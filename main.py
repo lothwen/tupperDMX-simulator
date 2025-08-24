@@ -294,28 +294,6 @@ class MainWindow(QMainWindow):
         """Handle MIDI worker finished signal."""
         self.logger.info("MIDI playback finished")
 
-    def setup_media_player(self):
-        self.media_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.audio_output.setVolume(self.audio_last_volume)
-        self.media_player.setAudioOutput(self.audio_output)
-        self.media_player.errorOccurred.connect(self.media_player_error)
-        self.media_player.mediaStatusChanged.connect(self.on_media_status_changed)
-
-    def on_media_status_changed(self, status):
-        if status == QMediaPlayer.MediaStatus.LoadedMedia and self._play_on_load:
-            self._play_on_load = False
-            if self.midi_manager.is_running():
-                self.is_playing = True
-                self.playback_start_time = time.time()
-                self.current_timeline_time = 0
-                self.seek_playback(0)
-                self.playback_timer.start()
-                self.metronome_timer.start(int(60000 / self.bpm))
-                self.play_pause_action.setIcon(self.pause_icon)
-
-    def media_player_error(self, error, error_string):
-        self.logger.error(f"Media player error: {error_string}")
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""
@@ -392,10 +370,6 @@ class MainWindow(QMainWindow):
                 self.toolbar_manager.set_export_midi_enabled(bool(self.config.files.midi))
                 
                 self.update_window_title()
-                
-                # Auto-start playback with new files
-                if not self.media_controller.start_playback():
-                    self.logger.warning("Failed to start playback after loading file")
                     
             except PermissionError:
                 ErrorDialogManager.show_file_permission_error(self, path, "read")
