@@ -599,9 +599,9 @@ class Timeline(QWidget):
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
     
-    def __init__(self, mp3_file=None, midi_file=None, midi_note_map=None, initial_metronome_volume=0.5, initial_audio_volume=0.5, parent=None):
+    def __init__(self, audio_file=None, midi_file=None, midi_note_map=None, initial_metronome_volume=0.5, initial_audio_volume=0.5, parent=None):
         super().__init__(parent)
-        self.mp3_file = mp3_file
+        self.audio_file = audio_file
         self.midi_file = midi_file
         self.midi_note_map = midi_note_map if midi_note_map else {}
         
@@ -713,8 +713,8 @@ class Timeline(QWidget):
         self.draw_playhead()
         self.draw_ruler()
         
-        if self.mp3_file:
-            self.draw_waveform(self.mp3_file)
+        if self.audio_file:
+            self.draw_waveform(self.audio_file)
         if self.midi_file:
             self.draw_midi_notes(self.midi_file)
             self.draw_midi_events(self.midi_file)
@@ -758,13 +758,13 @@ class Timeline(QWidget):
         x_pos = time_seconds * self.PIXELS_PER_SECOND
         self.playhead.setX(x_pos)
 
-    def draw_waveform(self, mp3_file):
+    def draw_waveform(self, audio_file):
         if self.waveform_item:
             self.content_scene.removeItem(self.waveform_item)
             self.waveform_item = None
             
         try:
-            y, sr = librosa.load(mp3_file, sr=None)
+            y, sr = librosa.load(audio_file, sr=None)
             song_length_seconds = librosa.get_duration(y=y, sr=sr)
 
             # Extend content width by 5% beyond song duration to show final MIDI events
@@ -900,8 +900,8 @@ class Timeline(QWidget):
         except Exception as e:
             self.logger.error(f"Error drawing midi events: {e}")
 
-    def set_files(self, mp3_file, midi_file):
-        self.mp3_file = mp3_file
+    def set_files(self, audio_file, midi_file):
+        self.audio_file = audio_file
         self.midi_file = midi_file
 
         for item in self.note_items: self.content_scene.removeItem(item)
@@ -911,7 +911,7 @@ class Timeline(QWidget):
         for item in self.midi_event_items: self.content_scene.removeItem(item)
         self.midi_event_items.clear()
 
-        if mp3_file: self.draw_waveform(mp3_file)
+        if audio_file: self.draw_waveform(audio_file)
         if midi_file:
             self.draw_midi_notes(midi_file)
             self.draw_midi_events(midi_file)
@@ -936,8 +936,8 @@ class Timeline(QWidget):
         waveform_header_rect.setPen(QPen(QColor(20,20,20)))
         self.header_scene.addItem(waveform_header_rect)
         
-        if self.mp3_file:
-            file_name = os.path.basename(self.mp3_file)
+        if self.audio_file:
+            file_name = os.path.basename(self.audio_file)
             waveform_text = QGraphicsTextItem(file_name)
             waveform_text.setDefaultTextColor(QColor(200,200,200))
             waveform_text.setPos(5, y_offset + 5)
@@ -1514,7 +1514,7 @@ if __name__ == '__main__':
     mp3_path = os.path.normpath(os.path.join(script_dir, '../../Desktop/TUPPERWARE/Teoría y Práctica/Teoria y Practica [WAVs & MP3s]/198kbps/02-tupperware - La Ciudad de Lona.mp3'))
     midi_path = os.path.normpath(os.path.join(script_dir, '../../Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-TYP/02-ciudad-de-lona-v0.5.mid'))
     main_win = QMainWindow()
-    timeline = Timeline(mp3_file=mp3_path, midi_file=midi_path)
+    timeline = Timeline(audio_file=mp3_path, midi_file=midi_path)
     main_win.setCentralWidget(timeline)
     main_win.setGeometry(100, 100, 1200, 800)
     main_win.show()

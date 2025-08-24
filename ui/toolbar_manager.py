@@ -13,7 +13,7 @@ class ToolbarManager(QObject):
     """Manages the main application toolbar with media controls and configuration options."""
     
     # Signals
-    load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'mp3')
+    load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
     export_midi_requested = pyqtSignal()  # request to export MIDI file
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
@@ -137,10 +137,10 @@ class ToolbarManager(QObject):
         load_midi_btn.clicked.connect(lambda: self.load_file_requested.emit('midi'))
         buttons_layout.addWidget(load_midi_btn)
         
-        # Load MP3 button
-        load_mp3_btn = QPushButton("Load MP3 file")
-        load_mp3_btn.setFixedSize(120, 35)
-        load_mp3_btn.setStyleSheet("""
+        # Load Audio button
+        load_audio_btn = QPushButton("Load Audio file")
+        load_audio_btn.setFixedSize(120, 35)
+        load_audio_btn.setStyleSheet("""
             QPushButton {
                 background-color: #555;
                 border: 1px solid #666;
@@ -152,8 +152,8 @@ class ToolbarManager(QObject):
                 background-color: #666;
             }
         """)
-        load_mp3_btn.clicked.connect(lambda: self.load_file_requested.emit('mp3'))
-        buttons_layout.addWidget(load_mp3_btn)
+        load_audio_btn.clicked.connect(lambda: self.load_file_requested.emit('audio'))
+        buttons_layout.addWidget(load_audio_btn)
         
         # Export MIDI button
         self.export_midi_button = QPushButton("Export MIDI")

@@ -10,7 +10,7 @@
   },
   "files": {
     "midi": "/home/lothwen/Desktop/lala.mid",
-    "mp3": "/home/lothwen/Desktop/TUPPERWARE/Teor\u00eda y Pr\u00e1ctica/Teoria y Practica [WAVs & MP3s]/198kbps/02-tupperware - La Ciudad de Lona.mp3"
+    "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav"
   },
   "fixtures": {
     "led_bar_controllers": [

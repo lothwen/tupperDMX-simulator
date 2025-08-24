@@ -56,14 +56,14 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         
         # Set initial files
-        if self.config.files.midi or self.config.files.mp3:
-            self.media_controller.set_files(self.config.files.mp3, self.config.files.midi)
-            self.timeline.set_files(self.config.files.mp3, self.config.files.midi)
+        if self.config.files.midi or self.config.files.audio:
+            self.media_controller.set_files(self.config.files.audio, self.config.files.midi)
+            self.timeline.set_files(self.config.files.audio, self.config.files.midi)
             
-            # Update audio file display if MP3 is loaded
-            if self.config.files.mp3:
+            # Update audio file display if audio file is loaded
+            if self.config.files.audio:
                 # Show full path instead of just filename
-                self.toolbar_manager.update_audio_file_display(self.config.files.mp3)
+                self.toolbar_manager.update_audio_file_display(self.config.files.audio)
             
             # Enable export button if MIDI file is configured
             self.toolbar_manager.set_export_midi_enabled(bool(self.config.files.midi))
@@ -339,9 +339,16 @@ class MainWindow(QMainWindow):
 
 
     def open_file_dialog(self, file_type):
-        """Handle file dialog for loading MIDI/MP3 files."""
-        title = f"Select {file_type.upper()} file"
-        filt = "MIDI files (*.mid)" if file_type == 'midi' else "MP3 files (*.mp3)"
+        """Handle file dialog for loading MIDI/Audio files."""
+        if file_type == 'midi':
+            title = "Select MIDI file"
+            filt = "MIDI files (*.mid)"
+        elif file_type == 'audio':
+            title = "Select Audio file"
+            filt = "Audio files (*.mp3 *.wav);;MP3 files (*.mp3);;WAV files (*.wav);;All files (*)"
+        else:
+            title = f"Select {file_type.upper()} file"
+            filt = "All files (*)"
         path, _ = QFileDialog.getOpenFileName(self, title, "", filt)
         if path:
             try:
@@ -353,16 +360,21 @@ class MainWindow(QMainWindow):
                 # Update configuration
                 if file_type == 'midi':
                     self.config.update_files(midi=path)
-                elif file_type == 'mp3':
-                    self.config.update_files(mp3=path)
+                elif file_type == 'audio':  # This handles all audio files (mp3, wav)
+                    # Validate file extension
+                    file_ext = path.lower().split('.')[-1]
+                    if file_ext not in ['mp3', 'wav']:
+                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
+                        return
+                    self.config.update_files(audio=path)
                 self.save_config()
                 
                 # Update components with new files
-                self.media_controller.set_files(self.config.files.mp3, self.config.files.midi)
-                self.timeline.set_files(self.config.files.mp3, self.config.files.midi)
+                self.media_controller.set_files(self.config.files.audio, self.config.files.midi)
+                self.timeline.set_files(self.config.files.audio, self.config.files.midi)
                 
                 # Update toolbar audio file display
-                if file_type == 'mp3':
+                if file_type == 'audio':
                     # Show full path instead of just filename
                     self.toolbar_manager.update_audio_file_display(path)
                 
@@ -490,8 +502,8 @@ class MainWindow(QMainWindow):
     def update_window_title(self):
         """Update window title with loaded file names."""
         title = "TupperDMX Simulator"
-        if self.config.files.mp3:
-            file_name = os.path.basename(self.config.files.mp3)
+        if self.config.files.audio:
+            file_name = os.path.basename(self.config.files.audio)
             title += f" - {file_name}"
         self.setWindowTitle(title)
 

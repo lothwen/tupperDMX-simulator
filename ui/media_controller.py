@@ -32,7 +32,7 @@ class MediaController(QObject):
         
         # Current files
         self.midi_file: Optional[str] = None
-        self.mp3_file: Optional[str] = None
+        self.audio_file: Optional[str] = None
         self.port_name: Optional[str] = None
         
         # Setup media player
@@ -50,25 +50,25 @@ class MediaController(QObject):
         
         self.logger.info("Media controller initialized")
     
-    def set_files(self, mp3_file: Optional[str], midi_file: Optional[str]) -> None:
+    def set_files(self, audio_file: Optional[str], midi_file: Optional[str]) -> None:
         """Set the media files for playback."""
-        self.mp3_file = mp3_file
+        self.audio_file = audio_file
         self.midi_file = midi_file
         
-        if mp3_file:
+        if audio_file:
             try:
                 # Validate file exists and is accessible
-                if not os.path.exists(mp3_file):
-                    self.error_occurred.emit("File not found", mp3_file)
+                if not os.path.exists(audio_file):
+                    self.error_occurred.emit("File not found", audio_file)
                     return
                 
-                self.logger.info(f"MP3 file set: {mp3_file}")
-                # Load the MP3 file into the media player
-                self.media_player.setSource(QUrl.fromLocalFile(mp3_file))
+                self.logger.info(f"Audio file set: {audio_file}")
+                # Load the audio file into the media player
+                self.media_player.setSource(QUrl.fromLocalFile(audio_file))
                 
             except Exception as e:
-                self.logger.error(f"Error setting MP3 file: {e}")
-                self.error_occurred.emit(str(e), mp3_file)
+                self.logger.error(f"Error setting audio file: {e}")
+                self.error_occurred.emit(str(e), audio_file)
                 return
                 
         if midi_file:
@@ -109,7 +109,7 @@ class MediaController(QObject):
     
     def start_playback(self) -> bool:
         """Start media playback from the beginning."""
-        if not self.mp3_file:
+        if not self.audio_file:
             self.logger.warning("Cannot start playback: no MP3 file loaded")
             return False
         
@@ -133,7 +133,7 @@ class MediaController(QObject):
         
         # Ensure media is loaded and reset position
         if not self.media_player.source().isValid():
-            self.media_player.setSource(QUrl.fromLocalFile(self.mp3_file))
+            self.media_player.setSource(QUrl.fromLocalFile(self.audio_file))
         self.media_player.setPosition(0)
         
         # Start playback immediately
@@ -147,7 +147,7 @@ class MediaController(QObject):
     
     def play_pause_playback(self) -> None:
         """Toggle play/pause state."""
-        if not self.mp3_file:
+        if not self.audio_file:
             self.logger.warning("Cannot play/pause: no MP3 file loaded")
             return
             
@@ -181,7 +181,7 @@ class MediaController(QObject):
             return
             
         # If no media loaded yet, can't resume
-        if not self.mp3_file or not self.media_player.source().isValid():
+        if not self.audio_file or not self.media_player.source().isValid():
             self.logger.warning("Cannot resume: no media loaded")
             return
         
@@ -281,7 +281,7 @@ class MediaController(QObject):
     def _on_media_error(self, error, error_string: str) -> None:
         """Handle media player errors."""
         self.logger.error(f"Media player error: {error_string}")
-        file_path = self.mp3_file or "Unknown file"
+        file_path = self.audio_file or "Unknown file"
         self.error_occurred.emit(error_string, file_path)
     
     def _on_playback_tick(self) -> None:

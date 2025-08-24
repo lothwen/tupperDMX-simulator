@@ -21,7 +21,7 @@ class ArtNetConfig:
 @dataclass
 class FilesConfig:
     midi: Optional[str] = None
-    mp3: Optional[str] = None
+    audio: Optional[str] = None
 
 
 @dataclass
@@ -136,7 +136,7 @@ class Config:
             files_data = data["files"]
             config.files = FilesConfig(
                 midi=cls._validate_file_path(files_data.get("midi")),
-                mp3=cls._validate_file_path(files_data.get("mp3"))
+                audio=cls._validate_file_path(files_data.get("audio"))
             )
         
         # Fixtures configuration
@@ -349,12 +349,12 @@ class Config:
         
         return data
 
-    def update_files(self, midi: Optional[str] = None, mp3: Optional[str] = None) -> None:
+    def update_files(self, midi: Optional[str] = None, audio: Optional[str] = None) -> None:
         """Update file paths with validation."""
         if midi is not None:
             self.files.midi = self._validate_file_path(midi)
-        if mp3 is not None:
-            self.files.mp3 = self._validate_file_path(mp3)
+        if audio is not None:
+            self.files.audio = self._validate_file_path(audio)
 
     def update_volume(self, metronome: Optional[float] = None, audio: Optional[float] = None) -> None:
         """Update volume settings with validation."""
