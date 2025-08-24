@@ -1,0 +1,9 @@
+mido
+python-rtmidi
+pyartnet
+mutagen
+librosa
+matplotlib
+PyQt6
+pyserial
+pylibftdi
