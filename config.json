@@ -1,0 +1,133 @@
+{
+  "window": {
+    "width": 1920,
+    "height": 1080
+  },
+  "artnet": {
+    "ip": "127.0.0.1",
+    "port": 6454,
+    "universe": 0
+  },
+  "files": {
+    "midi": "/home/lothwen/Desktop/lala.mid",
+    "mp3": "/home/lothwen/Desktop/TUPPERWARE/Teor\u00eda y Pr\u00e1ctica/Teoria y Practica [WAVs & MP3s]/198kbps/02-tupperware - La Ciudad de Lona.mp3"
+  },
+  "fixtures": {
+    "led_bar_controllers": [
+      {
+        "dmx_start": 1,
+        "dmx_channel_count": 7,
+        "bars": [
+          {
+            "x": 250,
+            "y": 350
+          },
+          {
+            "x": 425,
+            "y": 350
+          },
+          {
+            "x": 600,
+            "y": 350
+          },
+          {
+            "x": 775,
+            "y": 350
+          },
+          {
+            "x": 950,
+            "y": 350
+          },
+          {
+            "x": 1125,
+            "y": 350
+          },
+          {
+            "x": 1300,
+            "y": 350
+          },
+          {
+            "x": 1475,
+            "y": 350
+          }
+        ]
+      }
+    ],
+    "blinders": [
+      {
+        "x": 675,
+        "y": 500,
+        "dmx_start": 33
+      },
+      {
+        "x": 1025,
+        "y": 500,
+        "dmx_start": 65
+      }
+    ]
+  },
+  "midi_note_map": {
+    "40": {
+      "part": "START",
+      "color": "#c73737"
+    },
+    "41": {
+      "part": "INTRO",
+      "color": "#c77f37"
+    },
+    "42": {
+      "part": "VERSE",
+      "color": "#c6c737"
+    },
+    "43": {
+      "part": "CHORUS",
+      "color": "#37c737"
+    },
+    "44": {
+      "part": "BREAK",
+      "color": "#3737c7"
+    },
+    "45": {
+      "part": "BRIDGE",
+      "color": "#461c64"
+    },
+    "46": {
+      "part": "INST",
+      "color": "#802da4"
+    },
+    "47": {
+      "part": "SOLO",
+      "color": "#ffffff"
+    },
+    "48": {
+      "part": "OUTRO",
+      "color": "#c79337"
+    },
+    "49": {
+      "part": "END",
+      "color": "#808080"
+    },
+    "50": {
+      "part": "BLACKOUT",
+      "color": "#363636"
+    }
+  },
+  "metronome": {
+    "high_pitch_freq": 1200,
+    "low_pitch_freq": 800
+  },
+  "volume": {
+    "metronome": 0.13,
+    "audio": 0.16
+  },
+  "logging": {
+    "level": "INFO",
+    "console_output": true,
+    "file_output": true,
+    "log_dir": "logs",
+    "max_file_size": 10485760,
+    "backup_count": 5
+  },
+  "last_dmx_source": "FTDI:FT232R USB UART:BG01EQZU",
+  "last_midi_port": "USB MIDI Interface:USB MIDI Interface MIDI 1 28:0"
+}
