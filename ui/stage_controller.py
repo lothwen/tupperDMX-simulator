@@ -60,12 +60,6 @@ class StageController(QObject):
         
         # Remove borders and frame from the graphics view
         self.stage_view.setFrameStyle(0)  # No frame
-        self.stage_view.setStyleSheet("""
-            QGraphicsView {
-                border: none;
-                background: transparent;
-            }
-        """)
         
         # Setup fixtures
         self._setup_fixtures()

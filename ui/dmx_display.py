@@ -27,21 +27,6 @@ class DMXDisplayWidget(QTableWidget):
     
     def _setup_display(self) -> None:
         """Setup the table widget appearance and structure."""
-        self.setStyleSheet("""
-            QTableWidget {
-                background-color: #2B2B2B;
-                color: #FFFFFF;
-                /*gridline-color: #4A4A4A;*/
-                border: none;
-            }
-            QTableWidget::item {
-                border-bottom: 1px solid #4A4A4A;
-                padding: 3px;
-            }
-            QTableWidget::item:selected {
-                background-color: #5A5A5A;
-            }
-        """)
         
         # Configure table structure
         self.setColumnCount(2)

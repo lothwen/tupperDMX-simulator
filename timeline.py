@@ -24,16 +24,7 @@ class CustomTooltip(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #2b2b2b;
-                color: white;
-                border: 1px solid #555555;
-                border-radius: 3px;
-                padding: 6px;
-                font-size: 11px;
-            }
-        """)
+        self.setObjectName("TimelineTooltip")
         self.hide()
         
     def show_at(self, global_pos, text):
@@ -62,90 +53,6 @@ class MidiEventEditDialog(QDialog):
         self.setModal(True)
         self.resize(350, 200)
         
-        # Apply dark theme styling to match the application
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #2b2b2b;
-                color: white;
-            }
-            QLabel {
-                color: white;
-                font-weight: bold;
-            }
-            QComboBox {
-                background-color: #3c3c3c;
-                color: white;
-                border: 1px solid #555555;
-                padding: 4px;
-                border-radius: 3px;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 20px;
-                border-left: 1px solid #555555;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid white;
-                margin: 0px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #3c3c3c;
-                color: white;
-                selection-background-color: #3d7fe6;
-                border: 1px solid #555555;
-            }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #3c3c3c;
-                color: white;
-                border: 1px solid #555555;
-                padding: 4px;
-                border-radius: 3px;
-            }
-            QSpinBox::up-button, QDoubleSpinBox::up-button {
-                background-color: #555555;
-                border: none;
-                width: 16px;
-            }
-            QSpinBox::down-button, QDoubleSpinBox::down-button {
-                background-color: #555555;
-                border: none;
-                width: 16px;
-            }
-            QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-bottom: 4px solid white;
-                margin: 0px;
-            }
-            QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid white;
-                margin: 0px;
-            }
-            QPushButton {
-                background-color: #3c3c3c;
-                color: white;
-                border: 1px solid #555555;
-                padding: 6px 12px;
-                border-radius: 3px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #4c4c4c;
-            }
-            QPushButton:pressed {
-                background-color: #2c2c2c;
-            }
-            QPushButton:disabled {
-                background-color: #1c1c1c;
-                color: #666666;
-            }
-        """)
         
         self.setup_ui()
         self.populate_fields()
@@ -454,20 +361,6 @@ class DraggableMidiEvent(QGraphicsObject):
             main_window = main_window.parent()
         
         menu = QMenu(main_window)
-        # Apply the same styling as the empty space context menu
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2b2b2b;
-                color: white;
-                border: 1px solid #555555;
-            }
-            QMenu::item {
-                padding: 4px 20px 4px 20px;
-            }
-            QMenu::item:selected {
-                background-color: #3d7fe6;
-            }
-        """)
         
         # Edit Properties action
         edit_action = menu.addAction("Edit Properties...")
@@ -628,20 +521,6 @@ class ContentView(QGraphicsView):
                     main_window = main_window.parent()
                 
                 menu = QMenu(main_window if main_window else self)
-                # Set explicit style to ensure proper background
-                menu.setStyleSheet("""
-                    QMenu {
-                        background-color: #2b2b2b;
-                        color: white;
-                        border: 1px solid #555555;
-                    }
-                    QMenu::item {
-                        padding: 4px 20px 4px 20px;
-                    }
-                    QMenu::item:selected {
-                        background-color: #3d7fe6;
-                    }
-                """)
                 
                 add_action = menu.addAction("Add event at this position")
                 
@@ -785,11 +664,11 @@ class Timeline(QWidget):
         self.metronome_mute_button.setCheckable(True)
         self.metronome_mute_button.toggled.connect(self.on_mute_toggled)
         self.metronome_mute_button.setFixedSize(20, 20)
-        self.metronome_mute_button.setStyleSheet("color: white;")
+        self.metronome_mute_button.setObjectName("MetronomeMuteButton")
 
         self.metronome_controls_container = QWidget()
         self.metronome_controls_container.setFixedWidth(90)
-        self.metronome_controls_container.setStyleSheet("background-color: #383838; border-radius: 5px;")
+        self.metronome_controls_container.setObjectName("MetronomeControlsContainer")
         controls_layout = QHBoxLayout(self.metronome_controls_container)
         controls_layout.setContentsMargins(2, 2, 2, 2)
         controls_layout.setSpacing(2)
@@ -806,11 +685,11 @@ class Timeline(QWidget):
         self.audio_mute_button.setCheckable(True)
         self.audio_mute_button.toggled.connect(self.on_audio_mute_toggled)
         self.audio_mute_button.setFixedSize(20, 20)
-        self.audio_mute_button.setStyleSheet("color: white;")
+        self.audio_mute_button.setObjectName("AudioMuteButton")
 
         self.audio_controls_container = QWidget()
         self.audio_controls_container.setFixedWidth(90)
-        self.audio_controls_container.setStyleSheet("background-color: #383838; border-radius: 5px;")
+        self.audio_controls_container.setObjectName("AudioControlsContainer")
         audio_controls_layout = QHBoxLayout(self.audio_controls_container)
         audio_controls_layout.setContentsMargins(2, 2, 2, 2)
         audio_controls_layout.setSpacing(2)
@@ -870,17 +749,9 @@ class Timeline(QWidget):
 
     def on_mute_toggled(self, checked):
         self.metronome_mute_toggled.emit(checked)
-        if checked:
-            self.metronome_mute_button.setStyleSheet("background-color: red; color: white;")
-        else:
-            self.metronome_mute_button.setStyleSheet("color: white;")
 
     def on_audio_mute_toggled(self, checked):
         self.audio_mute_toggled.emit(checked)
-        if checked:
-            self.audio_mute_button.setStyleSheet("background-color: red; color: white;")
-        else:
-            self.audio_mute_button.setStyleSheet("color: white;")
 
     def draw_ruler_header(self):
         ruler_header_bg = QGraphicsRectItem(0, 0, self.PIANO_WIDTH, self.RULER_TRACK_HEIGHT)
