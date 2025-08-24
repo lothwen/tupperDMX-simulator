@@ -123,17 +123,6 @@ class MainWindow(QMainWindow):
 
         # Create main content splitter
         main_content = QSplitter(Qt.Orientation.Horizontal)
-        main_content.setStyleSheet("""
-            QSplitter {
-                border: none;
-                background: transparent;
-            }
-            QSplitter::handle {
-                background: transparent;
-                border: none;
-                width: 1px;
-            }
-        """)
         self.main_layout.addWidget(main_content, 1)
         
         # Add stage view
@@ -150,12 +139,6 @@ class MainWindow(QMainWindow):
             initial_audio_volume=self.config.volume.audio
         )
         self.timeline.setFixedHeight(300)
-        self.timeline.setStyleSheet("""
-            QWidget {
-                border: none;
-                background: transparent;
-            }
-        """)
         self.timeline.seek_requested.connect(self.seek_playback)
         self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
@@ -527,6 +510,12 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Load and apply dark theme
+    qss_path = os.path.join(os.path.dirname(__file__), 'dark-theme.qss')
+    if os.path.exists(qss_path):
+        with open(qss_path, 'r', encoding='utf-8') as f:
+            app.setStyleSheet(f.read())
     
     try:
         config = Config.load('config.json')

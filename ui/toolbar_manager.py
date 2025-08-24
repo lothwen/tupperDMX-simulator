@@ -53,13 +53,6 @@ class ToolbarManager(QObject):
         """Create and setup the main toolbar with grouped sections."""
         self.toolbar = QToolBar("Main Toolbar", parent)
         self.toolbar.setFixedHeight(120)
-        self.toolbar.setStyleSheet("""
-            QToolBar {
-                background-color: #2b2b2b;
-                border: none;
-                spacing: 10px;
-            }
-        """)
         self.toolbar.setMovable(False)
         self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         
@@ -105,13 +98,7 @@ class ToolbarManager(QObject):
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
         section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        section.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                border-radius: 8px;
-            }
-        """)
+        section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
         layout.setContentsMargins(10, 5, 10, 5)
@@ -122,59 +109,21 @@ class ToolbarManager(QObject):
         # Load MIDI button
         load_midi_btn = QPushButton("Load MIDI file")
         load_midi_btn.setFixedSize(120, 35)
-        load_midi_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-                border-radius: 4px;
-                color: #fff;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
+        load_midi_btn.setObjectName("LoadButton")
         load_midi_btn.clicked.connect(lambda: self.load_file_requested.emit('midi'))
         buttons_layout.addWidget(load_midi_btn)
         
         # Load Audio button
         load_audio_btn = QPushButton("Load Audio file")
         load_audio_btn.setFixedSize(120, 35)
-        load_audio_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-                border-radius: 4px;
-                color: #fff;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
+        load_audio_btn.setObjectName("LoadButton")
         load_audio_btn.clicked.connect(lambda: self.load_file_requested.emit('audio'))
         buttons_layout.addWidget(load_audio_btn)
         
         # Export MIDI button
         self.export_midi_button = QPushButton("Export MIDI")
         self.export_midi_button.setFixedSize(120, 35)
-        self.export_midi_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4a5568;
-                border: 1px solid #718096;
-                border-radius: 4px;
-                color: #e2e8f0;
-                font-size: 12px;
-            }
-            QPushButton:hover:enabled {
-                background-color: #5a6b7d;
-            }
-            QPushButton:disabled {
-                background-color: #2d3748;
-                border: 1px solid #4a5568;
-                color: #718096;
-            }
-        """)
+        self.export_midi_button.setObjectName("ExportButton")
         self.export_midi_button.clicked.connect(self.export_midi_requested.emit)
         self.export_midi_button.setEnabled(False)  # Disabled by default
         buttons_layout.addWidget(self.export_midi_button)
@@ -187,17 +136,7 @@ class ToolbarManager(QObject):
         self.audio_file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.audio_file_label.setWordWrap(False)  # Disable word wrapping
         self.audio_file_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.audio_file_label.setStyleSheet("""
-            QLabel {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 2px;
-                color: #FF9800;
-                font-size: 10px;
-                padding-left: 5px;
-                padding-right: 5px;
-            }
-        """)
+        self.audio_file_label.setObjectName("FileLabel")
         layout.addWidget(self.audio_file_label)
         
         self.logger.debug("Files section created")
@@ -208,20 +147,14 @@ class ToolbarManager(QObject):
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
         section.setFixedSize(180, 100)
-        section.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                border-radius: 8px;
-            }
-        """)
+        section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
         layout.setContentsMargins(10, 5, 10, 5)
         
         # Section title
         title = QLabel("TRANSPORT")
-        title.setStyleSheet("color: #aaa; font-size: 14px; font-weight: bold;")
+        title.setObjectName("SectionTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
@@ -233,16 +166,7 @@ class ToolbarManager(QObject):
         stop_btn = QPushButton()
         stop_btn.setIcon(self.stop_icon)
         stop_btn.setFixedSize(45, 45)
-        stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #666;
-            }
-        """)
+        stop_btn.setObjectName("StopButton")
         stop_btn.clicked.connect(self.stop_requested.emit)
         controls_layout.addWidget(stop_btn)
         
@@ -250,16 +174,7 @@ class ToolbarManager(QObject):
         self.play_pause_button = QPushButton()
         self.play_pause_button.setIcon(self.play_icon)
         self.play_pause_button.setFixedSize(55, 55)
-        self.play_pause_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                border: 2px solid #66bb6a;
-                border-radius: 27px;
-            }
-            QPushButton:hover {
-                background-color: #66bb6a;
-            }
-        """)
+        self.play_pause_button.setObjectName("PlayPauseButton")
         self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
         controls_layout.addWidget(self.play_pause_button)
         
@@ -273,20 +188,14 @@ class ToolbarManager(QObject):
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
         section.setFixedSize(300, 100)
-        section.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                border-radius: 8px;
-            }
-        """)
+        section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
         layout.setContentsMargins(10, 5, 10, 5)
         
         # Section title
         title = QLabel("TIMELINE")
-        title.setStyleSheet("color: #aaa; font-size: 14px; font-weight: bold;")
+        title.setObjectName("SectionTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
@@ -297,17 +206,7 @@ class ToolbarManager(QObject):
         self.time_display = QLabel("00:00.000")
         self.time_display.setFixedSize(150, 55)
         self.time_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_display.setStyleSheet("""
-            QLabel {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 3px;
-                color: #4CAF50;
-                font-family: monospace;
-                font-size: 22px;
-                margin: 5px 0px;
-            }
-        """)
+        self.time_display.setObjectName("TimeDisplay")
         controls_layout.addWidget(self.time_display)
         
         # BPM display with spinbox
@@ -317,7 +216,7 @@ class ToolbarManager(QObject):
         bpm_layout.setSpacing(0)
         
         bpm_label = QLabel("BPM")
-        bpm_label.setStyleSheet("color: #aaa; font-size: 12px;")
+        bpm_label.setObjectName("SmallLabel")
         bpm_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         bpm_layout.addWidget(bpm_label)
         
@@ -325,16 +224,6 @@ class ToolbarManager(QObject):
         self.bpm_spinbox.setRange(40, 300)
         self.bpm_spinbox.setValue(120)
         self.bpm_spinbox.setFixedSize(50, 30)
-        self.bpm_spinbox.setStyleSheet("""
-            QSpinBox {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 3px;
-                color: #ff9800;
-                font-family: monospace;
-                font-size: 14px;
-            }
-        """)
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         bpm_layout.addWidget(self.bpm_spinbox)
         
@@ -350,22 +239,17 @@ class ToolbarManager(QObject):
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
         section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        section.setStyleSheet("""
-            QFrame {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                border-radius: 8px;
-            }
-        """)
+        section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
         layout.setContentsMargins(10, 5, 10, 5)
         
         # Section title
         title = QLabel("SOURCES")
-        title.setStyleSheet("color: #aaa; font-size: 14px; font-weight: bold;")
+        title.setObjectName("SectionTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
-        
+       
         # Sources layout with more spacing
         sources_layout = QHBoxLayout()
         sources_layout.setSpacing(20)  # More space between MIDI and DMX
@@ -377,22 +261,12 @@ class ToolbarManager(QObject):
         midi_layout.setSpacing(5)
         
         midi_label = QLabel("MIDI Port")
-        midi_label.setStyleSheet("color: #aaa; font-size: 14px; font-weight: normal;")
+        midi_label.setObjectName("SubsectionLabel")
         midi_layout.addWidget(midi_label)
         
         self.midi_port_combo = QComboBox()
         self.midi_port_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.midi_port_combo.setMinimumHeight(25)
-        self.midi_port_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 2px;
-                color: #2196F3;
-                font-size: 14px;
-                padding: 3px;
-            }
-        """)
         available_ports = self.midi_manager.get_available_ports()
         self.midi_port_combo.addItems(available_ports)
         if self.config.last_midi_port and self.config.last_midi_port in available_ports:
@@ -409,22 +283,12 @@ class ToolbarManager(QObject):
         dmx_layout.setSpacing(5)
         
         dmx_label = QLabel("DMX Input")
-        dmx_label.setStyleSheet("color: #aaa; font-size: 14px; font-weight: normal;")
+        dmx_label.setObjectName("SubsectionLabel")
         dmx_layout.addWidget(dmx_label)
         
         self.dmx_source_combo = QComboBox()
         self.dmx_source_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.dmx_source_combo.setMinimumHeight(25)
-        self.dmx_source_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 2px;
-                color: #9C27B0;
-                font-size: 14px;
-                padding: 3px;
-            }
-        """)
         dmx_sources = self.dmx_manager.get_available_sources()
         self.dmx_source_combo.addItems(dmx_sources)
         self.dmx_source_combo.currentTextChanged.connect(self.dmx_source_changed.emit)
