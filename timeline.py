@@ -8,7 +8,7 @@ import os
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QApplication, QMainWindow, 
     QGraphicsRectItem, QGraphicsLineItem, QGraphicsPixmapItem, 
-    QGraphicsTextItem, QToolTip, QGraphicsItem, QWidget, 
+    QGraphicsTextItem, QGraphicsItem, QWidget, 
     QHBoxLayout, QScrollBar, QSizePolicy, QGraphicsObject,
     QSlider, QPushButton, QGraphicsProxyWidget, QMenu, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QDoubleSpinBox,
@@ -17,6 +17,36 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QObject
 from tupperlogger import get_logger
+
+class CustomTooltip(QLabel):
+    """Custom persistent tooltip widget."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        self.setStyleSheet("""
+            QLabel {
+                background-color: #2b2b2b;
+                color: white;
+                border: 1px solid #555555;
+                border-radius: 3px;
+                padding: 6px;
+                font-size: 11px;
+            }
+        """)
+        self.hide()
+        
+    def show_at(self, global_pos, text):
+        """Show tooltip at global position with given text."""
+        self.setText(text)
+        self.adjustSize()
+        self.move(global_pos)
+        self.show()
+        self.raise_()
+        
+    def hide_tooltip(self):
+        """Hide the tooltip."""
+        self.hide()
 
 class MidiEventEditDialog(QDialog):
     """Dialog for editing MIDI event properties."""
@@ -293,6 +323,10 @@ class DraggableMidiEvent(QGraphicsObject):
         self._brush = QBrush(QColor(100, 100, 100))
         self._pen = QPen(QColor(20, 20, 20))
         
+        # Tooltip state management
+        self._tooltip_shown = False
+        self._custom_tooltip = None
+        
         # Logger for debug messages
         self.logger = get_logger("ui.timeline.draggable_midi_event")
         
@@ -326,6 +360,57 @@ class DraggableMidiEvent(QGraphicsObject):
         """Set reference to the associated text label."""
         self.text_item = text_item
         
+    def _show_persistent_tooltip(self, local_pos):
+        """Show tooltip with detailed event information."""
+        if not self.event_data:
+            return
+            
+        # Create custom tooltip if it doesn't exist
+        if not self._custom_tooltip:
+            if self.scene() and self.scene().views():
+                main_window = self.scene().views()[0].window()
+                self._custom_tooltip = CustomTooltip(main_window)
+            
+        if not self._custom_tooltip:
+            return
+            
+        # Get event information
+        event_info = self.event_data.get('info', {})
+        part_name = getattr(event_info, 'part', f'Note {self.event_data["note"]}')
+        velocity = self.event_data.get('velocity', 0)
+        time = self.event_data.get('time', 0.0)
+        note = self.event_data.get('note', 0)
+        
+        # Calculate bar and beat information
+        if self.timeline:
+            seconds_per_beat = 60.0 / self.timeline.bpm
+            beat_number = time / seconds_per_beat
+            bar_number = int(beat_number / 4) + 1
+            beat_in_bar = int(beat_number % 4) + 1
+            
+            # Create detailed tooltip text
+            tooltip_text = (f"{part_name}\n"
+                          f"MIDI Note: {note}\n"
+                          f"Time: {time:.3f}s\n"
+                          f"Bar: {bar_number}, Beat: {beat_in_bar}\n"
+                          f"Velocity: {velocity}")
+        else:
+            # Fallback if timeline not available
+            tooltip_text = (f"{part_name}\n"
+                          f"MIDI Note: {note}\n"
+                          f"Time: {time:.3f}s\n"
+                          f"Velocity: {velocity}")
+        
+        # Get global position for tooltip
+        scene_pos = self.mapToScene(local_pos)
+        if self.scene() and self.scene().views():
+            for view in self.scene().views():
+                global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
+                # Offset tooltip slightly to avoid covering the cursor
+                global_pos.setY(global_pos.y() + 20)
+                self._custom_tooltip.show_at(global_pos, tooltip_text)
+                break
+        
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             local_pos = event.pos()
@@ -333,6 +418,11 @@ class DraggableMidiEvent(QGraphicsObject):
             # Check if we're in the resize zone (left edge)
             if local_pos.x() <= self.resize_zone_width:
                 self.logger.debug(f"Starting MIDI event resize for event {self.event_index}")
+                # Hide tooltip when starting drag operation
+                if self._custom_tooltip:
+                    self._custom_tooltip.hide_tooltip()
+                self._tooltip_shown = False
+                
                 self.is_resizing = True
                 self.resize_start_pos = event.scenePos()
                 self.original_x = self.pos().x()
@@ -431,9 +521,19 @@ class DraggableMidiEvent(QGraphicsObject):
             new_rect = QRectF(0, 0, new_width, self.rect.height())
             self.setRect(new_rect)
             
-            # Update text position to follow the left edge
-            if self.text_item:
+            # Update text position to follow the left edge and recalculate truncation
+            if self.text_item and self.timeline:
                 self.text_item.setPos(new_x + 5, self.text_item.pos().y())
+                
+                # Recalculate text truncation based on new width
+                # Account for zoom level since text ignores transformations
+                zoom_factor = self.timeline.content_view.transform().m11()
+                available_width = (new_width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
+                font_metrics = self.timeline.content_view.fontMetrics()
+                full_text = self.text_item.data(0)  # Get the stored full text
+                if full_text:
+                    text_to_display = self.timeline.get_truncated_text(full_text, available_width, font_metrics)
+                    self.text_item.setPlainText(text_to_display)
             
             event.accept()
             return
@@ -451,6 +551,14 @@ class DraggableMidiEvent(QGraphicsObject):
         self.resize_start_pos = None
         super().mouseReleaseEvent(event)
     
+    def hoverEnterEvent(self, event):
+        # Show tooltip when entering the item
+        if self.event_data:
+            self._show_persistent_tooltip(event.pos())
+            self._tooltip_shown = True
+        
+        super().hoverEnterEvent(event)
+
     def hoverMoveEvent(self, event):
         local_pos = event.pos()
         
@@ -469,6 +577,11 @@ class DraggableMidiEvent(QGraphicsObject):
         super().hoverMoveEvent(event)
         
     def hoverLeaveEvent(self, event):
+        # Hide custom tooltip when leaving and reset tooltip state
+        if self._custom_tooltip:
+            self._custom_tooltip.hide_tooltip()
+        self._tooltip_shown = False
+        
         # Reset cursor on the view when leaving
         if self.scene() and self.scene().views():
             for view in self.scene().views():
@@ -479,8 +592,6 @@ class ContentView(QGraphicsView):
     def __init__(self, timeline, parent=None):
         super().__init__(parent)
         self.timeline = timeline
-        # Temporarily disable mouse tracking to see if it helps
-        # self.setMouseTracking(True)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
@@ -489,6 +600,10 @@ class ContentView(QGraphicsView):
         # Enable context menu for right-clicks on empty areas
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        
+        # Custom tooltip for piano roll notes
+        self._piano_tooltip = None
+        self._current_tooltip_item = None
         
     def show_context_menu(self, position):
         """Show context menu for adding events on empty timeline areas."""
@@ -559,23 +674,51 @@ class ContentView(QGraphicsView):
                 else:
                     self.scale(zoom_out_factor, 1)
             self.timeline.update_ruler_labels()
+            self.timeline.update_midi_text_truncation()
         else:
             super().wheelEvent(event)
 
     def mouseMoveEvent(self, event):
         scene_pos = self.mapToScene(event.pos())
+        
+        # Check for piano roll notes
+        current_item = None
         for item in self.timeline.note_items:
             if item.contains(scene_pos):
-                note_info = item.data(0)
+                current_item = item
+                break
+        
+        # Handle tooltip based on current item
+        if current_item:
+            # If this is a new item or first time, show tooltip
+            if current_item != self._current_tooltip_item:
+                # Hide any existing tooltip
+                if self._piano_tooltip:
+                    self._piano_tooltip.hide_tooltip()
+                
+                # Create custom tooltip if it doesn't exist
+                if not self._piano_tooltip:
+                    self._piano_tooltip = CustomTooltip(self.window())
+                
+                # Show tooltip for this note
+                note_info = current_item.data(0)
                 note_name = librosa.midi_to_note(note_info['note'])
                 seconds_per_beat = 60.0 / self.timeline.bpm
                 beat_number = note_info['time'] / seconds_per_beat
                 bar_number = int(beat_number / 4) + 1
                 beat_in_bar = int(beat_number % 4) + 1
                 tooltip_text = f"{note_name}\nTime: {note_info['time']:.2f}s\nBar: {bar_number}, Beat: {beat_in_bar}\nVelocity: {note_info['velocity']}"
-                QToolTip.showText(event.globalPosition().toPoint(), tooltip_text, self)
-                return
-        QToolTip.hideText()
+                
+                global_pos = event.globalPosition().toPoint()
+                global_pos.setY(global_pos.y() + 20)  # Offset to avoid cursor
+                self._piano_tooltip.show_at(global_pos, tooltip_text)
+                self._current_tooltip_item = current_item
+        else:
+            # No item under cursor, hide tooltip
+            if self._piano_tooltip:
+                self._piano_tooltip.hide_tooltip()
+            self._current_tooltip_item = None
+        
         super().mouseMoveEvent(event)
 
 class Timeline(QWidget):
@@ -624,6 +767,10 @@ class Timeline(QWidget):
         
         self._is_panning = False
         self._pan_start_pos = None
+        
+        # Custom tooltip for piano roll notes
+        self._piano_tooltip = None
+        self._current_tooltip_item = None
         
         # Logger for debug messages
         self.logger = get_logger("ui.timeline")
@@ -881,15 +1028,30 @@ class Timeline(QWidget):
                 self.content_scene.addItem(event_rect)
                 self.midi_event_items.append(event_rect)
 
-                text_item = QGraphicsTextItem(info.part)
+                # Determine optimal text color based on background color brightness
+                brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
+                text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
+                
+                # Calculate maximum text that fits in the box width
+                # Account for zoom level since text ignores transformations
+                zoom_factor = self.content_view.transform().m11()
+                available_width = (width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
+                font_metrics = self.content_view.fontMetrics()
+                text_to_display = self.get_truncated_text(info.part, available_width, font_metrics)
+                
+                text_item = QGraphicsTextItem(text_to_display)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                text_item.setDefaultTextColor(QColor(0,0,0))
+                text_item.setDefaultTextColor(text_color)
                 text_item.setPos(x_pos + 5, y_pos + 5)
                 text_item.setZValue(2)  # Text should be above the box
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-                # Make text item not intercept mouse events
+                # Make text item completely transparent to mouse events
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
                 text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                text_item.setAcceptHoverEvents(False)  # Disable hover events on text
+                # Store the full text for tooltip
+                text_item.setData(0, info.part)
                 
                 # Connect the text item to the event box
                 event_rect.set_text_item(text_item)
@@ -928,6 +1090,7 @@ class Timeline(QWidget):
         self.content_view.resetTransform()
         self.content_view.scale(min_scale, 1)
         self.update_ruler_labels()
+        self.update_midi_text_truncation()
 
     def draw_track_headers(self):
         y_offset = self.RULER_TRACK_HEIGHT + self.TRACK_SPACING
@@ -1061,6 +1224,42 @@ class Timeline(QWidget):
         else:
             for bar_num, text_item in self.ruler_bar_text_items:
                 text_item.setVisible(True)
+
+    def update_midi_text_truncation(self):
+        """Update text truncation for all MIDI event labels based on current zoom level."""
+        if not self.midi_events_data or not self.midi_event_items:
+            return
+            
+        zoom_factor = self.content_view.transform().m11()
+        font_metrics = self.content_view.fontMetrics()
+        
+        # Find text items in midi_event_items (they alternate with event boxes)
+        text_items = [item for item in self.midi_event_items if isinstance(item, QGraphicsTextItem)]
+        
+        # Update each text item
+        for i, text_item in enumerate(text_items):
+            if i < len(self.midi_events_data):
+                event_data = self.midi_events_data[i]
+                
+                # Calculate box width for this event
+                if i < len(self.midi_events_data) - 1:
+                    duration = self.midi_events_data[i+1]['time'] - event_data['time']
+                else:
+                    # For last event, use a reasonable default duration
+                    song_length = self.midi_data.length if self.midi_data else 240
+                    extended_duration = song_length * 1.05
+                    duration = extended_duration - event_data['time']
+                    if duration <= 0:
+                        duration = song_length * 0.05
+                
+                width = max(duration * self.PIXELS_PER_SECOND, 20)
+                available_width = (width - 10) * zoom_factor
+                
+                # Get full text and truncate appropriately
+                full_text = text_item.data(0)
+                if full_text:
+                    text_to_display = self.get_truncated_text(full_text, available_width, font_metrics)
+                    text_item.setPlainText(text_to_display)
 
     def draw_time_grid(self):
         for item in self.time_grid_items: self.content_scene.removeItem(item)
@@ -1377,15 +1576,30 @@ class Timeline(QWidget):
                 self.content_scene.addItem(event_rect)
                 self.midi_event_items.append(event_rect)
 
-                text_item = QGraphicsTextItem(info.part)
+                # Determine optimal text color based on background color brightness
+                brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
+                text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
+                
+                # Calculate maximum text that fits in the box width
+                # Account for zoom level since text ignores transformations
+                zoom_factor = self.content_view.transform().m11()
+                available_width = (width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
+                font_metrics = self.content_view.fontMetrics()
+                text_to_display = self.get_truncated_text(info.part, available_width, font_metrics)
+                
+                text_item = QGraphicsTextItem(text_to_display)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                text_item.setDefaultTextColor(QColor(0,0,0))
+                text_item.setDefaultTextColor(text_color)
                 text_item.setPos(x_pos + 5, y_pos + 5)
                 text_item.setZValue(2)  # Text should be above the box
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-                # Make text item not intercept mouse events
+                # Make text item completely transparent to mouse events
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
                 text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                text_item.setAcceptHoverEvents(False)  # Disable hover events on text
+                # Store the full text for tooltip
+                text_item.setData(0, info.part)
                 
                 # Connect the text item to the event box
                 event_rect.set_text_item(text_item)
@@ -1477,6 +1691,41 @@ class Timeline(QWidget):
             self.logger.error(f"Error creating modified MIDI data: {e}")
             return None
 
+    def get_truncated_text(self, text, available_width, font_metrics):
+        """Return text truncated to fit within available width, with ellipsis if needed."""
+        if available_width <= 0:
+            return ""
+            
+        # If the text fits entirely, return it as-is
+        text_width = font_metrics.horizontalAdvance(text)
+        if text_width <= available_width:
+            return text
+            
+        # Calculate available width for ellipsis (3 dots)
+        ellipsis = "..."
+        ellipsis_width = font_metrics.horizontalAdvance(ellipsis)
+        available_for_text = available_width - ellipsis_width
+        
+        if available_for_text <= 0:
+            return ellipsis
+            
+        # Binary search to find the maximum characters that fit
+        left, right = 0, len(text)
+        best_length = 0
+        
+        while left <= right:
+            mid = (left + right) // 2
+            substring = text[:mid]
+            substring_width = font_metrics.horizontalAdvance(substring)
+            
+            if substring_width <= available_for_text:
+                best_length = mid
+                left = mid + 1
+            else:
+                right = mid - 1
+                
+        return text[:best_length] + ellipsis if best_length > 0 else ellipsis
+
     def get_time_from_pos(self, x_pos):
         scene_x = self.content_view.mapToScene(x_pos, 0).x()
         return scene_x / self.PIXELS_PER_SECOND if self.PIXELS_PER_SECOND > 0 else 0
@@ -1494,18 +1743,45 @@ class Timeline(QWidget):
     def mouseMoveEvent(self, event):
         view_pos = self.content_view.mapFrom(self, event.pos())
         scene_pos = self.content_view.mapToScene(view_pos)
+        
+        # Check for piano roll notes
+        current_item = None
         for item in self.note_items:
             if item.contains(scene_pos):
-                note_info = item.data(0)
+                current_item = item
+                break
+        
+        # Handle tooltip based on current item
+        if current_item:
+            # If this is a new item or first time, show tooltip
+            if current_item != self._current_tooltip_item:
+                # Hide any existing tooltip
+                if self._piano_tooltip:
+                    self._piano_tooltip.hide_tooltip()
+                
+                # Create custom tooltip if it doesn't exist
+                if not self._piano_tooltip:
+                    self._piano_tooltip = CustomTooltip(self)
+                
+                # Show tooltip for this note
+                note_info = current_item.data(0)
                 note_name = librosa.midi_to_note(note_info['note'])
                 seconds_per_beat = 60.0 / self.bpm
                 beat_number = note_info['time'] / seconds_per_beat
                 bar_number = int(beat_number / 4) + 1
                 beat_in_bar = int(beat_number % 4) + 1
                 tooltip_text = f"{note_name}\nTime: {note_info['time']:.2f}s\nBar: {bar_number}, Beat: {beat_in_bar}\nVelocity: {note_info['velocity']}"
-                QToolTip.showText(event.globalPosition().toPoint(), tooltip_text, self)
-                return
-        QToolTip.hideText()
+                
+                global_pos = event.globalPosition().toPoint()
+                global_pos.setY(global_pos.y() + 20)  # Offset to avoid cursor
+                self._piano_tooltip.show_at(global_pos, tooltip_text)
+                self._current_tooltip_item = current_item
+        else:
+            # No item under cursor, hide tooltip
+            if self._piano_tooltip:
+                self._piano_tooltip.hide_tooltip()
+            self._current_tooltip_item = None
+        
         super().mouseMoveEvent(event)
 
 if __name__ == '__main__':
