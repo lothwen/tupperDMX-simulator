@@ -76,10 +76,6 @@ class ToolbarManager(QObject):
         transport_section = self._create_transport_section()
         center_layout.addWidget(transport_section)
         
-        # Timeline Section (center - fixed)
-        timeline_section = self._create_timeline_section()
-        center_layout.addWidget(timeline_section)
-        
         # Add center container as fixed (no stretch)
         container_layout.addWidget(center_container, 0)  # stretch factor 0 = fixed/centered
         
@@ -108,14 +104,14 @@ class ToolbarManager(QObject):
         
         # Load MIDI button
         load_midi_btn = QPushButton("Load MIDI file")
-        load_midi_btn.setFixedSize(120, 35)
+        load_midi_btn.setFixedSize(150, 35)
         load_midi_btn.setObjectName("LoadButton")
         load_midi_btn.clicked.connect(lambda: self.load_file_requested.emit('midi'))
         buttons_layout.addWidget(load_midi_btn)
         
         # Load Audio button
         load_audio_btn = QPushButton("Load Audio file")
-        load_audio_btn.setFixedSize(120, 35)
+        load_audio_btn.setFixedSize(150, 35)
         load_audio_btn.setObjectName("LoadButton")
         load_audio_btn.clicked.connect(lambda: self.load_file_requested.emit('audio'))
         buttons_layout.addWidget(load_audio_btn)
@@ -146,7 +142,7 @@ class ToolbarManager(QObject):
         """Create the transport controls section."""
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setFixedSize(180, 100)
+        section.setFixedSize(480, 100)
         section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
@@ -178,30 +174,6 @@ class ToolbarManager(QObject):
         self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
         controls_layout.addWidget(self.play_pause_button)
         
-        layout.addLayout(controls_layout)
-        
-        self.logger.debug("Transport section created")
-        return section
-
-    def _create_timeline_section(self) -> QFrame:
-        """Create the timeline section."""
-        section = QFrame()
-        section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setFixedSize(300, 100)
-        section.setObjectName("ToolbarSection")
-        
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Section title
-        title = QLabel("TIMELINE")
-        title.setObjectName("SectionTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        
-        # Controls layout
-        controls_layout = QHBoxLayout()
-        
         # Time display
         self.time_display = QLabel("00:00.000")
         self.time_display.setFixedSize(150, 55)
@@ -228,10 +200,10 @@ class ToolbarManager(QObject):
         bpm_layout.addWidget(self.bpm_spinbox)
         
         controls_layout.addWidget(bpm_container)
-        
+
         layout.addLayout(controls_layout)
         
-        self.logger.debug("Timeline section created")
+        self.logger.debug("Transport section created")
         return section
 
     def _create_sources_section(self) -> QFrame:
