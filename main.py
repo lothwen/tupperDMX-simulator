@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.bpm_changed.connect(self.bpm_changed)
         self.toolbar_manager.dmx_source_changed.connect(self.on_dmx_source_changed)
         self.toolbar_manager.midi_port_changed.connect(self.set_midi_port)
+        self.toolbar_manager.metronome_mute_toggled.connect(self.on_toolbar_metronome_mute_toggled)
     
     def setup_ui(self):
         """Setup the main UI layout."""
@@ -296,6 +297,14 @@ class MainWindow(QMainWindow):
     def on_metronome_mute_toggled(self, muted):
         """Handle metronome mute toggle from timeline."""
         self.audio_controller.set_metronome_muted(muted)
+        # Update toolbar button to reflect mute state
+        self.toolbar_manager.set_metronome_mute(muted)
+
+    def on_toolbar_metronome_mute_toggled(self, muted):
+        """Handle metronome mute toggle from toolbar."""
+        self.audio_controller.set_metronome_muted(muted)
+        # Update timeline 'M' button to reflect mute state
+        self.timeline.metronome_mute_button.setChecked(muted)
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""
