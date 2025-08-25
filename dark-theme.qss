@@ -107,6 +107,29 @@ QMenu::separator {
     color: white;
 }
 
+/* Toolbar Metronome Button */
+#MetronomeButton {
+    /*border: 1px solid #555555;*/
+    border-radius: 3px;
+    background-color: #404040;
+    padding: 2px;
+}
+
+#MetronomeButton:hover {
+    background-color: #505050;
+    border-color: #777777;
+}
+
+#MetronomeButton:checked {
+    background-color: #ff4444;
+    border-color: #ff6666;
+}
+
+#MetronomeButton:checked:hover {
+    background-color: #ff6666;
+    border-color: #ff8888;
+}
+
 /* Control Containers */
 #MetronomeControlsContainer, #AudioControlsContainer {
     background-color: #383838;
@@ -167,6 +190,8 @@ QFrame#ToolbarSection {
 
 /* Section Titles */
 QLabel#SectionTitle {
+    background-color: #2b2b2b;
+    border-radius: 6px;
     color: #aaa;
     font-size: 14px;
     font-weight: bold;
@@ -287,8 +312,8 @@ QSpinBox {
     color: white;
     border: 1px solid #444;
     border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
+    padding: 4px 0px;
+    font-size: 16px;
 }
 
 QSpinBox:focus {
@@ -397,7 +422,6 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
 
 /* General Widget Styling */
 QWidget {
-    background-color: #2b2b2b;
     color: white;
 }
 

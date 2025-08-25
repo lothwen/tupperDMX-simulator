@@ -1,7 +1,7 @@
 from typing import Callable, Optional
 from PyQt6.QtWidgets import QToolBar, QSpinBox, QComboBox, QLabel, QWidget, QSizePolicy, QFrame, QHBoxLayout, QPushButton, QVBoxLayout
 from PyQt6.QtGui import QAction, QIcon, QFont
-from PyQt6.QtCore import QObject, pyqtSignal, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
 from tupperlogger import get_logger
 from dmx import DMXManager
@@ -20,6 +20,7 @@ class ToolbarManager(QObject):
     bpm_changed = pyqtSignal(int)  # new_bpm
     dmx_source_changed = pyqtSignal(str)  # source_name
     midi_port_changed = pyqtSignal(str)  # port_name
+    metronome_mute_toggled = pyqtSignal(bool)  # mute_state
     
     def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
                  play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon):
@@ -39,6 +40,7 @@ class ToolbarManager(QObject):
         self.play_pause_button: Optional[QPushButton] = None
         self.export_midi_button: Optional[QPushButton] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
+        self.metronome_button: Optional[QPushButton] = None
         self.dmx_source_combo: Optional[QComboBox] = None
         self.midi_port_combo: Optional[QComboBox] = None
         self.time_display: Optional[QLabel] = None
@@ -181,16 +183,22 @@ class ToolbarManager(QObject):
         self.time_display.setObjectName("TimeDisplay")
         controls_layout.addWidget(self.time_display)
         
-        # BPM display with spinbox
+        # BPM display with metronome icon and spinbox
         bpm_container = QWidget()
         bpm_layout = QHBoxLayout(bpm_container)
         bpm_layout.setContentsMargins(0, 0, 0, 0)
-        bpm_layout.setSpacing(0)
+        bpm_layout.setSpacing(2)
         
-        bpm_label = QLabel("BPM")
-        bpm_label.setObjectName("SmallLabel")
-        bpm_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bpm_layout.addWidget(bpm_label)
+        # Metronome icon button (clickable)
+        self.metronome_button = QPushButton()
+        metronome_icon = QIcon("metronome_icon.png")
+        self.metronome_button.setIcon(metronome_icon)
+        self.metronome_button.setIconSize(QSize(32, 32))  # Set icon size explicitly
+        self.metronome_button.setFixedSize(40, 40)
+        self.metronome_button.setCheckable(True)
+        self.metronome_button.setObjectName("MetronomeButton")
+        self.metronome_button.toggled.connect(self.metronome_mute_toggled.emit)
+        bpm_layout.addWidget(self.metronome_button)
         
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(40, 300)
@@ -381,6 +389,12 @@ class ToolbarManager(QObject):
             self.export_midi_button.setEnabled(enabled)
             self.logger.debug(f"Export MIDI button {'enabled' if enabled else 'disabled'}")
     
+    def set_metronome_mute(self, is_muted: bool) -> None:
+        """Set the metronome mute button state."""
+        if self.metronome_button:
+            self.metronome_button.setChecked(is_muted)
+            self.logger.debug(f"Metronome mute button set to: {'muted' if is_muted else 'unmuted'}")
+
     def update_configuration(self, config: Config) -> None:
         """Update toolbar with new configuration."""
         self.config = config
