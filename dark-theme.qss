@@ -321,15 +321,22 @@ QSpinBox:focus {
 }
 
 QSpinBox::up-button, QSpinBox::down-button {
-    background-color: #555;
-    border: 1px solid #666;
+    background-color: #1a1a1a;
+    /*border: 1px solid #444;*/
+    padding-right: 10px;
 }
 
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-    background-color: #666;
+    background-color: #444;
 }
 
-QSpinBox::up-arrow, QSpinBox::down-arrow {
+QSpinBox::up-arrow {
+    image: url('up-arrow.png');
+    color: white;
+}
+
+QSpinBox::down-arrow {
+    image: url('dropdown-arrow.png');
     color: white;
 }
 
@@ -349,11 +356,13 @@ QComboBox:focus {
 
 QComboBox::drop-down {
     border: none;
-    background-color: #555;
+    border-radius: 4px;
+    background-color: #1a1a1a;
+    padding-right: 10px;
 }
 
 QComboBox::down-arrow {
-    color: red;
+    image: url('dropdown-arrow.png');
 }
 
 QComboBox QAbstractItemView {
