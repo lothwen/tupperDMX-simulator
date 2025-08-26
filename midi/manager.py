@@ -32,6 +32,9 @@ class MidiManager(QObject):
         self.midi_notes: List[Dict[str, Any]] = []   # Notes for piano roll with unique IDs
         self.midi_note_map = midi_note_map or {}
         
+        # Track current playback position for in-place updates
+        self._current_playback_time: float = 0.0
+        
         self.logger = get_logger("midi.manager")
 
     # MIDI Data Management Methods
@@ -344,8 +347,46 @@ class MidiManager(QObject):
     def _auto_update_worker(self) -> None:
         """Automatically update the worker with current MIDI data if running."""
         if self.current_worker and self.current_port_name and self.midi_data:
-            self.logger.debug("Auto-updating worker with modified MIDI data")
-            self.start_worker(self.current_filename or "modified", self.current_port_name, self.midi_data)
+            # Try to update worker in-place to preserve playback position
+            if self._update_worker_in_place():
+                self.logger.debug("Updated worker MIDI data in-place")
+            else:
+                # Fallback to restarting if in-place update fails
+                self.logger.debug("In-place update failed, restarting worker with modified MIDI data")
+                self.start_worker(self.current_filename or "modified", self.current_port_name, self.midi_data)
+
+    def _update_worker_in_place(self) -> bool:
+        """Update the worker's MIDI data without restarting, preserving playback position."""
+        if not self.current_worker or not self.current_worker.isRunning():
+            return False
+            
+        # Get current playback position
+        current_time = self._get_current_playback_time()
+        
+        # Safety check: if MIDI data is None or empty, we can't do in-place update
+        if not self.midi_data:
+            self.logger.warning("Cannot update worker in-place: no MIDI data available")
+            return False
+        
+        # Update the worker's MIDI data
+        success = self.current_worker.update_midi_data(self.midi_data, current_time)
+        
+        if success:
+            self.logger.debug(f"Successfully updated worker MIDI data in-place at position {current_time:.2f}s")
+        else:
+            self.logger.warning("In-place MIDI data update failed, will need to restart worker")
+            
+        return success
+
+    def _get_current_playback_time(self) -> float:
+        """Get the current playback time from the MediaController."""
+        # We need a way to get the current playback position
+        # This will be set by the MediaController when it calls play_until()
+        return getattr(self, '_current_playback_time', 0.0)
+
+    def set_current_playback_time(self, time_seconds: float) -> None:
+        """Set the current playback time (called by MediaController)."""
+        self._current_playback_time = time_seconds
     
     def export_to_file(self, file_path: str) -> bool:
         """Export current MIDI data to file."""
@@ -425,6 +466,9 @@ class MidiManager(QObject):
             self.current_filename = filename
             self.current_port_name = port_name
             
+            # Reset playback time tracking when starting new worker
+            self._current_playback_time = 0.0
+            
             # Start the worker thread
             worker.start()
             
@@ -463,11 +507,15 @@ class MidiManager(QObject):
     def play_until(self, timeline_time_sec: float) -> None:
         """Request playback up to the specified timeline position."""
         if self.current_worker:
+            # Track the current playback time for in-place updates
+            self._current_playback_time = timeline_time_sec
             self.current_worker.play_until(timeline_time_sec)
     
     def seek(self, time_seconds: float) -> None:
         """Seek to a specific time position."""
         if self.current_worker:
+            # Track the current playback time for in-place updates
+            self._current_playback_time = time_seconds
             self.current_worker.seek(time_seconds)
     
     def get_current_filename(self) -> Optional[str]:
