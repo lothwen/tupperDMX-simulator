@@ -1,5 +1,8 @@
-from typing import Optional
+from typing import Optional, List, Dict, Any, Callable
 from PyQt6.QtCore import QObject, pyqtSignal
+import mido
+import uuid
+import copy
 
 from tupperlogger import get_logger
 from .worker import MidiWorker, MidiConnectionStatus
@@ -15,21 +18,367 @@ class MidiManager(QObject):
     error_occurred = pyqtSignal(str, str)  # port_name, error message
     playback_position_changed = pyqtSignal(float)  # current time
     worker_finished = pyqtSignal()
+    data_changed = pyqtSignal()  # Emitted when MIDI data is modified
     
-    def __init__(self):
+    def __init__(self, midi_note_map: Optional[Dict] = None):
         super().__init__()
         self.current_worker: Optional[MidiWorker] = None
         self.current_filename: Optional[str] = None
         self.current_port_name: Optional[str] = None
-        self.logger = get_logger("midi.manager")
         
-    def start_worker(self, filename: str, port_name: str) -> bool:
+        # MIDI Data Storage - Single Source of Truth
+        self.midi_data: Optional[mido.MidiFile] = None
+        self.midi_events: List[Dict[str, Any]] = []  # Events for UI display with unique IDs
+        self.midi_notes: List[Dict[str, Any]] = []   # Notes for piano roll with unique IDs
+        self.midi_note_map = midi_note_map or {}
+        
+        self.logger = get_logger("midi.manager")
+
+    # MIDI Data Management Methods
+    
+    def load_from_file(self, file_path: str) -> bool:
+        """Load MIDI data from file and parse it for UI display."""
+        try:
+            self.midi_data = mido.MidiFile(file_path)
+            self.current_filename = file_path
+            self._parse_midi_data()
+            self.logger.info(f"Loaded MIDI file: {file_path}")
+            self.data_changed.emit()
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to load MIDI file {file_path}: {e}")
+            return False
+    
+    def create_empty_track(self) -> None:
+        """Create an empty MIDI track for new compositions."""
+        self.midi_data = mido.MidiFile(type=1, ticks_per_beat=480)
+        self.midi_data.tracks.append(mido.MidiTrack())
+        self.midi_events.clear()
+        self.midi_notes.clear()
+        self.current_filename = None
+        self.logger.info("Created empty MIDI track")
+        self.data_changed.emit()
+        
+    def set_midi_note_map(self, midi_note_map: Dict) -> None:
+        """Update the MIDI note mapping and reparse data if available."""
+        self.midi_note_map = midi_note_map
+        if self.midi_data:
+            self._parse_midi_data()
+            self.data_changed.emit()
+    
+    def _parse_midi_data(self) -> None:
+        """Parse the loaded MIDI data into events and notes for UI display."""
+        if not self.midi_data:
+            return
+            
+        self.midi_events.clear()
+        self.midi_notes.clear()
+        
+        # Parse for MIDI events (using note map)
+        current_time = 0
+        for msg in self.midi_data:
+            current_time += msg.time
+            if msg.type == 'note_on' and msg.velocity > 0:
+                # Check if this note is in our note map (for events track)
+                note_info = self.midi_note_map.get(str(msg.note))
+                if note_info:
+                    event_id = str(uuid.uuid4())
+                    self.midi_events.append({
+                        "id": event_id,
+                        "note": msg.note,
+                        "time": current_time,
+                        "velocity": msg.velocity,
+                        "info": note_info
+                    })
+        
+        # Parse for piano roll notes
+        current_time = 0
+        active_notes = {}
+        for msg in self.midi_data:
+            current_time += msg.time
+            if msg.type == 'note_on' and msg.velocity > 0:
+                active_notes[msg.note] = {"time": current_time, "velocity": msg.velocity}
+            elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                if msg.note in active_notes:
+                    note_id = str(uuid.uuid4())
+                    start_time = active_notes[msg.note]["time"]
+                    self.midi_notes.append({
+                        "id": note_id,
+                        "note": msg.note,
+                        "time": start_time,
+                        "duration": current_time - start_time,
+                        "velocity": active_notes[msg.note]["velocity"]
+                    })
+                    del active_notes[msg.note]
+                    
+    def get_events_for_ui(self) -> List[Dict[str, Any]]:
+        """Get MIDI events formatted for Timeline display."""
+        return copy.deepcopy(self.midi_events)
+    
+    def get_notes_for_ui(self) -> List[Dict[str, Any]]:
+        """Get MIDI notes formatted for piano roll display.""" 
+        return copy.deepcopy(self.midi_notes)
+    
+    def get_duration(self) -> float:
+        """Get the total duration of the MIDI data."""
+        if self.midi_data:
+            return self.midi_data.length
+        return 0.0
+
+    # MIDI Modification Methods
+    
+    def add_event(self, note: int, time: float, velocity: int) -> str:
+        """Add a new MIDI event and return its ID."""
+        if str(note) not in self.midi_note_map:
+            self.logger.warning(f"Note {note} not in MIDI note map")
+            return ""
+            
+        event_id = str(uuid.uuid4())
+        new_event = {
+            "id": event_id,
+            "note": note,
+            "time": time,
+            "velocity": velocity,
+            "info": self.midi_note_map[str(note)]
+        }
+        
+        # Insert in chronological order
+        inserted = False
+        for i, event in enumerate(self.midi_events):
+            if event['time'] > time:
+                self.midi_events.insert(i, new_event)
+                inserted = True
+                break
+        if not inserted:
+            self.midi_events.append(new_event)
+        
+        # Also add to piano roll
+        note_id = str(uuid.uuid4())
+        new_note = {
+            "id": note_id,
+            "note": note,
+            "time": time,
+            "velocity": velocity,
+            "duration": 0.1  # Default duration
+        }
+        
+        inserted = False
+        for i, note_data in enumerate(self.midi_notes):
+            if note_data['time'] > time:
+                self.midi_notes.insert(i, new_note)
+                inserted = True
+                break
+        if not inserted:
+            self.midi_notes.append(new_note)
+            
+        self._rebuild_midi_data()
+        self._auto_update_worker()
+        self.data_changed.emit()
+        self.logger.info(f"Added MIDI event: note={note}, time={time:.3f}s")
+        return event_id
+    
+    def update_event_timing(self, event_id: str, new_time: float) -> bool:
+        """Update the timing of a MIDI event."""
+        # Find and update event
+        event = None
+        for e in self.midi_events:
+            if e['id'] == event_id:
+                old_time = e['time']
+                e['time'] = new_time
+                event = e
+                break
+        
+        if not event:
+            return False
+            
+        # Find and update corresponding note
+        for note in self.midi_notes:
+            if (note['note'] == event['note'] and abs(note['time'] - old_time) < 0.01):
+                note['time'] = new_time
+                break
+        
+        # Re-sort events by time
+        self.midi_events.sort(key=lambda x: x['time'])
+        self.midi_notes.sort(key=lambda x: x['time'])
+        
+        self._rebuild_midi_data()
+        self._auto_update_worker()
+        self.data_changed.emit()
+        self.logger.info(f"Updated event timing: {event_id} to {new_time:.3f}s")
+        return True
+    
+    def edit_event(self, event_id: str, **kwargs) -> bool:
+        """Edit a MIDI event's properties."""
+        # Find event
+        event = None
+        for e in self.midi_events:
+            if e['id'] == event_id:
+                event = e
+                break
+                
+        if not event:
+            return False
+        
+        old_note = event['note']
+        old_time = event['time']
+        
+        # Update event properties
+        if 'note' in kwargs and str(kwargs['note']) in self.midi_note_map:
+            event['note'] = kwargs['note']
+            event['info'] = self.midi_note_map[str(kwargs['note'])]
+        if 'time' in kwargs:
+            event['time'] = kwargs['time']
+        if 'velocity' in kwargs:
+            event['velocity'] = kwargs['velocity']
+            
+        # Find and update corresponding note
+        for note in self.midi_notes:
+            if (note['note'] == old_note and abs(note['time'] - old_time) < 0.01):
+                if 'note' in kwargs:
+                    note['note'] = kwargs['note']
+                if 'time' in kwargs:
+                    note['time'] = kwargs['time']
+                if 'velocity' in kwargs:
+                    note['velocity'] = kwargs['velocity']
+                break
+                
+        # Re-sort by time
+        self.midi_events.sort(key=lambda x: x['time'])
+        self.midi_notes.sort(key=lambda x: x['time'])
+        
+        self._rebuild_midi_data()
+        self._auto_update_worker()
+        self.data_changed.emit()
+        self.logger.info(f"Edited event: {event_id}")
+        return True
+    
+    def delete_event(self, event_id: str) -> bool:
+        """Delete a MIDI event."""
+        # Find and remove event
+        event = None
+        for i, e in enumerate(self.midi_events):
+            if e['id'] == event_id:
+                event = self.midi_events.pop(i)
+                break
+                
+        if not event:
+            return False
+            
+        # Find and remove corresponding note
+        note_to_remove = None
+        for i, note in enumerate(self.midi_notes):
+            if (note['note'] == event['note'] and abs(note['time'] - event['time']) < 0.01):
+                note_to_remove = self.midi_notes.pop(i)
+                break
+                
+        self._rebuild_midi_data()
+        self._auto_update_worker()
+        self.data_changed.emit()
+        self.logger.info(f"Deleted event: {event_id}")
+        return True
+    
+    def _rebuild_midi_data(self) -> None:
+        """Rebuild the MIDI file from current event and note data."""
+        if not self.midi_data:
+            return
+            
+        try:
+            # Create new MIDI file with current structure
+            new_mid = mido.MidiFile(type=self.midi_data.type, ticks_per_beat=self.midi_data.ticks_per_beat)
+            track = mido.MidiTrack()
+            new_mid.tracks.append(track)
+            
+            # Add tempo and meta messages from original
+            tempo_microseconds = 500000  # Default tempo (120 BPM)
+            for msg in self.midi_data.merged_track:
+                if msg.is_meta:
+                    if msg.type == 'set_tempo':
+                        tempo_microseconds = msg.tempo
+                    track.append(msg.copy())
+            
+            # Build all MIDI events from notes data
+            all_events = []
+            for note_data in self.midi_notes:
+                # Note on
+                all_events.append({
+                    'time': note_data['time'],
+                    'type': 'note_on',
+                    'note': note_data['note'],
+                    'velocity': note_data['velocity'],
+                    'channel': 0
+                })
+                # Note off
+                all_events.append({
+                    'time': note_data['time'] + note_data['duration'],
+                    'type': 'note_off',
+                    'note': note_data['note'],
+                    'velocity': 0,
+                    'channel': 0
+                })
+            
+            # Sort by time and convert to MIDI messages
+            all_events.sort(key=lambda x: x['time'])
+            current_time_seconds = 0
+            
+            for event in all_events:
+                delta_time_seconds = event['time'] - current_time_seconds
+                delta_ticks = int(mido.second2tick(delta_time_seconds,
+                                                 ticks_per_beat=new_mid.ticks_per_beat,
+                                                 tempo=tempo_microseconds))
+                
+                msg = mido.Message(
+                    event['type'],
+                    channel=event['channel'],
+                    note=event['note'],
+                    velocity=event['velocity'],
+                    time=delta_ticks
+                )
+                track.append(msg)
+                current_time_seconds = event['time']
+            
+            self.midi_data = new_mid
+            
+        except Exception as e:
+            self.logger.error(f"Error rebuilding MIDI data: {e}")
+    
+    def _auto_update_worker(self) -> None:
+        """Automatically update the worker with current MIDI data if running."""
+        if self.current_worker and self.current_port_name and self.midi_data:
+            self.logger.debug("Auto-updating worker with modified MIDI data")
+            self.start_worker(self.current_filename or "modified", self.current_port_name, self.midi_data)
+    
+    def export_to_file(self, file_path: str) -> bool:
+        """Export current MIDI data to file."""
+        if not self.midi_data:
+            self.logger.error("No MIDI data to export")
+            return False
+            
+        try:
+            self.midi_data.save(file_path)
+            self.logger.info(f"Exported MIDI data to: {file_path}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to export MIDI file {file_path}: {e}")
+            return False
+
+    # Enhanced playback methods
+    
+    def start_playback(self, port_name: str) -> bool:
+        """Start MIDI playback with current data."""
+        if not self.midi_data:
+            self.logger.warning("No MIDI data available for playback")
+            return False
+            
+        return self.start_worker(self.current_filename or "current", port_name, self.midi_data)
+            
+    def start_worker(self, filename: str, port_name: str, midi_data: Optional[mido.MidiFile] = None) -> bool:
         """
         Start a MIDI worker with the specified file and port.
         
         Args:
-            filename: Path to MIDI file
+            filename: Path to MIDI file (used for identification)
             port_name: MIDI output port name
+            midi_data: Optional MidiFile object to use instead of loading from file
             
         Returns:
             True if worker started successfully
@@ -37,9 +386,13 @@ class MidiManager(QObject):
         # Stop any existing worker
         self.stop_worker()
         
+        # Use current MIDI data if available and no specific data provided
+        if not midi_data and self.midi_data:
+            midi_data = self.midi_data
+        
         # Validate inputs
-        if not filename:
-            self.error_occurred.emit(port_name or "Unknown", "No MIDI file specified")
+        if not filename and not midi_data:
+            self.error_occurred.emit(port_name or "Unknown", "No MIDI file or data specified")
             return False
         
         if not port_name:
@@ -54,7 +407,7 @@ class MidiManager(QObject):
         
         # Create and start worker
         try:
-            worker = MidiWorker(filename, port_name)
+            worker = MidiWorker(filename, port_name, midi_data)
             
             # Connect signals
             worker.connection_status_changed.connect(
@@ -170,15 +523,16 @@ class MidiManager(QObject):
         if not self.current_port_name:
             return False
         
-        target_filename = filename or self.current_filename
-        if not target_filename:
-            return False
-        
-        return self.start_worker(target_filename, self.current_port_name)
+        if filename:
+            # Loading a new file
+            return self.load_from_file(filename) and self.start_playback(self.current_port_name)
+        else:
+            # Reloading current data
+            return self.start_playback(self.current_port_name)
     
     def switch_port(self, new_port_name: str) -> bool:
         """
-        Switch to a different MIDI port while keeping the same file.
+        Switch to a different MIDI port while keeping current data.
         
         Args:
             new_port_name: New MIDI port name
@@ -186,11 +540,31 @@ class MidiManager(QObject):
         Returns:
             True if switch was successful
         """
-        if not self.current_filename:
+        if not self.midi_data:
             return False
         
-        return self.start_worker(self.current_filename, new_port_name)
+        return self.start_playback(new_port_name)
     
+    def reload_with_midi_data(self, midi_data: mido.MidiFile) -> bool:
+        """
+        Reload the current connection with modified MIDI data.
+        This method is kept for backward compatibility but is now redundant.
+        
+        Args:
+            midi_data: Modified MidiFile object to use for playback
+            
+        Returns:
+            True if reload was successful
+        """
+        if not self.current_port_name:
+            self.logger.warning("Cannot reload MIDI data - no active connection")
+            return False
+        
+        # Update our internal data and restart playback
+        self.midi_data = midi_data
+        self._parse_midi_data()  # Re-parse for UI
+        return self.start_playback(self.current_port_name)
+
     def cleanup(self) -> None:
         """Clean up resources when shutting down."""
         self.stop_worker()

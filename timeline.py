@@ -621,11 +621,10 @@ class Timeline(QWidget):
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
     
-    def __init__(self, audio_file=None, midi_file=None, midi_note_map=None, initial_metronome_volume=0.5, initial_audio_volume=0.5, parent=None):
+    def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5, initial_audio_volume=0.5, parent=None):
         super().__init__(parent)
         self.audio_file = audio_file
-        self.midi_file = midi_file
-        self.midi_note_map = midi_note_map if midi_note_map else {}
+        self.midi_manager = midi_manager
         
         self.min_note = 21
         self.max_note = 108
@@ -639,10 +638,9 @@ class Timeline(QWidget):
         self.ruler_items = []
         self.ruler_bar_text_items = []
         
-        # Store MIDI data for editing
-        self.midi_data = None  # Will store mido.MidiFile object
-        self.midi_events_data = []  # Store events for the MIDI Events track
-        self.midi_notes_data = []   # Store notes for the piano roll
+        # Cache for current UI data (refreshed from MidiManager)
+        self._cached_events = []
+        self._cached_notes = []
         
         self._is_panning = False
         self._pan_start_pos = None
@@ -741,11 +739,50 @@ class Timeline(QWidget):
         
         if self.audio_file:
             self.draw_waveform(self.audio_file)
-        if self.midi_file:
-            self.draw_midi_notes(self.midi_file)
-            self.draw_midi_events(self.midi_file)
-            
+        
+        # MIDI data will be loaded via refresh_from_manager()
         self.draw_time_grid()
+        
+    def refresh_from_manager(self) -> None:
+        """Refresh timeline display from MidiManager data."""
+        if not self.midi_manager:
+            return
+            
+        # Get current data from MidiManager
+        self._cached_events = self.midi_manager.get_events_for_ui()
+        self._cached_notes = self.midi_manager.get_notes_for_ui()
+        
+        # Redraw the UI
+        self.redraw_midi_events()
+        self.redraw_piano_roll()
+        
+        # Detect BPM from first event if available
+        if self._cached_events:
+            # Try to get BPM from MIDI data
+            duration = self.midi_manager.get_duration()
+            if duration > 0:
+                self._detect_bpm_from_data()
+
+    def _detect_bpm_from_data(self) -> None:
+        """Detect BPM from MIDI data structure."""
+        if not self.midi_manager or not self.midi_manager.midi_data:
+            return
+            
+        # Look for tempo meta messages
+        for msg in self.midi_manager.midi_data:
+            if msg.is_meta and msg.type == 'set_tempo':
+                tempo = mido.tempo2bpm(msg.tempo)
+                self.bpm = int(tempo)
+                self.bpm_detected.emit(self.bpm)
+                return
+        
+        # Look for velocity-encoded BPM (specific to this application)
+        for msg in self.midi_manager.midi_data:
+            if not msg.is_meta and msg.type == 'note_on' and msg.note == 40:
+                tempo = msg.velocity * 2
+                self.bpm = int(tempo)
+                self.bpm_detected.emit(self.bpm)
+                return
 
     def on_mute_toggled(self, checked):
         self.metronome_mute_toggled.emit(checked)
@@ -827,116 +864,15 @@ class Timeline(QWidget):
         offset_sec = pos.x() / self.PIXELS_PER_SECOND
         self.waveform_offset_changed.emit(offset_sec)
 
-    def draw_midi_events(self, midi_file):
-        if not self.midi_note_map:
-            return
-            
-        try:
-            # Store the MIDI data for editing
-            self.midi_data = mido.MidiFile(midi_file)
-            mid = self.midi_data
-            song_length_seconds = mid.length
-            current_time = 0
-            events = []
-            tempo = None
+    def draw_midi_events_from_manager(self):
+        """Draw MIDI events from MidiManager data - kept for backward compatibility."""
+        self.redraw_midi_events()
 
-            for msg in mid:
-                if msg.is_meta and msg.type == 'set_tempo' and tempo is None:
-                    tempo = mido.tempo2bpm(msg.tempo)
-                if not msg.is_meta and msg.type == 'note_on' and msg.note == 40:
-                    tempo = msg.velocity * 2
-
-                current_time += msg.time
-                if msg.type == 'note_on' and msg.velocity > 0:
-                    note_info = self.midi_note_map.get(str(msg.note))
-                    if note_info:
-                        events.append({
-                            "note": msg.note,
-                            "time": current_time,
-                            "velocity": msg.velocity,
-                            "info": note_info
-                        })
-            
-            # Store events data for editing
-            self.midi_events_data = events.copy()
-            
-            if tempo:
-                self.bpm = int(tempo)
-                self.bpm_detected.emit(self.bpm)
-
-            y_pos = self.RULER_TRACK_HEIGHT + self.WAVEFORM_TRACK_HEIGHT + 2 * self.TRACK_SPACING
-
-            for i in range(len(events)):
-                event = events[i]
-                start_time = event['time']
-                if i < len(events) - 1:
-                    duration = events[i+1]['time'] - start_time
-                else:
-                    # For last event, extend to the end of extended timeline
-                    # Calculate extended duration (5% beyond song)
-                    timeline_end_seconds = song_length_seconds * 1.05
-                    duration = timeline_end_seconds - start_time
-                    # Ensure minimum width for visibility
-                    if duration <= 0:
-                        duration = song_length_seconds * 0.05  # Use 5% of song as minimum
-                
-                x_pos = start_time * self.PIXELS_PER_SECOND
-                width = max(duration * self.PIXELS_PER_SECOND, 20)  # Minimum 20px width
-                
-                # Create draggable MIDI event box
-                event_rect = DraggableMidiEvent(x_pos, y_pos, width, self.MIDI_EVENTS_TRACK_HEIGHT, i, event)
-                event_rect.set_timeline(self)
-                event_rect.timing_changed.connect(self.on_midi_event_timing_changed)
-                event_rect.edit_requested.connect(self.on_midi_event_edit_requested)
-                event_rect.delete_requested.connect(self.on_midi_event_delete_requested)
-                event_rect.add_at_position_requested.connect(self.on_add_event_requested)
-                
-                info = event['info']
-                color = QColor(info.color)
-                event_rect.setBrush(QBrush(color))
-                event_rect.setPen(QPen(QColor(20,20,20)))
-                event_rect.setZValue(1)  # Ensure event box is above other items
-                self.content_scene.addItem(event_rect)
-                self.midi_event_items.append(event_rect)
-
-                # Determine optimal text color based on background color brightness
-                brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
-                text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
-                
-                # Calculate maximum text that fits in the box width
-                # Account for zoom level since text ignores transformations
-                zoom_factor = self.content_view.transform().m11()
-                available_width = (width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
-                font_metrics = self.content_view.fontMetrics()
-                text_to_display = self.get_truncated_text(info.part, available_width, font_metrics)
-                
-                text_item = QGraphicsTextItem(text_to_display)
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                text_item.setDefaultTextColor(text_color)
-                text_item.setPos(x_pos + 5, y_pos + 5)
-                text_item.setZValue(2)  # Text should be above the box
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-                # Make text item completely transparent to mouse events
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
-                text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                text_item.setAcceptHoverEvents(False)  # Disable hover events on text
-                # Store the full text for tooltip
-                text_item.setData(0, info.part)
-                
-                # Connect the text item to the event box
-                event_rect.set_text_item(text_item)
-                
-                self.content_scene.addItem(text_item)
-                self.midi_event_items.append(text_item)
-
-        except Exception as e:
-            self.logger.error(f"Error drawing midi events: {e}")
-
-    def set_files(self, audio_file, midi_file):
+    def set_files(self, audio_file, midi_file=None):
+        """Set audio file. MIDI files should be loaded via MidiManager."""
         self.audio_file = audio_file
-        self.midi_file = midi_file
 
+        # Clear existing items
         for item in self.note_items: self.content_scene.removeItem(item)
         self.note_items.clear()
         if self.waveform_item: self.content_scene.removeItem(self.waveform_item)
@@ -944,11 +880,10 @@ class Timeline(QWidget):
         for item in self.midi_event_items: self.content_scene.removeItem(item)
         self.midi_event_items.clear()
 
+        # Draw audio waveform
         if audio_file: self.draw_waveform(audio_file)
-        if midi_file:
-            self.draw_midi_notes(midi_file)
-            self.draw_midi_events(midi_file)
         
+        # MIDI data should be loaded via MidiManager and displayed via refresh_from_manager()
         QTimer.singleShot(0, self.fit_to_width)
 
     def fit_to_width(self):
@@ -1098,7 +1033,7 @@ class Timeline(QWidget):
 
     def update_midi_text_truncation(self):
         """Update text truncation for all MIDI event labels based on current zoom level."""
-        if not self.midi_events_data or not self.midi_event_items:
+        if not self._cached_events or not self.midi_event_items:
             return
             
         zoom_factor = self.content_view.transform().m11()
@@ -1109,15 +1044,15 @@ class Timeline(QWidget):
         
         # Update each text item
         for i, text_item in enumerate(text_items):
-            if i < len(self.midi_events_data):
-                event_data = self.midi_events_data[i]
+            if i < len(self._cached_events):
+                event_data = self._cached_events[i]
                 
                 # Calculate box width for this event
-                if i < len(self.midi_events_data) - 1:
-                    duration = self.midi_events_data[i+1]['time'] - event_data['time']
+                if i < len(self._cached_events) - 1:
+                    duration = self._cached_events[i+1]['time'] - event_data['time']
                 else:
                     # For last event, use a reasonable default duration
-                    song_length = self.midi_data.length if self.midi_data else 240
+                    song_length = self.midi_manager.get_duration() if self.midi_manager else 240
                     extended_duration = song_length * 1.05
                     duration = extended_duration - event_data['time']
                     if duration <= 0:
@@ -1197,89 +1132,58 @@ class Timeline(QWidget):
 
     def on_midi_event_timing_changed(self, event_index, new_start_time):
         """Handle when a MIDI event box left border is dragged, updating this event's start time."""
-        if event_index < 0 or event_index >= len(self.midi_events_data):
+        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
             return
         
-        # Update the timing of the current event
-        old_time = self.midi_events_data[event_index]['time']
-        self.midi_events_data[event_index]['time'] = new_start_time
+        # Get the event ID from cached data
+        event_data = self._cached_events[event_index]
+        event_id = event_data.get('id')
         
-        # Find and update corresponding MIDI notes that match this event
-        event_note = self.midi_events_data[event_index]['note']
-        updated_notes = 0
-        for note_data in self.midi_notes_data:
-            if (note_data['note'] == event_note and 
-                abs(note_data['time'] - old_time) < 0.01):
-                note_data['time'] = new_start_time
-                updated_notes += 1
-                break
+        if not event_id:
+            self.logger.error(f"No event ID found for event index {event_index}")
+            return
         
-        # Log the change
-        event_info = self.midi_events_data[event_index].get('info', {})
-        part_name = getattr(event_info, 'part', f'Note {event_note}') if hasattr(event_info, 'part') else f'Note {event_note}'
-        self.logger.info(f"MIDI timing updated: {part_name} moved from {old_time:.3f}s to {new_start_time:.3f}s")
-        
-        # Redraw both the MIDI events track and piano roll to reflect changes
-        self.redraw_midi_events()
-        self.redraw_piano_roll()
-        
-        # Update MIDI data structure for export
-        self.update_midi_data_structure()
-        
-        # Emit signal that MIDI data has changed
-        self.midi_data_changed.emit()
+        # Update via MidiManager
+        if self.midi_manager.update_event_timing(event_id, new_start_time):
+            # Refresh the timeline display
+            self.refresh_from_manager()
 
     def on_midi_event_edit_requested(self, event_index):
         """Handle edit request for a MIDI event."""
-        if event_index < 0 or event_index >= len(self.midi_events_data):
+        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
             return
             
-        event_data = self.midi_events_data[event_index]
-        dialog = MidiEventEditDialog(event_data, self.midi_note_map)
+        event_data = self._cached_events[event_index]
+        event_id = event_data.get('id')
+        
+        if not event_id:
+            return
+            
+        # Use MidiManager's note map for the dialog
+        dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
         
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Get the new values
             new_values = dialog.get_values()
             
-            # Store old values for updating corresponding piano roll notes
-            old_note = event_data['note']
-            old_time = event_data['time']
-            
-            # Update the event data
-            event_data['note'] = new_values['note']
-            event_data['time'] = new_values['time']
-            event_data['velocity'] = new_values['velocity']
-            
-            # Update the info based on new note
-            if str(new_values['note']) in self.midi_note_map:
-                event_data['info'] = self.midi_note_map[str(new_values['note'])]
-            
-            # Update corresponding notes in piano roll
-            for note_data in self.midi_notes_data:
-                if (note_data['note'] == old_note and 
-                    abs(note_data['time'] - old_time) < 0.01):
-                    note_data['note'] = new_values['note']
-                    note_data['time'] = new_values['time']
-                    note_data['velocity'] = new_values['velocity']
-                    break
-            
-            # Redraw to reflect changes
-            self.redraw_midi_events()
-            self.redraw_piano_roll()
-            self.update_midi_data_structure()
-            self.midi_data_changed.emit()
-            
-            self.logger.info(f"MIDI event {event_index} edited: note={new_values['note']}, time={new_values['time']:.3f}s, velocity={new_values['velocity']}")
+            # Update via MidiManager
+            if self.midi_manager.edit_event(event_id, **new_values):
+                # Refresh the timeline display
+                self.refresh_from_manager()
+                self.logger.info(f"MIDI event {event_index} edited: note={new_values['note']}, time={new_values['time']:.3f}s, velocity={new_values['velocity']}")
 
     def on_midi_event_delete_requested(self, event_index):
         """Handle delete request for a MIDI event."""
-        if event_index < 0 or event_index >= len(self.midi_events_data):
+        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
             return
             
-        event_data = self.midi_events_data[event_index]
+        event_data = self._cached_events[event_index]
+        event_id = event_data.get('id')
         
+        if not event_id:
+            return
+            
         # Confirm deletion
-        # Get event name for confirmation dialog
         info = event_data.get('info', None)
         if info and hasattr(info, 'part'):
             event_name = info.part
@@ -1295,29 +1199,17 @@ class Timeline(QWidget):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            # Store values for finding corresponding piano roll notes
-            deleted_note = event_data['note']
-            deleted_time = event_data['time']
-            
-            # Remove from events data
-            del self.midi_events_data[event_index]
-            
-            # Remove corresponding notes from piano roll
-            self.midi_notes_data = [
-                note for note in self.midi_notes_data 
-                if not (note['note'] == deleted_note and abs(note['time'] - deleted_time) < 0.01)
-            ]
-            
-            # Redraw to reflect changes
-            self.redraw_midi_events()
-            self.redraw_piano_roll()
-            self.update_midi_data_structure()
-            self.midi_data_changed.emit()
-            
-            self.logger.info(f"MIDI event {event_index} deleted: note={deleted_note}, time={deleted_time:.3f}s")
+            # Delete via MidiManager
+            if self.midi_manager.delete_event(event_id):
+                # Refresh the timeline display
+                self.refresh_from_manager()
+                self.logger.info(f"MIDI event {event_index} deleted: note={event_data['note']}, time={event_data['time']:.3f}s")
 
     def on_add_event_requested(self, time_seconds):
         """Handle request to add a new MIDI event at the specified time."""
+        if not self.midi_manager:
+            return
+            
         # Create event data with default values
         new_event_data = {
             'time': time_seconds,
@@ -1325,70 +1217,40 @@ class Timeline(QWidget):
             'note': None  # Will be set by dialog
         }
         
-        dialog = MidiEventEditDialog(new_event_data, self.midi_note_map, is_new_event=True)
+        dialog = MidiEventEditDialog(new_event_data, self.midi_manager.midi_note_map, is_new_event=True)
         
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Get the new values from dialog
             new_values = dialog.get_values()
             
-            # Create the new event data
-            new_event = {
-                'note': new_values['note'],
-                'time': new_values['time'],
-                'velocity': new_values['velocity'],
-                'info': self.midi_note_map[str(new_values['note'])]
-            }
+            # Add via MidiManager
+            event_id = self.midi_manager.add_event(
+                new_values['note'],
+                new_values['time'], 
+                new_values['velocity']
+            )
             
-            # Add to events data in chronological order
-            inserted = False
-            for i, existing_event in enumerate(self.midi_events_data):
-                if existing_event['time'] > new_event['time']:
-                    self.midi_events_data.insert(i, new_event)
-                    inserted = True
-                    break
-            
-            if not inserted:
-                # Add at the end if it's the latest event
-                self.midi_events_data.append(new_event)
-            
-            # Also add to piano roll data
-            new_note = {
-                'note': new_values['note'],
-                'time': new_values['time'],
-                'velocity': new_values['velocity'],
-                'duration': 0.1  # Default duration for new notes
-            }
-            
-            # Insert piano roll note in chronological order
-            inserted = False
-            for i, existing_note in enumerate(self.midi_notes_data):
-                if existing_note['time'] > new_note['time']:
-                    self.midi_notes_data.insert(i, new_note)
-                    inserted = True
-                    break
-                    
-            if not inserted:
-                self.midi_notes_data.append(new_note)
-            
-            # Redraw both tracks to reflect changes
-            self.redraw_midi_events()
-            self.redraw_piano_roll()
-            self.update_midi_data_structure()
-            self.midi_data_changed.emit()
-            
-            part_name = getattr(new_event['info'], 'part', f'Note {new_values["note"]}')
-            self.logger.info(f"MIDI event added: {part_name} at {new_values['time']:.3f}s, velocity={new_values['velocity']}")
+            if event_id:
+                # Refresh the timeline display
+                self.refresh_from_manager()
+                
+                # Get part name for logging
+                note_info = self.midi_manager.midi_note_map.get(str(new_values['note']))
+                part_name = getattr(note_info, 'part', f'Note {new_values["note"]}') if note_info else f'Note {new_values["note"]}'
+                self.logger.info(f"MIDI event added: {part_name} at {new_values['time']:.3f}s, velocity={new_values['velocity']}")
+            else:
+                self.logger.error(f"Failed to add MIDI event: note {new_values['note']} not in note map")
 
     def redraw_piano_roll(self):
-        """Redraw only the piano roll notes based on updated midi_notes_data."""
+        """Redraw only the piano roll notes based on cached data."""
         # Remove existing note items
         for item in self.note_items:
             self.content_scene.removeItem(item)
         self.note_items.clear()
         
-        # Redraw notes from updated data
+        # Redraw notes from cached data
         y_offset = self.RULER_TRACK_HEIGHT + self.WAVEFORM_TRACK_HEIGHT + self.MIDI_EVENTS_TRACK_HEIGHT + 3 * self.TRACK_SPACING
-        for note in self.midi_notes_data:
+        for note in self._cached_notes:
             x_pos = note["time"] * self.PIXELS_PER_SECOND
             y_pos = y_offset + (self.max_note - note["note"]) * self.KEY_HEIGHT
             width = note["duration"] * self.PIXELS_PER_SECOND
@@ -1400,27 +1262,27 @@ class Timeline(QWidget):
             self.note_items.append(note_rect)
 
     def redraw_midi_events(self):
-        """Redraw the MIDI events track with updated timings."""
+        """Redraw the MIDI events track with cached data."""
         # Remove existing MIDI event items
         for item in self.midi_event_items:
             self.content_scene.removeItem(item)
         self.midi_event_items.clear()
         
-        if not self.midi_events_data:
+        if not self._cached_events:
             return
             
         try:
             # Get song length for calculating durations
-            song_length_seconds = self.midi_data.length if self.midi_data else 240
+            song_length_seconds = self.midi_manager.get_duration() if self.midi_manager else 240
             # Use extended timeline duration for last event calculation
             extended_duration = song_length_seconds * 1.05
             y_pos = self.RULER_TRACK_HEIGHT + self.WAVEFORM_TRACK_HEIGHT + 2 * self.TRACK_SPACING
 
-            for i in range(len(self.midi_events_data)):
-                event = self.midi_events_data[i]
+            for i in range(len(self._cached_events)):
+                event = self._cached_events[i]
                 start_time = event['time']
-                if i < len(self.midi_events_data) - 1:
-                    duration = self.midi_events_data[i+1]['time'] - start_time
+                if i < len(self._cached_events) - 1:
+                    duration = self._cached_events[i+1]['time'] - start_time
                 else:
                     # For last event, extend to the end of extended timeline
                     duration = extended_duration - start_time
@@ -1482,85 +1344,14 @@ class Timeline(QWidget):
             self.logger.error(f"Error redrawing midi events: {e}")
 
     def update_midi_data_structure(self):
-        """Update the internal mido MidiFile structure with modified timings."""
-        if not self.midi_data:
-            return
-            
-        # This is a simplified approach - in a full implementation, 
-        # you'd need to rebuild the entire MIDI file structure
-        # For now, we'll mark that the data has been modified
+        """Deprecated - MIDI data structure is now managed by MidiManager."""
         pass
 
     def get_modified_midi_data(self):
-        """Get the modified MIDI data as a mido.MidiFile object."""
-        if not self.midi_data or not self.midi_events_data:
-            return None
-            
-        try:
-            # Create a new MIDI file with updated timings
-            # This is a simplified implementation - you may need to handle more complex cases
-            new_mid = mido.MidiFile(type=self.midi_data.type, ticks_per_beat=self.midi_data.ticks_per_beat)
-            track = mido.MidiTrack()
-            new_mid.tracks.append(track)
-            
-            # Add tempo and other meta messages from original, and extract tempo
-            tempo_microseconds = 500000  # Default tempo (120 BPM)
-            for msg in self.midi_data.merged_track:
-                if msg.is_meta:
-                    if msg.type == 'set_tempo':
-                        tempo_microseconds = msg.tempo
-                    track.append(msg.copy())
-                    
-            # Sort all notes by time for proper MIDI file structure
-            all_events = []
-            
-            # Add note events from modified data
-            for note_data in self.midi_notes_data:
-                # Note on
-                all_events.append({
-                    'time': note_data['time'],
-                    'type': 'note_on',
-                    'note': note_data['note'],
-                    'velocity': note_data['velocity'],
-                    'channel': 0
-                })
-                # Note off
-                all_events.append({
-                    'time': note_data['time'] + note_data['duration'],
-                    'type': 'note_off', 
-                    'note': note_data['note'],
-                    'velocity': 0,
-                    'channel': 0
-                })
-            
-            # Sort events by time
-            all_events.sort(key=lambda x: x['time'])
-            
-            # Convert to MIDI messages with delta times
-            current_time_seconds = 0
-            for event in all_events:
-                delta_time_seconds = event['time'] - current_time_seconds
-                
-                # Convert delta time from seconds to MIDI ticks
-                delta_ticks = int(mido.second2tick(delta_time_seconds, 
-                                                 ticks_per_beat=new_mid.ticks_per_beat, 
-                                                 tempo=tempo_microseconds))
-                
-                msg = mido.Message(
-                    event['type'],
-                    channel=event['channel'],
-                    note=event['note'],
-                    velocity=event['velocity'],
-                    time=delta_ticks
-                )
-                track.append(msg)
-                current_time_seconds = event['time']
-            
-            return new_mid
-            
-        except Exception as e:
-            self.logger.error(f"Error creating modified MIDI data: {e}")
-            return None
+        """Get the modified MIDI data from MidiManager."""
+        if self.midi_manager and self.midi_manager.midi_data:
+            return self.midi_manager.midi_data
+        return None
 
     def get_truncated_text(self, text, available_width, font_metrics):
         """Return text truncated to fit within available width, with ellipsis if needed."""
