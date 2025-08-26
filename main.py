@@ -159,10 +159,6 @@ class MainWindow(QMainWindow):
         
         main_content.setSizes([self.width() - 250, 250])
 
-        # Setup DMX display (using widget created in _setup_ui_components)
-        # DMX display is already configured, just trigger initial update
-        self.update_dmx_display()
-
     def on_waveform_offset_changed(self, offset_sec):
         """Handle waveform offset changes from timeline."""
         self.media_controller.set_audio_offset(offset_sec)
@@ -323,10 +319,6 @@ class MainWindow(QMainWindow):
     def on_audio_mute_toggled(self, muted):
         """Handle audio mute toggle from timeline."""
         self.media_controller.set_audio_muted(muted)
-
-    def on_midi_data_changed(self):
-        """Deprecated - MIDI data changes are now handled by MidiManager."""
-        pass
         
     def on_midi_data_changed_from_manager(self):
         """Handle when MIDI data is modified via MidiManager."""
@@ -339,14 +331,6 @@ class MainWindow(QMainWindow):
         # Enable export button if we have MIDI data
         has_midi_data = self.midi_manager.midi_data is not None
         self.toolbar_manager.set_export_midi_enabled(has_midi_data)
-
-    def update_dmx_display(self):
-        """Update DMX display - now handled by DMXDisplayWidget component."""
-        # DMX display updates are now handled by the DMXDisplayWidget component
-        # through the update_dmx() method which calls dmx_display.update_dmx_data()
-        pass
-            
-
 
     def open_file_dialog(self, file_type):
         """Handle file dialog for loading MIDI/Audio files."""

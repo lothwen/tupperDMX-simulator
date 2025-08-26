@@ -1343,10 +1343,6 @@ class Timeline(QWidget):
         except Exception as e:
             self.logger.error(f"Error redrawing midi events: {e}")
 
-    def update_midi_data_structure(self):
-        """Deprecated - MIDI data structure is now managed by MidiManager."""
-        pass
-
     def get_modified_midi_data(self):
         """Get the modified MIDI data from MidiManager."""
         if self.midi_manager and self.midi_manager.midi_data:
