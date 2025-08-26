@@ -182,6 +182,49 @@ class MidiWorker(QThread):
         
         self.logger.debug(f"MIDI seeked to {time_seconds:.2f}s (message index: {self.last_played_index})")
 
+    def update_midi_data(self, midi_data: mido.MidiFile, current_time: float = 0.0) -> bool:
+        """Update the MIDI data without restarting the worker, preserving playback position."""
+        if not self._is_running:
+            return False
+            
+        try:
+            # Send all notes off first to prevent hanging notes from removed events
+            if self.port:
+                try:
+                    for channel in range(16):
+                        all_notes_off = mido.Message('control_change', channel=channel, control=123, value=0)
+                        self.port.send(all_notes_off)
+                    self.logger.debug("Sent all notes off before MIDI data update")
+                except Exception as e:
+                    self.logger.warning(f"Failed to send all notes off during update: {e}")
+            
+            # Parse the new MIDI data
+            current_time_seconds = 0
+            new_messages = []
+            
+            for msg in midi_data:
+                current_time_seconds += msg.time
+                if not msg.is_meta:
+                    new_messages.append((current_time_seconds, msg))
+            
+            # Update messages atomically
+            old_message_count = len(self.messages)
+            self.messages = new_messages
+            
+            # Adjust playback position to current time
+            self.last_played_index = 0
+            for i, (msg_time, _) in enumerate(self.messages):
+                if msg_time >= current_time:
+                    self.last_played_index = i
+                    break
+            
+            self.logger.debug(f"Updated MIDI data: {old_message_count} -> {len(new_messages)} messages, positioned at {current_time:.2f}s (index: {self.last_played_index})")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update MIDI data: {e}")
+            return False
+
     def stop(self) -> None:
         """Stop the MIDI worker gracefully."""
         self.logger.debug("Stopping MIDI worker")
