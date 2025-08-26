@@ -389,17 +389,48 @@ class MidiManager(QObject):
         self._current_playback_time = time_seconds
     
     def export_to_file(self, file_path: str) -> bool:
-        """Export current MIDI data to file."""
+        """Export current MIDI data to file using safe temporary file approach."""
         if not self.midi_data:
             self.logger.error("No MIDI data to export")
             return False
-            
+        
+        import os
+        import tempfile
+        import shutil
+        
+        # Create temporary file in the same directory as target
+        target_dir = os.path.dirname(os.path.abspath(file_path))
+        temp_path = None
+        
         try:
-            self.midi_data.save(file_path)
+            # Create temporary file with .tmp extension in target directory
+            temp_fd, temp_path = tempfile.mkstemp(suffix='.tmp', dir=target_dir, prefix='midi_export_')
+            os.close(temp_fd)  # Close file descriptor, we'll use the path
+            
+            # Export MIDI data to temporary file first
+            self.midi_data.save(temp_path)
+            self.logger.debug(f"MIDI data written to temporary file: {temp_path}")
+            
+            # Verify the temporary file was created and has content
+            if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                raise Exception("Temporary MIDI file is empty or was not created")
+            
+            # Atomic move from temporary file to final destination
+            shutil.move(temp_path, file_path)
             self.logger.info(f"Exported MIDI data to: {file_path}")
             return True
+            
         except Exception as e:
             self.logger.error(f"Failed to export MIDI file {file_path}: {e}")
+            
+            # Clean up temporary file if it still exists
+            try:
+                if temp_path and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                    self.logger.debug(f"Cleaned up temporary file: {temp_path}")
+            except Exception as cleanup_error:
+                self.logger.warning(f"Failed to clean up temporary file {temp_path}: {cleanup_error}")
+            
             return False
 
     # Enhanced playback methods
