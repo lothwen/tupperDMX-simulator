@@ -68,10 +68,11 @@ python main.py
 ### UI Architecture
 
 The application uses a modular UI design:
-- `ToolbarManager`: Creates media controls, BPM spinner, and source selectors
-- `Timeline`: Waveform visualization with beat detection and seeking
-- `DMXDisplayWidget`: Real-time DMX channel monitor
-- `AudioController`: Metronome generation and audio processing
+- `ToolbarManager` (`ui/toolbar_manager.py`): Creates media controls, BPM spinner, and source selectors
+- `Timeline` (`timeline.py`): Waveform visualization with beat detection, seeking, and MIDI event editing
+- `DMXDisplayWidget` (`ui/dmx_display.py`): Real-time DMX channel monitor
+- `AudioController` (`ui/audio_controller.py`): Metronome generation and audio processing
+- `ErrorDialogManager` (`ui/error_dialogs.py`): Centralized error handling with user-friendly dialogs and retry functionality
 
 ### Key Synchronization Logic
 
@@ -105,14 +106,68 @@ When starting/resuming metronome:
 - All settings auto-persist to `config.json` with validation and defaults
 - File paths validated for existence before saving
 - DMX channel mapping calculated dynamically from fixture definitions
+- Comprehensive dataclass-based structure with automatic migration and error recovery
+
+**MIDI Event Management**
+- Interactive MIDI event editing via timeline right-click context menus
+- Drag-and-drop event timing adjustment with visual feedback
+- Real-time synchronization between timeline display and MidiManager data
+- Support for adding, editing, and deleting events with proper validation
+
+**Error Handling & Recovery**
+- Centralized error dialog system with user-friendly messages
+- Automatic retry mechanisms for recoverable connection errors
+- Graceful degradation when hardware components are unavailable
+- Configuration reset options for corrupted settings
 
 ### File Organization
-- `ui/`: All UI components and controllers  
+- `ui/`: All UI components and controllers
+  - `media_controller.py`: Audio playback and timeline synchronization
+  - `audio_controller.py`: Metronome generation and audio processing
+  - `stage_controller.py`: Virtual stage visualization with fixture rendering
+  - `dmx_display.py`: Real-time DMX channel monitoring widget
+  - `toolbar_manager.py`: Application toolbar with controls and status displays
+  - `error_dialogs.py`: User-friendly error handling and recovery dialogs
 - `dmx/`: DMX protocol implementations and workers
+  - `manager.py`: Factory pattern DMX source management with hot-swapping
+  - `artnet_worker.py`: Art-Net UDP protocol implementation
+  - `usb_worker.py`: USB DMX interface support (FTDI/serial)
+  - `base.py`: Common DMX worker interface and utilities
 - `midi/`: MIDI file parsing and playback workers
+  - `manager.py`: MIDI data management, file I/O, and real-time editing
+  - `worker.py`: Threaded MIDI output synchronized to timeline
 - `tupperlogger/`: Custom logging system with file rotation
+- `timeline.py`: Advanced timeline widget with waveform, piano roll, and interactive MIDI editing
+- `config.py`: Comprehensive configuration management with dataclass validation
+- `fixtures.py`: DMX fixture definitions and channel mapping utilities
 
-### Common Debugging Commands
+## Important Development Patterns
+
+### Timeline and MIDI Integration
+- Timeline widgets use `refresh_from_manager()` to sync with MidiManager data
+- MIDI events are cached in `_cached_events` and `_cached_notes` for UI performance
+- Event editing emits `data_changed` signal for cross-component synchronization
+- Timeline coordinate conversion: `time_seconds = x_pos / PIXELS_PER_SECOND`
+
+### Error Handling Standards
+- All file operations wrapped with try/catch and user-friendly error dialogs
+- Hardware connections use retry dialogs for recoverable errors
+- Configuration errors offer reset options to prevent application crashes
+- Logging integrated throughout with structured error messages
+
+### UI State Management
+- Toolbar state synchronized with playback, BPM, and connection status
+- Volume and mute controls mirrored between timeline and toolbar
+- Configuration persistence handled automatically on state changes
+- Window geometry and last-used settings preserved between sessions
+
+### Threading and Performance
+- DMX output runs in dedicated worker threads with QThread
+- MIDI playback synchronized via worker threads with timeline position
+- Audio processing uses QAudioSink for low-latency metronome generation
+- UI updates batched to avoid blocking main thread during intensive operations
+
+## Common Debugging Commands
 ```bash
 # Check log files
 tail -f logs/tupperDMX_$(date +%Y%m%d).log
@@ -120,4 +175,18 @@ tail -f logs/tupperDMX_$(date +%Y%m%d).log
 # Test DMX connectivity (from config)
 # Art-Net: Usually 127.0.0.1:6454
 # USB: Check device enumeration in /dev/
+
+# Reset configuration if corrupted
+rm config.json && python main.py
+
+# Debug MIDI devices
+python -c "import mido; print(mido.get_output_names())"
+
+# Check audio devices
+python -c "from PyQt6.QtMultimedia import QMediaDevices; print([d.description() for d in QMediaDevices.audioOutputs()])"
 ```
+
+## Key Import Fixes
+- Always include `QMessageBox` in PyQt6 imports when using dialog boxes
+- Error dialogs require proper parent widget reference for styling consistency
+- Timeline editing requires both `QDialog` and `QMessageBox` for event management
