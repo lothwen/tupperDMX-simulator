@@ -6,7 +6,7 @@ import numpy as np
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QComboBox, QFileDialog, QGraphicsView, QGraphicsScene,
-                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle)
+                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
 from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl, QTimer
