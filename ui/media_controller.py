@@ -31,7 +31,6 @@ class MediaController(QObject):
         self.audio_offset_sec = 0.0
         
         # Current files
-        self.midi_file: Optional[str] = None
         self.audio_file: Optional[str] = None
         self.port_name: Optional[str] = None
         
@@ -50,10 +49,9 @@ class MediaController(QObject):
         
         self.logger.info("Media controller initialized")
     
-    def set_files(self, audio_file: Optional[str], midi_file: Optional[str]) -> None:
-        """Set the media files for playback."""
+    def set_files(self, audio_file: Optional[str], midi_file: Optional[str] = None) -> None:
+        """Set audio file for playback. MIDI files should be loaded via MidiManager."""
         self.audio_file = audio_file
-        self.midi_file = midi_file
         
         if audio_file:
             try:
@@ -71,17 +69,9 @@ class MediaController(QObject):
                 self.error_occurred.emit(str(e), audio_file)
                 return
                 
+        # MIDI files are now handled by MidiManager
         if midi_file:
-            try:
-                if not os.path.exists(midi_file):
-                    self.error_occurred.emit("MIDI file not found", midi_file)
-                    return
-                    
-                self.logger.info(f"MIDI file set: {midi_file}")
-                
-            except Exception as e:
-                self.logger.error(f"Error setting MIDI file: {e}")
-                self.error_occurred.emit(str(e), midi_file)
+            self.logger.info(f"MIDI file should be loaded via MidiManager.load_from_file(): {midi_file}")
     
     def set_midi_port(self, port_name: str) -> None:
         """Set the MIDI output port."""
@@ -89,7 +79,7 @@ class MediaController(QObject):
         self.logger.info(f"MIDI port set: {port_name}")
         
         # Switch MIDI port if currently playing
-        if self.is_playing and self.midi_file:
+        if self.is_playing and self.midi_manager.midi_data:
             self.midi_manager.switch_port(port_name)
     
     def set_audio_volume(self, volume: float) -> None:
@@ -125,11 +115,11 @@ class MediaController(QObject):
         self.last_pause_time = 0
         self.is_playing = False
         
-        # Start MIDI worker if we have MIDI file and port
-        if self.midi_file and self.port_name:
-            midi_started = self.midi_manager.start_worker(self.midi_file, self.port_name)
+        # Start MIDI playback if we have MIDI data and port
+        if self.midi_manager.midi_data and self.port_name:
+            midi_started = self.midi_manager.start_playback(self.port_name)
             if not midi_started:
-                self.logger.warning("Failed to start MIDI worker, continuing with audio only")
+                self.logger.warning("Failed to start MIDI playback, continuing with audio only")
         
         # Ensure media is loaded and reset position
         if not self.media_player.source().isValid():
@@ -185,11 +175,11 @@ class MediaController(QObject):
             self.logger.warning("Cannot resume: no media loaded")
             return
         
-        # Check if we need to restart MIDI worker after stop
-        if self.midi_file and self.port_name and not self.midi_manager.is_running() and self.last_pause_time == 0:
-            self.logger.info("Restarting MIDI worker after stop")
-            if not self.midi_manager.start_worker(self.midi_file, self.port_name):
-                self.logger.warning("Failed to restart MIDI worker, continuing with audio only")
+        # Check if we need to restart MIDI playback after stop
+        if self.midi_manager.midi_data and self.port_name and not self.midi_manager.is_running() and self.last_pause_time == 0:
+            self.logger.info("Restarting MIDI playback after stop")
+            if not self.midi_manager.start_playback(self.port_name):
+                self.logger.warning("Failed to restart MIDI playback, continuing with audio only")
         
         self.logger.info(f"Resuming playback from {self.current_timeline_time:.2f}s")
         self.is_playing = True
@@ -207,7 +197,7 @@ class MediaController(QObject):
             self.logger.debug(f"Starting playback from {self.current_timeline_time:.2f}s")
         
         # Position MIDI if available
-        if self.midi_file and self.current_timeline_time > 0:
+        if self.midi_manager.midi_data and self.current_timeline_time > 0:
             self.midi_manager.seek(self.current_timeline_time)
             self.logger.debug(f"Seeking MIDI to {self.current_timeline_time:.2f}s")
         
@@ -294,7 +284,7 @@ class MediaController(QObject):
         self.position_changed.emit(self.current_timeline_time)
         
         # Send MIDI data if available
-        if self.midi_file and self.midi_manager.is_running():
+        if self.midi_manager.midi_data and self.midi_manager.is_running():
             self.midi_manager.play_until(self.current_timeline_time)
         
         # Synchronize audio playback

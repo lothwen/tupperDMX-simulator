@@ -26,7 +26,7 @@ class MidiWorker(QThread):
     error_occurred = pyqtSignal(str)  # Error message
     playback_position_changed = pyqtSignal(float)  # Current playback time
     
-    def __init__(self, filename: str, port_name: str):
+    def __init__(self, filename: str, port_name: str, midi_data: Optional[mido.MidiFile] = None):
         super().__init__()
         self.filename = filename
         self.port_name = port_name
@@ -38,8 +38,11 @@ class MidiWorker(QThread):
         self.status = MidiConnectionStatus.DISCONNECTED
         self.logger = get_logger("midi.worker")
         
-        # Load MIDI file
-        self._load_midi_file()
+        # Load MIDI file or use provided data
+        if midi_data:
+            self._load_midi_from_data(midi_data)
+        else:
+            self._load_midi_file()
 
     def _load_midi_file(self) -> None:
         """Load and parse the MIDI file."""
@@ -50,6 +53,17 @@ class MidiWorker(QThread):
                 raise ValueError("No MIDI file specified")
             
             mid = mido.MidiFile(self.filename)
+            self._load_midi_from_data(mid)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load MIDI file: {e}")
+            self._emit_error(f"Failed to load MIDI file: {e}")
+
+    def _load_midi_from_data(self, mid: mido.MidiFile) -> None:
+        """Load and parse MIDI data from a MidiFile object."""
+        try:
+            self._set_status(MidiConnectionStatus.CONNECTING)
+            
             current_time = 0
             self.messages.clear()
             
@@ -58,11 +72,12 @@ class MidiWorker(QThread):
                 if not msg.is_meta:
                     self.messages.append((current_time, msg))
             
-            self.logger.info(f"Loaded {len(self.messages)} MIDI messages from {self.filename}")
+            source = self.filename if self.filename else "modified MIDI data"
+            self.logger.info(f"Loaded {len(self.messages)} MIDI messages from {source}")
             
         except Exception as e:
-            self.logger.error(f"Failed to load MIDI file: {e}")
-            self._emit_error(f"Failed to load MIDI file: {e}")
+            self.logger.error(f"Failed to load MIDI data: {e}")
+            self._emit_error(f"Failed to load MIDI data: {e}")
 
     def run(self) -> None:
         """Main worker thread execution."""

@@ -34,9 +34,10 @@ class MainWindow(QMainWindow):
         self.dmx_manager.connection_status_changed.connect(self.on_dmx_status_changed)
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
         
-        self.midi_manager = MidiManager()
+        self.midi_manager = MidiManager(self.config.midi_note_map)
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
+        self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)
         
         # Initialize UI components
         self._setup_ui_components()
@@ -56,17 +57,23 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         
         # Set initial files
-        if self.config.files.midi or self.config.files.audio:
-            self.media_controller.set_files(self.config.files.audio, self.config.files.midi)
-            self.timeline.set_files(self.config.files.audio, self.config.files.midi)
-            
-            # Update audio file display if audio file is loaded
-            if self.config.files.audio:
-                # Show full path instead of just filename
-                self.toolbar_manager.update_audio_file_display(self.config.files.audio)
-            
-            # Enable export button if MIDI file is configured
-            self.toolbar_manager.set_export_midi_enabled(bool(self.config.files.midi))
+        if self.config.files.audio:
+            self.media_controller.set_files(self.config.files.audio)
+            self.timeline.set_files(self.config.files.audio)
+            # Update audio file display
+            self.toolbar_manager.update_audio_file_display(self.config.files.audio)
+        
+        # Load MIDI file via MidiManager
+        if self.config.files.midi:
+            if self.midi_manager.load_from_file(self.config.files.midi):
+                self.timeline.refresh_from_manager()
+                self.toolbar_manager.set_export_midi_enabled(True)
+            else:
+                self.logger.error(f"Failed to load MIDI file: {self.config.files.midi}")
+        else:
+            # Create empty MIDI track if no file configured
+            self.midi_manager.create_empty_track()
+            self.timeline.refresh_from_manager()
         
         # Set initial MIDI port
         initial_midi_port = self.toolbar_manager.get_selected_midi_port()
@@ -133,9 +140,9 @@ class MainWindow(QMainWindow):
         # Add DMX display
         main_content.addWidget(self.dmx_display)
         
-        # Create timeline
+        # Create timeline with MidiManager reference
         self.timeline = Timeline(
-            midi_note_map=self.config.midi_note_map,
+            midi_manager=self.midi_manager,
             initial_metronome_volume=self.config.volume.metronome,
             initial_audio_volume=self.config.volume.audio
         )
@@ -147,7 +154,7 @@ class MainWindow(QMainWindow):
         self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
         self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
-        self.timeline.midi_data_changed.connect(self.on_midi_data_changed)
+        # Timeline no longer emits midi_data_changed - handled by MidiManager
         self.main_layout.addWidget(self.timeline)
         
         main_content.setSizes([self.width() - 250, 250])
@@ -318,9 +325,20 @@ class MainWindow(QMainWindow):
         self.media_controller.set_audio_muted(muted)
 
     def on_midi_data_changed(self):
-        """Handle when MIDI data is modified in the timeline."""
-        self.logger.info("MIDI data has been modified in timeline")
-        # Could add visual indication that data has been modified if desired
+        """Deprecated - MIDI data changes are now handled by MidiManager."""
+        pass
+        
+    def on_midi_data_changed_from_manager(self):
+        """Handle when MIDI data is modified via MidiManager."""
+        self.logger.info("MIDI data has been modified via MidiManager")
+        
+        # Refresh the timeline display
+        if self.timeline:
+            self.timeline.refresh_from_manager()
+        
+        # Enable export button if we have MIDI data
+        has_midi_data = self.midi_manager.midi_data is not None
+        self.toolbar_manager.set_export_midi_enabled(has_midi_data)
 
     def update_dmx_display(self):
         """Update DMX display - now handled by DMXDisplayWidget component."""
@@ -382,9 +400,9 @@ class MainWindow(QMainWindow):
 
     def export_midi_dialog(self):
         """Handle export MIDI file dialog."""
-        if not self.config.files.midi:
+        if not self.midi_manager.midi_data:
             ErrorDialogManager.show_validation_error(
-                self, "Export MIDI", "No MIDI file loaded", "Load a MIDI file first"
+                self, "Export MIDI", "No MIDI data available", "Load a MIDI file or create events first"
             )
             return
         
@@ -392,10 +410,12 @@ class MainWindow(QMainWindow):
         filt = "MIDI files (*.mid)"
         suggested_name = ""
         
-        # Suggest name based on current MIDI file
+        # Suggest name based on current MIDI file or use default
         if self.config.files.midi:
             base_name = os.path.splitext(os.path.basename(self.config.files.midi))[0]
             suggested_name = f"{base_name}_export.mid"
+        else:
+            suggested_name = "exported_midi.mid"
         
         path, _ = QFileDialog.getSaveFileName(self, title, suggested_name, filt)
         if path:
@@ -404,45 +424,14 @@ class MainWindow(QMainWindow):
                 if not path.lower().endswith('.mid'):
                     path += '.mid'
                 
-                # Create temporary file for safe export
-                import tempfile
-                temp_dir = os.path.dirname(path)
-                temp_fd, temp_path = tempfile.mkstemp(suffix='.mid.tmp', dir=temp_dir)
-                os.close(temp_fd)  # Close the file descriptor, we just need the path
-                
-                try:
-                    # Export the MIDI file - use modified data if available
-                    modified_midi = self.timeline.get_modified_midi_data()
-                    if modified_midi:
-                        # Export modified MIDI data to temporary file
-                        modified_midi.save(temp_path)
-                        self.logger.info(f"Modified MIDI data generated successfully")
-                    else:
-                        # Fall back to original file
-                        import mido
-                        midi_file = mido.MidiFile(self.config.files.midi)
-                        midi_file.save(temp_path)
-                        self.logger.info(f"Original MIDI data copied successfully")
-                    
-                    # Only move to final location if generation was successful
-                    if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                        # Remove existing file if it exists
-                        if os.path.exists(path):
-                            os.remove(path)
-                        # Move temporary file to final location
-                        os.rename(temp_path, path)
-                        self.logger.info(f"MIDI file exported successfully to: {path}")
-                    else:
-                        raise Exception("Generated MIDI file is empty or invalid")
-                        
-                except Exception as export_error:
-                    # Clean up temporary file on error
-                    if os.path.exists(temp_path):
-                        try:
-                            os.remove(temp_path)
-                        except:
-                            pass
-                    raise export_error
+                # Export via MidiManager
+                if self.midi_manager.export_to_file(path):
+                    self.logger.info(f"MIDI file exported successfully to: {path}")
+                    QMessageBox.information(self, "Export Success", f"MIDI file exported to:\n{path}")
+                else:
+                    ErrorDialogManager.show_validation_error(
+                        self, "Export Failed", "Failed to export MIDI file", "Check the file path and permissions"
+                    )
                     
             except PermissionError:
                 ErrorDialogManager.show_file_permission_error(self, path, "write")
