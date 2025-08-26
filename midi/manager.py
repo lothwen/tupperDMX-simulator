@@ -545,26 +545,6 @@ class MidiManager(QObject):
         
         return self.start_playback(new_port_name)
     
-    def reload_with_midi_data(self, midi_data: mido.MidiFile) -> bool:
-        """
-        Reload the current connection with modified MIDI data.
-        This method is kept for backward compatibility but is now redundant.
-        
-        Args:
-            midi_data: Modified MidiFile object to use for playback
-            
-        Returns:
-            True if reload was successful
-        """
-        if not self.current_port_name:
-            self.logger.warning("Cannot reload MIDI data - no active connection")
-            return False
-        
-        # Update our internal data and restart playback
-        self.midi_data = midi_data
-        self._parse_midi_data()  # Re-parse for UI
-        return self.start_playback(self.current_port_name)
-
     def cleanup(self) -> None:
         """Clean up resources when shutting down."""
         self.stop_worker()
