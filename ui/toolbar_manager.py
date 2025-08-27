@@ -168,7 +168,6 @@ class ToolbarManager(QObject):
         """Create the transport controls section."""
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setFixedSize(480, 100)
         section.setObjectName("ToolbarSection")
         
         layout = QVBoxLayout(section)
@@ -187,7 +186,7 @@ class ToolbarManager(QObject):
         # Stop button
         stop_btn = QPushButton()
         stop_btn.setIcon(self.stop_icon)
-        stop_btn.setFixedSize(45, 45)
+        stop_btn.setFixedSize(40, 40)
         stop_btn.setObjectName("StopButton")
         stop_btn.clicked.connect(self.stop_requested.emit)
         controls_layout.addWidget(stop_btn)
@@ -195,14 +194,14 @@ class ToolbarManager(QObject):
         # Play/Pause button (larger)
         self.play_pause_button = QPushButton()
         self.play_pause_button.setIcon(self.play_icon)
-        self.play_pause_button.setFixedSize(55, 55)
+        self.play_pause_button.setFixedSize(50, 50)
         self.play_pause_button.setObjectName("PlayPauseButton")
         self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
         controls_layout.addWidget(self.play_pause_button)
         
         # Time display
         self.time_display = QLabel("00:00.000")
-        self.time_display.setFixedSize(150, 55)
+        self.time_display.setFixedSize(150, 50)
         self.time_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_display.setObjectName("TimeDisplay")
         controls_layout.addWidget(self.time_display)

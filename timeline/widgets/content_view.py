@@ -125,7 +125,7 @@ class ContentView(QGraphicsView):
                 beat_number = note_info['time'] / seconds_per_beat
                 bar_number = int(beat_number / 4) + 1
                 beat_in_bar = int(beat_number % 4) + 1
-                tooltip_text = f"{note_name}\\nTime: {note_info['time']:.2f}s\\nBar: {bar_number}, Beat: {beat_in_bar}\\nVelocity: {note_info['velocity']}"
+                tooltip_text = f"{note_name}\nTime: {note_info['time']:.2f}s\nBar: {bar_number}, Beat: {beat_in_bar}\nVelocity: {note_info['velocity']}"
                 
                 global_pos = event.globalPosition().toPoint()
                 global_pos.setY(global_pos.y() + 20)  # Offset to avoid cursor
