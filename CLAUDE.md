@@ -8,7 +8,25 @@ TupperDMX Simulator is a PyQt6-based lighting control application that synchroni
 
 ## Development Commands
 
-### Setup and Running
+### Setup and Running (uv - Recommended)
+```bash
+# Install dependencies and create virtual environment
+uv sync
+
+# Run the application
+uv run python main.py
+
+# Activate managed virtual environment
+uv shell
+
+# Add new dependencies
+uv add package-name
+
+# Update dependencies
+uv lock --upgrade
+```
+
+### Legacy Setup (pip)
 ```bash
 # Install dependencies
 pip install -r requirements.txt
