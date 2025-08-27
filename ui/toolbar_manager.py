@@ -14,6 +14,7 @@ class ToolbarManager(QObject):
     
     # Signals
     load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
+    new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
@@ -45,6 +46,7 @@ class ToolbarManager(QObject):
         self.midi_port_combo: Optional[QComboBox] = None
         self.time_display: Optional[QLabel] = None
         self.audio_file_label: Optional[QLabel] = None
+        self.midi_file_label: Optional[QLabel] = None
         
         # State
         self.is_playing = False
@@ -106,21 +108,28 @@ class ToolbarManager(QObject):
         
         # Load MIDI button
         load_midi_btn = QPushButton("Load MIDI file")
-        load_midi_btn.setFixedSize(150, 35)
+        load_midi_btn.setFixedSize(150, 30)
         load_midi_btn.setObjectName("LoadButton")
         load_midi_btn.clicked.connect(lambda: self.load_file_requested.emit('midi'))
         buttons_layout.addWidget(load_midi_btn)
         
         # Load Audio button
         load_audio_btn = QPushButton("Load Audio file")
-        load_audio_btn.setFixedSize(150, 35)
+        load_audio_btn.setFixedSize(150, 30)
         load_audio_btn.setObjectName("LoadButton")
         load_audio_btn.clicked.connect(lambda: self.load_file_requested.emit('audio'))
         buttons_layout.addWidget(load_audio_btn)
         
+        # New MIDI track button
+        new_midi_btn = QPushButton("New MIDI track")
+        new_midi_btn.setFixedSize(150, 30)
+        new_midi_btn.setObjectName("NewButton")
+        new_midi_btn.clicked.connect(self.new_midi_track_requested.emit)
+        buttons_layout.addWidget(new_midi_btn)
+
         # Export MIDI button
         self.export_midi_button = QPushButton("Export MIDI")
-        self.export_midi_button.setFixedSize(120, 35)
+        self.export_midi_button.setFixedSize(150, 30)
         self.export_midi_button.setObjectName("ExportButton")
         self.export_midi_button.clicked.connect(self.export_midi_requested.emit)
         self.export_midi_button.setEnabled(False)  # Disabled by default
@@ -128,14 +137,29 @@ class ToolbarManager(QObject):
         
         layout.addLayout(buttons_layout)
         
+        # File path labels container
+        file_paths_layout = QVBoxLayout()
+        file_paths_layout.setSpacing(2)
+        
         # Audio file info (full width to show complete path)
         self.audio_file_label = QLabel("No audio file")
-        self.audio_file_label.setFixedHeight(25)
+        self.audio_file_label.setFixedHeight(20)
         self.audio_file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.audio_file_label.setWordWrap(False)  # Disable word wrapping
         self.audio_file_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.audio_file_label.setObjectName("FileLabel")
-        layout.addWidget(self.audio_file_label)
+        file_paths_layout.addWidget(self.audio_file_label)
+        
+        # MIDI file info (full width to show complete path)
+        self.midi_file_label = QLabel("No MIDI file")
+        self.midi_file_label.setFixedHeight(20)
+        self.midi_file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.midi_file_label.setWordWrap(False)  # Disable word wrapping
+        self.midi_file_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.midi_file_label.setObjectName("FileLabel")
+        file_paths_layout.addWidget(self.midi_file_label)
+        
+        layout.addLayout(file_paths_layout)
         
         self.logger.debug("Files section created")
         return section
@@ -293,6 +317,22 @@ class ToolbarManager(QObject):
             else:
                 self.audio_file_label.setToolTip("")
             self.logger.debug(f"Audio file display updated: {display_name}")
+            
+    def update_midi_file_display(self, filename: str) -> None:
+        """Update the MIDI file display."""
+        if hasattr(self, 'midi_file_label') and self.midi_file_label:
+            if filename:
+                display_name = filename
+            else:
+                display_name = "No MIDI file"
+            # No truncation needed - let the label expand to show full path
+            self.midi_file_label.setText(display_name)
+            # Set tooltip to show full path if it's long
+            if filename and len(filename) > 50:
+                self.midi_file_label.setToolTip(filename)
+            else:
+                self.midi_file_label.setToolTip("")
+            self.logger.debug(f"MIDI file display updated: {display_name}")
 
     def update_time_display(self, time_str: str) -> None:
         """Update the time display."""

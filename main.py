@@ -68,12 +68,15 @@ class MainWindow(QMainWindow):
             if self.midi_manager.load_from_file(self.config.files.midi):
                 self.timeline.refresh_from_manager()
                 self.toolbar_manager.set_export_midi_enabled(True)
+                # Update MIDI file display
+                self.toolbar_manager.update_midi_file_display(self.config.files.midi)
             else:
                 self.logger.error(f"Failed to load MIDI file: {self.config.files.midi}")
         else:
             # Create empty MIDI track if no file configured
             self.midi_manager.create_empty_track()
             self.timeline.refresh_from_manager()
+            self.toolbar_manager.update_midi_file_display("")
         
         # Set initial MIDI port
         initial_midi_port = self.toolbar_manager.get_selected_midi_port()
@@ -115,6 +118,7 @@ class MainWindow(QMainWindow):
     def _connect_toolbar_signals(self):
         """Connect toolbar manager signals to appropriate handlers."""
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
+        self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
         self.toolbar_manager.play_pause_requested.connect(self.play_pause_playback)
         self.toolbar_manager.stop_requested.connect(self.stop_playback)
@@ -367,13 +371,23 @@ class MainWindow(QMainWindow):
                 self.media_controller.set_files(self.config.files.audio, self.config.files.midi)
                 self.timeline.set_files(self.config.files.audio, self.config.files.midi)
                 
-                # Update toolbar audio file display
+                # Update toolbar file displays
                 if file_type == 'audio':
                     # Show full path instead of just filename
                     self.toolbar_manager.update_audio_file_display(path)
+                elif file_type == 'midi':
+                    # Load MIDI file via MidiManager and update display
+                    if self.midi_manager.load_from_file(path):
+                        self.timeline.refresh_from_manager()
+                        self.toolbar_manager.update_midi_file_display(path)
+                        self.toolbar_manager.set_export_midi_enabled(True)
+                    else:
+                        ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
+                        return
                 
                 # Enable/disable export button based on MIDI file availability
-                self.toolbar_manager.set_export_midi_enabled(bool(self.config.files.midi))
+                if file_type != 'midi':  # Only set this for non-MIDI files since MIDI is handled above
+                    self.toolbar_manager.set_export_midi_enabled(bool(self.config.files.midi))
                 
                 self.update_window_title()
                     
@@ -381,6 +395,22 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_file_permission_error(self, path, "read")
             except Exception as e:
                 ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def create_new_midi_track(self):
+        """Handle creating a new empty MIDI track."""
+        # Create empty MIDI track via MidiManager
+        self.midi_manager.create_empty_track()
+        self.timeline.refresh_from_manager()
+        
+        # Clear the MIDI file path in config since this is a new track
+        self.config.update_files(midi="")
+        self.toolbar_manager.update_midi_file_display("New MIDI track")
+        
+        # Enable export button since we now have MIDI data
+        self.toolbar_manager.set_export_midi_enabled(True)
+        
+        self.save_config()
+        self.logger.info("Created new empty MIDI track")
 
     def export_midi_dialog(self):
         """Handle export MIDI file dialog."""
