@@ -1,0 +1,159 @@
+name: Build Cross-Platform Executables
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: TupperDMX-Simulator-linux
+          - os: windows-latest  
+            platform: windows
+            artifact_name: TupperDMX-Simulator-windows
+          - os: macos-latest
+            platform: macos
+            artifact_name: TupperDMX-Simulator-macos
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+    
+    - name: Set up Python
+      run: uv python install 3.13
+      
+    - name: Install system dependencies (Linux)
+      if: matrix.platform == 'linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libasound2-dev \
+          portaudio19-dev \
+          libusb-1.0-0-dev \
+          libftdi1-dev
+    
+    - name: Install system dependencies (macOS)
+      if: matrix.platform == 'macos'
+      run: |
+        brew install portaudio libusb libftdi
+    
+    - name: Install dependencies and build tools
+      run: |
+        uv sync --extra build
+        
+    - name: Create platform-specific icons
+      shell: python
+      run: |
+        import sys
+        import subprocess
+        from pathlib import Path
+        
+        png_icon = Path("assets/icons/metronome_icon.png")
+        if not png_icon.exists():
+            print("PNG icon not found, skipping")
+            sys.exit(0)
+            
+        try:
+            if sys.platform == "win32":
+                # Windows: Create ICO (requires Pillow)
+                subprocess.run(["uv", "add", "pillow"], check=True)
+                subprocess.run([
+                    "uv", "run", "python", "-c", 
+                    f"from PIL import Image; Image.open('{png_icon}').save('{png_icon.with_suffix('.ico')}')"
+                ], check=True)
+            elif sys.platform == "darwin":
+                # macOS: Create ICNS
+                subprocess.run([
+                    "sips", "-s", "format", "icns", str(png_icon), 
+                    "--out", str(png_icon.with_suffix('.icns'))
+                ], check=True)
+        except Exception as e:
+            print(f"Icon creation failed: {e}")
+    
+    - name: Build executable
+      run: |
+        uv run python scripts/build.py --no-clean
+        
+    - name: Install NSIS (Windows)
+      if: matrix.platform == 'windows'
+      run: |
+        Invoke-WebRequest -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.09/nsis-3.09-setup.exe/download" -OutFile "nsis-setup.exe"
+        Start-Process -FilePath "nsis-setup.exe" -ArgumentList "/S" -Wait
+        echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
+        
+    - name: Create Windows installer
+      if: matrix.platform == 'windows'
+      run: |
+        makensis scripts/windows_installer.nsi
+        
+    - name: Create macOS DMG
+      if: matrix.platform == 'macos'
+      run: |
+        if [ -d "dist/TupperDMX-Simulator.app" ]; then
+          hdiutil create -srcfolder "dist/TupperDMX-Simulator.app" \
+            -volname "TupperDMX Simulator" "dist/TupperDMX-Simulator.dmg"
+        fi
+        
+    - name: Prepare artifacts (Linux/macOS)
+      if: matrix.platform != 'windows'
+      run: |
+        mkdir -p artifacts
+        if [ -f "dist/TupperDMX-Simulator" ]; then
+          cp "dist/TupperDMX-Simulator" "artifacts/${{ matrix.artifact_name }}"
+        fi
+        if [ -f "dist/TupperDMX-Simulator.dmg" ]; then
+          cp "dist/TupperDMX-Simulator.dmg" "artifacts/"
+        fi
+        
+    - name: Prepare artifacts (Windows)
+      if: matrix.platform == 'windows'
+      run: |
+        mkdir artifacts
+        if (Test-Path "dist/TupperDMX-Simulator.exe") {
+          Copy-Item "dist/TupperDMX-Simulator.exe" "artifacts/${{ matrix.artifact_name }}.exe"
+        }
+        if (Test-Path "dist/TupperDMX-Simulator-Setup.exe") {
+          Copy-Item "dist/TupperDMX-Simulator-Setup.exe" "artifacts/"
+        }
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: artifacts/*
+        retention-days: 30
+        
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-artifacts
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release-artifacts/**/*
+        draft: true
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

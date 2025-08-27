@@ -9,7 +9,7 @@
     "universe": 0
   },
   "files": {
-    "midi": "/home/lothwen/Desktop/lala.mid",
+    "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
     "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav"
   },
   "fixtures": {
@@ -117,8 +117,8 @@
     "low_pitch_freq": 800
   },
   "volume": {
-    "metronome": 0.13,
-    "audio": 0.16
+    "metronome": 0.16,
+    "audio": 0.13
   },
   "logging": {
     "level": "INFO",

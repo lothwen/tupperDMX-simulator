@@ -14,3 +14,18 @@ dependencies = [
     "pyserial>=3.5",
     "python-rtmidi>=1.5.8",
 ]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib",
+]
+
+[project.scripts]
+tupperdmx = "main:main"
+
+[tool.pyinstaller]
+name = "TupperDMX-Simulator"
+entry-points = ["main.py"]
+console = false
+icon = "assets/icons/metronome_icon.png"
