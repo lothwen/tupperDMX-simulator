@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QPushButton, QComboBox, QFileDialog, QGraphicsView, QGraphicsScene,
                              QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
-from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl, QTimer
+from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent
 
 from config import Config
 from fixtures import LedBar, Blinder
@@ -89,6 +89,9 @@ class MainWindow(QMainWindow):
         if initial_dmx_source in self.dmx_manager.get_available_sources():
             self.toolbar_manager.set_dmx_source(initial_dmx_source)
             self.dmx_manager.start_worker(initial_dmx_source)
+        
+        # Install global event filter for spacebar handling
+        QApplication.instance().installEventFilter(self)
     
     def _setup_ui_components(self):
         """Initialize all UI component managers."""
@@ -502,9 +505,21 @@ class MainWindow(QMainWindow):
             title += f" - {file_name}"
         self.setWindowTitle(title)
 
+    def eventFilter(self, source, event):
+        """Global event filter to capture spacebar from any widget."""
+        if (event.type() == QEvent.Type.KeyPress and 
+            event.key() == Qt.Key.Key_Space):
+            # Toggle play/pause when spacebar is pressed anywhere
+            self.play_pause_playback()
+            return True  # Event handled, don't pass to widget
+        return super().eventFilter(source, event)
+
     def closeEvent(self, event):
         """Handle application close event."""
         self.logger.info("Application closing - cleaning up resources")
+        
+        # Remove global event filter
+        QApplication.instance().removeEventFilter(self)
         
         # Stop playback and cleanup components
         self.media_controller.cleanup()
