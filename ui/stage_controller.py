@@ -38,7 +38,7 @@ class StageController(QObject):
     fixture_updated = pyqtSignal(str, object)  # fixture_type, fixture_object
     stage_clicked = pyqtSignal(float, float)  # x, y coordinates
     
-    def __init__(self, config: Config, background_image_path: str = 'stage_background.png'):
+    def __init__(self, config: Config, background_image_path: str = 'assets/images/stage_background.png'):
         super().__init__()
         self.config = config
         self.logger = get_logger("ui.stage")

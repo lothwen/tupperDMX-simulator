@@ -331,12 +331,12 @@ QSpinBox::up-button:hover, QSpinBox::down-button:hover {
 }
 
 QSpinBox::up-arrow {
-    image: url('up-arrow.png');
+    image: url('assets/icons/up-arrow.png');
     color: white;
 }
 
 QSpinBox::down-arrow {
-    image: url('dropdown-arrow.png');
+    image: url('assets/icons/dropdown-arrow.png');
     color: white;
 }
 
@@ -362,7 +362,7 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
-    image: url('dropdown-arrow.png');
+    image: url('assets/icons/dropdown-arrow.png');
 }
 
 QComboBox QAbstractItemView {

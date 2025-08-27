@@ -83,7 +83,7 @@ class LedBar(QGraphicsObject):
         if animation_number in self.animations:
             self.current_movie = self.animations[animation_number]
         else:
-            gif_path_list = glob.glob(f"gifs/{animation_number:02d}-*.gif")
+            gif_path_list = glob.glob(f"assets/animations/{animation_number:02d}-*.gif")
             if gif_path_list:
                 movie = QMovie(gif_path_list[0])
                 self.animations[animation_number] = movie
