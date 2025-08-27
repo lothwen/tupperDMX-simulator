@@ -137,17 +137,35 @@ When starting/resuming metronome:
   - `manager.py`: MIDI data management, file I/O, and real-time editing
   - `worker.py`: Threaded MIDI output synchronized to timeline
 - `tupperlogger/`: Custom logging system with file rotation
-- `timeline.py`: Advanced timeline widget with waveform, piano roll, and interactive MIDI editing
+- `timeline/`: Modular timeline package with track-based architecture
+  - `manager.py`: Main Timeline coordinator and public interface
+  - `tracks/base.py`: BaseTrack interface for all timeline tracks
+  - `tracks/ruler.py`: Time ruler with persistent metronome controls
+  - `tracks/waveform.py`: Audio waveform visualization with DraggableWaveform
+  - `tracks/midi_events.py`: Interactive MIDI event boxes with drag-and-drop editing
+  - `tracks/piano_roll.py`: Piano keys and note visualization
+  - `widgets/tooltip.py`: CustomTooltip for detailed event information
+  - `widgets/content_view.py`: ContentView with zoom/pan functionality
+  - `widgets/midi_event_edit.py`: MidiEventEditDialog for event editing
 - `config.py`: Comprehensive configuration management with dataclass validation
 - `fixtures.py`: DMX fixture definitions and channel mapping utilities
 
 ## Important Development Patterns
 
+### Timeline Architecture (Modular Design)
+- **Track-Based System**: Timeline uses individual track objects for different content types
+- **BaseTrack Interface**: All tracks inherit from BaseTrack providing common functionality
+- **Separation of Concerns**: Each track handles its own rendering and interaction logic
+- **Persistent Controls**: Metronome and audio controls persist across BPM changes and redraws
+- **Content vs Header Separation**: Tracks maintain separate item lists for content and headers
+- **Coordinate Management**: Timeline manager provides PIXELS_PER_SECOND conversion utilities
+
 ### Timeline and MIDI Integration
-- Timeline widgets use `refresh_from_manager()` to sync with MidiManager data
-- MIDI events are cached in `_cached_events` and `_cached_notes` for UI performance
+- Timeline manager coordinates all tracks via `refresh_from_manager()` calls
+- MIDI events cached in `_cached_events` and `_cached_notes` for UI performance
 - Event editing emits `data_changed` signal for cross-component synchronization
-- Timeline coordinate conversion: `time_seconds = x_pos / PIXELS_PER_SECOND`
+- Track coordinate conversion: `time_seconds = x_pos / timeline.PIXELS_PER_SECOND`
+- Interactive editing: DraggableMidiEvent handles mouse events and emits timing changes
 
 ### Error Handling Standards
 - All file operations wrapped with try/catch and user-friendly error dialogs
@@ -166,6 +184,15 @@ When starting/resuming metronome:
 - MIDI playback synchronized via worker threads with timeline position
 - Audio processing uses QAudioSink for low-latency metronome generation
 - UI updates batched to avoid blocking main thread during intensive operations
+- Timeline tracks render independently for better performance isolation
+
+### Timeline Development Guidelines
+- **Adding New Tracks**: Inherit from BaseTrack and implement required methods
+- **Persistent UI Elements**: Use separate item lists for content vs permanent header items
+- **Track Communication**: Use timeline manager as coordinator, avoid direct track-to-track calls
+- **Redrawing Logic**: Only clear content items during redraws, preserve header items
+- **Widget Reuse**: Timeline widgets can be imported and used in other UI components
+- **Testing Tracks**: Individual tracks can be unit tested independently of full timeline
 
 ## Common Debugging Commands
 ```bash
