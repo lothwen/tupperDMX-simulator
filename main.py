@@ -494,7 +494,7 @@ def main():
     app = QApplication(sys.argv)
     
     # Load and apply dark theme
-    qss_path = os.path.join(os.path.dirname(__file__), 'dark-theme.qss')
+    qss_path = 'assets/styles/dark-theme.qss'
     if os.path.exists(qss_path):
         with open(qss_path, 'r', encoding='utf-8') as f:
             app.setStyleSheet(f.read())

@@ -191,7 +191,7 @@ class ToolbarManager(QObject):
         
         # Metronome icon button (clickable)
         self.metronome_button = QPushButton()
-        metronome_icon = QIcon("metronome_icon.png")
+        metronome_icon = QIcon("assets/icons/metronome_icon.png")
         self.metronome_button.setIcon(metronome_icon)
         self.metronome_button.setIconSize(QSize(32, 32))  # Set icon size explicitly
         self.metronome_button.setFixedSize(40, 40)
