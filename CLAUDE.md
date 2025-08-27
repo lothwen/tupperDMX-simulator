@@ -212,6 +212,133 @@ When starting/resuming metronome:
 - **Widget Reuse**: Timeline widgets can be imported and used in other UI components
 - **Testing Tracks**: Individual tracks can be unit tested independently of full timeline
 
+## Build System and Distribution
+
+The project includes a comprehensive cross-platform build system integrated with uv for creating distributable executables and installers.
+
+### Build Commands
+
+**Development Setup:**
+```bash
+# Install build dependencies
+make dev
+# or: uv sync --extra build
+
+# Run application in development
+make run
+# or: uv run python main.py
+```
+
+**Building Executables:**
+```bash
+# Build for current platform
+make build
+
+# Clean previous builds
+make clean
+
+# Platform-specific builds (run on target platform)
+make build-windows    # Windows executable + NSIS installer
+make build-macos      # macOS app bundle + DMG
+make build-linux      # Linux executable
+```
+
+**Direct Build Script:**
+```bash
+# Cross-platform build script
+uv run python scripts/build.py
+
+# With options
+uv run python scripts/build.py --no-clean
+```
+
+### Build System Architecture
+
+**Core Components:**
+- `build.spec`: PyInstaller configuration with platform-specific settings
+- `scripts/build.py`: Integrated build script with uv dependency management
+- `scripts/windows_installer.nsi`: NSIS installer script for Windows
+- `Makefile`: Convenient build commands for all platforms
+- `.github/workflows/build.yml`: CI/CD automation for cross-platform builds
+
+**PyInstaller Configuration:**
+- **Hidden Imports**: Includes all PyQt6, audio, MIDI, and DMX modules
+- **Data Files**: Bundles assets, icons, and configuration files  
+- **Module Exclusions**: Optimized to reduce executable size
+- **Platform Icons**: Automatic PNG/ICO/ICNS icon conversion
+
+**uv Integration:**
+- Build dependencies managed via `[project.optional-dependencies]`
+- Seamless virtual environment handling
+- Consistent dependency resolution across platforms
+
+### CI/CD and Automated Builds
+
+**GitHub Actions Workflow:**
+- Builds for Windows, macOS, and Linux simultaneously
+- Creates platform-specific installers automatically
+- Uploads build artifacts for download
+- Creates GitHub releases for tagged versions
+
+**Triggering Builds:**
+```bash
+# Local development build
+make build
+
+# Trigger CI builds for all platforms
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Build Artifacts
+
+**File Sizes (Approximate):**
+- Linux executable: ~230 MB (includes all dependencies)
+- Windows executable: ~200 MB + installer (~100 MB)
+- macOS app bundle: ~180 MB + DMG (~120 MB)
+
+**Distribution Files:**
+- **Linux**: `TupperDMX-Simulator` (executable)
+- **Windows**: `TupperDMX-Simulator.exe` + `TupperDMX-Simulator-Setup.exe`
+- **macOS**: `TupperDMX-Simulator.app` + `TupperDMX-Simulator.dmg`
+
+### Build Dependencies
+
+**Runtime Dependencies (Auto-bundled):**
+- PyQt6 (GUI framework and multimedia)
+- librosa (audio processing and BPM detection)
+- mido/python-rtmidi (MIDI handling)
+- pyartnet (Art-Net DMX protocol)
+- pylibftdi/pyserial (USB DMX interfaces)
+- numpy/scipy (scientific computing)
+
+**Build-Only Dependencies:**
+- PyInstaller 6.0+ (executable creation)
+- pyinstaller-hooks-contrib (additional package hooks)
+
+### Build Troubleshooting
+
+**Common Issues:**
+- Missing modules: Add to `hidden_imports` in `build.spec`
+- Large file sizes: Review `excludes` list and data files
+- Icon problems: Ensure PNG icon exists and install platform converters
+
+**Debug Build:**
+```bash
+# Enable PyInstaller debug output
+PYINSTALLER_DEBUG=1 uv run python scripts/build.py
+
+# Test with console output
+uv run pyinstaller --debug=all --console build.spec
+```
+
+**Platform Requirements:**
+- **Windows**: NSIS 3.0+ (for installer), Visual C++ Redistributable
+- **macOS**: Xcode Command Line Tools, macOS 10.15+
+- **Linux**: Standard development tools, audio/USB system libraries
+
+For detailed build instructions and troubleshooting, see `BUILD.md`.
+
 ## Common Debugging Commands
 ```bash
 # Check log files
@@ -229,6 +356,11 @@ python -c "import mido; print(mido.get_output_names())"
 
 # Check audio devices
 python -c "from PyQt6.QtMultimedia import QMediaDevices; print([d.description() for d in QMediaDevices.audioOutputs()])"
+
+# Build system debugging
+uv run python scripts/build.py --no-clean
+ls -la dist/
+./dist/TupperDMX-Simulator --version 2>/dev/null || echo "Test basic execution"
 ```
 
 ## Key Import Fixes
