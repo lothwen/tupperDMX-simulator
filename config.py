@@ -42,6 +42,7 @@ class Blinder:
     x: int
     y: int
     dmx_start: int
+    multiply_factor: float = 2.0
 
 
 @dataclass
@@ -222,7 +223,8 @@ class Config:
                     blinder = Blinder(
                         x=Config._validate_int(blinder_data["x"], 0, 10000),
                         y=Config._validate_int(blinder_data["y"], 0, 10000),
-                        dmx_start=Config._validate_int(blinder_data["dmx_start"], 1, 512)
+                        dmx_start=Config._validate_int(blinder_data["dmx_start"], 1, 512),
+                        multiply_factor=Config._validate_float(blinder_data.get("multiply_factor", 2.0), 0.1, 10.0)
                     )
                     fixtures.blinders.append(blinder)
         

@@ -1,6 +1,6 @@
 import glob
 from PyQt6.QtCore import QRectF
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle
+from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem
 from PyQt6.QtGui import QColor, QBrush, QMovie
 
 
@@ -132,59 +132,112 @@ class LedBar(QGraphicsObject):
             avg_b = total_b / self.NUM_PIXELS
             self.graphicsEffect().setColor(QColor(int(avg_r), int(avg_g), int(avg_b), 255))
 
-class Blinder(QGraphicsRectItem):
+class Blinder(QGraphicsObject):
     dmx_channel_count = 8
+    WIDTH = 40
+    HEIGHT = 80
+    BULB_SIZE = 30
 
-    def __init__(self, x, y):
-        super().__init__(0, 0, 50, 50)
+    def __init__(self, x, y, multiply_factor=2.0):
+        super().__init__()
         self.setPos(x, y)
-        self.setBrush(QColor("darkgrey"))
 
         self.brightness = 0
-        self.led1_cool = 0
-        self.led2_cool = 0
-        self.led1_warm = 0
-        self.led2_warm = 0
+        self.led1_cool = 0  # Top bulb cool (DMX channel 2)
+        self.led2_cool = 0  # Bottom bulb cool (DMX channel 3)
+        self.led1_warm = 0  # Top bulb warm (DMX channel 4)
+        self.led2_warm = 0  # Bottom bulb warm (DMX channel 5)
+        self.multiply_factor = multiply_factor
         
-        dse = QGraphicsDropShadowEffect();
-        dse.setBlurRadius(100);
-        dse.setOffset(0);
-        self.setGraphicsEffect(dse);
+        # Create housing (black rectangle)
+        self.housing = QGraphicsRectItem(0, 0, self.WIDTH, self.HEIGHT, self)
+        self.housing.setBrush(QColor(20, 20, 20))  # Dark housing
+        
+        # Create two bulbs
+        bulb_x = (self.WIDTH - self.BULB_SIZE) / 2
+        
+        # Top bulb (LED 1)
+        self.bulb1 = QGraphicsEllipseItem(
+            bulb_x, 5, self.BULB_SIZE, self.BULB_SIZE, self
+        )
+        self.bulb1.setBrush(QColor("darkgrey"))
+        
+        # Bottom bulb (LED 2)  
+        self.bulb2 = QGraphicsEllipseItem(
+            bulb_x, self.HEIGHT - self.BULB_SIZE - 5, self.BULB_SIZE, self.BULB_SIZE, self
+        )
+        self.bulb2.setBrush(QColor("darkgrey"))
+        
+        # Drop shadow glow effect
+        dse = QGraphicsDropShadowEffect()
+        dse.setBlurRadius(200)
+        dse.setOffset(0)
+        self.setGraphicsEffect(dse)
+
+    def boundingRect(self):
+        return QRectF(0, 0, self.WIDTH, self.HEIGHT)
+
+    def paint(self, painter, option, widget):
+        # Let child items handle their own painting
+        pass
 
     def update_dmx(self, data):
         if len(data) < self.dmx_channel_count:
             return
-        # DMX: Brightness, led 1 Cool, led 2 Cool, led 1 Warm, led 2  Warm
+            
+        # DMX mapping: 
+        # Channel 1: Master brightness
+        # Channel 2: LED 1 (top) cool
+        # Channel 3: LED 2 (bottom) cool  
+        # Channel 4: LED 1 (top) warm
+        # Channel 5: LED 2 (bottom) warm
         self.brightness = data[0]
-        self.led1_cool = data[1]
-        self.led2_cool = data[2]
-        self.led1_warm = data[3]
-        self.led2_warm = data[4]
+        self.led1_cool = data[1]  # Top cool
+        self.led2_cool = data[2]  # Bottom cool
+        self.led1_warm = data[3]  # Top warm
+        self.led2_warm = data[4]  # Bottom warm
 
-        # More realistic color mix
+        # Color definitions
         warm_color = QColor(255, 180, 100)  # Amber
-        cool_color = QColor(200, 200, 255)  # Light Blue/White
+        cool_color = QColor(200, 220, 255)  # Cool white
+        
+        brightness_factor = (self.brightness / 255) * self.multiply_factor
 
-        warm_intensity = (self.led1_warm + self.led2_warm) / 2 / 255
-        cool_intensity = (self.led1_cool + self.led2_cool) / 2 / 255
+        # Update top bulb (LED 1)
+        led1_warm_intensity = self.led1_warm / 255
+        led1_cool_intensity = self.led1_cool / 255
+        
+        r1 = warm_color.red() * led1_warm_intensity + cool_color.red() * led1_cool_intensity
+        g1 = warm_color.green() * led1_warm_intensity + cool_color.green() * led1_cool_intensity
+        b1 = warm_color.blue() * led1_warm_intensity + cool_color.blue() * led1_cool_intensity
+        
+        r1 = min(255, r1) * brightness_factor
+        g1 = min(255, g1) * brightness_factor
+        b1 = min(255, b1) * brightness_factor
+        
+        bulb1_color = QColor(int(r1), int(g1), int(b1))
+        self.bulb1.setBrush(QBrush(bulb1_color))
 
-        # Blend colors
-        r = warm_color.red() * warm_intensity + cool_color.red() * cool_intensity
-        g = warm_color.green() * warm_intensity + cool_color.green() * cool_intensity
-        b = warm_color.blue() * warm_intensity + cool_color.blue() * cool_intensity
-
-        # Clamp values
-        r = min(255, r)
-        g = min(255, g)
-        b = min(255, b)
-
-        # Apply master brightness
-        brightness_factor = self.brightness / 255
-        color = QColor(
-            int(r * brightness_factor),
-            int(g * brightness_factor),
-            int(b * brightness_factor)
-        )
-        self.setBrush(QBrush(color))
-        self.graphicsEffect().setColor(QColor(int(r), int(g), int(b), 255))
+        # Update bottom bulb (LED 2)
+        led2_warm_intensity = self.led2_warm / 255
+        led2_cool_intensity = self.led2_cool / 255
+        
+        r2 = warm_color.red() * led2_warm_intensity + cool_color.red() * led2_cool_intensity
+        g2 = warm_color.green() * led2_warm_intensity + cool_color.green() * led2_cool_intensity
+        b2 = warm_color.blue() * led2_warm_intensity + cool_color.blue() * led2_cool_intensity
+        
+        r2 = min(255, r2) * brightness_factor
+        g2 = min(255, g2) * brightness_factor  
+        b2 = min(255, b2) * brightness_factor
+        
+        bulb2_color = QColor(int(r2), int(g2), int(b2))
+        self.bulb2.setBrush(QBrush(bulb2_color))
+        
+        # Update glow effect with combined color
+        avg_r = (r1 + r2) / 2
+        avg_g = (g1 + g2) / 2
+        avg_b = (b1 + b2) / 2
+        
+        glow_color = QColor(int(avg_r), int(avg_g), int(avg_b))
+        self.graphicsEffect().setColor(glow_color)
         

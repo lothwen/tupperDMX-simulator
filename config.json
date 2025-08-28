@@ -57,12 +57,14 @@
       {
         "x": 675,
         "y": 500,
-        "dmx_start": 33
+        "dmx_start": 33,
+        "multiply_factor": 2.0
       },
       {
         "x": 1025,
         "y": 500,
-        "dmx_start": 65
+        "dmx_start": 65,
+        "multiply_factor": 2.0
       }
     ]
   },
