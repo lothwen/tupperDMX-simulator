@@ -91,7 +91,7 @@ class StageController(QObject):
     def _setup_blinders(self) -> None:
         """Setup blinder fixtures."""
         for blinder_config in self.config.fixtures.blinders:
-            blinder = Blinder(blinder_config.x, blinder_config.y)
+            blinder = Blinder(blinder_config.x, blinder_config.y, blinder_config.multiply_factor)
             self.blinders.append(blinder)
             self.scene.addItem(blinder)
         
@@ -134,14 +134,14 @@ class StageController(QObject):
         
         return bar
     
-    def add_blinder(self, x: float, y: float) -> Blinder:
+    def add_blinder(self, x: float, y: float, multiply_factor: float = 2.0) -> Blinder:
         """Add a new blinder to the stage."""
-        blinder = Blinder(x, y)
+        blinder = Blinder(x, y, multiply_factor)
         self.blinders.append(blinder)
         self.scene.addItem(blinder)
         
         self.fixture_updated.emit("blinder", blinder)
-        self.logger.info(f"Added blinder at ({x}, {y})")
+        self.logger.info(f"Added blinder at ({x}, {y}) with multiply_factor {multiply_factor}")
         
         return blinder
     
