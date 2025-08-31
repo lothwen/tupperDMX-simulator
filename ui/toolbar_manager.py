@@ -201,7 +201,7 @@ class ToolbarManager(QObject):
         
         # Time display
         self.time_display = QLabel("00:00.000")
-        self.time_display.setFixedSize(150, 50)
+        self.time_display.setFixedSize(120, 50)
         self.time_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_display.setObjectName("TimeDisplay")
         controls_layout.addWidget(self.time_display)
@@ -216,8 +216,8 @@ class ToolbarManager(QObject):
         self.metronome_button = QPushButton()
         metronome_icon = QIcon("assets/icons/metronome_icon.png")
         self.metronome_button.setIcon(metronome_icon)
-        self.metronome_button.setIconSize(QSize(32, 32))  # Set icon size explicitly
-        self.metronome_button.setFixedSize(40, 40)
+        self.metronome_button.setIconSize(QSize(28, 28))  # Set icon size explicitly
+        self.metronome_button.setFixedSize(32, 32)
         self.metronome_button.setCheckable(True)
         self.metronome_button.setObjectName("MetronomeButton")
         self.metronome_button.toggled.connect(self.metronome_mute_toggled.emit)
