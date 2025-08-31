@@ -1,7 +1,95 @@
 import glob
-from PyQt6.QtCore import QRectF
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem
-from PyQt6.QtGui import QColor, QBrush, QMovie
+from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient
+
+
+class GlowingEllipse(QGraphicsEllipseItem):
+    """Custom QGraphicsEllipseItem with shader-like radial gradient glow effect"""
+    
+    def __init__(self, x, y, width, height, parent=None):
+        super().__init__(x, y, width, height, parent)
+        self.glow_color = QColor("darkgrey")
+        self.glow_intensity = 0.0
+        self.glow_radius_multiplier = 20.0  # How far the glow extends beyond the ellipse
+        
+    def setGlowColor(self, color, intensity=1.0):
+        """Set the glow color and intensity (0.0-1.0)"""
+        self.glow_color = color
+        self.glow_intensity = max(0.0, min(1.0, intensity))
+        self.update()  # Trigger repaint
+        
+    def boundingRect(self):
+        """Expand bounding rect to include glow area"""
+        rect = super().boundingRect()
+        glow_expansion = self.rect().width() * (self.glow_radius_multiplier - 1) / 2
+        return rect.adjusted(-glow_expansion, -glow_expansion, glow_expansion, glow_expansion)
+        
+    def paint(self, painter, option, widget):
+        """Custom paint method with radial gradient glow"""
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        ellipse_rect = self.rect()
+        center_x = ellipse_rect.center().x()
+        center_y = ellipse_rect.center().y()
+        bulb_radius = ellipse_rect.width() / 2
+        glow_radius = bulb_radius * self.glow_radius_multiplier
+        
+        if self.glow_intensity > 0:
+            
+            # Create smooth radial gradient for seamless glow
+            gradient = QRadialGradient(center_x, center_y, glow_radius)
+            
+            # Core - full intensity
+            core_color = QColor(self.glow_color)
+            core_color.setAlpha(int(220 * self.glow_intensity))
+            gradient.setColorAt(0.0, core_color)
+            #gradient.setColorAt(0.0, QColor("red"))
+            
+            # Inner bright area
+            inner_color = QColor(self.glow_color)
+            inner_color.setAlpha(int(180 * self.glow_intensity))
+            gradient.setColorAt(0.0, inner_color)
+            #gradient.setColorAt(0.06, QColor("blue"))
+            
+            # Mid glow
+            mid_color = QColor(self.glow_color)
+            mid_color.setAlpha(int(130 * self.glow_intensity))
+            gradient.setColorAt(0.13, mid_color)
+            #gradient.setColorAt(0.13, QColor("green"))
+            
+            # Outer glow
+            outer_color = QColor(self.glow_color)
+            outer_color.setAlpha(int(90 * self.glow_intensity))
+            gradient.setColorAt(0.25, outer_color)
+            #gradient.setColorAt(0.25, QColor("yellow"))
+            
+            # Far glow
+            far_color = QColor(self.glow_color)
+            far_color.setAlpha(int(40 * self.glow_intensity))
+            gradient.setColorAt(0.5, far_color)
+            #gradient.setColorAt(0.5, QColor("white"))
+            
+            # Edge - fade to transparent
+            edge_color = QColor(self.glow_color)
+            edge_color.setAlpha(0)
+            gradient.setColorAt(1.0, edge_color)
+            #gradient.setColorAt(1.0, QColor("purple"))
+            
+            # Paint the entire glow with smooth gradient
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(gradient))
+            glow_diameter = int(glow_radius * 2)
+            painter.drawEllipse(
+                int(center_x - glow_radius), int(center_y - glow_radius),
+                glow_diameter, glow_diameter
+            )
+        else:
+            # No glow - just dark grey bulb
+            painter.setBrush(QBrush(QColor(40, 40, 40)))
+            painter.setPen(self.pen())
+            painter.drawEllipse(ellipse_rect)
+            
 
 
 class LedBar(QGraphicsObject):
@@ -153,26 +241,24 @@ class Blinder(QGraphicsObject):
         self.housing = QGraphicsRectItem(0, 0, self.WIDTH, self.HEIGHT, self)
         self.housing.setBrush(QColor(20, 20, 20))  # Dark housing
         
-        # Create two bulbs
+        # Create two bulbs with custom glow effect
         bulb_x = (self.WIDTH - self.BULB_SIZE) / 2
         
         # Top bulb (LED 1)
-        self.bulb1 = QGraphicsEllipseItem(
+        self.bulb1 = GlowingEllipse(
             bulb_x, 5, self.BULB_SIZE, self.BULB_SIZE, self
         )
-        self.bulb1.setBrush(QColor("darkgrey"))
         
         # Bottom bulb (LED 2)  
-        self.bulb2 = QGraphicsEllipseItem(
+        self.bulb2 = GlowingEllipse(
             bulb_x, self.HEIGHT - self.BULB_SIZE - 5, self.BULB_SIZE, self.BULB_SIZE, self
         )
-        self.bulb2.setBrush(QColor("darkgrey"))
         
         # Drop shadow glow effect
-        dse = QGraphicsDropShadowEffect()
-        dse.setBlurRadius(200)
-        dse.setOffset(0)
-        self.setGraphicsEffect(dse)
+        #dse = QGraphicsDropShadowEffect()
+        #dse.setBlurRadius(200)
+        #dse.setOffset(0)
+        #self.setGraphicsEffect(dse)
 
     def boundingRect(self):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
@@ -198,7 +284,7 @@ class Blinder(QGraphicsObject):
         self.led2_warm = data[4]  # Bottom warm
 
         # Color definitions
-        warm_color = QColor(255, 180, 100)  # Amber
+        warm_color = QColor(255, 200, 100)  # Amber
         cool_color = QColor(200, 220, 255)  # Cool white
         
         brightness_factor = (self.brightness / 255) * self.multiply_factor
@@ -216,7 +302,7 @@ class Blinder(QGraphicsObject):
         b1 = min(255, b1) * brightness_factor
         
         bulb1_color = QColor(int(r1), int(g1), int(b1))
-        self.bulb1.setBrush(QBrush(bulb1_color))
+        self.bulb1.setGlowColor(bulb1_color, brightness_factor)
 
         # Update bottom bulb (LED 2)
         led2_warm_intensity = self.led2_warm / 255
@@ -231,8 +317,8 @@ class Blinder(QGraphicsObject):
         b2 = min(255, b2) * brightness_factor
         
         bulb2_color = QColor(int(r2), int(g2), int(b2))
-        self.bulb2.setBrush(QBrush(bulb2_color))
-        
+        self.bulb2.setGlowColor(bulb2_color, brightness_factor)
+        """
         # Update glow effect with combined color
         avg_r = (r1 + r2) / 2
         avg_g = (g1 + g2) / 2
@@ -240,4 +326,5 @@ class Blinder(QGraphicsObject):
         
         glow_color = QColor(int(avg_r), int(avg_g), int(avg_b))
         self.graphicsEffect().setColor(glow_color)
+        """
         
