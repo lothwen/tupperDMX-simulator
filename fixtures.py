@@ -44,37 +44,31 @@ class GlowingEllipse(QGraphicsEllipseItem):
             core_color = QColor(self.glow_color)
             core_color.setAlpha(int(220 * self.glow_intensity))
             gradient.setColorAt(0.0, core_color)
-            #gradient.setColorAt(0.0, QColor("red"))
             
             # Inner bright area
             inner_color = QColor(self.glow_color)
             inner_color.setAlpha(int(180 * self.glow_intensity))
             gradient.setColorAt(0.0, inner_color)
-            #gradient.setColorAt(0.06, QColor("blue"))
             
             # Mid glow
             mid_color = QColor(self.glow_color)
             mid_color.setAlpha(int(130 * self.glow_intensity))
             gradient.setColorAt(0.13, mid_color)
-            #gradient.setColorAt(0.13, QColor("green"))
             
             # Outer glow
             outer_color = QColor(self.glow_color)
             outer_color.setAlpha(int(90 * self.glow_intensity))
             gradient.setColorAt(0.25, outer_color)
-            #gradient.setColorAt(0.25, QColor("yellow"))
             
             # Far glow
             far_color = QColor(self.glow_color)
             far_color.setAlpha(int(40 * self.glow_intensity))
             gradient.setColorAt(0.5, far_color)
-            #gradient.setColorAt(0.5, QColor("white"))
             
             # Edge - fade to transparent
             edge_color = QColor(self.glow_color)
             edge_color.setAlpha(0)
             gradient.setColorAt(1.0, edge_color)
-            #gradient.setColorAt(1.0, QColor("purple"))
             
             # Paint the entire glow with smooth gradient
             painter.setPen(Qt.PenStyle.NoPen)
@@ -253,12 +247,6 @@ class Blinder(QGraphicsObject):
         self.bulb2 = GlowingEllipse(
             bulb_x, self.HEIGHT - self.BULB_SIZE - 5, self.BULB_SIZE, self.BULB_SIZE, self
         )
-        
-        # Drop shadow glow effect
-        #dse = QGraphicsDropShadowEffect()
-        #dse.setBlurRadius(200)
-        #dse.setOffset(0)
-        #self.setGraphicsEffect(dse)
 
     def boundingRect(self):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
@@ -318,13 +306,5 @@ class Blinder(QGraphicsObject):
         
         bulb2_color = QColor(int(r2), int(g2), int(b2))
         self.bulb2.setGlowColor(bulb2_color, brightness_factor)
-        """
-        # Update glow effect with combined color
-        avg_r = (r1 + r2) / 2
-        avg_g = (g1 + g2) / 2
-        avg_b = (b1 + b2) / 2
-        
-        glow_color = QColor(int(avg_r), int(avg_g), int(avg_b))
-        self.graphicsEffect().setColor(glow_color)
-        """
+
         
