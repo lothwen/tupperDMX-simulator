@@ -1,0 +1,107 @@
+{
+    "led_banks": {
+        "ANIMATIONS": [
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 132, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 128, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 12, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 16, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 20, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 24, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 28, "speed": 255, "direction": 0}
+        ],
+        "FILLS": [
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 68, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 0, "green": 0, "red": 150, "animation": 68, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 72, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 0, "green": 255, "red": 0, "animation": 72, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 76, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 0, "animation": 76, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 88, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 76, "speed": 255, "direction": 0}
+        ],
+        "FILLS2": [
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 0, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 96, "speed": 150, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 68, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 76, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0}
+        ],
+        "MULTICOLOR": [
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 100, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 104, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 108, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 112, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 116, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0}
+        ],
+        "STROBES": [
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 30, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 60, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 100, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 136, "speed": 255, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0}
+        ],
+        "TUBES": [
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 32, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 36, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 40, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 44, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 48, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 52, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 56, "speed": 255, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 60, "speed": 255, "direction": 0}
+        ],
+        "RADARS": [
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 64, "speed": 150, "direction": 0},
+            {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 124, "speed": 200, "direction": 0},
+            {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 120, "speed": 255, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
+            {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0}
+        ]
+    },
+    "blinder_banks": {
+        "BLINDER_SCENES": [
+            {"brightness": 25, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+            {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+            {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+            {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 200, "mode": 0, "speed": 0},
+            {"brightness": 255, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 250, "speed": 0},
+            {"brightness": 1, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+            {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+            {"brightness": 0, "cool1": 0, "cool2": 0, "warm1": 0, "warm2": 0, "strobe": 0, "mode": 0, "speed": 0}
+        ]
+    },
+    "led_chases": [
+        {"banks": ["STROBES", "FILLS2"], "scenes": [1, 0]},
+        {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 5]},
+        {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 6]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [0, 0]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [1, 1]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [2, 2]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [3, 3]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [4, 4]},
+        {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [5, 5]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 0]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 3]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 4]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 5]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 6]},
+        {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 7]}
+    ],
+    "blinder_chases": [
+        {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [0, 5]},
+        {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [1, 5]}
+    ]
+}

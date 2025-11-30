@@ -36,9 +36,17 @@ class MidiManager(QObject):
         self._current_playback_time: float = 0.0
         
         self.logger = get_logger("midi.manager")
+        
+        # Software controller reference
+        self.software_controller = None
 
-    # MIDI Data Management Methods
-    
+    def set_software_controller(self, controller):
+        """Set the software controller instance."""
+        self.software_controller = controller
+        if self.current_worker:
+            self.current_worker.set_software_controller(controller)
+
+    # MIDI Data Management Methods  
     def load_from_file(self, file_path: str) -> bool:
         """Load MIDI data from file and parse it for UI display."""
         try:
@@ -480,6 +488,8 @@ class MidiManager(QObject):
         # Create and start worker
         try:
             worker = MidiWorker(filename, port_name, midi_data)
+            if self.software_controller:
+                worker.set_software_controller(self.software_controller)
             
             # Connect signals
             worker.connection_status_changed.connect(

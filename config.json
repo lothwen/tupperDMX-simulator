@@ -119,7 +119,7 @@
     "low_pitch_freq": 800
   },
   "volume": {
-    "metronome": 0.16,
+    "metronome": 0.11,
     "audio": 0.13
   },
   "logging": {
@@ -131,5 +131,5 @@
     "backup_count": 5
   },
   "last_dmx_source": "FTDI:FT232R USB UART:BG01EQZU",
-  "last_midi_port": "USB MIDI Interface:USB MIDI Interface MIDI 1 28:0"
+  "last_midi_port": "Software emulated"
 }
