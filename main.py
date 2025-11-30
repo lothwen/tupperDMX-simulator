@@ -18,7 +18,6 @@ from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import MediaController, DMXDisplayWidget, AudioController, StageController, ToolbarManager, ErrorDialogManager
-from software_controller.main import DMXController
 
 
 # StageView moved to ui.stage_controller module
@@ -35,17 +34,12 @@ class MainWindow(QMainWindow):
         self.dmx_manager.dmx_data_received.connect(self.update_dmx)
         self.dmx_manager.connection_status_changed.connect(self.on_dmx_status_changed)
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
+        self.dmx_manager.software_controller_changed.connect(self.on_software_controller_changed)
         
         self.midi_manager = MidiManager(self.config.midi_note_map)
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
-        self.midi_manager.error_occurred.connect(self.on_midi_error)
         self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)
-        
-        # Initialize Software Controller
-        self.software_controller = DMXController()
-        self.software_controller.start_background()
-        self.midi_manager.set_software_controller(self.software_controller)
         
         # Initialize UI components
         self._setup_ui_components()
@@ -296,6 +290,11 @@ class MainWindow(QMainWindow):
         """Handle MIDI worker finished signal."""
         self.logger.info("MIDI playback finished")
 
+    def on_software_controller_changed(self, controller):
+        """Handle software controller instance changes."""
+        self.logger.info(f"Software controller changed: {controller}")
+        self.software_controller = controller
+        self.midi_manager.set_software_controller(controller)
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""
@@ -535,7 +534,7 @@ class MainWindow(QMainWindow):
         self.dmx_manager.cleanup()
         self.midi_manager.cleanup()
         
-        if hasattr(self, 'software_controller'):
+        if hasattr(self, 'software_controller') and self.software_controller:
             self.software_controller.stop()
         
         # Save configuration
