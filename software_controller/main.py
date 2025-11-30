@@ -25,39 +25,6 @@ COLOR32_ORANGE = (255, 165, 0)
 COLOR32_CYAN = (0, 255, 255)
 COLOR32_PINK = (255, 192, 203)
 
-# MIDI Note definitions
-NOTE_C0 = 12
-NOTE_CS0 = 13
-NOTE_G_SHARP0 = 20
-NOTE_A0 = 21
-NOTE_AS0 = 22
-NOTE_B0 = 23
-NOTE_C1 = 24
-NOTE_CS1 = 25
-NOTE_D1 = 26
-NOTE_DS1 = 27
-NOTE_E1 = 28
-NOTE_F1 = 29
-NOTE_FS1 = 30
-NOTE_G1 = 31
-NOTE_GS1 = 32
-SONG_PART_START = 40
-SONG_PART_END = 49
-NOTE_D3 = 50
-NOTE_DS3 = 51
-NOTE_E3 = 52
-
-# Direct channel mapping
-DIRECT_CHANNEL_MAP = {
-    1: 'brightness',
-    2: 'blue',
-    3: 'green',
-    4: 'red',
-    5: 'animation',
-    6: 'speed',
-    7: 'direction'
-}
-
 # DMX Channel definitions
 LED_START_CHANNEL = 0
 LED_NUM_BLEND_CHANNELS = 4
@@ -126,9 +93,6 @@ class DMXController:
         self.led = LedScene()
         self.blinder1 = BlinderScene()
         self.blinder2 = BlinderScene()
-
-        self.note_handlers = {}
-        self._setup_note_handlers()
 
         self.blackout_all_state = False
         self.current_velocity = 127
@@ -204,7 +168,7 @@ class DMXController:
         self.universe_past = copy.deepcopy(self.universe_present)
 
     def blackout_led(self):
-        self.logger.info("Blackout LED")
+        self.logger.debug("Blackout LED")
 
         self.led = LedScene(brightness=0, blue=0, green=0, red=0, animation=0, speed=0, direction=0)
         self.led_status['is_blackout'] = True
@@ -214,7 +178,7 @@ class DMXController:
         self.update_universe()
 
     def blackout_blinder(self, blinder):
-        self.logger.info(f"Blackout Blinder{blinder}")
+        self.logger.debug(f"Blackout Blinder{blinder}")
 
         if blinder == 1:
             self.blinder1 = BlinderScene(brightness=0, cool1=0, cool2=0, warm1=0, warm2=0, strobe=0, mode=0, speed=0)
@@ -268,69 +232,117 @@ class DMXController:
         else:
             self.last_blinder2_chase_change = time.time()
         
-    def _setup_note_handlers(self):
-        self.note_handlers = {
-            8: lambda v: self.led_status.update({'is_palette_random': True}),
-            9: lambda v: self.led_status.update({'is_palette_random': False}),
-            10: lambda v: self.led_status.update({'blend_time': v * 100}),
-            11: lambda v: self.led_status.update({'color_change_time': v * 1000}),
-            NOTE_G_SHARP0: lambda v: self.set_led_color(COLOR32_WHITE),
-            NOTE_A0: lambda v: self.set_led_color(COLOR32_ORANGE),
-            NOTE_AS0: lambda v: self.set_led_color(COLOR32_CYAN),
-            NOTE_B0: lambda v: self.set_led_color(COLOR32_PINK),
-            NOTE_C1: lambda v: self.led_status.update({'bank': 'FILLS'}),
-            NOTE_CS1: lambda v: self.led_status.update({'bank': 'TUBES'}),
-            NOTE_D1: self._handle_note_d1,
-            NOTE_DS1: self._handle_note_ds1,
-            NOTE_E1: self._handle_note_e1,
-            NOTE_F1: self._handle_note_f1,
-            NOTE_FS1: self._handle_note_fs1,
-            NOTE_G1: lambda v: self.update_blinder_scene(1, 'BLINDER_SCENES', 1),
-            NOTE_GS1: lambda v: self.update_blinder_scene(2, 'BLINDER_SCENES', 1),
-            NOTE_D3: lambda v: self.blackout_led(),
-            NOTE_DS3: self._handle_note_ds3,
-            NOTE_E3: lambda v: self.blackout_all(),
-        }
-
-    def _handle_note_d1(self, velocity):
-        self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
-        self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
-
-    def _handle_note_ds1(self, velocity):
-        self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
-        self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
-
-    def _handle_note_e1(self, velocity):
-        self.update_blinder_scene(1, 'BLINDER_SCENES', 2)
-        self.update_blinder_scene(2, 'BLINDER_SCENES', 2)
-
-    def _handle_note_f1(self, velocity):
-        self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
-        self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
-
-    def _handle_note_fs1(self, velocity):
-        self.update_blinder_scene(1, 'BLINDER_SCENES', 4)
-        self.update_blinder_scene(2, 'BLINDER_SCENES', 4)
-
-    def _handle_note_ds3(self, velocity):
-        self.blackout_blinder(1)
-        self.blackout_blinder(2)
-
     def handle_note_on(self, channel, pitch, velocity):
         with self.lock:
             self.logger.debug(f"Note On: channel={channel}, pitch={pitch}, velocity={velocity}")
             self.current_velocity = velocity
 
-            handler = self.note_handlers.get(pitch)
-            if handler:
-                handler(velocity)
-            elif 1 <= pitch <= 7:
-                self.set_channel(DIRECT_CHANNEL_MAP[pitch], velocity * 2)
-            elif NOTE_C0 <= pitch <= 19:
-                self.update_led_scene(self.led_status['bank'], pitch - NOTE_C0)
-            elif SONG_PART_START <= pitch <= SONG_PART_END:
-                self.pick_scene_from_song_part(pitch - SONG_PART_START, velocity)
-            
+            match pitch:
+                case 0:  # C-1
+                    pass # NoteOff, do nothing
+                case 1:   # C#-1
+                    self.set_channel('brightness', velocity * 2)
+                case 2:   # D-1
+                    self.set_channel('blue', velocity * 2) 
+                case 3:   # D#-1
+                    self.set_channel('green', velocity * 2) 
+                case 4:   # E-1
+                    self.set_channel('red', velocity * 2)
+                case 5:   # F-1
+                    self.set_channel('animation', velocity * 2)
+                case 6:   # F#-1
+                    self.set_channel('speed', velocity * 2)
+                case 7:   # G-1
+                    self.set_channel('direction', velocity * 2)
+                case 8:   # G#-1
+                    self.led_status['is_palette_random'] = True
+                case 9:   # A-1
+                    self.led_status['is_palette_random'] = False
+                case 10:  # A#-1
+                    self.led_status['blend_time'] = velocity * 100
+                case 11:  # B-1
+                    self.led_status['color_change_time'] = velocity * 1000
+                case 12:  # C0
+                    self.update_led_scene(self.led_status['bank'], 0)
+                case 13:  # C#0
+                    self.update_led_scene(self.led_status['bank'], 1)
+                case 14:  # D0
+                    self.update_led_scene(self.led_status['bank'], 2)
+                case 15:  # D#0
+                    self.update_led_scene(self.led_status['bank'], 3)
+                case 16:  # E0
+                    self.update_led_scene(self.led_status['bank'], 4)
+                case 17:  # F0
+                    self.update_led_scene(self.led_status['bank'], 5)
+                case 18:  # F#0
+                    self.update_led_scene(self.led_status['bank'], 6)
+                case 19:  # G0
+                    self.update_led_scene(self.led_status['bank'], 7)
+                case 20:  # G#0
+                    self.set_led_color(COLOR32_WHITE)
+                case 21:  # A0
+                    self.set_led_color(COLOR32_ORANGE)
+                case 22:  # A#0
+                    self.set_led_color(COLOR32_CYAN)
+                case 23:  # B0
+                    self.set_led_color(COLOR32_PINK)
+                case 24:  # C1
+                    self.led_status['bank'] = 'FILLS'
+                case 25:  # C#1
+                    self.led_status['bank'] = 'TUBES'
+                case 26:  # D1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+                case 27:  # D#1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                case 28:  # E1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 2)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 2)
+                case 29:  # F1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+                case 30:  # F#1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 4)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 4)
+                case 31:  # G1
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+                case 32:  # G#1
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                case 38:  # D2 - Precount beats
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+                case 39:  # D#2 - Precount downbeats
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                case 40:  # E2
+                    self.pick_scene_from_song_part(0, velocity) # START
+                case 41:  # F2
+                    self.pick_scene_from_song_part(1, velocity) # INTRO
+                case 42:  # F#2
+                    self.pick_scene_from_song_part(2, velocity) # VERSE
+                case 43:  # G2
+                    self.pick_scene_from_song_part(3, velocity) # CHORUS
+                case 44:  # G#2
+                    self.pick_scene_from_song_part(4, velocity) # BREAK
+                case 45:  # A2
+                    self.pick_scene_from_song_part(5, velocity) # BRIDGE
+                case 46:  # A#2
+                    self.pick_scene_from_song_part(6, velocity) # INST
+                case 47:  # B2
+                    self.pick_scene_from_song_part(7, velocity) # SOLO
+                case 48:  # C3
+                    self.pick_scene_from_song_part(8, velocity) # OUTRO
+                case 49:  # C#3
+                    self.pick_scene_from_song_part(9, velocity) # END
+                case 50:  # D3
+                    self.blackout_led()
+                case 51:  # D#3
+                    self.blackout_blinder(1)
+                    self.blackout_blinder(2)
+                case 52:  # E3
+                    self.blackout_all()
+
             self.update_universe()
 
     def pick_scene_from_song_part(self, song_part, velocity):
