@@ -18,6 +18,8 @@ from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import MediaController, DMXDisplayWidget, AudioController, StageController, ToolbarManager, ErrorDialogManager
+from software_controller.main import DMXController
+
 
 # StageView moved to ui.stage_controller module
 
@@ -37,7 +39,13 @@ class MainWindow(QMainWindow):
         self.midi_manager = MidiManager(self.config.midi_note_map)
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
+        self.midi_manager.error_occurred.connect(self.on_midi_error)
         self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)
+        
+        # Initialize Software Controller
+        self.software_controller = DMXController()
+        self.software_controller.start_background()
+        self.midi_manager.set_software_controller(self.software_controller)
         
         # Initialize UI components
         self._setup_ui_components()
@@ -526,6 +534,9 @@ class MainWindow(QMainWindow):
         self.audio_controller.cleanup()
         self.dmx_manager.cleanup()
         self.midi_manager.cleanup()
+        
+        if hasattr(self, 'software_controller'):
+            self.software_controller.stop()
         
         # Save configuration
         self.save_config()

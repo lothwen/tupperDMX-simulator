@@ -38,11 +38,18 @@ class MidiWorker(QThread):
         self.status = MidiConnectionStatus.DISCONNECTED
         self.logger = get_logger("midi.worker")
         
+        # Software controller reference
+        self.software_controller = None
+
         # Load MIDI file or use provided data
         if midi_data:
             self._load_midi_from_data(midi_data)
         else:
             self._load_midi_file()
+
+    def set_software_controller(self, controller):
+        """Set the software controller instance for direct MIDI routing."""
+        self.software_controller = controller
 
     def _load_midi_file(self) -> None:
         """Load and parse the MIDI file."""
@@ -94,6 +101,10 @@ class MidiWorker(QThread):
             if not self.port_name:
                 raise ValueError("No MIDI port specified")
             
+            if self.port_name == "Software emulated":
+                self.logger.info("Connected to Software emulated MIDI port")
+                return True
+
             self.port = mido.open_output(self.port_name)
             self.logger.info(f"Connected to MIDI port: {self.port_name}")
             return True
@@ -129,7 +140,14 @@ class MidiWorker(QThread):
             
             if msg_time <= timeline_time_sec:
                 # Send all MIDI messages, not just note_on
-                if self.port and msg.type in ('note_on', 'note_off', 'control_change', 'program_change'):
+                if self.port_name == "Software emulated" and self.software_controller:
+                    if msg.type == 'note_on':
+                        try:
+                            self.software_controller.handle_note_on(msg.channel, msg.note, msg.velocity)
+                            self.logger.debug(f"Sent MIDI message to software controller: {msg}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to send MIDI message to software controller: {e}")
+                elif self.port and msg.type in ('note_on', 'note_off', 'control_change', 'program_change'):
                     try:
                         self.port.send(msg)
                         self.logger.debug(f"Sent MIDI message: {msg}")
@@ -280,7 +298,10 @@ class MidiWorker(QThread):
     def get_available_ports() -> List[str]:
         """Get list of available MIDI output ports."""
         try:
-            return mido.get_output_names()
+            ports = mido.get_output_names()
+            ports.insert(0, "Software emulated")
+            return ports
+
         except Exception as e:
             logger = get_logger("midi.worker")
             logger.error(f"Error getting MIDI ports: {e}")
