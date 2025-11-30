@@ -130,6 +130,6 @@
     "max_file_size": 10485760,
     "backup_count": 5
   },
-  "last_dmx_source": "FTDI:FT232R USB UART:BG01EQZU",
+  "last_dmx_source": "Art-Net",
   "last_midi_port": "Software emulated"
 }

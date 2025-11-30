@@ -1,4 +1,4 @@
-from .sockets import DMXSocketServer
+from .artnet_sender import ArtNetSender
 
 from .dmx import led_banks, blinder_banks, led_chases, blinder_chases, LedScene, BlinderScene
 import time
@@ -453,9 +453,10 @@ class DMXController:
 
 
     def _run_loop(self):
-        dmx_server = DMXSocketServer()
-        dmx_server.listen()
-
+        # Initialize ArtNet Sender
+        # We use default localhost:6454 for simulation
+        dmx_sender = ArtNetSender(ip="127.0.0.1", port=6454, universe=0)
+        
         last_dmx_update = time.time()
         
         while self._running:
@@ -495,9 +496,11 @@ class DMXController:
                         data_to_send = self.universe_present
                 
                 if data_to_send:
-                    dmx_server.send_data(data_to_send)
+                    dmx_sender.send_dmx(data_to_send)
             
             time.sleep(1.0 / LOOP_FREQUENCY_HZ)
+            
+        dmx_sender.close()
 
     def _handle_chase(self, status, last_change_time, chases, update_func, current_time, *args):
         if status['is_chasing'] and current_time - last_change_time >= status['chase_change_time'] / 1000.0:

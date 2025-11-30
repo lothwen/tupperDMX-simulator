@@ -18,6 +18,7 @@ class DMXManager(QObject):
     connection_status_changed = pyqtSignal(str, str)  # source, status
     error_occurred = pyqtSignal(str, str)  # source, error message
     source_changed = pyqtSignal(str)  # new source
+    software_controller_changed = pyqtSignal(object) # software controller instance
     
     def __init__(self, config: Config):
         super().__init__()
@@ -65,6 +66,10 @@ class DMXManager(QObject):
         worker.error_occurred.connect(
             lambda error: self.error_occurred.emit(source, error)
         )
+        
+        # Connect software controller signal if available
+        if hasattr(worker, 'software_controller_changed'):
+            worker.software_controller_changed.connect(self.software_controller_changed.emit)
         
         # Connect thread lifecycle
         thread.started.connect(worker.run)

@@ -1,51 +1,81 @@
 import asyncio
 import threading
-import queue
+import socket
+import struct
 from typing import Optional
-from pyartnet import ArtNetNode
+from PyQt6.QtCore import pyqtSignal
 
 from config import Config
 from tupperlogger import get_logger
 from .base import DMXWorkerBase, DMXConnectionStatus
+from software_controller.main import DMXController
 
 
-class ArtNetSim(ArtNetNode):
-    """Custom Art-Net Node for simulation that captures DMX data."""
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._sim_queue = queue.Queue()
+class ArtNetProtocol(asyncio.DatagramProtocol):
+    def __init__(self, on_data_received, universe, logger):
+        self.on_data_received = on_data_received
+        self.universe = universe
+        self.logger = logger
 
-    def _send_universe(self, universe: int, data_size: int, data: bytearray, universe_obj) -> None:
-        """Override to capture DMX data instead of sending."""
-        self._sim_queue.put(data)
+    def connection_made(self, transport):
+        self.transport = transport
+        self.logger.info("ArtNet UDP transport established")
 
-    def get_dmx_data(self) -> Optional[bytearray]:
-        """Get the next DMX data packet if available."""
+    def datagram_received(self, data, addr):
         try:
-            return self._sim_queue.get_nowait()
-        except queue.Empty:
-            return None
-
-    async def start(self):
-        """Start the Art-Net node."""
-        self.start_refresh()
-
-    async def stop(self):
-        """Stop the Art-Net node."""
-        self.stop_refresh()
+            # Basic ArtNet validation
+            if len(data) < 18:
+                return
+            
+            # Check ID "Art-Net\0"
+            if data[0:8] != b'Art-Net\x00':
+                return
+                
+            # Check OpCode (OpOutput = 0x5000 -> 0x00, 0x50 little endian)
+            opcode = struct.unpack('<H', data[8:10])[0]
+            if opcode != 0x5000:
+                return
+                
+            # Check Protocol Version (14 -> 0x00, 0x0e big endian)
+            prot_ver = struct.unpack('>H', data[10:12])[0]
+            if prot_ver < 14:
+                return
+                
+            # Sequence (data[12]) - ignore
+            # Physical (data[13]) - ignore
+            
+            # Universe (data[14:16] little endian)
+            universe = struct.unpack('<H', data[14:16])[0]
+            if universe != self.universe:
+                return
+                
+            # Length (data[16:18] big endian)
+            length = struct.unpack('>H', data[16:18])[0]
+            
+            # Data
+            dmx_data = data[18:18+length]
+            
+            self.on_data_received(dmx_data)
+            
+        except Exception as e:
+            self.logger.warning(f"Error parsing ArtNet packet: {e}")
 
 
 class ArtNetWorker(DMXWorkerBase):
     """Worker for receiving DMX data via Art-Net protocol."""
     
+    # Signal to notify when software controller instance changes
+    software_controller_changed = pyqtSignal(object)
+    
     def __init__(self, config: Config):
         super().__init__(f"Art-Net ({config.artnet.ip}:{config.artnet.port})")
         self.config = config
-        self.node: Optional[ArtNetSim] = None
+        self.transport = None
+        self.protocol = None
         self.stop_event = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.logger = get_logger("dmx.artnet")
+        self.software_controller: Optional[DMXController] = None
 
     def run(self) -> None:
         """Start the Art-Net worker in async event loop."""
@@ -71,59 +101,66 @@ class ArtNetWorker(DMXWorkerBase):
     async def _async_worker(self) -> None:
         """Async worker function."""
         try:
-            # Initialize Art-Net node
-            self.logger.info(f"Connecting to Art-Net at {self.config.artnet.ip}:{self.config.artnet.port}")
-            self.node = ArtNetSim(
-                ip=self.config.artnet.ip, 
-                port=self.config.artnet.port
+            # Check if we should start the software controller (local simulation)
+            if self.config.artnet.ip in ["127.0.0.1", "localhost"]:
+                self.logger.info("Starting local software controller for simulation")
+                self.software_controller = DMXController()
+                self.software_controller.start_background()
+                self.software_controller_changed.emit(self.software_controller)
+            
+            # Start UDP listener
+            self.logger.info(f"Listening for Art-Net at {self.config.artnet.ip}:{self.config.artnet.port}")
+            
+            # Bind to all interfaces if 0.0.0.0, otherwise specific IP
+            # For localhost, we bind to 127.0.0.1
+            bind_ip = self.config.artnet.ip
+            if bind_ip == "localhost":
+                bind_ip = "127.0.0.1"
+                
+            self.transport, self.protocol = await self._loop.create_datagram_endpoint(
+                lambda: ArtNetProtocol(self._on_dmx_data, self.config.artnet.universe, self.logger),
+                local_addr=(bind_ip, self.config.artnet.port)
             )
-            self.node.add_universe(self.config.artnet.universe)
             
-            # Start the node
-            await self.node.start()
             self._set_status(DMXConnectionStatus.CONNECTED)
-            self.logger.info(f"Art-Net connected, listening on universe {self.config.artnet.universe}")
+            self.logger.info(f"Art-Net listener started on universe {self.config.artnet.universe}")
             
-            # Main data processing loop
+            # Main loop to keep the thread alive
             while not self.stop_event.is_set():
-                dmx_data = self.node.get_dmx_data()
-                if dmx_data:
-                    self.dmx_data_received.emit(dmx_data)
-                    self.logger.debug(f"Received DMX data: {len(dmx_data)} bytes")
+                await asyncio.sleep(0.1)
                 
-                # Small delay to prevent excessive CPU usage
-                await asyncio.sleep(0.01)
-                
+        except OSError as e:
+            self.logger.error(f"Failed to bind Art-Net port: {e}")
+            self._emit_error(f"Failed to bind port {self.config.artnet.port}: {e}")
         except Exception as e:
-            self.logger.error(f"Art-Net connection error: {e}")
-            self._emit_error(f"Art-Net connection error: {e}")
+            self.logger.error(f"Art-Net error: {e}")
+            self._emit_error(f"Art-Net error: {e}")
         finally:
             # Clean shutdown
-            if self.node:
-                try:
-                    await self.node.stop()
-                    self.logger.debug("Art-Net node stopped")
-                except Exception as e:
-                    self.logger.warning(f"Error stopping Art-Net node: {e}")
-                self.node = None
+            if self.transport:
+                self.transport.close()
+                self.transport = None
+                
+            if self.software_controller:
+                self.logger.info("Stopping local software controller")
+                self.software_controller.stop()
+                self.software_controller = None
+                self.software_controller_changed.emit(None)
+
+    def _on_dmx_data(self, data):
+        """Callback when DMX data is received."""
+        if data:
+            # Convert to bytearray if needed
+            byte_data = bytearray(data)
+            self.dmx_data_received.emit(byte_data)
 
     def stop(self) -> None:
         """Stop the Art-Net worker."""
         self.stop_event.set()
         
         # If we have a running loop, schedule the shutdown
-        if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._schedule_shutdown)
-    
-    def _schedule_shutdown(self) -> None:
-        """Schedule shutdown in the event loop."""
-        if self.node:
-            asyncio.create_task(self._shutdown())
-    
-    async def _shutdown(self) -> None:
-        """Async shutdown helper."""
-        if self.node:
-            await self.node.stop()
+        # The loop is running _async_worker which checks stop_event
+        pass
             
     def get_connection_info(self) -> dict:
         """Get detailed connection information."""
