@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
@@ -27,6 +28,7 @@ class AudioController(QObject):
         self.is_metronome_enabled = False
         self.metronome_last_volume = initial_volume
         self.metronome_is_muted = False
+        self.next_beat_expected_time = 0.0
         
         # Audio setup
         self.beep_audio_output: Optional[QAudioSink] = None
@@ -84,13 +86,8 @@ class AudioController(QObject):
         self.logger.debug(f"Generated beep sounds: {high_freq}Hz (high), {low_freq}Hz (low)")
     
     def set_bpm(self, bpm: int) -> None:
-        """Set metronome BPM and update timer interval."""
+        """Set metronome BPM."""
         self.bpm = max(40, min(300, bpm))  # Clamp between 40-300 BPM
-        
-        if self.metronome_timer.isActive():
-            interval_ms = int(60000 / self.bpm)
-            self.metronome_timer.setInterval(interval_ms)
-            
         self.logger.debug(f"BPM set to {self.bpm}")
     
     def start_metronome(self, timeline_position_sec: float = 0.0) -> None:
@@ -123,15 +120,17 @@ class AudioController(QObject):
         # Time until next beat
         time_to_next_beat = beat_duration_sec - time_since_last_beat
         
+        current_time = time.time()
+        
         # Play beat immediately if we're on or very close to a beat boundary
         if time_since_beat_boundary < 0.001:  # Very close to beat boundary (within 1ms)
-            # We're right on a beat, play it immediately and start regular intervals
+            # We're right on a beat, play it immediately
+            self.next_beat_expected_time = current_time
             self._play_metronome_beep()
-            interval_ms = int(60000 / self.bpm)
-            self.metronome_timer.start(interval_ms)
             self.logger.info(f"Metronome started at {self.bpm} BPM, position {timeline_position_sec:.2f}s, playing beat {self.beat_count} immediately")
         else:
-            # Start timer to fire at the next beat, then use regular intervals
+            # Start timer to fire at the next beat
+            self.next_beat_expected_time = current_time + time_to_next_beat
             initial_delay_ms = int(time_to_next_beat * 1000)
             self.metronome_timer.setSingleShot(True)
             self.metronome_timer.start(initial_delay_ms)
@@ -141,13 +140,7 @@ class AudioController(QObject):
         """Stop the metronome."""
         self.is_metronome_enabled = False
         self.metronome_timer.stop()
-        
-        # Reset timer to non-single-shot mode for next use
-        if self.metronome_timer.isSingleShot():
-            self.metronome_timer.setSingleShot(False)
-        
         self.beat_count = 0
-        
         self.logger.info("Metronome stopped")
     
     def _play_metronome_beep(self) -> None:
@@ -169,11 +162,17 @@ class AudioController(QObject):
         # Advance to next beat
         self.beat_count = (self.beat_count % 4) + 1
         
-        # If we were on single-shot mode, switch to regular intervals
-        if self.metronome_timer.isSingleShot():
-            interval_ms = int(60000 / self.bpm)
-            self.metronome_timer.setSingleShot(False)
-            self.metronome_timer.start(interval_ms)
+        # Calculate next beat time to prevent drift
+        beat_duration_sec = 60.0 / self.bpm
+        self.next_beat_expected_time += beat_duration_sec
+        
+        # Schedule next beat
+        current_time = time.time()
+        delay_sec = self.next_beat_expected_time - current_time
+        delay_ms = max(0, int(delay_sec * 1000))
+        
+        self.metronome_timer.setSingleShot(True)
+        self.metronome_timer.start(delay_ms)
     
     def set_metronome_volume(self, volume: float) -> None:
         """Set metronome volume (0.0 to 1.0)."""
