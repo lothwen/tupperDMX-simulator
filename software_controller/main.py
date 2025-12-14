@@ -10,9 +10,9 @@ from tupperlogger import get_logger
 
 
 # Constants from the Arduino code
-DEFAULT_BLEND_TIME = 1000
+DEFAULT_BLEND_TIME = 300
 DEFAULT_COLOR_CHANGE_TIME = 5000
-DEFAULT_CHASE_TIME = 500
+DEFAULT_CHASE_TIME = 1000
 
 # App constants
 DMX_UPDATE_HZ = 20
@@ -37,11 +37,6 @@ BLINDER1_NUM_TOTAL_CHANNELS = 8
 BLINDER2_START_CHANNEL = 64
 BLINDER2_NUM_BLEND_CHANNELS = 5
 BLINDER2_NUM_TOTAL_CHANNELS = 8
-
-# Chase constants
-CHORUS_CHASE_RANGE = (9, 14)
-OUTRO_CHASE_RANGE = (0, 2)
-
 
 # HSL Constants
 RAINBOW_HUE_12 = [0.0, 0.083, 0.166, 0.25, 0.333, 0.416, 0.5, 0.583, 0.666, 0.75, 0.833, 0.916]
@@ -110,7 +105,7 @@ class DMXController:
 
 
     def update_led_scene(self, bank, scene_index):
-        if not self.led_status['is_blackout'] and self.led_status['bank'] == bank and self.led_status['scene'] == scene_index:
+        if not self.led_status['is_blackout'] and self.led_status['bank'] == bank and self.led_status['scene'] == scene_index and not self.led_status['is_chasing']:
             self.blackout_led()
             return
             
@@ -142,10 +137,13 @@ class DMXController:
         self.led_status['is_blackout'] = False
         self.led_status['blend_time_elapsed'] = 0
         self.universe_past = copy.deepcopy(self.universe_present)
+        
+        # Immediately apply non-blended channels (animation, speed, direction) to universe_present
+        self.universe_present[LED_START_CHANNEL + LED_NUM_BLEND_CHANNELS:LED_START_CHANNEL + LED_NUM_TOTAL_CHANNELS] = [self.led.animation, self.led.speed, self.led.direction]
 
     def update_blinder_scene(self, blinder, bank_name, scene_index):
         status = self.blinder1_status if blinder == 1 else self.blinder2_status
-        if not status['is_blackout'] and status['bank'] == bank_name and status['scene'] == scene_index:
+        if not status['is_blackout'] and status['bank'] == bank_name and status['scene'] == scene_index and not status['is_chasing']:
             self.blackout_blinder(blinder)
             return
 
@@ -166,6 +164,11 @@ class DMXController:
         status['is_blackout'] = False
         status['blend_time_elapsed'] = 0
         self.universe_past = copy.deepcopy(self.universe_present)
+        
+        # Immediately apply non-blended channels (strobe, mode, speed) to universe_present
+        start_channel = BLINDER1_START_CHANNEL if blinder == 1 else BLINDER2_START_CHANNEL
+        num_blend_channels = BLINDER1_NUM_BLEND_CHANNELS
+        self.universe_present[start_channel + num_blend_channels:start_channel + BLINDER1_NUM_TOTAL_CHANNELS] = [blinder_obj.strobe, blinder_obj.mode, blinder_obj.speed]
 
     def blackout_led(self):
         self.logger.debug("Blackout LED")
@@ -365,13 +368,13 @@ class DMXController:
         elif song_part == 3: # CHORUS
             if self.random_palette:
                 self.change_led_color_palette(self.random_palette, 0, 3, self.beat_duration(self.song_tempo) * 4, self.beat_duration(self.song_tempo) * 8)
-            self.load_led_chase(random.randint(*CHORUS_CHASE_RANGE))
+            self.load_led_chase(random.randint(9, 14))
         elif 4 <= song_part <= 7: # BREAK, BRIDGE, INST, SOLO
             self.update_led_scene('FILLS2', random.randint(0, 7))
             self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
             self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
         elif song_part == 8: # OUTRO
-            self.load_led_chase(random.randint(*OUTRO_CHASE_RANGE))
+            self.load_led_chase(random.randint(0, 2))
             self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
             self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
         elif song_part == 9: # END
@@ -519,6 +522,7 @@ class DMXController:
             chase = chases[status['chase']]
             status['chase_index'] = (status['chase_index'] + 1) % len(chase['scenes'])
             update_func(*args, chase['banks'][status['chase_index']], chase['scenes'][status['chase_index']])
+            self.update_universe()
             return current_time
         return last_change_time
 
@@ -527,12 +531,14 @@ class DMXController:
             status['blend_time_elapsed'] += dt
             t = min(status['blend_time_elapsed'] / status['blend_time'], 1.0)
             
+            # Blend the color/brightness channels
             for i in range(num_blend_channels):
                 channel = start_channel + i
                 past_val = self.universe_past[channel]
                 future_val = self.universe_future[channel]
                 self.universe_present[channel] = int(self.lerp(past_val, future_val, t))
         else:
+            # Blend complete - copy all channels from future to present
             end_channel = start_channel + num_total_channels
             self.universe_present[start_channel:end_channel] = self.universe_future[start_channel:end_channel]
 
