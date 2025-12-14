@@ -480,6 +480,13 @@ class Timeline(QWidget):
             self.waveform_track.draw_waveform(audio_file, waveform_y)
         
         QTimer.singleShot(0, self.fit_to_width)
+    
+    def set_waveform_offset(self, offset_sec: float) -> None:
+        """Set the waveform offset position."""
+        if self.waveform_track.waveform_item:
+            x_pos = offset_sec * self.PIXELS_PER_SECOND
+            self.waveform_track.waveform_item.setX(x_pos)
+            self.logger.debug(f"Waveform offset set to {offset_sec:.3f}s")
 
     def fit_to_width(self):
         """Fit timeline to view width."""

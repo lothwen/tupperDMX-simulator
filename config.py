@@ -22,6 +22,7 @@ class ArtNetConfig:
 class FilesConfig:
     midi: Optional[str] = None
     audio: Optional[str] = None
+    offset: float = 0.0
 
 
 @dataclass
@@ -137,7 +138,8 @@ class Config:
             files_data = data["files"]
             config.files = FilesConfig(
                 midi=cls._validate_file_path(files_data.get("midi")),
-                audio=cls._validate_file_path(files_data.get("audio"))
+                audio=cls._validate_file_path(files_data.get("audio")),
+                offset=cls._validate_float(files_data.get("offset", 0.0), -3600.0, 3600.0)
             )
         
         # Fixtures configuration
@@ -364,6 +366,10 @@ class Config:
             self.volume.metronome = self._validate_float(metronome, 0.0, 1.0)
         if audio is not None:
             self.volume.audio = self._validate_float(audio, 0.0, 1.0)
+    
+    def update_offset(self, offset: float) -> None:
+        """Update audio offset with validation."""
+        self.files.offset = self._validate_float(offset, -3600.0, 3600.0)
 
     def get_used_dmx_channels(self) -> Dict[str, List[int]]:
         """Get mapping of fixture names to their DMX channels."""
