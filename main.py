@@ -64,6 +64,13 @@ class MainWindow(QMainWindow):
             self.timeline.set_files(self.config.files.audio)
             # Update audio file display
             self.toolbar_manager.update_audio_file_display(self.config.files.audio)
+            
+            # Apply saved audio offset
+            if self.config.files.offset != 0.0:
+                self.media_controller.set_audio_offset(self.config.files.offset)
+                # Use QTimer to ensure waveform is drawn before setting offset
+                QTimer.singleShot(100, lambda: self.timeline.set_waveform_offset(self.config.files.offset))
+                self.logger.info(f"Applied saved audio offset: {self.config.files.offset:.3f}s")
         
         # Load MIDI file via MidiManager
         if self.config.files.midi:
@@ -171,6 +178,8 @@ class MainWindow(QMainWindow):
     def on_waveform_offset_changed(self, offset_sec):
         """Handle waveform offset changes from timeline."""
         self.media_controller.set_audio_offset(offset_sec)
+        self.config.update_offset(offset_sec)
+        self.save_config()
     
     def bpm_changed(self, value):
         """Handle BPM changes from toolbar."""

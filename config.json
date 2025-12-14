@@ -10,7 +10,8 @@
   },
   "files": {
     "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
-    "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav"
+    "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav",
+    "offset": 6.195862575818853
   },
   "fixtures": {
     "led_bar_controllers": [
