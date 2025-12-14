@@ -8,10 +8,20 @@
     "port": 6454,
     "universe": 0
   },
-  "files": {
-    "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
-    "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav",
-    "offset": 6.195862575818853
+  "playlist": {
+    "songs": [
+      {
+        "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/01-leve-temblor-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/01_El_leve_temblor_de_los_charcos.wav",
+        "offset": -0.7962293293672588
+      },
+      {
+        "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav",
+        "offset": 6.198446749508021
+      }
+    ],
+    "current_song_index": 1
   },
   "fixtures": {
     "led_bar_controllers": [
