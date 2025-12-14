@@ -19,10 +19,18 @@ class ArtNetConfig:
 
 
 @dataclass
-class FilesConfig:
+class SongConfig:
+    """Configuration for a single song in the playlist."""
     midi: Optional[str] = None
-    audio: Optional[str] = None
+    audio: Optional[str] = None  # Primary key - audio file path uniquely identifies a song
     offset: float = 0.0
+
+
+@dataclass
+class PlaylistConfig:
+    """Configuration for the playlist."""
+    songs: List["SongConfig"] = field(default_factory=list)
+    current_song_index: int = 0
 
 
 @dataclass
@@ -84,7 +92,7 @@ class LoggingConfig:
 class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     artnet: ArtNetConfig = field(default_factory=ArtNetConfig)
-    files: FilesConfig = field(default_factory=FilesConfig)
+    playlist: PlaylistConfig = field(default_factory=PlaylistConfig)
     fixtures: FixturesConfig = field(default_factory=FixturesConfig)
     midi_note_map: Dict[str, MidiNoteConfig] = field(default_factory=dict)
     metronome: MetronomeConfig = field(default_factory=MetronomeConfig)
@@ -133,13 +141,19 @@ class Config:
                 universe=cls._validate_int(artnet_data.get("universe", 0), 0, 32767)
             )
         
-        # Files configuration
-        if "files" in data:
-            files_data = data["files"]
-            config.files = FilesConfig(
-                midi=cls._validate_file_path(files_data.get("midi")),
-                audio=cls._validate_file_path(files_data.get("audio")),
-                offset=cls._validate_float(files_data.get("offset", 0.0), -3600.0, 3600.0)
+        # Playlist configuration
+        if "playlist" in data:
+            playlist_data = data["playlist"]
+            songs = []
+            for song_data in playlist_data.get("songs", []):
+                songs.append(SongConfig(
+                    midi=cls._validate_file_path(song_data.get("midi")),
+                    audio=cls._validate_file_path(song_data.get("audio")),
+                    offset=cls._validate_float(song_data.get("offset", 0.0), -3600.0, 3600.0)
+                ))
+            config.playlist = PlaylistConfig(
+                songs=songs,
+                current_song_index=cls._validate_int(playlist_data.get("current_song_index", 0), 0, max(0, len(songs) - 1))
             )
         
         # Fixtures configuration
@@ -329,7 +343,10 @@ class Config:
         
         data["window"] = asdict(self.window)
         data["artnet"] = asdict(self.artnet)
-        data["files"] = asdict(self.files)
+        data["playlist"] = {
+            "songs": [asdict(song) for song in self.playlist.songs],
+            "current_song_index": self.playlist.current_song_index
+        }
         
         # Handle fixtures
         data["fixtures"] = {
@@ -353,12 +370,60 @@ class Config:
         
         return data
 
-    def update_files(self, midi: Optional[str] = None, audio: Optional[str] = None) -> None:
-        """Update file paths with validation."""
-        if midi is not None:
-            self.files.midi = self._validate_file_path(midi)
-        if audio is not None:
-            self.files.audio = self._validate_file_path(audio)
+    # Playlist management methods
+    def get_current_song(self) -> Optional[SongConfig]:
+        """Get the current song configuration."""
+        if not self.playlist.songs:
+            return None
+        index = self.playlist.current_song_index
+        if 0 <= index < len(self.playlist.songs):
+            return self.playlist.songs[index]
+        return None
+    
+    def set_current_song_index(self, index: int) -> bool:
+        """Set the current song index. Returns True if successful."""
+        if 0 <= index < len(self.playlist.songs):
+            self.playlist.current_song_index = index
+            return True
+        return False
+    
+    def find_song_by_audio(self, audio_path: str) -> Optional[int]:
+        """Find a song index by audio file path. Returns None if not found."""
+        for i, song in enumerate(self.playlist.songs):
+            if song.audio == audio_path:
+                return i
+        return None
+    
+    def add_song(self, audio: str, midi: Optional[str] = None, offset: float = 0.0) -> int:
+        """Add a new song to the playlist. Returns the new song's index."""
+        song = SongConfig(
+            audio=self._validate_file_path(audio),
+            midi=self._validate_file_path(midi) if midi else None,
+            offset=self._validate_float(offset, -3600.0, 3600.0)
+        )
+        self.playlist.songs.append(song)
+        return len(self.playlist.songs) - 1
+    
+    def remove_song(self, index: int) -> bool:
+        """Remove a song from the playlist. Returns True if successful."""
+        if 0 <= index < len(self.playlist.songs):
+            self.playlist.songs.pop(index)
+            # Adjust current index if needed
+            if self.playlist.current_song_index >= len(self.playlist.songs):
+                self.playlist.current_song_index = max(0, len(self.playlist.songs) - 1)
+            elif self.playlist.current_song_index > index:
+                self.playlist.current_song_index -= 1
+            return True
+        return False
+    
+    def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None) -> None:
+        """Update the current song's MIDI or offset."""
+        song = self.get_current_song()
+        if song:
+            if midi is not None:
+                song.midi = self._validate_file_path(midi) if midi else None
+            if offset is not None:
+                song.offset = self._validate_float(offset, -3600.0, 3600.0)
 
     def update_volume(self, metronome: Optional[float] = None, audio: Optional[float] = None) -> None:
         """Update volume settings with validation."""
@@ -366,10 +431,6 @@ class Config:
             self.volume.metronome = self._validate_float(metronome, 0.0, 1.0)
         if audio is not None:
             self.volume.audio = self._validate_float(audio, 0.0, 1.0)
-    
-    def update_offset(self, offset: float) -> None:
-        """Update audio offset with validation."""
-        self.files.offset = self._validate_float(offset, -3600.0, 3600.0)
 
     def get_used_dmx_channels(self) -> Dict[str, List[int]]:
         """Get mapping of fixture names to their DMX channels."""

@@ -22,6 +22,10 @@ class ToolbarManager(QObject):
     dmx_source_changed = pyqtSignal(str)  # source_name
     midi_port_changed = pyqtSignal(str)  # port_name
     metronome_mute_toggled = pyqtSignal(bool)  # mute_state
+    # Playlist navigation signals
+    prev_song_requested = pyqtSignal()
+    next_song_requested = pyqtSignal()
+    remove_song_requested = pyqtSignal()
     
     def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
                  play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon):
@@ -47,6 +51,11 @@ class ToolbarManager(QObject):
         self.time_display: Optional[QLabel] = None
         self.audio_file_label: Optional[QLabel] = None
         self.midi_file_label: Optional[QLabel] = None
+        # Playlist navigation widgets
+        self.prev_button: Optional[QPushButton] = None
+        self.next_button: Optional[QPushButton] = None
+        self.remove_button: Optional[QPushButton] = None
+        self.song_counter_label: Optional[QLabel] = None
         
         # State
         self.is_playing = False
@@ -105,6 +114,40 @@ class ToolbarManager(QObject):
         
         # File loading buttons
         buttons_layout = QHBoxLayout()
+        
+        # Playlist navigation buttons
+        self.prev_button = QPushButton("⏮")
+        self.prev_button.setFixedSize(30, 30)
+        self.prev_button.setObjectName("NavButton")
+        self.prev_button.setToolTip("Previous song")
+        self.prev_button.clicked.connect(self.prev_song_requested.emit)
+        self.prev_button.setEnabled(False)
+        buttons_layout.addWidget(self.prev_button)
+        
+        # Song counter label
+        self.song_counter_label = QLabel("0/0")
+        self.song_counter_label.setFixedSize(50, 30)
+        self.song_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.song_counter_label.setObjectName("SongCounter")
+        self.song_counter_label.setToolTip("Current song / Total songs")
+        buttons_layout.addWidget(self.song_counter_label)
+        
+        self.next_button = QPushButton("⏭")
+        self.next_button.setFixedSize(30, 30)
+        self.next_button.setObjectName("NavButton")
+        self.next_button.setToolTip("Next song")
+        self.next_button.clicked.connect(self.next_song_requested.emit)
+        self.next_button.setEnabled(False)
+        buttons_layout.addWidget(self.next_button)
+        
+        self.remove_button = QPushButton("🗑")
+        self.remove_button.setFixedSize(30, 30)
+        self.remove_button.setObjectName("RemoveButton")
+        self.remove_button.setToolTip("Remove current song from playlist")
+        self.remove_button.clicked.connect(self.remove_song_requested.emit)
+        buttons_layout.addWidget(self.remove_button)
+        
+        buttons_layout.addSpacing(10)
         
         # Load MIDI button
         load_midi_btn = QPushButton("Load MIDI file")
@@ -440,3 +483,17 @@ class ToolbarManager(QObject):
         self.refresh_dmx_sources()
         self.refresh_midi_ports()
         self.logger.info("Toolbar configuration updated")
+    
+    def update_song_counter(self, current: int, total: int) -> None:
+        """Update the song counter display (e.g., '2/5')."""
+        if self.song_counter_label:
+            self.song_counter_label.setText(f"{current}/{total}")
+            self.logger.debug(f"Song counter updated: {current}/{total}")
+    
+    def set_navigation_enabled(self, has_prev: bool, has_next: bool) -> None:
+        """Enable/disable the prev/next navigation buttons."""
+        if self.prev_button:
+            self.prev_button.setEnabled(has_prev)
+        if self.next_button:
+            self.next_button.setEnabled(has_next)
+        self.logger.debug(f"Navigation buttons: prev={has_prev}, next={has_next}")

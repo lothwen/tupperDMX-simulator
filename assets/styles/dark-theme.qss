@@ -278,6 +278,57 @@ QPushButton#ExportButton:disabled {
     border-color: #444;
 }
 
+/* Playlist Navigation Buttons */
+QPushButton#NavButton {
+    background-color: #4a5568;
+    color: white;
+    border: 1px solid #5a6578;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+QPushButton#NavButton:hover {
+    background-color: #5a6578;
+}
+
+QPushButton#NavButton:pressed {
+    background-color: #3a4558;
+}
+
+QPushButton#NavButton:disabled {
+    background-color: #333;
+    color: #555;
+    border-color: #444;
+}
+
+/* Remove Song Button */
+QPushButton#RemoveButton {
+    background-color: #6b3030;
+    color: white;
+    border: 1px solid #7b4040;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+QPushButton#RemoveButton:hover {
+    background-color: #8b4040;
+}
+
+QPushButton#RemoveButton:pressed {
+    background-color: #5b2020;
+}
+
+/* Song Counter Label */
+QLabel#SongCounter {
+    background-color: #1a1a1a;
+    color: #aaa;
+    border: 1px solid #444;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
 /* File Labels */
 QLabel#FileLabel {
     background-color: #2b2b2b;
