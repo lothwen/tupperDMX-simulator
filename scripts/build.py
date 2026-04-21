@@ -20,7 +20,7 @@ class Builder:
         
     def clean(self):
         """Clean previous build artifacts"""
-        print("🧹 Cleaning previous builds...")
+        print("Cleaning previous builds...")
         for dir_path in [self.dist_dir, self.build_dir]:
             if dir_path.exists():
                 shutil.rmtree(dir_path)
@@ -28,23 +28,23 @@ class Builder:
                 
     def setup_build_env(self):
         """Install build dependencies using uv"""
-        print("📦 Setting up build environment...")
+        print("Setting up build environment...")
         try:
             subprocess.run([
                 "uv", "sync", "--extra", "build"
             ], check=True, cwd=self.project_root)
-            print("   ✅ Build dependencies installed")
+            print("Build dependencies installed")
         except subprocess.CalledProcessError as e:
-            print(f"   ❌ Failed to install build dependencies: {e}")
+            print(f"Failed to install build dependencies: {e}")
             sys.exit(1)
             
     def create_icons(self):
         """Create platform-specific icon files from PNG"""
-        print("🎨 Creating platform-specific icons...")
+        print("Creating platform-specific icons...")
         png_icon = self.project_root / "assets" / "icons" / "metronome_icon.png"
         
         if not png_icon.exists():
-            print("   ⚠️  PNG icon not found, skipping icon creation")
+            print("PNG icon not found, skipping icon creation")
             return
             
         try:
@@ -55,7 +55,7 @@ class Builder:
                     "uv", "run", "python", "-c",
                     f"from PIL import Image; img=Image.open('{png_icon}'); img.save('{ico_path}')"
                 ], check=True, cwd=self.project_root)
-                print("   ✅ Created Windows ICO icon")
+                print("Created Windows ICO icon")
                 
             elif self.platform == "darwin":
                 # Create ICNS file for macOS  
@@ -63,14 +63,14 @@ class Builder:
                 subprocess.run([
                     "sips", "-s", "format", "icns", str(png_icon), "--out", str(icns_path)
                 ], check=True)
-                print("   ✅ Created macOS ICNS icon")
+                print("Created macOS ICNS icon")
                 
         except (subprocess.CalledProcessError, ImportError) as e:
-            print(f"   ⚠️  Icon conversion failed: {e}")
+            print(f"Icon conversion failed: {e}")
             
     def build_executable(self):
         """Build executable using PyInstaller"""
-        print("🔨 Building executable...")
+        print("Building executable...")
         
         try:
             subprocess.run([
@@ -79,14 +79,14 @@ class Builder:
                 "--noconfirm",
                 "build.spec"
             ], check=True, cwd=self.project_root)
-            print("   ✅ Executable built successfully")
+            print("Executable built successfully")
         except subprocess.CalledProcessError as e:
-            print(f"   ❌ Build failed: {e}")
+            print(f"Build failed: {e}")
             sys.exit(1)
             
     def create_installer(self):
         """Create platform-specific installer"""
-        print(f"📦 Creating {self.platform} installer...")
+        print(f"Creating {self.platform} installer...")
         if self.platform == "windows":
             self._create_windows_installer()
         elif self.platform == "darwin":
@@ -94,33 +94,33 @@ class Builder:
         elif self.platform == "linux":
             self._create_linux_appimage()
         else:
-            print(f"   ℹ️  No installer creation configured for {self.platform}")
+            print(f"No installer creation configured for {self.platform}")
             
     def _create_windows_installer(self):
         """Create Windows NSIS installer"""
-        print("📦 Creating Windows installer...")
+        print("Creating Windows installer...")
         nsis_script = self.project_root / "scripts" / "windows_installer.nsi"
         
         if not nsis_script.exists():
-            print("   ⚠️  NSIS script not found, skipping installer creation")
+            print("NSIS script not found, skipping installer creation")
             return
             
         try:
             subprocess.run([
                 "makensis", str(nsis_script)
             ], check=True)
-            print("   ✅ Windows installer created")
+            print("Windows installer created")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print("   ⚠️  NSIS not found, skipping installer creation")
+            print("NSIS not found, skipping installer creation")
             
     def _create_macos_dmg(self):
         """Create macOS DMG package"""
-        print("📦 Creating macOS DMG...")
+        print("Creating macOS DMG...")
         app_path = self.dist_dir / "TupperDMX-Simulator.app"
         dmg_path = self.dist_dir / "TupperDMX-Simulator.dmg"
         
         if not app_path.exists():
-            print("   ❌ App bundle not found")
+            print("App bundle not found")
             return
             
         try:
@@ -130,18 +130,18 @@ class Builder:
                 "-volname", "TupperDMX Simulator",
                 str(dmg_path)
             ], check=True)
-            print("   ✅ macOS DMG created")
+            print("macOS DMG created")
         except subprocess.CalledProcessError:
-            print("   ⚠️  DMG creation failed")
+            print("DMG creation failed")
             
     def _create_linux_appimage(self):
         """Create Linux AppImage"""
-        print("📦 Creating Linux AppImage...")
-        print("   ℹ️  AppImage creation requires additional setup - see documentation")
+        print("Creating Linux AppImage...")
+        print("AppImage creation requires additional setup - see documentation")
         
     def run(self, clean_first=True):
         """Run the complete build process"""
-        print(f"🚀 Starting build for {self.platform}...")
+        print(f"Starting build for {self.platform}...")
         
         if clean_first:
             self.clean()
@@ -151,8 +151,8 @@ class Builder:
         self.build_executable()
         self.create_installer()
         
-        print("✅ Build complete!")
-        print(f"📁 Output directory: {self.dist_dir}")
+        print("Build complete!")
+        print(f"Output directory: {self.dist_dir}")
 
 def main():
     builder = Builder()
