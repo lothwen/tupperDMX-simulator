@@ -38,7 +38,7 @@ python main.py
 ### Key Dependencies
 - PyQt6: GUI framework and multimedia playback
 - mido/python-rtmidi: MIDI handling
-- pyartnet: Art-Net DMX protocol
+- Custom async Art-Net UDP receiver (replaces pyartnet)
 - librosa: Audio analysis for BPM detection
 - pylibftdi/pyserial: USB DMX interface support
 
@@ -65,31 +65,44 @@ python main.py
 
 **DMX Management (`dmx/`)**
 - `DMXManager`: Factory pattern for Art-Net and USB DMX output
-- `ArtnetWorker`/`USBWorker`: Threaded DMX data transmission
+- `ArtnetWorker`: Async UDP listener using asyncio; automatically starts `DMXController` when Art-Net IP is localhost
+- `USBWorker`: Serial communication for FTDI/direct USB DMX interfaces
+- Emits `software_controller_changed` signal when controller lifecycle events occur
 - Supports multiple DMX sources with hot-swapping capabilities
 
 **MIDI Management (`midi/`)**
 - `MidiManager`: Handles MIDI file parsing and real-time playback
 - `MidiWorker`: Threaded MIDI output synchronized to timeline
 - Supports seeking and port switching during playback
+- "Software emulated" port option routes MIDI note_on messages directly to `DMXController.handle_note_on()`
 
 **Stage Visualization (`ui/stage_controller.py`)**
 - `StageController`: Renders virtual stage with DMX-controlled fixtures
 - Updates fixture colors/intensity in real-time based on DMX data
 - Supports LED bars and blinder fixtures with configurable positions
 
+**Software Controller (`software_controller/`)**
+- `DMXController`: Pure-Python DMX lighting controller that simulates hardware controllers via MIDI messages
+- Enables full testing and live lighting design without physical hardware
+- Manages a 96-channel DMX universe: LED bar (7 channels), Blinder1/2 (8 channels each)
+- Responds to 53 MIDI note pitches mapped to scene selection, color control, song parts, and blinder control
+- `ArtNetSender`: Transmits properly formatted Art-Net UDP packets to DMX receivers
+- `LedScene`/`BlinderScene` dataclasses load from `software_controller/dmx_config.json`
+- `dmx_config.json`: Defines scene banks (ANIMATIONS, FILLS, FILLS2, MULTICOLOR, STROBES, TUBES, RADARS, BLINDER_SCENES) and 15+ chase sequences
+
 **Configuration (`config.py`)**
 - Comprehensive dataclass-based configuration with validation
 - Handles fixture definitions, MIDI note mapping, and user preferences
 - Automatic config file generation and migration
+- Includes playlist management (song list with current index), audio offset, and window geometry
 
 ### UI Architecture
 
 The application uses a modular UI design:
-- `ToolbarManager` (`ui/toolbar_manager.py`): Creates media controls, BPM spinner, and source selectors
-- `Timeline` (`timeline.py`): Waveform visualization with beat detection, seeking, and MIDI event editing
+- `ToolbarManager` (`ui/toolbar_manager.py`): Creates media controls, BPM spinner, source selectors, and playlist navigation (prev/next/remove song with counter)
+- `Timeline` (`timeline/manager.py`): Waveform visualization with beat detection, seeking, and MIDI event editing
 - `DMXDisplayWidget` (`ui/dmx_display.py`): Real-time DMX channel monitor
-- `AudioController` (`ui/audio_controller.py`): Metronome generation and audio processing
+- `AudioController` (`ui/audio_controller.py`): Drift-free metronome generation and audio processing
 - `ErrorDialogManager` (`ui/error_dialogs.py`): Centralized error handling with user-friendly dialogs and retry functionality
 
 ### Key Synchronization Logic
@@ -138,22 +151,37 @@ When starting/resuming metronome:
 - Graceful degradation when hardware components are unavailable
 - Configuration reset options for corrupted settings
 
+**Playlist Management**
+- Song list with current index persisted in configuration
+- Toolbar navigation buttons (prev/next/remove) with song counter
+- Signals: `prev_song_requested`, `next_song_requested`, `remove_song_requested`
+
+**Audio Offset**
+- Configurable audio offset stored in config (`audio.offset`)
+- Allows fine-tuning sync between audio playback and MIDI/DMX
+
 ### File Organization
 - `ui/`: All UI components and controllers
   - `media_controller.py`: Audio playback and timeline synchronization
-  - `audio_controller.py`: Metronome generation and audio processing
+  - `audio_controller.py`: Drift-free metronome generation and audio processing
   - `stage_controller.py`: Virtual stage visualization with fixture rendering
   - `dmx_display.py`: Real-time DMX channel monitoring widget
-  - `toolbar_manager.py`: Application toolbar with controls and status displays
+  - `toolbar_manager.py`: Application toolbar with controls, playlist navigation, and status displays
   - `error_dialogs.py`: User-friendly error handling and recovery dialogs
 - `dmx/`: DMX protocol implementations and workers
-  - `manager.py`: Factory pattern DMX source management with hot-swapping
-  - `artnet_worker.py`: Art-Net UDP protocol implementation
+  - `manager.py`: Factory pattern DMX source management with hot-swapping; propagates `software_controller_changed` signal
+  - `artnet_worker.py`: Async Art-Net UDP listener (asyncio); auto-starts software controller when target is localhost
   - `usb_worker.py`: USB DMX interface support (FTDI/serial)
   - `base.py`: Common DMX worker interface and utilities
+  - `factory.py`: Worker factory pattern
 - `midi/`: MIDI file parsing and playback workers
   - `manager.py`: MIDI data management, file I/O, and real-time editing
-  - `worker.py`: Threaded MIDI output synchronized to timeline
+  - `worker.py`: Threaded MIDI output synchronized to timeline; supports "Software emulated" port
+- `software_controller/`: Pure-Python software-emulated DMX controller
+  - `main.py`: `DMXController` — manages 96-channel DMX universe with 53 MIDI note mappings, scene banks, chase sequences, color palette generation, and HSL blending
+  - `artnet_sender.py`: `ArtNetSender` — sends Art-Net UDP packets to DMX receivers
+  - `dmx.py`: `LedScene`/`BlinderScene` dataclasses for fixture configuration
+  - `dmx_config.json`: Scene banks (FILLS, TUBES, ANIMATIONS, etc.) and chase definitions
 - `tupperlogger/`: Custom logging system with file rotation
 - `timeline/`: Modular timeline package with track-based architecture
   - `manager.py`: Main Timeline coordinator and public interface
@@ -203,6 +231,42 @@ When starting/resuming metronome:
 - Audio processing uses QAudioSink for low-latency metronome generation
 - UI updates batched to avoid blocking main thread during intensive operations
 - Timeline tracks render independently for better performance isolation
+
+### Software Controller Architecture
+
+The `software_controller/` module provides hardware-free DMX control via MIDI messages:
+
+**Activation Flow:**
+1. Set Art-Net IP to `127.0.0.1` (localhost) in the DMX source selector
+2. `ArtnetWorker` detects localhost target and auto-instantiates `DMXController`
+3. `DMXController` starts a background loop thread sending DMX data to `ArtNetSender`
+4. `DMXManager` emits `software_controller_changed(controller)` to `MainWindow`
+5. `MainWindow.on_software_controller_changed()` passes the controller to `MidiManager`
+6. Select "Software emulated" in the MIDI port dropdown
+7. `MidiWorker` now routes all `note_on` messages to `DMXController.handle_note_on()`
+
+**MIDI Note Mapping (pitch 0–52):**
+- **1–11**: Channel control — brightness, RGB color channels, animation, speed, direction
+- **12–19**: Scene selection (8 scenes per active bank)
+- **20–23**: Predefined colors (white, orange, cyan, pink)
+- **24–25**: Bank selection (FILLS, TUBES)
+- **26–32**: Blinder controls
+- **38–52**: Song part markers (START, INTRO, VERSE, CHORUS, BREAK, BRIDGE, INST, SOLO, OUTRO, END) and master controls
+
+**DMX Universe Layout:**
+- LED bar: channels 1–7 (brightness, R, G, B, animation, speed, direction)
+- Blinder 1: channels 8–15
+- Blinder 2: channels 16–23
+
+**Color Palette Generation:**
+- `generate_song_colors()` produces palettes using ANALOGOUS, COMPLEMENTARY, or TRIADIC modes
+- HSL-to-RGB conversion with hue rotation for smooth color transitions
+- Thread-safe palette state with mutex locking
+
+**Scene Blending:**
+- `_apply_blend()` interpolates between present and future DMX states
+- Configurable transition duration; immediate apply for non-blended channels
+- Prevents blackout artifacts during scene changes
 
 ### Timeline Development Guidelines
 - **Adding New Tracks**: Inherit from BaseTrack and implement required methods
@@ -308,7 +372,7 @@ git push origin v1.0.0
 - PyQt6 (GUI framework and multimedia)
 - librosa (audio processing and BPM detection)
 - mido/python-rtmidi (MIDI handling)
-- pyartnet (Art-Net DMX protocol)
+- Custom asyncio Art-Net UDP receiver (no longer uses pyartnet)
 - pylibftdi/pyserial (USB DMX interfaces)
 - numpy/scipy (scientific computing)
 
@@ -356,6 +420,9 @@ python -c "import mido; print(mido.get_output_names())"
 
 # Check audio devices
 python -c "from PyQt6.QtMultimedia import QMediaDevices; print([d.description() for d in QMediaDevices.audioOutputs()])"
+
+# Test software controller standalone (sends Art-Net UDP to localhost:6454)
+uv run python -c "from software_controller.main import DMXController; c = DMXController(); c.start(); import time; time.sleep(2); c.stop()"
 
 # Build system debugging
 uv run python scripts/build.py --no-clean
