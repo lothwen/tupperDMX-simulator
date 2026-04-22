@@ -90,18 +90,6 @@ jobs:
       run: |
         uv run python scripts/build.py --no-clean
         
-    - name: Install NSIS (Windows)
-      if: matrix.platform == 'windows'
-      run: |
-        Invoke-WebRequest -Uri "https://sourceforge.net/projects/nsis/files/NSIS%203/3.09/nsis-3.09-setup.exe/download" -OutFile "nsis-setup.exe"
-        Start-Process -FilePath "nsis-setup.exe" -ArgumentList "/S" -Wait
-        echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
-        
-    - name: Create Windows installer
-      if: matrix.platform == 'windows'
-      run: |
-        makensis scripts/windows_installer.nsi
-        
     - name: Create macOS DMG
       if: matrix.platform == 'macos'
       run: |
@@ -127,9 +115,6 @@ jobs:
         mkdir artifacts
         if (Test-Path "dist/TupperDMX-Simulator.exe") {
           Copy-Item "dist/TupperDMX-Simulator.exe" "artifacts/${{ matrix.artifact_name }}.exe"
-        }
-        if (Test-Path "dist/TupperDMX-Simulator-Setup.exe") {
-          Copy-Item "dist/TupperDMX-Simulator-Setup.exe" "artifacts/"
         }
         
     - name: Upload artifacts
