@@ -10,6 +10,7 @@ main_script = "main.py"
 data_files = [
     ("assets", "assets"),
     ("config.json", "."),
+    ("software_controller/dmx_config.json", "software_controller"),
 ]
 
 # Hidden imports for PyQt6 and other dependencies

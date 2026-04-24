@@ -1,4 +1,6 @@
 import glob
+import os
+import sys
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem
 from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient
@@ -165,7 +167,11 @@ class LedBar(QGraphicsObject):
         if animation_number in self.animations:
             self.current_movie = self.animations[animation_number]
         else:
-            gif_path_list = glob.glob(f"assets/animations/{animation_number:02d}-*.gif")
+            _assets = os.path.join(
+                getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))),
+                "assets", "animations",
+            )
+            gif_path_list = glob.glob(os.path.join(_assets, f"{animation_number:02d}-*.gif"))
             if gif_path_list:
                 movie = QMovie(gif_path_list[0])
                 self.animations[animation_number] = movie

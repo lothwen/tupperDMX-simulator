@@ -1,3 +1,5 @@
+import os
+import sys
 from typing import List
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
 from PyQt6.QtGui import QPixmap, QBrush
@@ -38,15 +40,19 @@ class StageController(QObject):
     fixture_updated = pyqtSignal(str, object)  # fixture_type, fixture_object
     stage_clicked = pyqtSignal(float, float)  # x, y coordinates
     
-    def __init__(self, config: Config, background_image_path: str = 'assets/images/stage_background.png'):
+    def __init__(self, config: Config, background_image_path: str = None):
         super().__init__()
         self.config = config
         self.logger = get_logger("ui.stage")
-        
+
+        if background_image_path is None:
+            _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+            background_image_path = os.path.join(_base, "assets", "images", "stage_background.png")
+
         # Fixture collections
         self.led_bars: List[LedBar] = []
         self.blinders: List[Blinder] = []
-        
+
         # Setup stage view
         self.scene = QGraphicsScene()
         self.pixmap = QPixmap(background_image_path)

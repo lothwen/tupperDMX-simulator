@@ -20,7 +20,27 @@ from tupperlogger import setup_logging, get_logger
 from ui import MediaController, DMXDisplayWidget, AudioController, StageController, ToolbarManager, ErrorDialogManager
 
 
-# StageView moved to ui.stage_controller module
+def _base_dir() -> str:
+    # ABOUTME: PyInstaller extracts bundled files to sys._MEIPASS; use that when frozen.
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def asset_path(*parts: str) -> str:
+    """Return the absolute path to a file inside the assets/ directory."""
+    return os.path.join(_base_dir(), "assets", *parts)
+
+
+def config_path(filename: str = "config.json") -> str:
+    """Return a writable path for config files.
+
+    When frozen the config lives next to the executable so the user can write it.
+    When running from source it lives in the project root.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), filename)
+    return os.path.join(_base_dir(), filename)
 
 
 class MainWindow(QMainWindow):
@@ -612,11 +632,11 @@ class MainWindow(QMainWindow):
     def save_config(self):
         """Save configuration with error handling."""
         try:
-            if not self.config.save('config.json'):
-                ErrorDialogManager.show_file_permission_error(self, 'config.json', 'save')
+            if not self.config.save(config_path()):
+                ErrorDialogManager.show_file_permission_error(self, config_path(), 'save')
         except Exception as e:
             self.logger.error(f"Failed to save configuration: {e}")
-            ErrorDialogManager.show_file_permission_error(self, 'config.json', 'save')
+            ErrorDialogManager.show_file_permission_error(self, config_path(), 'save')
 
     def start_playback(self):
         """Start media playback using media controller."""
@@ -689,21 +709,22 @@ def main():
     app = QApplication(sys.argv)
     
     # Load and apply dark theme
-    qss_path = 'assets/styles/dark-theme.qss'
+    qss_path = asset_path("styles", "dark-theme.qss")
     if os.path.exists(qss_path):
         with open(qss_path, 'r', encoding='utf-8') as f:
             app.setStyleSheet(f.read())
-    
+
+    cfg_file = config_path()
     try:
-        config = Config.load('config.json')
+        config = Config.load(cfg_file)
     except Exception as e:
         # Show configuration error before main window is created
         from ui.error_dialogs import ErrorDialogManager
         if ErrorDialogManager.show_configuration_error(None, str(e), can_reset=True):
             # User chose to reset configuration
             try:
-                os.remove('config.json')
-                config = Config.load('config.json')  # Will create new default config
+                os.remove(cfg_file)
+                config = Config.load(cfg_file)  # Will create new default config
             except Exception as reset_error:
                 # If we can't even reset, use default config in memory
                 config = Config()

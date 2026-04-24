@@ -1,3 +1,5 @@
+import os
+import sys
 from typing import Callable, Optional
 from PyQt6.QtWidgets import QToolBar, QSpinBox, QComboBox, QLabel, QWidget, QSizePolicy, QFrame, QHBoxLayout, QPushButton, QVBoxLayout
 from PyQt6.QtGui import QAction, QIcon, QFont
@@ -257,7 +259,8 @@ class ToolbarManager(QObject):
         
         # Metronome icon button (clickable)
         self.metronome_button = QPushButton()
-        metronome_icon = QIcon("assets/icons/metronome_icon.png")
+        _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        metronome_icon = QIcon(os.path.join(_base, "assets", "icons", "metronome_icon.png"))
         self.metronome_button.setIcon(metronome_icon)
         self.metronome_button.setIconSize(QSize(28, 28))  # Set icon size explicitly
         self.metronome_button.setFixedSize(32, 32)
