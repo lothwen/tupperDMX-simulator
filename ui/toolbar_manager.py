@@ -67,7 +67,7 @@ class ToolbarManager(QObject):
     def create_toolbar(self, parent) -> QToolBar:
         """Create and setup the main toolbar with grouped sections."""
         self.toolbar = QToolBar("Main Toolbar", parent)
-        self.toolbar.setFixedHeight(120)
+        self.toolbar.setMinimumHeight(115)
         self.toolbar.setMovable(False)
         self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         
@@ -153,28 +153,36 @@ class ToolbarManager(QObject):
         
         # Load MIDI button
         load_midi_btn = QPushButton("Load MIDI file")
-        load_midi_btn.setFixedSize(150, 30)
+        load_midi_btn.setMinimumWidth(130)
+        load_midi_btn.setFixedHeight(30)
+        load_midi_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         load_midi_btn.setObjectName("LoadButton")
         load_midi_btn.clicked.connect(lambda: self.load_file_requested.emit('midi'))
         buttons_layout.addWidget(load_midi_btn)
-        
+
         # Load Audio button
         load_audio_btn = QPushButton("Load Audio file")
-        load_audio_btn.setFixedSize(150, 30)
+        load_audio_btn.setMinimumWidth(140)
+        load_audio_btn.setFixedHeight(30)
+        load_audio_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         load_audio_btn.setObjectName("LoadButton")
         load_audio_btn.clicked.connect(lambda: self.load_file_requested.emit('audio'))
         buttons_layout.addWidget(load_audio_btn)
-        
+
         # New MIDI track button
         new_midi_btn = QPushButton("New MIDI track")
-        new_midi_btn.setFixedSize(150, 30)
+        new_midi_btn.setMinimumWidth(140)
+        new_midi_btn.setFixedHeight(30)
+        new_midi_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         new_midi_btn.setObjectName("NewButton")
         new_midi_btn.clicked.connect(self.new_midi_track_requested.emit)
         buttons_layout.addWidget(new_midi_btn)
 
         # Export MIDI button
         self.export_midi_button = QPushButton("Export MIDI")
-        self.export_midi_button.setFixedSize(150, 30)
+        self.export_midi_button.setMinimumWidth(120)
+        self.export_midi_button.setFixedHeight(30)
+        self.export_midi_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.export_midi_button.setObjectName("ExportButton")
         self.export_midi_button.clicked.connect(self.export_midi_requested.emit)
         self.export_midi_button.setEnabled(False)  # Disabled by default
@@ -259,7 +267,10 @@ class ToolbarManager(QObject):
         
         # Metronome icon button (clickable)
         self.metronome_button = QPushButton()
-        _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        if getattr(sys, "frozen", False):
+            _base = sys._MEIPASS
+        else:
+            _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         metronome_icon = QIcon(os.path.join(_base, "assets", "icons", "metronome_icon.png"))
         self.metronome_button.setIcon(metronome_icon)
         self.metronome_button.setIconSize(QSize(28, 28))  # Set icon size explicitly

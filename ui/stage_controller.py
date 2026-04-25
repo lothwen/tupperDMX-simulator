@@ -1,36 +1,101 @@
 import os
 import sys
-from typing import List
-from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene
-from PyQt6.QtGui import QPixmap, QBrush
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from typing import List, Optional
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
+from PyQt6.QtGui import QPixmap, QPainter
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF
 
 from tupperlogger import get_logger
 from config import Config
 from fixtures import LedBar, Blinder
 
 
+# Fallback scene size when no background pixmap is loaded; matches the native
+# resolution of the bundled stage_background.png so existing fixture coords
+# remain valid.
+DEFAULT_SCENE_WIDTH = 1536
+DEFAULT_SCENE_HEIGHT = 1024
+
+
 class StageView(QGraphicsView):
-    """Custom graphics view for the stage with background image support."""
-    
+    """Graphics view that fits the entire scene proportionally with letterbox."""
+
     def __init__(self, scene, pixmap, parent=None):
         super().__init__(scene, parent)
         self.pixmap = pixmap
-        self.update_background()
+        self._overlay_widget: Optional[QWidget] = None
+        self._background_item: Optional[QGraphicsPixmapItem] = None
+
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
+        )
+
+        self._install_background(pixmap)
+
+    def _install_background(self, pixmap: QPixmap) -> None:
+        scene = self.scene()
+        if not pixmap.isNull():
+            self._background_item = QGraphicsPixmapItem(pixmap)
+            self._background_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+            self._background_item.setZValue(-1000)
+            scene.addItem(self._background_item)
+            scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
+        else:
+            scene.setSceneRect(0, 0, DEFAULT_SCENE_WIDTH, DEFAULT_SCENE_HEIGHT)
+
+    def set_pixmap(self, pixmap: QPixmap) -> None:
+        self.pixmap = pixmap
+        scene = self.scene()
+        if pixmap.isNull():
+            if self._background_item is not None:
+                scene.removeItem(self._background_item)
+                self._background_item = None
+            scene.setSceneRect(0, 0, DEFAULT_SCENE_WIDTH, DEFAULT_SCENE_HEIGHT)
+        else:
+            if self._background_item is None:
+                self._background_item = QGraphicsPixmapItem(pixmap)
+                self._background_item.setTransformationMode(
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                self._background_item.setZValue(-1000)
+                scene.addItem(self._background_item)
+            else:
+                self._background_item.setPixmap(pixmap)
+            scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
+        self._fit_scene()
+
+    def set_overlay_widget(self, widget: QWidget) -> None:
+        """Attach a widget to float over the top-right corner of the view."""
+        self._overlay_widget = widget
+        widget.setParent(self.viewport())
+        widget.raise_()
+        self._reposition_overlay()
+        widget.show()
+
+    def _reposition_overlay(self) -> None:
+        if self._overlay_widget is None:
+            return
+        margin = 8
+        w = self._overlay_widget
+        x = max(0, self.viewport().width() - w.width() - margin)
+        y = margin
+        w.move(x, y)
+
+    def _fit_scene(self) -> None:
+        scene = self.scene()
+        if scene is not None:
+            self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.update_background()
+        self._fit_scene()
+        self._reposition_overlay()
 
-    def update_background(self):
-        if not self.pixmap.isNull():
-            self.scene().setBackgroundBrush(QBrush(self.pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation
-            )))
-        else:
-            self.scene().setBackgroundBrush(QBrush(Qt.GlobalColor.black))
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_scene()
 
 
 class StageController(QObject):
@@ -46,7 +111,11 @@ class StageController(QObject):
         self.logger = get_logger("ui.stage")
 
         if background_image_path is None:
-            _base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+            if getattr(sys, "frozen", False):
+                _base = sys._MEIPASS
+            else:
+                # __file__ is ui/stage_controller.py; assets/ is one level up
+                _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             background_image_path = os.path.join(_base, "assets", "images", "stage_background.png")
 
         # Fixture collections
@@ -232,9 +301,8 @@ class StageController(QObject):
             return False
         
         self.pixmap = new_pixmap
-        self.stage_view.pixmap = new_pixmap
-        self.stage_view.update_background()
-        
+        self.stage_view.set_pixmap(new_pixmap)
+
         self.logger.info(f"Background image updated: {image_path}")
         return True
     

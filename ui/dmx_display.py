@@ -27,21 +27,36 @@ class DMXDisplayWidget(QTableWidget):
     
     def _setup_display(self) -> None:
         """Setup the table widget appearance and structure."""
-        
+
         # Configure table structure
         self.setColumnCount(2)
         self.setHorizontalHeaderLabels(["Channel", "Value"])
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setVisible(False)
-        self.setColumnWidth(0, 100)
-        self.setColumnWidth(1, 100)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.setFixedWidth(200)
-        
+        # Allow the panel to resize within bounds; the slide animation drives
+        # the actual width via the splitter.
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(260)
+        self._distribute_column_widths()
+
         # Set font
         font = self.font()
         font.setPointSize(10)
         self.setFont(font)
+
+    def _distribute_column_widths(self) -> None:
+        """Split the available viewport width 50/50 between the two columns."""
+        width = max(0, self.viewport().width())
+        if width == 0:
+            return
+        half = width // 2
+        self.setColumnWidth(0, half)
+        self.setColumnWidth(1, width - half)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._distribute_column_widths()
     
     def _populate_channels(self) -> None:
         """Populate the table with DMX channels from configuration."""

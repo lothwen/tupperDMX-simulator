@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
 from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent
+from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
+                          QVariantAnimation, QAbstractAnimation, QEasingCurve)
 
 from config import Config
 from fixtures import LedBar, Blinder
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         
         # Window setup
         self.update_window_title()
+        self.setMinimumSize(1200, 800)
         self.setGeometry(100, 100, self.config.window.width, self.config.window.height)
          
         # Setup main layout
@@ -155,16 +157,16 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         # Create main content splitter
-        main_content = QSplitter(Qt.Orientation.Horizontal)
-        self.main_layout.addWidget(main_content, 1)
-        
+        self.main_content = QSplitter(Qt.Orientation.Horizontal)
+        self.main_layout.addWidget(self.main_content, 1)
+
         # Add stage view
         stage_view = self.stage_controller.get_stage_view()
-        main_content.addWidget(stage_view)
-        
+        self.main_content.addWidget(stage_view)
+
         # Add DMX display
-        main_content.addWidget(self.dmx_display)
-        
+        self.main_content.addWidget(self.dmx_display)
+
         # Create timeline with MidiManager reference
         self.timeline = Timeline(
             midi_manager=self.midi_manager,
@@ -181,8 +183,92 @@ class MainWindow(QMainWindow):
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         self.main_layout.addWidget(self.timeline)
-        
-        main_content.setSizes([self.width() - 250, 250])
+
+        self.main_content.setSizes([self.width() - 250, 250])
+
+        # Floating toggle button for the DMX side panel
+        self._dmx_panel_collapsed = False
+        self._last_dmx_width = 250
+        self._panel_animation = None
+        self.dmx_toggle_button = QPushButton(stage_view)
+        self.dmx_toggle_button.setObjectName("DmxPanelToggle")
+        self.dmx_toggle_button.setFixedSize(28, 28)
+        self.dmx_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dmx_toggle_button.clicked.connect(self._toggle_dmx_panel)
+        stage_view.set_overlay_widget(self.dmx_toggle_button)
+        self._update_dmx_toggle_button()
+
+        # Apply persisted collapsed state once the splitter has a real geometry
+        if self.config.window.dmx_panel_collapsed:
+            QTimer.singleShot(0, self._apply_initial_collapsed_state)
+
+    def _apply_initial_collapsed_state(self) -> None:
+        """Collapse the DMX panel without animation at startup."""
+        sizes = self.main_content.sizes()
+        if len(sizes) < 2:
+            return
+        total = sizes[0] + sizes[1]
+        self._last_dmx_width = sizes[1] if sizes[1] > 0 else 250
+        self.main_content.setSizes([total, 0])
+        self.dmx_display.setVisible(False)
+        self._dmx_panel_collapsed = True
+        self._update_dmx_toggle_button()
+
+    def _toggle_dmx_panel(self) -> None:
+        """Slide the DMX side panel in or out with a short animation."""
+        if (self._panel_animation is not None
+                and self._panel_animation.state() == QAbstractAnimation.State.Running):
+            return
+
+        sizes = self.main_content.sizes()
+        if len(sizes) < 2:
+            return
+        total = sizes[0] + sizes[1]
+
+        will_be_collapsed = not self._dmx_panel_collapsed
+
+        if will_be_collapsed:
+            if sizes[1] > 0:
+                self._last_dmx_width = sizes[1]
+            start_value = sizes[1]
+            end_value = 0
+        else:
+            self.dmx_display.setVisible(True)
+            target = self._last_dmx_width if self._last_dmx_width > 0 else 250
+            # Always leave at least 200px for the stage area
+            target = max(0, min(target, total - 200))
+            start_value = sizes[1]
+            end_value = target
+
+        anim = QVariantAnimation(self)
+        anim.setDuration(200)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        anim.setStartValue(start_value)
+        anim.setEndValue(end_value)
+        anim.valueChanged.connect(
+            lambda val: self.main_content.setSizes([total - int(val), int(val)])
+        )
+
+        def on_finished():
+            self._dmx_panel_collapsed = will_be_collapsed
+            if will_be_collapsed:
+                self.dmx_display.setVisible(False)
+            self._update_dmx_toggle_button()
+            self.config.window.dmx_panel_collapsed = will_be_collapsed
+            self.save_config()
+
+        anim.finished.connect(on_finished)
+        self._panel_animation = anim
+        anim.start()
+
+    def _update_dmx_toggle_button(self) -> None:
+        """Refresh the toggle button glyph and tooltip based on current state."""
+        if self._dmx_panel_collapsed:
+            self.dmx_toggle_button.setText("◀")  # ◀
+            self.dmx_toggle_button.setToolTip("Show DMX panel")
+        else:
+            self.dmx_toggle_button.setText("▶")  # ▶
+            self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def _apply_song_config(self, song):
         """Apply song configuration to all components."""
