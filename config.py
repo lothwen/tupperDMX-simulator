@@ -9,6 +9,7 @@ from pathlib import Path
 class WindowConfig:
     width: int = 1280
     height: int = 720
+    dmx_panel_collapsed: bool = False
 
 
 @dataclass
@@ -129,7 +130,8 @@ class Config:
             window_data = data["window"]
             config.window = WindowConfig(
                 width=cls._validate_int(window_data.get("width", 1280), 400, 4000),
-                height=cls._validate_int(window_data.get("height", 720), 300, 3000)
+                height=cls._validate_int(window_data.get("height", 720), 300, 3000),
+                dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False))
             )
         
         # Art-Net configuration

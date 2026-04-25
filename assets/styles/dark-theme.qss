@@ -505,6 +505,25 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     background: none;
 }
 
+/* DMX Side Panel Toggle (floating overlay on stage view) */
+QPushButton#DmxPanelToggle {
+    background-color: rgba(40, 40, 40, 200);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 80);
+    border-radius: 4px;
+    font-weight: bold;
+    padding: 0;
+}
+
+QPushButton#DmxPanelToggle:hover {
+    background-color: rgba(70, 70, 70, 220);
+    border-color: rgba(255, 255, 255, 140);
+}
+
+QPushButton#DmxPanelToggle:pressed {
+    background-color: rgba(20, 20, 20, 230);
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;
