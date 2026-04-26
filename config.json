@@ -2,7 +2,10 @@
   "window": {
     "width": 1920,
     "height": 1080,
-    "dmx_panel_collapsed": false
+    "dmx_panel_collapsed": false,
+    "piano_roll_visible": false,
+    "waveform_track_height": 77,
+    "midi_events_track_height": 77
   },
   "artnet": {
     "ip": "127.0.0.1",

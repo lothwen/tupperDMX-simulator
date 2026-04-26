@@ -37,10 +37,10 @@ class ContentView(QGraphicsView):
         scene_pos = self.mapToScene(position)
         
         # Check if we're in the MIDI Events track area
-        midi_events_y_start = (self.timeline.RULER_TRACK_HEIGHT + 
-                              self.timeline.WAVEFORM_TRACK_HEIGHT + 
+        midi_events_y_start = (self.timeline.RULER_TRACK_HEIGHT +
+                              self.timeline.waveform_track_height +
                               2 * self.timeline.TRACK_SPACING)
-        midi_events_y_end = midi_events_y_start + self.timeline.MIDI_EVENTS_TRACK_HEIGHT
+        midi_events_y_end = midi_events_y_start + self.timeline.midi_events_track_height
         
         if midi_events_y_start <= scene_pos.y() <= midi_events_y_end:
             # Check if we clicked on an empty area (no MIDI event at this position)

@@ -5,14 +5,12 @@ Handles audio waveform rendering and dragging functionality.
 """
 
 import io
-import os
 import librosa
 import matplotlib.pyplot as plt
-import numpy as np
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsTextItem, QGraphicsProxyWidget
+from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsProxyWidget
 from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap
-from PyQt6.QtCore import pyqtSignal, QPointF, QRectF, QObject
+from PyQt6.QtCore import pyqtSignal, QPointF, QRectF
 from PyQt6.QtWidgets import QGraphicsObject, QGraphicsItem
 
 from .base import BaseTrack
@@ -57,46 +55,45 @@ class WaveformTrack(BaseTrack):
     def __init__(self, timeline_manager, content_scene, header_scene):
         super().__init__(timeline_manager, content_scene, header_scene)
         self.waveform_item = None
+        self._audio_controls_proxy = None  # Persistent proxy — survives header redraws
         self.logger = get_logger("timeline.tracks.waveform")
         
     def get_track_height(self) -> int:
         """Get the height of the waveform track."""
-        return self.timeline_manager.WAVEFORM_TRACK_HEIGHT
+        return self.timeline_manager.waveform_track_height
         
     def draw_header(self, y_offset: int):
         """Draw the waveform track header."""
         self.clear_header_items()
-        
+
         # Draw header background
         header_rect = QGraphicsRectItem(
-            0, y_offset, 
-            self.timeline_manager.PIANO_WIDTH, 
+            0, y_offset,
+            self.timeline_manager.PIANO_WIDTH,
             self.get_track_height()
         )
         header_rect.setBrush(QBrush(QColor(50, 50, 50)))
         header_rect.setPen(QPen(QColor(20, 20, 20)))
         self.header_scene.addItem(header_rect)
         self.header_items.append(header_rect)
-        
-        # Add audio file name if available
-        if self.timeline_manager.audio_file:
-            file_name = os.path.basename(self.timeline_manager.audio_file)
-            waveform_text = QGraphicsTextItem(file_name)
-            waveform_text.setDefaultTextColor(QColor(200, 200, 200))
-            waveform_text.setPos(5, y_offset + 5)
-            self.header_scene.addItem(waveform_text)
-            self.header_items.append(waveform_text)
 
-        # Add audio controls
+        # Add audio controls — keep a single persistent proxy so the underlying
+        # QWidget isn't destroyed when the header is redrawn during reflow.
         if hasattr(self.timeline_manager, 'audio_controls_container'):
-            proxy = QGraphicsProxyWidget()
-            proxy.setWidget(self.timeline_manager.audio_controls_container)
-            proxy.setPos(5, y_offset + 25)
-            self.header_scene.addItem(proxy)
-            self.header_items.append(proxy)
-    
+            if self._audio_controls_proxy is None:
+                self._audio_controls_proxy = QGraphicsProxyWidget()
+                self._audio_controls_proxy.setWidget(self.timeline_manager.audio_controls_container)
+                # Stay above the header background, which is re-added on every reflow
+                # and would otherwise occlude the proxy at the same z-value.
+                self._audio_controls_proxy.setZValue(1)
+            if self._audio_controls_proxy.scene() is None:
+                self.header_scene.addItem(self._audio_controls_proxy)
+            proxy_height = self._audio_controls_proxy.size().height()
+            centered_y = y_offset + max(0, (self.get_track_height() - proxy_height) / 2)
+            self._audio_controls_proxy.setPos(5, centered_y)
+
     def clear_header_items(self):
-        """Clear only header items."""
+        """Clear only header items (preserve the persistent audio-controls proxy)."""
         for item in self.header_items:
             if item.scene():
                 item.scene().removeItem(item)
@@ -104,10 +101,14 @@ class WaveformTrack(BaseTrack):
         
     def draw_waveform(self, audio_file: str, y_offset: int):
         """Draw waveform from audio file."""
+        # Preserve any existing horizontal offset (e.g. song-start offset) so
+        # redraws triggered by track resizing don't snap the waveform back to x=0.
+        preserved_x = self.waveform_item.x() if self.waveform_item else 0.0
+
         if self.waveform_item:
             self.content_scene.removeItem(self.waveform_item)
             self.waveform_item = None
-            
+
         try:
             y, sr = librosa.load(audio_file, sr=None)
             song_length_seconds = librosa.get_duration(y=y, sr=sr)
@@ -145,6 +146,7 @@ class WaveformTrack(BaseTrack):
 
             self.waveform_item = DraggableWaveform(waveform_pixmap)
             self.waveform_item.setYPos(y_offset)
+            self.waveform_item.setX(preserved_x)
             self.waveform_item.setZValue(0.5)  # Keep waveform above grid but below events
             self.waveform_item.position_changed.connect(self._on_waveform_moved)
             self.content_scene.addItem(self.waveform_item)
