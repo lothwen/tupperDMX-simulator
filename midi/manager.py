@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
 import uuid
@@ -6,6 +6,24 @@ import copy
 
 from tupperlogger import get_logger
 from .worker import MidiWorker, MidiConnectionStatus
+
+
+# Identification of BLACKOUT events is by part name (case-insensitive),
+# not by note number — keeps it config-driven.
+BLACKOUT_PART_NAME = "BLACKOUT"
+
+# Minimum non-BLACKOUT clip duration in seconds. Below this, an event is too
+# short to remain a valid clip and gets clamped during edits.
+MIN_EVENT_DURATION = 0.01
+
+# A BLACKOUT whose effective duration (distance to its next event) is below
+# this threshold gets removed by reconcile_blackouts().
+BLACKOUT_EPSILON = 1e-4
+
+# Tolerance used when matching a midi_notes entry to its midi_events parent
+# by (note_number, time). Must be larger than BLACKOUT_EPSILON to survive
+# tiny drift from float arithmetic during a series of edits.
+NOTE_MATCH_TOLERANCE = 0.005
 
 
 class MidiManager(QObject):
@@ -287,7 +305,399 @@ class MidiManager(QObject):
         self.data_changed.emit()
         self.logger.info(f"Deleted event: {event_id}")
         return True
-    
+
+    # ------------------------------------------------------------------
+    # Clip-style edit ops (move / set_left_edge / set_right_edge)
+    # ------------------------------------------------------------------
+    #
+    # The timeline UI treats each MIDI event as a "clip" that starts at the
+    # event's `time` and visually extends until the next event. These ops
+    # let the UI move clips around without overlapping neighbors and
+    # automatically maintain BLACKOUT events as gap markers.
+    #
+    # Invariants enforced by reconcile_blackouts() after every mutation:
+    #   - Events sorted by time.
+    #   - No two adjacent BLACKOUTs (the later one is merged away).
+    #   - No BLACKOUT with effective duration <= BLACKOUT_EPSILON.
+
+    def is_blackout(self, event: Dict[str, Any]) -> bool:
+        """Return True if `event` is a BLACKOUT (matched by part name)."""
+        info = event.get('info') if event else None
+        if info is None:
+            return False
+        part = getattr(info, 'part', '') or ''
+        return part.upper() == BLACKOUT_PART_NAME
+
+    def _blackout_note_number(self) -> Optional[int]:
+        """Return the MIDI note number mapped to BLACKOUT, or None."""
+        for note_str, info in self.midi_note_map.items():
+            if getattr(info, 'part', '').upper() == BLACKOUT_PART_NAME:
+                try:
+                    return int(note_str)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def _index_of(self, event_id: str) -> int:
+        for i, e in enumerate(self.midi_events):
+            if e['id'] == event_id:
+                return i
+        return -1
+
+    def _right_edge_of(self, idx: int) -> float:
+        """Visual right edge of event at index idx (= time of next event, or +inf)."""
+        if 0 <= idx < len(self.midi_events) - 1:
+            return self.midi_events[idx + 1]['time']
+        return float('inf')
+
+    def _song_end_time(self) -> float:
+        """Effective end-of-timeline used as the song-end clamp for moves."""
+        duration = self.get_duration()
+        if duration and duration > 0:
+            return duration
+        # Fallback for empty/missing MIDI data — match the timeline's UI default.
+        return 240.0
+
+    def _non_blackout_intervals(self, exclude_event_id: Optional[str] = None
+                                ) -> List[Tuple[float, float, str]]:
+        """Visible intervals of non-BLACKOUT clips, sorted by start.
+
+        Each clip's interval = [clip.time, next_event.time). The last event's
+        interval extends to song_end. Excludes `exclude_event_id` if given.
+        """
+        song_end = self._song_end_time()
+        intervals: List[Tuple[float, float, str]] = []
+        for i, e in enumerate(self.midi_events):
+            if self.is_blackout(e) or e['id'] == exclude_event_id:
+                continue
+            end = (self.midi_events[i + 1]['time']
+                   if i + 1 < len(self.midi_events) else song_end)
+            intervals.append((e['time'], end, e['id']))
+        intervals.sort(key=lambda x: x[0])
+        return intervals
+
+    def _free_slots_for_move(self, exclude_event_id: str
+                             ) -> List[Tuple[float, float]]:
+        """Compute (start, end) intervals where a clip can be placed without
+        overlapping any non-BLACKOUT clip (excluding `exclude_event_id`)."""
+        obstacles = self._non_blackout_intervals(exclude_event_id)
+        slots: List[Tuple[float, float]] = []
+        cursor = 0.0
+        for start, end, _ in obstacles:
+            if start > cursor:
+                slots.append((cursor, start))
+            cursor = max(cursor, end)
+        # Tail slot extends past the last obstacle to the song end.
+        song_end = self._song_end_time()
+        if cursor < song_end:
+            slots.append((cursor, song_end))
+        return slots
+
+    def _insert_blackout_internal(self, time: float) -> Optional[str]:
+        """Insert a BLACKOUT event+note at `time`. No rebuild/emit. Returns new id, or None."""
+        bo_note = self._blackout_note_number()
+        if bo_note is None:
+            self.logger.warning(
+                "Cannot auto-insert BLACKOUT: no entry with part='BLACKOUT' in midi_note_map"
+            )
+            return None
+
+        event_id = str(uuid.uuid4())
+        info = self.midi_note_map[str(bo_note)]
+        self.midi_events.append({
+            "id": event_id,
+            "note": bo_note,
+            "time": time,
+            "velocity": 100,
+            "info": info,
+        })
+        self.midi_events.sort(key=lambda x: x['time'])
+
+        note_id = str(uuid.uuid4())
+        self.midi_notes.append({
+            "id": note_id,
+            "note": bo_note,
+            "time": time,
+            "velocity": 100,
+            "duration": 0.1,
+        })
+        self.midi_notes.sort(key=lambda x: x['time'])
+        return event_id
+
+    def _delete_event_internal(self, event_id: str) -> bool:
+        """Remove event AND its corresponding note. No rebuild/emit."""
+        event = None
+        for i, e in enumerate(self.midi_events):
+            if e['id'] == event_id:
+                event = self.midi_events.pop(i)
+                break
+        if event is None:
+            return False
+        for i, note in enumerate(self.midi_notes):
+            if note['note'] == event['note'] and abs(note['time'] - event['time']) < NOTE_MATCH_TOLERANCE:
+                self.midi_notes.pop(i)
+                break
+        return True
+
+    def _set_event_time_internal(self, event_id: str, new_time: float) -> bool:
+        """Set an event's time and the matching note's time. No rebuild/emit."""
+        for e in self.midi_events:
+            if e['id'] == event_id:
+                old_time = e['time']
+                e['time'] = new_time
+                # Mirror in midi_notes (matched by note + old time)
+                for note in self.midi_notes:
+                    if (note['note'] == e['note']
+                            and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
+                        note['time'] = new_time
+                        break
+                self.midi_events.sort(key=lambda x: x['time'])
+                self.midi_notes.sort(key=lambda x: x['time'])
+                return True
+        return False
+
+    def reconcile_blackouts(self) -> None:
+        """Enforce BLACKOUT invariants. Idempotent."""
+        # Sort first
+        self.midi_events.sort(key=lambda x: x['time'])
+        self.midi_notes.sort(key=lambda x: x['time'])
+
+        # Pass 1: drop zero/negative-duration BLACKOUTs.
+        # A BLACKOUT's effective duration = (next event's time) - (its time).
+        # If <= BLACKOUT_EPSILON, drop it.
+        dropped = True
+        while dropped:
+            dropped = False
+            for i, e in enumerate(self.midi_events):
+                if not self.is_blackout(e):
+                    continue
+                next_time = (self.midi_events[i + 1]['time']
+                             if i + 1 < len(self.midi_events) else float('inf'))
+                if next_time - e['time'] <= BLACKOUT_EPSILON:
+                    self._delete_event_internal(e['id'])
+                    dropped = True
+                    break  # restart loop after mutation
+
+        # Pass 2: merge adjacent BLACKOUTs (delete the later one of any pair).
+        merged = True
+        while merged:
+            merged = False
+            for i in range(len(self.midi_events) - 1):
+                if self.is_blackout(self.midi_events[i]) and self.is_blackout(self.midi_events[i + 1]):
+                    self._delete_event_internal(self.midi_events[i + 1]['id'])
+                    merged = True
+                    break
+
+    def _commit(self) -> None:
+        """Final step of any mutation: rebuild MIDI, push to worker, notify."""
+        self._rebuild_midi_data()
+        self._auto_update_worker()
+        self.data_changed.emit()
+
+    def move_event(self, event_id: str, new_time: float) -> bool:
+        """Move a clip horizontally, preserving its width.
+
+        Allows "jumping" over other clips when there is enough free space at
+        the destination. Free space = the union of intervals not occupied by
+        any non-BLACKOUT clip (other than this one). If no slot can fit the
+        clip, the move is rejected.
+        """
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+
+        target = self.midi_events[idx]
+        old_time = target['time']
+        target_old_right = self._right_edge_of(idx)
+        # Clamp width — may be infinite if the target was the last event.
+        song_end = self._song_end_time()
+        target_width = (target_old_right - old_time
+                        if target_old_right != float('inf')
+                        else max(MIN_EVENT_DURATION, song_end - old_time))
+        target_width = max(MIN_EVENT_DURATION, target_width)
+
+        if new_time < 0:
+            new_time = 0.0
+
+        # Snapshot every non-BLACKOUT's intended right edge BEFORE the move.
+        # We use this after the move to reinsert BLACKOUTs that preserve each
+        # clip's intended visual extent.
+        intended_ends: Dict[str, float] = {}
+        for i, e in enumerate(self.midi_events):
+            if not self.is_blackout(e):
+                end = self._right_edge_of(i)
+                if end == float('inf'):
+                    end = song_end
+                intended_ends[e['id']] = end
+
+        # Find the slot whose clamped placement is closest to `new_time`.
+        slots = self._free_slots_for_move(event_id)
+        best_new_time: Optional[float] = None
+        best_distance = float('inf')
+        for slot_start, slot_end in slots:
+            if slot_end - slot_start + BLACKOUT_EPSILON < target_width:
+                continue  # too small
+            valid_min = slot_start
+            valid_max = slot_end - target_width
+            clamped = max(valid_min, min(new_time, valid_max))
+            dist = abs(clamped - new_time)
+            if dist < best_distance:
+                best_distance = dist
+                best_new_time = clamped
+
+        if best_new_time is None:
+            self.logger.debug(
+                f"move_event {event_id}: no slot fits target width {target_width:.3f}s"
+            )
+            return False
+        if abs(best_new_time - old_time) < BLACKOUT_EPSILON:
+            return False
+
+        # Update target's intended end now that we know its new position.
+        new_target_end = best_new_time + target_width
+        intended_ends[event_id] = new_target_end
+
+        # Apply the move.
+        self._set_event_time_internal(event_id, best_new_time)
+
+        # Drop any BLACKOUT that now sits strictly inside target's new visible
+        # span. Without this step the target's "next event" can land in the
+        # middle of its own extent, visually shrinking the clip.
+        stale_blackouts = [
+            e['id'] for e in self.midi_events
+            if e['id'] != event_id
+            and self.is_blackout(e)
+            and best_new_time + BLACKOUT_EPSILON < e['time'] < new_target_end - BLACKOUT_EPSILON
+        ]
+        for bo_id in stale_blackouts:
+            self._delete_event_internal(bo_id)
+
+        # Restore each non-BLACKOUT's intended extent: if its actual next event
+        # is now past its intended end, insert a BLACKOUT at the intended end.
+        for eid, intended_end in intended_ends.items():
+            e_idx = self._index_of(eid)
+            if e_idx < 0:
+                continue
+            actual_end = self._right_edge_of(e_idx)
+            if actual_end == float('inf'):
+                actual_end = song_end
+            if actual_end > intended_end + BLACKOUT_EPSILON:
+                self._insert_blackout_internal(intended_end)
+
+        # Reconcile (drops zero-duration BLACKOUTs, merges adjacent ones).
+        self.reconcile_blackouts()
+
+        self._commit()
+        self.logger.info(
+            f"Moved event {event_id} from {old_time:.3f}s to {best_new_time:.3f}s"
+        )
+        return True
+
+    def set_event_left_edge(self, event_id: str, new_time: float) -> bool:
+        """Resize a clip from the left (changes its start time only)."""
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+
+        target = self.midi_events[idx]
+        old_time = target['time']
+
+        # Clamp range
+        # Right limit: keep at least MIN_EVENT_DURATION before next event (or 0
+        # if no next — unconstrained on the right of the timeline).
+        right_edge = self._right_edge_of(idx)
+        max_new_time = (right_edge - MIN_EVENT_DURATION
+                        if right_edge != float('inf')
+                        else float('inf'))
+        # Left limit: cannot cross immediate non-BLACKOUT predecessor + MIN_DURATION.
+        # If prev is BLACKOUT, we can extend through it (consuming) up to that
+        # BLACKOUT's predecessor. Reconcile will delete the consumed BLACKOUT.
+        min_new_time = 0.0
+        for i in range(idx - 1, -1, -1):
+            e = self.midi_events[i]
+            if not self.is_blackout(e):
+                min_new_time = e['time'] + MIN_EVENT_DURATION
+                break
+
+        new_time = max(min_new_time, min(new_time, max_new_time))
+        delta = new_time - old_time
+        if abs(delta) < BLACKOUT_EPSILON:
+            return False
+
+        # Capture immediate prev state before mutation.
+        prev_id = self.midi_events[idx - 1]['id'] if idx > 0 else None
+        prev_was_blackout = (prev_id is not None
+                             and self.is_blackout(self.midi_events[idx - 1]))
+
+        # Apply target time change.
+        self._set_event_time_internal(event_id, new_time)
+
+        # If we shrunk (delta > 0) and the immediate prev is non-BLACKOUT
+        # (or there is no prev), insert a BLACKOUT to fill the gap.
+        if delta > 0 and not prev_was_blackout and prev_id is not None:
+            self._insert_blackout_internal(old_time)
+        # If we extended (delta < 0) and prev was BLACKOUT, it shrinks naturally
+        # (its time stays, target.time decreased → its right edge moved left).
+        # reconcile_blackouts() will delete it if duration ≤ epsilon.
+
+        self.reconcile_blackouts()
+        self._commit()
+        self.logger.info(
+            f"Resized event {event_id} left edge {old_time:.3f}s → {new_time:.3f}s"
+        )
+        return True
+
+    def set_event_right_edge(self, event_id: str, new_right_time: float) -> bool:
+        """Resize a clip from the right.
+
+        The right edge of clip[i] is the time of clip[i+1]; this method is the
+        moral equivalent of "where should this clip end?". Inserts/grows/
+        shrinks/deletes the BLACKOUT immediately following `event_id`.
+        """
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+
+        target = self.midi_events[idx]
+
+        # Clamp range
+        # Left limit: at least MIN_EVENT_DURATION after target's start.
+        min_right = target['time'] + MIN_EVENT_DURATION
+        # Right limit: cannot extend past the next non-BLACKOUT (or infinity).
+        max_right = float('inf')
+        for i in range(idx + 1, len(self.midi_events)):
+            if not self.is_blackout(self.midi_events[i]):
+                max_right = self.midi_events[i]['time']
+                break
+
+        new_right_time = max(min_right, min(new_right_time, max_right))
+
+        # Determine current behavior: is there a BLACKOUT immediately after target?
+        next_idx = idx + 1
+        next_event = self.midi_events[next_idx] if next_idx < len(self.midi_events) else None
+
+        if next_event is not None and self.is_blackout(next_event):
+            # Move the existing BLACKOUT to new_right_time. Reconcile handles deletion if zero.
+            if abs(next_event['time'] - new_right_time) < BLACKOUT_EPSILON:
+                return False
+            self._set_event_time_internal(next_event['id'], new_right_time)
+        else:
+            # No BLACKOUT yet. Determine if we need to insert one.
+            current_right = self._right_edge_of(idx)
+            if new_right_time < current_right - BLACKOUT_EPSILON:
+                # Shrinking: insert BLACKOUT at new_right_time.
+                self._insert_blackout_internal(new_right_time)
+            else:
+                # No-op: cannot extend past non-BLACKOUT next (already clamped).
+                return False
+
+        self.reconcile_blackouts()
+        self._commit()
+        self.logger.info(
+            f"Resized event {event_id} right edge to {new_right_time:.3f}s"
+        )
+        return True
+
     def _rebuild_midi_data(self) -> None:
         """Rebuild the MIDI file from current event and note data."""
         if not self.midi_data:

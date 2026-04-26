@@ -504,38 +504,36 @@ class Timeline(QWidget):
         """Update text truncation for all MIDI event labels based on current zoom level."""
         if not self._cached_events or not self.midi_events_track.items:
             return
-            
+
         zoom_factor = self.content_view.transform().m11()
         font_metrics = self.content_view.fontMetrics()
-        
-        # Find text items in midi event items
+
+        # Build an id → end-time map so we can compute each clip's width.
+        # BLACKOUT clips have no text item, so the previous index-based pairing
+        # would drift; iterate the text items directly and look up by id.
+        sorted_events = sorted(self._cached_events, key=lambda x: x['time'])
+        id_to_end = {}
+        song_length = self.midi_manager.get_duration() if self.midi_manager else 240
+        extended_end = song_length * 1.05
+        for i, e in enumerate(sorted_events):
+            end = sorted_events[i + 1]['time'] if i + 1 < len(sorted_events) else extended_end
+            id_to_end[e['id']] = end
+
         from PyQt6.QtWidgets import QGraphicsTextItem
-        text_items = [item for item in self.midi_events_track.items if isinstance(item, QGraphicsTextItem)]
-        
-        # Update each text item
-        for i, text_item in enumerate(text_items):
-            if i < len(self._cached_events):
-                event_data = self._cached_events[i]
-                
-                # Calculate box width for this event
-                if i < len(self._cached_events) - 1:
-                    duration = self._cached_events[i+1]['time'] - event_data['time']
-                else:
-                    # For last event, use a reasonable default duration
-                    song_length = self.midi_manager.get_duration() if self.midi_manager else 240
-                    extended_duration = song_length * 1.05
-                    duration = extended_duration - event_data['time']
-                    if duration <= 0:
-                        duration = song_length * 0.05
-                
-                width = max(duration * self.PIXELS_PER_SECOND, 20)
-                available_width = (width - 10) * zoom_factor
-                
-                # Get full text and truncate appropriately
-                full_text = text_item.data(0)
-                if full_text:
-                    text_to_display = self.get_truncated_text(full_text, available_width, font_metrics)
-                    text_item.setPlainText(text_to_display)
+        for item in self.midi_events_track.items:
+            if not isinstance(item, QGraphicsTextItem):
+                continue
+            full_text = item.data(0)
+            if not full_text:
+                continue
+            event_id = item.data(1)
+            event = next((e for e in sorted_events if e['id'] == event_id), None)
+            if event is None:
+                continue
+            duration = max(0.01, id_to_end[event_id] - event['time'])
+            width = max(duration * self.PIXELS_PER_SECOND, 20)
+            available_width = (width - 10) * zoom_factor
+            item.setPlainText(self.get_truncated_text(full_text, available_width, font_metrics))
 
     def get_truncated_text(self, text, available_width, font_metrics):
         """Return text truncated to fit within available width, with ellipsis if needed."""
@@ -579,81 +577,81 @@ class Timeline(QWidget):
     def on_audio_mute_toggled(self, checked):
         self.audio_mute_toggled.emit(checked)
 
-    # MIDI event management methods
-    def on_midi_event_timing_changed(self, event_index, new_start_time):
-        """Handle when a MIDI event box left border is dragged, updating this event's start time."""
-        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
+    # MIDI event management methods (event-id based)
+    def _find_cached_event(self, event_id: str):
+        """Look up a cached event by id."""
+        for e in self._cached_events:
+            if e.get('id') == event_id:
+                return e
+        return None
+
+    def on_midi_event_moved(self, event_id: str, new_time: float):
+        """Whole-clip MOVE drag committed."""
+        if not self.midi_manager or not event_id:
             return
-        
-        # Get the event ID from cached data
-        event_data = self._cached_events[event_index]
-        event_id = event_data.get('id')
-        
-        if not event_id:
-            self.logger.error(f"No event ID found for event index {event_index}")
-            return
-        
-        # Update via MidiManager
-        if self.midi_manager.update_event_timing(event_id, new_start_time):
-            # Refresh the timeline display
+        if self.midi_manager.move_event(event_id, new_time):
             self.refresh_from_manager()
 
-    def on_midi_event_edit_requested(self, event_index):
-        """Handle edit request for a MIDI event."""
-        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
+    def on_midi_event_left_edge(self, event_id: str, new_time: float):
+        """Left-edge resize drag committed."""
+        if not self.midi_manager or not event_id:
             return
-            
-        event_data = self._cached_events[event_index]
-        event_id = event_data.get('id')
-        
-        if not event_id:
-            return
-            
-        # Use MidiManager's note map for the dialog
-        dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
-        
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Get the new values
-            new_values = dialog.get_values()
-            
-            # Update via MidiManager
-            if self.midi_manager.edit_event(event_id, **new_values):
-                # Refresh the timeline display
-                self.refresh_from_manager()
-                self.logger.info(f"MIDI event {event_index} edited: note={new_values['note']}, time={new_values['time']:.3f}s, velocity={new_values['velocity']}")
+        if self.midi_manager.set_event_left_edge(event_id, new_time):
+            self.refresh_from_manager()
 
-    def on_midi_event_delete_requested(self, event_index):
-        """Handle delete request for a MIDI event."""
-        if not self.midi_manager or event_index < 0 or event_index >= len(self._cached_events):
+    def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
+        """Right-edge resize drag committed."""
+        if not self.midi_manager or not event_id:
             return
-            
-        event_data = self._cached_events[event_index]
-        event_id = event_data.get('id')
-        
-        if not event_id:
+        if self.midi_manager.set_event_right_edge(event_id, new_right_time):
+            self.refresh_from_manager()
+
+    def on_midi_event_edit_by_id(self, event_id: str):
+        """Edit dialog request for the event with `event_id`."""
+        if not self.midi_manager or not event_id:
             return
-            
-        # Confirm deletion
+        event_data = self._find_cached_event(event_id)
+        if not event_data:
+            return
+
+        dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_values = dialog.get_values()
+            if self.midi_manager.edit_event(event_id, **new_values):
+                self.refresh_from_manager()
+                self.logger.info(
+                    f"MIDI event edited: note={new_values['note']}, "
+                    f"time={new_values['time']:.3f}s, velocity={new_values['velocity']}"
+                )
+
+    def on_midi_event_delete_by_id(self, event_id: str):
+        """Delete request for the event with `event_id`."""
+        if not self.midi_manager or not event_id:
+            return
+        event_data = self._find_cached_event(event_id)
+        if not event_data:
+            return
+
         info = event_data.get('info', None)
         if info and hasattr(info, 'part'):
             event_name = info.part
         else:
             event_name = f"Note {event_data['note']}"
-            
+
         reply = QMessageBox.question(
-            None, 
-            "Delete MIDI Event", 
+            None,
+            "Delete MIDI Event",
             f"Are you sure you want to delete the MIDI event '{event_name}' at {event_data['time']:.2f}s?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
-            # Delete via MidiManager
             if self.midi_manager.delete_event(event_id):
-                # Refresh the timeline display
                 self.refresh_from_manager()
-                self.logger.info(f"MIDI event {event_index} deleted: note={event_data['note']}, time={event_data['time']:.3f}s")
+                self.logger.info(
+                    f"MIDI event deleted: note={event_data['note']}, time={event_data['time']:.3f}s"
+                )
 
     def on_add_event_requested(self, time_seconds):
         """Handle request to add a new MIDI event at the specified time."""
