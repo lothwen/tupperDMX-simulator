@@ -10,6 +10,9 @@ class WindowConfig:
     width: int = 1280
     height: int = 720
     dmx_panel_collapsed: bool = False
+    piano_roll_visible: bool = False
+    waveform_track_height: int = 100
+    midi_events_track_height: int = 50
 
 
 @dataclass
@@ -131,7 +134,10 @@ class Config:
             config.window = WindowConfig(
                 width=cls._validate_int(window_data.get("width", 1280), 400, 4000),
                 height=cls._validate_int(window_data.get("height", 720), 300, 3000),
-                dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False))
+                dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False)),
+                piano_roll_visible=bool(window_data.get("piano_roll_visible", False)),
+                waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
+                midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000)
             )
         
         # Art-Net configuration

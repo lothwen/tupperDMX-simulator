@@ -315,7 +315,7 @@ class MidiEventsTrack(BaseTrack):
         
     def get_track_height(self) -> int:
         """Get the height of the MIDI events track."""
-        return self.timeline_manager.MIDI_EVENTS_TRACK_HEIGHT
+        return self.timeline_manager.midi_events_track_height
         
     def draw_header(self, y_offset: int):
         """Draw the MIDI events track header."""
