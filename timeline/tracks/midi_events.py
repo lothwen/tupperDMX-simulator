@@ -1,13 +1,26 @@
 """
 MIDI Events track for timeline.
 
-Handles display and interaction with MIDI events including drag-and-drop editing,
-context menus, and visual representation.
+Renders each MIDI event as a draggable, resizable clip — like clips in a
+classical video editor / Audacity. Clips never overlap; gaps between
+non-BLACKOUT clips are represented by transparent BLACKOUT clips.
+
+Three drag modes per clip:
+  * MOVE       — grab the body, slide horizontally (preserves width).
+  * RESIZE_LEFT — grab the left edge zone, change start time only.
+  * RESIZE_RIGHT — grab the right edge zone, change end time only.
+
+All gestures clamp to neighbor bounds and snap to adjacent clip edges.
+Persistence happens on mouseRelease via the *_committed signals;
+mid-drag is purely visual.
 """
 
-from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject, 
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
+
+from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu)
-from PyQt6.QtGui import QColor, QBrush, QPen
+from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt
 
 from .base import BaseTrack
@@ -15,317 +28,415 @@ from ..widgets.tooltip import CustomTooltip
 from tupperlogger import get_logger
 
 
+# Edge-zone widths (pixels in scene space) for resize gestures.
+RESIZE_ZONE_PX = 8
+# Snap radius — if a dragged edge ends within this many scene-pixels of a
+# neighboring clip edge, snap to it.
+SNAP_PX = 6
+# Minimum visible width for a clip's hit area (so sub-pixel clips remain
+# clickable until the user zooms in).
+MIN_HIT_WIDTH_PX = 1
+# Visual styling for clip boxes.
+CLIP_CORNER_RADIUS_PX = 4
+CLIP_GRADIENT_LIGHTEN = 118   # top of gradient = base.lighter(LIGHTEN)
+CLIP_GRADIENT_DARKEN = 140    # bottom of gradient = base.darker(DARKEN)
+
+
+@dataclass
+class ClipBounds:
+    """Pixel-space bounds and snap targets for a single clip's drag gestures.
+
+    All values are in scene pixel coordinates (i.e. `time_seconds *
+    PIXELS_PER_SECOND`). The fields encode the policy of "no overlap",
+    "BLACKOUTs absorb moves", and "preserve target width during MOVE".
+    """
+    # MOVE mode: list of (min_x, max_x) intervals where the clip's LEFT edge
+    # may land. Multiple intervals enable "jumping" over other clips when a
+    # large enough slot exists on the far side.
+    move_intervals: List[Tuple[float, float]] = field(default_factory=list)
+    # RESIZE_LEFT mode: bounds on the clip's LEFT edge (start time).
+    resize_left_min_x: float = 0.0
+    resize_left_max_x: float = 0.0
+    # RESIZE_RIGHT mode: bounds on the clip's RIGHT edge (end time).
+    resize_right_min_x: float = 0.0
+    resize_right_max_x: float = 0.0
+    # Snap targets — neighbor edges to which a dragged edge will snap.
+    snap_xs: List[float] = field(default_factory=list)
+
+
 class DraggableMidiEvent(QGraphicsObject):
-    """A MIDI event box that can be resized by dragging its left border."""
-    
-    timing_changed = pyqtSignal(int, float)  # event_index, new_time
-    edit_requested = pyqtSignal(int)  # event_index
-    delete_requested = pyqtSignal(int)  # event_index
-    add_at_position_requested = pyqtSignal(float)  # time_seconds
-    
-    def __init__(self, x, y, width, height, event_index, event_data, parent=None):
+    """A MIDI clip box: movable, resizable, snap-aware. No overlap."""
+
+    # Signals — committed on mouseRelease only.
+    move_committed = pyqtSignal(str, float)         # event_id, new_time
+    left_edge_committed = pyqtSignal(str, float)    # event_id, new_time
+    right_edge_committed = pyqtSignal(str, float)   # event_id, new_right_time
+    edit_requested = pyqtSignal(str)                # event_id
+    delete_requested = pyqtSignal(str)              # event_id
+    add_at_position_requested = pyqtSignal(float)   # time_seconds
+
+    # Drag-mode enum (string-based for readability).
+    MODE_IDLE = "idle"
+    MODE_MOVE = "move"
+    MODE_RESIZE_LEFT = "resize_left"
+    MODE_RESIZE_RIGHT = "resize_right"
+
+    def __init__(self, x, y, width, height, event_id: str, event_data: dict,
+                 bounds: ClipBounds, is_blackout: bool = False, parent=None):
         super().__init__(parent)
-        # Store only width and height in rect, position with setPos()
-        self.rect = QRectF(0, 0, width, height)
-        self.setPos(x, y)  # Position the item in scene coordinates
-        self.event_index = event_index
+        self.rect = QRectF(0, 0, max(width, MIN_HIT_WIDTH_PX), height)
+        self.setPos(x, y)
+
+        self.event_id = event_id
         self.event_data = event_data
+        self.bounds = bounds
+        self.is_blackout_clip = is_blackout
+
+        # Qt item flags
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True) 
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
-        
-        # Resize handle zone (left edge)
-        self.resize_zone_width = 10
-        self.is_resizing = False
-        self.resize_start_pos = None
-        self.original_width = width
-        
-        # Store reference to timeline for coordinate conversion
+
+        # Drag state
+        self._mode = self.MODE_IDLE
+        self._press_scene_pos = None
+        self._press_self_pos = None         # self.pos() at press time
+        self._press_width = float(width)    # rect width at press time
+
+        # External hooks
         self.timeline = None
-        self.text_item = None  # Reference to the associated text label
-        
-        # Store the last right-click position for "Add event at this position"
+        self.text_item = None
         self.last_right_click_scene_pos = None
-        
-        # Default brush and pen
+
+        # Painting state (overridden by setBrush/setPen unless BLACKOUT)
         self._brush = QBrush(QColor(100, 100, 100))
         self._pen = QPen(QColor(20, 20, 20))
-        
-        # Tooltip state management
+
+        # Tooltip
         self._tooltip_shown = False
         self._custom_tooltip = None
-        
-        # Logger for debug messages
+
         self.logger = get_logger("timeline.tracks.midi_events.draggable")
-        
+
+    # --- Geometry / paint -------------------------------------------------
+
     def boundingRect(self):
-        # Return a rect that starts at (0,0) for proper item-local coordinates
         return QRectF(0, 0, self.rect.width(), self.rect.height())
-    
+
     def paint(self, painter, option, widget):
-        painter.setBrush(self._brush)
+        if self.is_blackout_clip:
+            # BLACKOUT clips are visual gaps. Paint nothing — but the bounding
+            # rect still catches mouse events so the user can drag/right-click
+            # the empty space to manage the BLACKOUT.
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.boundingRect()
+        # Build a subtle vertical gradient from the base color so the clip
+        # reads with a bit of depth instead of a flat fill.
+        base_color = self._brush.color()
+        gradient = QLinearGradient(0, 0, 0, rect.height())
+        gradient.setColorAt(0.0, base_color.lighter(CLIP_GRADIENT_LIGHTEN))
+        gradient.setColorAt(1.0, base_color.darker(CLIP_GRADIENT_DARKEN))
+        painter.setBrush(QBrush(gradient))
         painter.setPen(self._pen)
-        # Paint at (0,0) in item coordinates, not scene coordinates
-        painter.drawRect(self.boundingRect())
-    
+        painter.drawRoundedRect(rect, CLIP_CORNER_RADIUS_PX, CLIP_CORNER_RADIUS_PX)
+
     def setBrush(self, brush):
         self._brush = brush
         self.update()
-    
+
     def setPen(self, pen):
         self._pen = pen
         self.update()
-        
+
     def setRect(self, rect):
         self.prepareGeometryChange()
         self.rect = rect
         self.update()
-    
+
     def set_timeline(self, timeline):
         self.timeline = timeline
-    
+
     def set_text_item(self, text_item):
-        """Set reference to the associated text label."""
         self.text_item = text_item
-        
+
+    # --- Cursor / hit-test ------------------------------------------------
+
+    def _zone_at(self, local_x: float) -> str:
+        """Classify a local x position into a drag zone."""
+        w = self.rect.width()
+        if w <= 2 * RESIZE_ZONE_PX:
+            # Narrow clip: no MOVE zone; split half/half between resize zones.
+            return self.MODE_RESIZE_LEFT if local_x < w / 2 else self.MODE_RESIZE_RIGHT
+        if local_x <= RESIZE_ZONE_PX:
+            return self.MODE_RESIZE_LEFT
+        if local_x >= w - RESIZE_ZONE_PX:
+            return self.MODE_RESIZE_RIGHT
+        return self.MODE_MOVE
+
+    def _set_view_cursor(self, cursor_shape):
+        if self.scene() and self.scene().views():
+            for view in self.scene().views():
+                view.setCursor(cursor_shape)
+
+    # --- Tooltip ----------------------------------------------------------
+
     def _show_persistent_tooltip(self, local_pos):
-        """Show tooltip with detailed event information."""
-        if not self.event_data:
+        if not self.event_data or self.is_blackout_clip:
+            # No tooltip on BLACKOUTs — they're just gaps.
             return
-            
-        # Create custom tooltip if it doesn't exist
         if not self._custom_tooltip:
             if self.scene() and self.scene().views():
                 main_window = self.scene().views()[0].window()
                 self._custom_tooltip = CustomTooltip(main_window)
-            
         if not self._custom_tooltip:
             return
-            
-        # Get event information
+
         event_info = self.event_data.get('info', {})
         part_name = getattr(event_info, 'part', f'Note {self.event_data["note"]}')
         velocity = self.event_data.get('velocity', 0)
         time = self.event_data.get('time', 0.0)
         note = self.event_data.get('note', 0)
-        
-        # Calculate bar and beat information
+
         if self.timeline:
             seconds_per_beat = 60.0 / self.timeline.bpm
             beat_number = time / seconds_per_beat
             bar_number = int(beat_number / 4) + 1
             beat_in_bar = int(beat_number % 4) + 1
-            
-            # Create detailed tooltip text
             tooltip_text = (f"{part_name}\n"
-                          f"MIDI Note: {note}\n"
-                          f"Time: {time:.3f}s\n"
-                          f"Bar: {bar_number}, Beat: {beat_in_bar}\n"
-                          f"Velocity: {velocity}")
+                            f"MIDI Note: {note}\n"
+                            f"Time: {time:.3f}s\n"
+                            f"Bar: {bar_number}, Beat: {beat_in_bar}\n"
+                            f"Velocity: {velocity}")
         else:
-            # Fallback if timeline not available
             tooltip_text = (f"{part_name}\n"
-                          f"MIDI Note: {note}\n"
-                          f"Time: {time:.3f}s\n"
-                          f"Velocity: {velocity}")
-        
-        # Get global position for tooltip
+                            f"MIDI Note: {note}\n"
+                            f"Time: {time:.3f}s\n"
+                            f"Velocity: {velocity}")
+
         scene_pos = self.mapToScene(local_pos)
         if self.scene() and self.scene().views():
             for view in self.scene().views():
                 global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
-                # Offset tooltip slightly to avoid covering the cursor
                 global_pos.setY(global_pos.y() + 20)
                 self._custom_tooltip.show_at(global_pos, tooltip_text)
                 break
-        
+
+    # --- Mouse events -----------------------------------------------------
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            local_pos = event.pos()
-            
-            # Check if we're in the resize zone (left edge)
-            if local_pos.x() <= self.resize_zone_width:
-                self.logger.debug(f"Starting MIDI event resize for event {self.event_index}")
-                # Hide tooltip when starting drag operation
-                if self._custom_tooltip:
-                    self._custom_tooltip.hide_tooltip()
-                self._tooltip_shown = False
-                
-                self.is_resizing = True
-                self.resize_start_pos = event.scenePos()
-                self.original_x = self.pos().x()
-                self.original_width = self.rect.width()
-                event.accept()
-                return
-        elif event.button() == Qt.MouseButton.RightButton:
-            # Store the scene position of the right-click for \"Add event at this position\"
+            zone = self._zone_at(event.pos().x())
+            if self._custom_tooltip:
+                self._custom_tooltip.hide_tooltip()
+            self._tooltip_shown = False
+
+            self._mode = zone
+            self._press_scene_pos = event.scenePos()
+            self._press_self_pos = self.pos()
+            self._press_width = self.rect.width()
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.RightButton:
             self.last_right_click_scene_pos = event.scenePos()
             self.show_context_menu(event.screenPos())
             event.accept()
             return
-        
+
         super().mousePressEvent(event)
-        
+
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.edit_requested.emit(self.event_index)
+        if event.button() == Qt.MouseButton.LeftButton and not self.is_blackout_clip:
+            self.edit_requested.emit(self.event_id)
             event.accept()
             return
-        
         super().mouseDoubleClickEvent(event)
-        
+
+    def mouseMoveEvent(self, event):
+        if self._mode == self.MODE_IDLE or self._press_scene_pos is None:
+            super().mouseMoveEvent(event)
+            return
+
+        delta_x = event.scenePos().x() - self._press_scene_pos.x()
+
+        if self._mode == self.MODE_MOVE:
+            self._apply_move_preview(delta_x)
+        elif self._mode == self.MODE_RESIZE_LEFT:
+            self._apply_resize_left_preview(delta_x)
+        elif self._mode == self.MODE_RESIZE_RIGHT:
+            self._apply_resize_right_preview(delta_x)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._mode == self.MODE_IDLE or not self.timeline:
+            super().mouseReleaseEvent(event)
+            return
+
+        pps = self.timeline.PIXELS_PER_SECOND
+        if self._mode == self.MODE_MOVE:
+            new_time = self.pos().x() / pps
+            self.move_committed.emit(self.event_id, new_time)
+        elif self._mode == self.MODE_RESIZE_LEFT:
+            new_time = self.pos().x() / pps
+            self.left_edge_committed.emit(self.event_id, new_time)
+        elif self._mode == self.MODE_RESIZE_RIGHT:
+            new_right_x = self.pos().x() + self.rect.width()
+            self.right_edge_committed.emit(self.event_id, new_right_x / pps)
+
+        self._mode = self.MODE_IDLE
+        self._press_scene_pos = None
+        self._press_self_pos = None
+        super().mouseReleaseEvent(event)
+
+    # --- Drag previews ----------------------------------------------------
+    # Each preview computes the proposed new position/width, clamps to bounds,
+    # snaps to nearby targets, and updates the visual state. No data mutation.
+
+    def _snap(self, x: float) -> float:
+        nearest = None
+        for tx in self.bounds.snap_xs:
+            d = abs(tx - x)
+            if d <= SNAP_PX and (nearest is None or d < abs(nearest - x)):
+                nearest = tx
+        return nearest if nearest is not None else x
+
+    def _apply_move_preview(self, delta_x: float):
+        proposed = self._press_self_pos.x() + delta_x
+        # Find the clamped position closest to `proposed` across all valid
+        # MOVE intervals. Multiple intervals enable jumping over a neighbor
+        # clip when a slot on the far side can fit this clip.
+        best_clamped = None
+        best_interval = None
+        best_distance = float('inf')
+        for lo, hi in self.bounds.move_intervals:
+            clamped = max(lo, min(proposed, hi))
+            d = abs(clamped - proposed)
+            if d < best_distance:
+                best_distance = d
+                best_clamped = clamped
+                best_interval = (lo, hi)
+        if best_clamped is None:
+            return  # no slot fits; nothing to preview
+        # Snap, then re-clamp into the chosen interval so a snap target
+        # outside this slot's valid range can't push us into overlap.
+        snapped = self._snap(best_clamped)
+        lo, hi = best_interval
+        snapped = max(lo, min(snapped, hi))
+        self.setPos(snapped, self.pos().y())
+        self._reposition_text(snapped)
+
+    def _apply_resize_left_preview(self, delta_x: float):
+        # The right edge is fixed; left edge moves.
+        original_right = self._press_self_pos.x() + self._press_width
+        new_x = self._press_self_pos.x() + delta_x
+        new_x = max(self.bounds.resize_left_min_x,
+                    min(new_x, self.bounds.resize_left_max_x))
+        new_x = self._snap(new_x)
+        new_width = max(MIN_HIT_WIDTH_PX, original_right - new_x)
+        self.setPos(new_x, self.pos().y())
+        self.setRect(QRectF(0, 0, new_width, self.rect.height()))
+        self._reposition_text(new_x)
+        self._refresh_text_truncation(new_width)
+
+    def _apply_resize_right_preview(self, delta_x: float):
+        # The left edge is fixed; right edge moves.
+        original_left = self._press_self_pos.x()
+        new_right = original_left + self._press_width + delta_x
+        new_right = max(self.bounds.resize_right_min_x,
+                        min(new_right, self.bounds.resize_right_max_x))
+        new_right = self._snap(new_right)
+        new_width = max(MIN_HIT_WIDTH_PX, new_right - original_left)
+        self.setRect(QRectF(0, 0, new_width, self.rect.height()))
+        self._refresh_text_truncation(new_width)
+
+    def _reposition_text(self, new_x: float):
+        if self.text_item is None:
+            return
+        self.text_item.setPos(new_x + 5, self.text_item.pos().y())
+
+    def _refresh_text_truncation(self, new_width: float):
+        if self.text_item is None or self.timeline is None:
+            return
+        zoom = self.timeline.content_view.transform().m11()
+        available = (new_width - 10) * zoom
+        full_text = self.text_item.data(0)
+        if not full_text:
+            return
+        fm = self.timeline.content_view.fontMetrics()
+        self.text_item.setPlainText(self.timeline.get_truncated_text(full_text, available, fm))
+
+    # --- Hover ------------------------------------------------------------
+
+    def hoverEnterEvent(self, event):
+        if self.event_data and not self.is_blackout_clip:
+            self._show_persistent_tooltip(event.pos())
+            self._tooltip_shown = True
+        super().hoverEnterEvent(event)
+
+    def hoverMoveEvent(self, event):
+        zone = self._zone_at(event.pos().x())
+        if zone in (self.MODE_RESIZE_LEFT, self.MODE_RESIZE_RIGHT):
+            self._set_view_cursor(Qt.CursorShape.SizeHorCursor)
+        else:
+            self._set_view_cursor(Qt.CursorShape.SizeAllCursor)
+        super().hoverMoveEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        if self._custom_tooltip:
+            self._custom_tooltip.hide_tooltip()
+        self._tooltip_shown = False
+        self._set_view_cursor(Qt.CursorShape.ArrowCursor)
+        super().hoverLeaveEvent(event)
+
+    # --- Context menu -----------------------------------------------------
+
     def show_context_menu(self, global_pos):
-        """Show right-click context menu."""
-        # Find the main window for proper styling
         main_window = self.timeline.parent() if self.timeline else None
         while main_window and not hasattr(main_window, 'centralWidget'):
             main_window = main_window.parent()
-        
         menu = QMenu(main_window)
-        
-        # Edit Properties action
-        edit_action = menu.addAction("Edit Properties...")
-        edit_action.triggered.connect(lambda: self.edit_requested.emit(self.event_index))
-        
-        # Add separator
-        menu.addSeparator()
-        
-        # Add event at this position action
+
+        if not self.is_blackout_clip:
+            edit_action = menu.addAction("Edit Properties...")
+            edit_action.triggered.connect(lambda: self.edit_requested.emit(self.event_id))
+            menu.addSeparator()
+
         add_action = menu.addAction("Add event at this position")
-        # Calculate time from the mouse click position
         if self.last_right_click_scene_pos and self.timeline:
             click_time = max(0.0, self.last_right_click_scene_pos.x() / self.timeline.PIXELS_PER_SECOND)
             add_action.triggered.connect(lambda: self.add_at_position_requested.emit(click_time))
         else:
-            # Fallback to event time if position not available
             event_time = self.event_data['time']
             add_action.triggered.connect(lambda: self.add_at_position_requested.emit(event_time))
-        
-        # Add separator
-        menu.addSeparator()
-        
-        # Delete Event action
-        delete_action = menu.addAction("Delete Event")
-        delete_action.triggered.connect(lambda: self.delete_requested.emit(self.event_index))
-        
-        menu.exec(global_pos)
-    
-    def mouseMoveEvent(self, event):
-        if self.is_resizing and self.resize_start_pos:
-            # Calculate new position based on mouse movement (dragging left edge)
-            current_pos = event.scenePos()
-            delta_x = current_pos.x() - self.resize_start_pos.x()
-            new_x = self.original_x + delta_x
-            
-            # Prevent moving left border before 0.0 seconds (x = 0)
-            new_x = max(0, new_x)
-            
-            # Calculate new width (since we're moving the left edge, width changes inversely)
-            right_edge = self.original_x + self.original_width  # Keep right edge fixed
-            new_width = max(20, right_edge - new_x)  # Minimum width of 20px
-            
-            # If new_width would be less than minimum, adjust new_x
-            if new_width == 20:
-                new_x = right_edge - 20
-                # But still ensure we don't go below 0
-                new_x = max(0, new_x)
-            
-            # Update position and size
-            self.setPos(new_x, self.pos().y())
-            new_rect = QRectF(0, 0, new_width, self.rect.height())
-            self.setRect(new_rect)
-            
-            # Update text position to follow the left edge and recalculate truncation
-            if self.text_item and self.timeline:
-                self.text_item.setPos(new_x + 5, self.text_item.pos().y())
-                
-                # Recalculate text truncation based on new width
-                # Account for zoom level since text ignores transformations
-                zoom_factor = self.timeline.content_view.transform().m11()
-                available_width = (new_width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
-                font_metrics = self.timeline.content_view.fontMetrics()
-                full_text = self.text_item.data(0)  # Get the stored full text
-                if full_text:
-                    text_to_display = self.timeline.get_truncated_text(full_text, available_width, font_metrics)
-                    self.text_item.setPlainText(text_to_display)
-            
-            event.accept()
-            return
-            
-        super().mouseMoveEvent(event)
-    
-    def mouseReleaseEvent(self, event):
-        if self.is_resizing and self.timeline:
-            # Calculate the new timing for THIS event (the one being moved)
-            new_start_time = self.pos().x() / self.timeline.PIXELS_PER_SECOND
-            self.logger.debug(f"MIDI event {self.event_index} moved to time {new_start_time:.3f}s")
-            self.timing_changed.emit(self.event_index, new_start_time)
-            
-        self.is_resizing = False
-        self.resize_start_pos = None
-        super().mouseReleaseEvent(event)
-    
-    def hoverEnterEvent(self, event):
-        # Show tooltip when entering the item
-        if self.event_data:
-            self._show_persistent_tooltip(event.pos())
-            self._tooltip_shown = True
-        
-        super().hoverEnterEvent(event)
 
-    def hoverMoveEvent(self, event):
-        local_pos = event.pos()
-        
-        # Change cursor when over resize zone (left edge)
-        if local_pos.x() <= self.resize_zone_width:
-            # Set cursor on the view instead of the item
-            if self.scene() and self.scene().views():
-                for view in self.scene().views():
-                    view.setCursor(Qt.CursorShape.SizeHorCursor)
-        else:
-            # Set cursor on the view instead of the item
-            if self.scene() and self.scene().views():
-                for view in self.scene().views():
-                    view.setCursor(Qt.CursorShape.ArrowCursor)
-            
-        super().hoverMoveEvent(event)
-        
-    def hoverLeaveEvent(self, event):
-        # Hide custom tooltip when leaving and reset tooltip state
-        if self._custom_tooltip:
-            self._custom_tooltip.hide_tooltip()
-        self._tooltip_shown = False
-        
-        # Reset cursor on the view when leaving
-        if self.scene() and self.scene().views():
-            for view in self.scene().views():
-                view.setCursor(Qt.CursorShape.ArrowCursor)
-        super().hoverLeaveEvent(event)
+        menu.addSeparator()
+        delete_label = "Remove blackout" if self.is_blackout_clip else "Delete Event"
+        delete_action = menu.addAction(delete_label)
+        delete_action.triggered.connect(lambda: self.delete_requested.emit(self.event_id))
+
+        menu.exec(global_pos)
 
 
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
-    
+
     def __init__(self, timeline_manager, content_scene, header_scene):
         super().__init__(timeline_manager, content_scene, header_scene)
         self.logger = get_logger("timeline.tracks.midi_events")
-        
+
     def get_track_height(self) -> int:
-        """Get the height of the MIDI events track."""
         return self.timeline_manager.midi_events_track_height
-        
+
     def draw_header(self, y_offset: int):
-        """Draw the MIDI events track header."""
-        # Clear existing header items
         for item in self.header_items:
             if item.scene():
                 item.scene().removeItem(item)
         self.header_items.clear()
-        
-        # Draw header background
+
         header_rect = QGraphicsRectItem(
             0, y_offset,
             self.timeline_manager.PIANO_WIDTH,
@@ -336,96 +447,183 @@ class MidiEventsTrack(BaseTrack):
         self.header_scene.addItem(header_rect)
         self.header_items.append(header_rect)
 
-        # Add header text
         header_text = QGraphicsTextItem("MIDI Events")
         header_text.setDefaultTextColor(QColor(200, 200, 200))
         header_text.setPos(5, y_offset + 5)
         self.header_scene.addItem(header_text)
         self.header_items.append(header_text)
-        
+
+    # --- Bounds computation ----------------------------------------------
+
+    def _is_blackout_event(self, event) -> bool:
+        info = event.get('info') if event else None
+        part = getattr(info, 'part', '') if info else ''
+        return (part or '').upper() == "BLACKOUT"
+
+    def _compute_bounds(self, events, idx: int, song_end_time: float) -> ClipBounds:
+        """Return pixel-space bounds for clip at index `idx` of the sorted list."""
+        pps = self.timeline_manager.PIXELS_PER_SECOND
+        from midi.manager import MIN_EVENT_DURATION
+
+        cur = events[idx]
+        cur_time = cur['time']
+        cur_right = (events[idx + 1]['time'] if idx + 1 < len(events) else song_end_time)
+        cur_width_t = max(MIN_EVENT_DURATION, cur_right - cur_time)
+
+        # MOVE bounds: collect every slot of free space (visible space NOT
+        # occupied by another non-BLACKOUT clip) wide enough to fit cur_width_t.
+        # This enables jumping over neighbors when there's room on the far side.
+        obstacles: List[Tuple[float, float]] = []
+        for j, e in enumerate(events):
+            if j == idx or self._is_blackout_event(e):
+                continue
+            j_end = (events[j + 1]['time'] if j + 1 < len(events) else song_end_time)
+            obstacles.append((e['time'], j_end))
+        obstacles.sort()
+
+        slots: List[Tuple[float, float]] = []
+        cursor = 0.0
+        for ostart, oend in obstacles:
+            if ostart > cursor:
+                slots.append((cursor, ostart))
+            cursor = max(cursor, oend)
+        if cursor < song_end_time:
+            slots.append((cursor, song_end_time))
+
+        move_intervals: List[Tuple[float, float]] = []
+        for slot_start, slot_end in slots:
+            if slot_end - slot_start + 1e-6 < cur_width_t:
+                continue
+            # Valid range for the LEFT edge inside this slot.
+            move_intervals.append((slot_start * pps,
+                                   (slot_end - cur_width_t) * pps))
+
+        # RESIZE_LEFT bounds (only B.time changes).
+        # min: just past the closest non-BLACKOUT predecessor (consume any BO).
+        resize_left_min_t = 0.0
+        for j in range(idx - 1, -1, -1):
+            if not self._is_blackout_event(events[j]):
+                resize_left_min_t = events[j]['time'] + MIN_EVENT_DURATION
+                break
+        resize_left_max_t = cur_right - MIN_EVENT_DURATION
+
+        # RESIZE_RIGHT bounds (B's right edge changes).
+        resize_right_min_t = cur_time + MIN_EVENT_DURATION
+        resize_right_max_t = song_end_time
+        for j in range(idx + 1, len(events)):
+            if not self._is_blackout_event(events[j]):
+                resize_right_max_t = events[j]['time']
+                break
+
+        # Snap targets: every other clip's edges (start & end) in pixel-space.
+        snap_xs: List[float] = []
+        for j, e in enumerate(events):
+            if j == idx:
+                continue
+            snap_xs.append(e['time'] * pps)
+            j_right = (events[j + 1]['time'] if j + 1 < len(events) else song_end_time)
+            snap_xs.append(j_right * pps)
+        snap_xs.extend([0.0, song_end_time * pps])
+
+        return ClipBounds(
+            move_intervals=move_intervals,
+            resize_left_min_x=resize_left_min_t * pps,
+            resize_left_max_x=resize_left_max_t * pps,
+            resize_right_min_x=resize_right_min_t * pps,
+            resize_right_max_x=resize_right_max_t * pps,
+            snap_xs=snap_xs,
+        )
+
     def redraw_events(self, cached_events, y_offset: int):
-        """Redraw the MIDI events track with cached data."""
-        # Remove existing MIDI event items (content only, preserve header)
+        # Clear existing content items
         for item in self.items:
             if item.scene():
                 item.scene().removeItem(item)
         self.items.clear()
-        
+
         if not cached_events:
             return
-            
-        try:
-            # Get song length for calculating durations
-            song_length_seconds = self.timeline_manager.midi_manager.get_duration() if self.timeline_manager.midi_manager else 240
-            # Use extended timeline duration for last event calculation
-            extended_duration = song_length_seconds * 1.05
 
-            for i in range(len(cached_events)):
-                event = cached_events[i]
+        try:
+            song_length_seconds = (self.timeline_manager.midi_manager.get_duration()
+                                   if self.timeline_manager.midi_manager else 240.0)
+            song_end_time = song_length_seconds * 1.05
+            pps = self.timeline_manager.PIXELS_PER_SECOND
+            track_height = self.get_track_height()
+
+            # Pre-sort defensively (manager already sorts; cheap insurance).
+            events = list(cached_events)
+
+            for i, event in enumerate(events):
                 start_time = event['time']
-                if i < len(cached_events) - 1:
-                    duration = cached_events[i+1]['time'] - start_time
+                if i < len(events) - 1:
+                    end_time = events[i + 1]['time']
                 else:
-                    # For last event, extend to the end of extended timeline
-                    duration = extended_duration - start_time
-                    # Ensure minimum width for visibility
-                    if duration <= 0:
-                        duration = song_length_seconds * 0.05  # Use 5% of song as minimum
-                
-                x_pos = start_time * self.timeline_manager.PIXELS_PER_SECOND
-                width = max(duration * self.timeline_manager.PIXELS_PER_SECOND, 20)  # Minimum 20px width
-                
-                # Create draggable MIDI event box
-                event_rect = DraggableMidiEvent(x_pos, y_offset, width, self.get_track_height(), i, event)
+                    end_time = song_end_time
+                duration = max(0.0, end_time - start_time)
+
+                x_pos = start_time * pps
+                width = max(duration * pps, MIN_HIT_WIDTH_PX)
+                is_blackout = self._is_blackout_event(event)
+                bounds = self._compute_bounds(events, i, song_end_time)
+
+                event_rect = DraggableMidiEvent(
+                    x_pos, y_offset, width, track_height,
+                    event_id=event['id'], event_data=event,
+                    bounds=bounds, is_blackout=is_blackout,
+                )
                 event_rect.set_timeline(self.timeline_manager)
-                event_rect.timing_changed.connect(self.timeline_manager.on_midi_event_timing_changed)
-                event_rect.edit_requested.connect(self.timeline_manager.on_midi_event_edit_requested)
-                event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_requested)
+
+                # Connect new signals (event_id-based).
+                event_rect.move_committed.connect(self.timeline_manager.on_midi_event_moved)
+                event_rect.left_edge_committed.connect(self.timeline_manager.on_midi_event_left_edge)
+                event_rect.right_edge_committed.connect(self.timeline_manager.on_midi_event_right_edge)
+                event_rect.edit_requested.connect(self.timeline_manager.on_midi_event_edit_by_id)
+                event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_by_id)
                 event_rect.add_at_position_requested.connect(self.timeline_manager.on_add_event_requested)
-                
-                info = event['info']
-                color = QColor(info.color)
-                event_rect.setBrush(QBrush(color))
-                event_rect.setPen(QPen(QColor(20,20,20)))
-                event_rect.setZValue(1)  # Ensure event box is above other items
+
+                if is_blackout:
+                    event_rect.setBrush(QBrush(Qt.GlobalColor.transparent))
+                    event_rect.setPen(QPen(Qt.PenStyle.NoPen))
+                else:
+                    info = event['info']
+                    color = QColor(info.color)
+                    event_rect.setBrush(QBrush(color))
+                    event_rect.setPen(QPen(QColor(20, 20, 20)))
+                event_rect.setZValue(1)
                 self.content_scene.addItem(event_rect)
                 self.items.append(event_rect)
 
-                # Determine optimal text color based on background color brightness
-                brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
-                text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
-                
-                # Calculate maximum text that fits in the box width
-                # Account for zoom level since text ignores transformations
-                zoom_factor = self.timeline_manager.content_view.transform().m11()
-                available_width = (width - 10) * zoom_factor  # 5px padding on each side, adjusted for zoom
-                font_metrics = self.timeline_manager.content_view.fontMetrics()
-                text_to_display = self.timeline_manager.get_truncated_text(info.part, available_width, font_metrics)
-                
-                text_item = QGraphicsTextItem(text_to_display)
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                text_item.setDefaultTextColor(text_color)
-                text_item.setPos(x_pos + 5, y_offset + 5)
-                text_item.setZValue(2)  # Text should be above the box
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-                # Make text item completely transparent to mouse events
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
-                text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                text_item.setAcceptHoverEvents(False)  # Disable hover events on text
-                # Store the full text for tooltip
-                text_item.setData(0, info.part)
-                
-                # Connect the text item to the event box
-                event_rect.set_text_item(text_item)
-                
-                self.content_scene.addItem(text_item)
-                self.items.append(text_item)
+                if not is_blackout:
+                    info = event['info']
+                    color = QColor(info.color)
+                    brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
+                    text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
+                    zoom_factor = self.timeline_manager.content_view.transform().m11()
+                    available_width = (width - 10) * zoom_factor
+                    fm = self.timeline_manager.content_view.fontMetrics()
+                    text_to_display = self.timeline_manager.get_truncated_text(info.part, available_width, fm)
+
+                    text_item = QGraphicsTextItem(text_to_display)
+                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+                    text_item.setDefaultTextColor(text_color)
+                    text_item.setPos(x_pos + 5, y_offset + 5)
+                    text_item.setZValue(2)
+                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+                    text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                    text_item.setAcceptHoverEvents(False)
+                    text_item.setData(0, info.part)
+                    text_item.setData(1, event['id'])
+
+                    event_rect.set_text_item(text_item)
+
+                    self.content_scene.addItem(text_item)
+                    self.items.append(text_item)
 
         except Exception as e:
             self.logger.error(f"Error redrawing midi events: {e}")
 
     def redraw(self):
         """Redraw the MIDI events track."""
-        # This will be called by the timeline manager when needed
         pass
