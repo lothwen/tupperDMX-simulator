@@ -8,8 +8,9 @@ from tupperlogger import get_logger
 from .worker import MidiWorker, MidiConnectionStatus
 
 
-# Identification of BLACKOUT events is by part name (case-insensitive),
-# not by note number — keeps it config-driven.
+# Identification of BLACKOUT events is by part-name PREFIX (case-insensitive),
+# not by note number — keeps it config-driven and lets each fixture have its
+# own gap marker (BLACKOUT for ledbar, BLACKOUT_BLINDERS for blinders, ...).
 BLACKOUT_PART_NAME = "BLACKOUT"
 
 # Minimum non-BLACKOUT clip duration in seconds. Below this, an event is too
@@ -321,21 +322,32 @@ class MidiManager(QObject):
     #   - No BLACKOUT with effective duration <= BLACKOUT_EPSILON.
 
     def is_blackout(self, event: Dict[str, Any]) -> bool:
-        """Return True if `event` is a BLACKOUT (matched by part name)."""
+        """Return True if `event` is any BLACKOUT* gap marker (prefix match)."""
         info = event.get('info') if event else None
         if info is None:
             return False
         part = getattr(info, 'part', '') or ''
-        return part.upper() == BLACKOUT_PART_NAME
+        return part.upper().startswith(BLACKOUT_PART_NAME)
 
-    def _blackout_note_number(self) -> Optional[int]:
-        """Return the MIDI note number mapped to BLACKOUT, or None."""
+    def _event_fixture(self, event: Dict[str, Any]) -> Optional[str]:
+        """Return the fixture this event belongs to ('ledbar', 'blinder', ...)."""
+        info = event.get('info') if event else None
+        return getattr(info, 'fixture', None) if info else None
+
+    def _blackout_note_number(self, fixture: Optional[str] = None) -> Optional[int]:
+        """Return the MIDI note number mapped to BLACKOUT* for `fixture`.
+
+        If `fixture` is None, returns the first match found (legacy behavior).
+        """
         for note_str, info in self.midi_note_map.items():
-            if getattr(info, 'part', '').upper() == BLACKOUT_PART_NAME:
-                try:
-                    return int(note_str)
-                except (TypeError, ValueError):
-                    continue
+            if not getattr(info, 'part', '').upper().startswith(BLACKOUT_PART_NAME):
+                continue
+            if fixture is not None and getattr(info, 'fixture', None) != fixture:
+                continue
+            try:
+                return int(note_str)
+            except (TypeError, ValueError):
+                continue
         return None
 
     def _index_of(self, event_id: str) -> int:
@@ -344,10 +356,20 @@ class MidiManager(QObject):
                 return i
         return -1
 
-    def _right_edge_of(self, idx: int) -> float:
-        """Visual right edge of event at index idx (= time of next event, or +inf)."""
-        if 0 <= idx < len(self.midi_events) - 1:
-            return self.midi_events[idx + 1]['time']
+    def _right_edge_of(self, idx: int, fixture: Optional[str] = None) -> float:
+        """Visual right edge of event at index idx.
+
+        If `fixture` is given, returns the time of the next event of the
+        same fixture (so each track is scoped independently); otherwise
+        falls back to the next event globally.
+        """
+        if fixture is None:
+            if 0 <= idx < len(self.midi_events) - 1:
+                return self.midi_events[idx + 1]['time']
+            return float('inf')
+        for j in range(idx + 1, len(self.midi_events)):
+            if self._event_fixture(self.midi_events[j]) == fixture:
+                return self.midi_events[j]['time']
         return float('inf')
 
     def _song_end_time(self) -> float:
@@ -358,29 +380,38 @@ class MidiManager(QObject):
         # Fallback for empty/missing MIDI data — match the timeline's UI default.
         return 240.0
 
-    def _non_blackout_intervals(self, exclude_event_id: Optional[str] = None
+    def _non_blackout_intervals(self, exclude_event_id: Optional[str] = None,
+                                fixture: Optional[str] = None
                                 ) -> List[Tuple[float, float, str]]:
         """Visible intervals of non-BLACKOUT clips, sorted by start.
 
         Each clip's interval = [clip.time, next_event.time). The last event's
         interval extends to song_end. Excludes `exclude_event_id` if given.
+        If `fixture` is given, only events of that fixture are considered and
+        each clip's right edge becomes the next *same-fixture* event.
         """
         song_end = self._song_end_time()
+        candidates: List[Dict[str, Any]] = (
+            [e for e in self.midi_events if self._event_fixture(e) == fixture]
+            if fixture is not None else self.midi_events
+        )
         intervals: List[Tuple[float, float, str]] = []
-        for i, e in enumerate(self.midi_events):
+        for i, e in enumerate(candidates):
             if self.is_blackout(e) or e['id'] == exclude_event_id:
                 continue
-            end = (self.midi_events[i + 1]['time']
-                   if i + 1 < len(self.midi_events) else song_end)
+            end = (candidates[i + 1]['time']
+                   if i + 1 < len(candidates) else song_end)
             intervals.append((e['time'], end, e['id']))
         intervals.sort(key=lambda x: x[0])
         return intervals
 
-    def _free_slots_for_move(self, exclude_event_id: str
+    def _free_slots_for_move(self, exclude_event_id: str,
+                             fixture: Optional[str] = None
                              ) -> List[Tuple[float, float]]:
         """Compute (start, end) intervals where a clip can be placed without
-        overlapping any non-BLACKOUT clip (excluding `exclude_event_id`)."""
-        obstacles = self._non_blackout_intervals(exclude_event_id)
+        overlapping any non-BLACKOUT clip of the same fixture (excluding
+        `exclude_event_id`)."""
+        obstacles = self._non_blackout_intervals(exclude_event_id, fixture)
         slots: List[Tuple[float, float]] = []
         cursor = 0.0
         for start, end, _ in obstacles:
@@ -393,12 +424,14 @@ class MidiManager(QObject):
             slots.append((cursor, song_end))
         return slots
 
-    def _insert_blackout_internal(self, time: float) -> Optional[str]:
+    def _insert_blackout_internal(self, time: float,
+                                  fixture: Optional[str] = None) -> Optional[str]:
         """Insert a BLACKOUT event+note at `time`. No rebuild/emit. Returns new id, or None."""
-        bo_note = self._blackout_note_number()
+        bo_note = self._blackout_note_number(fixture)
         if bo_note is None:
             self.logger.warning(
-                "Cannot auto-insert BLACKOUT: no entry with part='BLACKOUT' in midi_note_map"
+                f"Cannot auto-insert BLACKOUT for fixture={fixture!r}: "
+                "no matching entry in midi_note_map"
             )
             return None
 
@@ -456,35 +489,52 @@ class MidiManager(QObject):
                 return True
         return False
 
-    def reconcile_blackouts(self) -> None:
-        """Enforce BLACKOUT invariants. Idempotent."""
+    def reconcile_blackouts(self, fixture: Optional[str] = None) -> None:
+        """Enforce BLACKOUT invariants per fixture. Idempotent.
+
+        BLACKOUTs are scoped to their own fixture: a blinder BLACKOUT
+        sandwiched between two ledbar events should NOT be merged or
+        dropped based on those neighbors. When `fixture` is None, every
+        fixture present in the data is reconciled in turn.
+        """
+        if fixture is None:
+            fixtures = {self._event_fixture(e) for e in self.midi_events}
+            fixtures.discard(None)
+            for f in fixtures:
+                self.reconcile_blackouts(f)
+            return
+
         # Sort first
         self.midi_events.sort(key=lambda x: x['time'])
         self.midi_notes.sort(key=lambda x: x['time'])
 
-        # Pass 1: drop zero/negative-duration BLACKOUTs.
-        # A BLACKOUT's effective duration = (next event's time) - (its time).
+        # Pass 1: drop zero/negative-duration same-fixture BLACKOUTs.
+        # A BLACKOUT's effective duration = (next same-fixture event's time) - (its time).
         # If <= BLACKOUT_EPSILON, drop it.
         dropped = True
         while dropped:
             dropped = False
-            for i, e in enumerate(self.midi_events):
+            filtered = [e for e in self.midi_events
+                        if self._event_fixture(e) == fixture]
+            for i, e in enumerate(filtered):
                 if not self.is_blackout(e):
                     continue
-                next_time = (self.midi_events[i + 1]['time']
-                             if i + 1 < len(self.midi_events) else float('inf'))
+                next_time = (filtered[i + 1]['time']
+                             if i + 1 < len(filtered) else float('inf'))
                 if next_time - e['time'] <= BLACKOUT_EPSILON:
                     self._delete_event_internal(e['id'])
                     dropped = True
                     break  # restart loop after mutation
 
-        # Pass 2: merge adjacent BLACKOUTs (delete the later one of any pair).
+        # Pass 2: merge adjacent same-fixture BLACKOUTs (delete the later one).
         merged = True
         while merged:
             merged = False
-            for i in range(len(self.midi_events) - 1):
-                if self.is_blackout(self.midi_events[i]) and self.is_blackout(self.midi_events[i + 1]):
-                    self._delete_event_internal(self.midi_events[i + 1]['id'])
+            filtered = [e for e in self.midi_events
+                        if self._event_fixture(e) == fixture]
+            for i in range(len(filtered) - 1):
+                if self.is_blackout(filtered[i]) and self.is_blackout(filtered[i + 1]):
+                    self._delete_event_internal(filtered[i + 1]['id'])
                     merged = True
                     break
 
@@ -507,8 +557,9 @@ class MidiManager(QObject):
             return False
 
         target = self.midi_events[idx]
+        fixture = self._event_fixture(target)
         old_time = target['time']
-        target_old_right = self._right_edge_of(idx)
+        target_old_right = self._right_edge_of(idx, fixture)
         # Clamp width — may be infinite if the target was the last event.
         song_end = self._song_end_time()
         target_width = (target_old_right - old_time
@@ -519,19 +570,21 @@ class MidiManager(QObject):
         if new_time < 0:
             new_time = 0.0
 
-        # Snapshot every non-BLACKOUT's intended right edge BEFORE the move.
-        # We use this after the move to reinsert BLACKOUTs that preserve each
-        # clip's intended visual extent.
+        # Snapshot every same-fixture non-BLACKOUT's intended right edge BEFORE
+        # the move. We use this after the move to reinsert BLACKOUTs that
+        # preserve each clip's intended visual extent. Other fixtures aren't
+        # affected by this move so we ignore them.
         intended_ends: Dict[str, float] = {}
         for i, e in enumerate(self.midi_events):
-            if not self.is_blackout(e):
-                end = self._right_edge_of(i)
-                if end == float('inf'):
-                    end = song_end
-                intended_ends[e['id']] = end
+            if self._event_fixture(e) != fixture or self.is_blackout(e):
+                continue
+            end = self._right_edge_of(i, fixture)
+            if end == float('inf'):
+                end = song_end
+            intended_ends[e['id']] = end
 
         # Find the slot whose clamped placement is closest to `new_time`.
-        slots = self._free_slots_for_move(event_id)
+        slots = self._free_slots_for_move(event_id, fixture)
         best_new_time: Optional[float] = None
         best_distance = float('inf')
         for slot_start, slot_end in slots:
@@ -560,32 +613,36 @@ class MidiManager(QObject):
         # Apply the move.
         self._set_event_time_internal(event_id, best_new_time)
 
-        # Drop any BLACKOUT that now sits strictly inside target's new visible
-        # span. Without this step the target's "next event" can land in the
-        # middle of its own extent, visually shrinking the clip.
+        # Drop any same-fixture BLACKOUT that now sits strictly inside
+        # target's new visible span. Without this step the target's "next
+        # event" can land in the middle of its own extent, visually
+        # shrinking the clip. Other fixtures' BLACKOUTs are untouched.
         stale_blackouts = [
             e['id'] for e in self.midi_events
             if e['id'] != event_id
+            and self._event_fixture(e) == fixture
             and self.is_blackout(e)
             and best_new_time + BLACKOUT_EPSILON < e['time'] < new_target_end - BLACKOUT_EPSILON
         ]
         for bo_id in stale_blackouts:
             self._delete_event_internal(bo_id)
 
-        # Restore each non-BLACKOUT's intended extent: if its actual next event
-        # is now past its intended end, insert a BLACKOUT at the intended end.
+        # Restore each same-fixture non-BLACKOUT's intended extent: if its
+        # actual next same-fixture event is now past its intended end,
+        # insert a BLACKOUT (of the right fixture) at the intended end.
         for eid, intended_end in intended_ends.items():
             e_idx = self._index_of(eid)
             if e_idx < 0:
                 continue
-            actual_end = self._right_edge_of(e_idx)
+            actual_end = self._right_edge_of(e_idx, fixture)
             if actual_end == float('inf'):
                 actual_end = song_end
             if actual_end > intended_end + BLACKOUT_EPSILON:
-                self._insert_blackout_internal(intended_end)
+                self._insert_blackout_internal(intended_end, fixture)
 
-        # Reconcile (drops zero-duration BLACKOUTs, merges adjacent ones).
-        self.reconcile_blackouts()
+        # Reconcile only this fixture (drops zero-duration BLACKOUTs and
+        # merges adjacent ones within the same track).
+        self.reconcile_blackouts(fixture)
 
         self._commit()
         self.logger.info(
@@ -600,21 +657,28 @@ class MidiManager(QObject):
             return False
 
         target = self.midi_events[idx]
+        fixture = self._event_fixture(target)
         old_time = target['time']
 
         # Clamp range
-        # Right limit: keep at least MIN_EVENT_DURATION before next event (or 0
-        # if no next — unconstrained on the right of the timeline).
-        right_edge = self._right_edge_of(idx)
+        # Right limit: keep at least MIN_EVENT_DURATION before next event of
+        # the same fixture (or 0 if no next — unconstrained on the right).
+        right_edge = self._right_edge_of(idx, fixture)
         max_new_time = (right_edge - MIN_EVENT_DURATION
                         if right_edge != float('inf')
                         else float('inf'))
-        # Left limit: cannot cross immediate non-BLACKOUT predecessor + MIN_DURATION.
-        # If prev is BLACKOUT, we can extend through it (consuming) up to that
-        # BLACKOUT's predecessor. Reconcile will delete the consumed BLACKOUT.
+        # Left limit: cannot cross immediate non-BLACKOUT same-fixture
+        # predecessor + MIN_DURATION. If prev is a BLACKOUT of the same
+        # fixture, we can extend through it (consuming) up to that BLACKOUT's
+        # predecessor. Reconcile will delete the consumed BLACKOUT.
         min_new_time = 0.0
+        prev_same: Optional[Dict[str, Any]] = None
         for i in range(idx - 1, -1, -1):
             e = self.midi_events[i]
+            if self._event_fixture(e) != fixture:
+                continue
+            if prev_same is None:
+                prev_same = e
             if not self.is_blackout(e):
                 min_new_time = e['time'] + MIN_EVENT_DURATION
                 break
@@ -624,23 +688,23 @@ class MidiManager(QObject):
         if abs(delta) < BLACKOUT_EPSILON:
             return False
 
-        # Capture immediate prev state before mutation.
-        prev_id = self.midi_events[idx - 1]['id'] if idx > 0 else None
-        prev_was_blackout = (prev_id is not None
-                             and self.is_blackout(self.midi_events[idx - 1]))
+        # Capture immediate same-fixture prev state before mutation.
+        prev_id = prev_same['id'] if prev_same is not None else None
+        prev_was_blackout = (prev_same is not None and self.is_blackout(prev_same))
 
         # Apply target time change.
         self._set_event_time_internal(event_id, new_time)
 
-        # If we shrunk (delta > 0) and the immediate prev is non-BLACKOUT
-        # (or there is no prev), insert a BLACKOUT to fill the gap.
+        # If we shrunk (delta > 0) and the immediate same-fixture prev is
+        # non-BLACKOUT (or there is no prev of this fixture), insert a
+        # fixture-matching BLACKOUT to fill the gap.
         if delta > 0 and not prev_was_blackout and prev_id is not None:
-            self._insert_blackout_internal(old_time)
+            self._insert_blackout_internal(old_time, fixture)
         # If we extended (delta < 0) and prev was BLACKOUT, it shrinks naturally
         # (its time stays, target.time decreased → its right edge moved left).
         # reconcile_blackouts() will delete it if duration ≤ epsilon.
 
-        self.reconcile_blackouts()
+        self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
             f"Resized event {event_id} left edge {old_time:.3f}s → {new_time:.3f}s"
@@ -659,22 +723,32 @@ class MidiManager(QObject):
             return False
 
         target = self.midi_events[idx]
+        fixture = self._event_fixture(target)
 
         # Clamp range
         # Left limit: at least MIN_EVENT_DURATION after target's start.
         min_right = target['time'] + MIN_EVENT_DURATION
-        # Right limit: cannot extend past the next non-BLACKOUT (or infinity).
+        # Right limit: cannot extend past the next non-BLACKOUT same-fixture
+        # event (or infinity). Other fixtures are scoped independently.
         max_right = float('inf')
         for i in range(idx + 1, len(self.midi_events)):
-            if not self.is_blackout(self.midi_events[i]):
-                max_right = self.midi_events[i]['time']
+            e = self.midi_events[i]
+            if self._event_fixture(e) != fixture:
+                continue
+            if not self.is_blackout(e):
+                max_right = e['time']
                 break
 
         new_right_time = max(min_right, min(new_right_time, max_right))
 
-        # Determine current behavior: is there a BLACKOUT immediately after target?
-        next_idx = idx + 1
-        next_event = self.midi_events[next_idx] if next_idx < len(self.midi_events) else None
+        # Find the next same-fixture event (BLACKOUT or not) — the gap
+        # marker we must move/insert to express the new right edge.
+        next_event: Optional[Dict[str, Any]] = None
+        for i in range(idx + 1, len(self.midi_events)):
+            e = self.midi_events[i]
+            if self._event_fixture(e) == fixture:
+                next_event = e
+                break
 
         if next_event is not None and self.is_blackout(next_event):
             # Move the existing BLACKOUT to new_right_time. Reconcile handles deletion if zero.
@@ -682,16 +756,16 @@ class MidiManager(QObject):
                 return False
             self._set_event_time_internal(next_event['id'], new_right_time)
         else:
-            # No BLACKOUT yet. Determine if we need to insert one.
-            current_right = self._right_edge_of(idx)
+            # No same-fixture BLACKOUT yet. Determine if we need to insert one.
+            current_right = self._right_edge_of(idx, fixture)
             if new_right_time < current_right - BLACKOUT_EPSILON:
-                # Shrinking: insert BLACKOUT at new_right_time.
-                self._insert_blackout_internal(new_right_time)
+                # Shrinking: insert fixture-matching BLACKOUT at new_right_time.
+                self._insert_blackout_internal(new_right_time, fixture)
             else:
                 # No-op: cannot extend past non-BLACKOUT next (already clamped).
                 return False
 
-        self.reconcile_blackouts()
+        self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
             f"Resized event {event_id} right edge to {new_right_time:.3f}s"

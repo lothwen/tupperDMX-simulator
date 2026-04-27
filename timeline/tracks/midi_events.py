@@ -424,9 +424,17 @@ class DraggableMidiEvent(QGraphicsObject):
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
 
-    def __init__(self, timeline_manager, content_scene, header_scene):
+    def __init__(self, timeline_manager, content_scene, header_scene,
+                 fixture_filter: Optional[str] = None):
         super().__init__(timeline_manager, content_scene, header_scene)
+        self.fixture_filter = fixture_filter
         self.logger = get_logger("timeline.tracks.midi_events")
+
+    def matches_filter(self, event) -> bool:
+        if not self.fixture_filter:
+            return True
+        info = event.get('info') if event else None
+        return getattr(info, 'fixture', None) == self.fixture_filter
 
     def get_track_height(self) -> int:
         return self.timeline_manager.midi_events_track_height
@@ -447,7 +455,10 @@ class MidiEventsTrack(BaseTrack):
         self.header_scene.addItem(header_rect)
         self.header_items.append(header_rect)
 
-        header_text = QGraphicsTextItem("MIDI Events")
+        title = "MIDI Events"
+        if self.fixture_filter:
+            title = f"{self.fixture_filter.capitalize()}"
+        header_text = QGraphicsTextItem(title)
         header_text.setDefaultTextColor(QColor(200, 200, 200))
         header_text.setPos(5, y_offset + 5)
         self.header_scene.addItem(header_text)
@@ -456,9 +467,11 @@ class MidiEventsTrack(BaseTrack):
     # --- Bounds computation ----------------------------------------------
 
     def _is_blackout_event(self, event) -> bool:
+        # Prefix match so each fixture can have its own gap-marker note
+        # (BLACKOUT for ledbar, BLACKOUT_BLINDERS for blinders, etc.).
         info = event.get('info') if event else None
         part = getattr(info, 'part', '') if info else ''
-        return (part or '').upper() == "BLACKOUT"
+        return (part or '').upper().startswith("BLACKOUT")
 
     def _compute_bounds(self, events, idx: int, song_end_time: float) -> ClipBounds:
         """Return pixel-space bounds for clip at index `idx` of the sorted list."""
@@ -552,7 +565,12 @@ class MidiEventsTrack(BaseTrack):
             track_height = self.get_track_height()
 
             # Pre-sort defensively (manager already sorts; cheap insurance).
-            events = list(cached_events)
+            # Filter by fixture so each track only handles its own clips —
+            # neighbor lookups, MOVE bounds, and BLACKOUT gap logic all
+            # operate on the per-track slice, not the global event list.
+            events = [e for e in cached_events if self.matches_filter(e)]
+            if not events:
+                return
 
             for i, event in enumerate(events):
                 start_time = event['time']

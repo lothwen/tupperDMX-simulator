@@ -84,49 +84,100 @@
     ]
   },
   "midi_note_map": {
+    "26": {
+      "part": "WARM LOW",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "27": {
+      "part": "WARM HIGH",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "28": {
+      "part": "WARM FULL POWER",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "29": {
+      "part": "WARM STROBE",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "30": {
+      "part": "BLINDER UNK",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "38": {
+      "part": "PRECOUNT BEAT",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
+    "39": {
+      "part": "PRECOUNT DOWNBEAT",
+      "color": "#c73737",
+      "fixture": "blinder"
+    },
     "40": {
       "part": "START",
-      "color": "#c73737"
+      "color": "#c73737",
+      "fixture": "ledbar"
     },
     "41": {
       "part": "INTRO",
-      "color": "#c77f37"
+      "color": "#c77f37",
+      "fixture": "ledbar"
     },
     "42": {
       "part": "VERSE",
-      "color": "#c6c737"
+      "color": "#c6c737",
+      "fixture": "ledbar"
     },
     "43": {
       "part": "CHORUS",
-      "color": "#37c737"
+      "color": "#37c737",
+      "fixture": "ledbar"
     },
     "44": {
       "part": "BREAK",
-      "color": "#3737c7"
+      "color": "#3737c7",
+      "fixture": "ledbar"
     },
     "45": {
       "part": "BRIDGE",
-      "color": "#461c64"
+      "color": "#461c64",
+      "fixture": "blinder"
     },
     "46": {
       "part": "INST",
-      "color": "#802da4"
+      "color": "#802da4",
+      "fixture": "blinder"
     },
     "47": {
       "part": "SOLO",
-      "color": "#ffffff"
+      "color": "#ffffff",
+      "fixture": "ledbar"
     },
     "48": {
       "part": "OUTRO",
-      "color": "#c79337"
+      "color": "#c79337",
+      "fixture": "ledbar"
     },
     "49": {
       "part": "END",
-      "color": "#808080"
+      "color": "#808080",
+      "fixture": "ledbar"
     },
     "50": {
       "part": "BLACKOUT",
-      "color": "#363636"
+      "color": "#363636",
+      "fixture": "ledbar"
+    },
+    "51": {
+      "part": "BLACKOUT_BLINDERS",
+      "color": "#363636",
+      "fixture": "blinder"
     }
   },
   "metronome": {

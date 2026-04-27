@@ -194,12 +194,16 @@ class Timeline(QWidget):
         return self.RULER_TRACK_HEIGHT + self.TRACK_SPACING
 
     def _midi_events_y(self) -> int:
-        """Y offset of the MIDI events track."""
+        """Y offset of the LedBar MIDI events track."""
         return self._waveform_y() + self.waveform_track_height + self.TRACK_SPACING
+
+    def _midi_events_blinder_y(self) -> int:
+        """Y offset of the Blinder MIDI events track (shares the same height)."""
+        return self._midi_events_y() + self.midi_events_track_height + self.TRACK_SPACING
 
     def _piano_roll_toggle_y(self) -> int:
         """Y offset of the piano-roll toggle strip in the header scene."""
-        return self._midi_events_y() + self.midi_events_track_height + self.TRACK_SPACING
+        return self._midi_events_blinder_y() + self.midi_events_track_height + self.TRACK_SPACING
 
     def _piano_roll_content_y(self) -> int:
         """Y offset where piano-roll keys/notes start (below the toggle strip)."""
@@ -217,7 +221,10 @@ class Timeline(QWidget):
         """Initialize all timeline tracks."""
         self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
         self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
-        self.midi_events_track = MidiEventsTrack(self, self.content_scene, self.header_scene)
+        self.midi_events_track = MidiEventsTrack(self, self.content_scene, self.header_scene,
+                                                 fixture_filter="ledbar")
+        self.midi_events_blinder_track = MidiEventsTrack(self, self.content_scene, self.header_scene,
+                                                         fixture_filter="blinder")
         self.piano_roll_track = PianoRollTrack(self, self.content_scene, self.header_scene)
 
         # Draw initial track layout
@@ -226,6 +233,7 @@ class Timeline(QWidget):
 
         self.waveform_track.draw_header(self._waveform_y())
         self.midi_events_track.draw_header(self._midi_events_y())
+        self.midi_events_blinder_track.draw_header(self._midi_events_blinder_y())
 
         # Resize handles for the two resizable tracks
         self._create_resize_handles()
@@ -315,6 +323,7 @@ class Timeline(QWidget):
         # Headers
         self.waveform_track.draw_header(self._waveform_y())
         self.midi_events_track.draw_header(self._midi_events_y())
+        self.midi_events_blinder_track.draw_header(self._midi_events_blinder_y())
 
         # Piano-roll toggle proxy
         if hasattr(self, 'piano_roll_toggle_proxy') and self.piano_roll_toggle_proxy is not None:
@@ -331,6 +340,7 @@ class Timeline(QWidget):
         # MIDI events content (cheap to redraw — keeps box heights in sync)
         if self._cached_events:
             self.midi_events_track.redraw_events(self._cached_events, self._midi_events_y())
+            self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
 
         # Waveform — only do the expensive pixmap rebuild on commit
         if redraw_waveform and self.audio_file:
@@ -456,6 +466,7 @@ class Timeline(QWidget):
         piano_roll_y = self._piano_roll_content_y()
 
         self.midi_events_track.redraw_events(self._cached_events, midi_events_y)
+        self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
         if self.piano_roll_visible:
             self.piano_roll_track.redraw_notes(self._cached_notes, piano_roll_y)
         else:
@@ -502,38 +513,44 @@ class Timeline(QWidget):
 
     def update_midi_text_truncation(self):
         """Update text truncation for all MIDI event labels based on current zoom level."""
-        if not self._cached_events or not self.midi_events_track.items:
+        if not self._cached_events:
             return
 
         zoom_factor = self.content_view.transform().m11()
         font_metrics = self.content_view.fontMetrics()
-
-        # Build an id → end-time map so we can compute each clip's width.
-        # BLACKOUT clips have no text item, so the previous index-based pairing
-        # would drift; iterate the text items directly and look up by id.
         sorted_events = sorted(self._cached_events, key=lambda x: x['time'])
-        id_to_end = {}
         song_length = self.midi_manager.get_duration() if self.midi_manager else 240
         extended_end = song_length * 1.05
-        for i, e in enumerate(sorted_events):
-            end = sorted_events[i + 1]['time'] if i + 1 < len(sorted_events) else extended_end
-            id_to_end[e['id']] = end
 
         from PyQt6.QtWidgets import QGraphicsTextItem
-        for item in self.midi_events_track.items:
-            if not isinstance(item, QGraphicsTextItem):
+        # Each track has its own filtered slice — so end-times must be
+        # recomputed per track or the blinder text would inherit gaps from
+        # ledbar neighbors (and vice-versa).
+        for track in (self.midi_events_track, self.midi_events_blinder_track):
+            if not track.items:
                 continue
-            full_text = item.data(0)
-            if not full_text:
-                continue
-            event_id = item.data(1)
-            event = next((e for e in sorted_events if e['id'] == event_id), None)
-            if event is None:
-                continue
-            duration = max(0.01, id_to_end[event_id] - event['time'])
-            width = max(duration * self.PIXELS_PER_SECOND, 20)
-            available_width = (width - 10) * zoom_factor
-            item.setPlainText(self.get_truncated_text(full_text, available_width, font_metrics))
+            track_events = [e for e in sorted_events if track.matches_filter(e)]
+            id_to_end = {}
+            for i, e in enumerate(track_events):
+                end = track_events[i + 1]['time'] if i + 1 < len(track_events) else extended_end
+                id_to_end[e['id']] = end
+
+            for item in track.items:
+                if not isinstance(item, QGraphicsTextItem):
+                    continue
+                full_text = item.data(0)
+                if not full_text:
+                    continue
+                event_id = item.data(1)
+                if event_id not in id_to_end:
+                    continue
+                event = next((e for e in track_events if e['id'] == event_id), None)
+                if event is None:
+                    continue
+                duration = max(0.01, id_to_end[event_id] - event['time'])
+                width = max(duration * self.PIXELS_PER_SECOND, 20)
+                available_width = (width - 10) * zoom_factor
+                item.setPlainText(self.get_truncated_text(full_text, available_width, font_metrics))
 
     def get_truncated_text(self, text, available_width, font_metrics):
         """Return text truncated to fit within available width, with ellipsis if needed."""
@@ -759,5 +776,7 @@ class Timeline(QWidget):
             self.waveform_track.clear_items()
         if hasattr(self, 'midi_events_track'):
             self.midi_events_track.clear_items()
+        if hasattr(self, 'midi_events_blinder_track'):
+            self.midi_events_blinder_track.clear_items()
         if hasattr(self, 'piano_roll_track'):
             self.piano_roll_track.clear_items()
