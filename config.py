@@ -68,6 +68,7 @@ class FixturesConfig:
 class MidiNoteConfig:
     part: str
     color: str
+    fixture: str = "ledbar"
 
 
 @dataclass
@@ -176,7 +177,8 @@ class Config:
                 if isinstance(note_data, dict) and "part" in note_data and "color" in note_data:
                     note_map[note] = MidiNoteConfig(
                         part=str(note_data["part"]),
-                        color=cls._validate_color(note_data["color"])
+                        color=cls._validate_color(note_data["color"]),
+                        fixture=str(note_data.get("fixture", "ledbar")),
                     )
             config.midi_note_map = note_map
         
