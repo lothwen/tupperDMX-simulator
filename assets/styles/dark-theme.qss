@@ -545,6 +545,113 @@ QPushButton#DmxPanelToggle:pressed {
     background-color: rgba(20, 20, 20, 230);
 }
 
+/* Right Sidebar (Tabbed: Library + DMX Channels) */
+QTabWidget#RightSidebar::pane {
+    border: 1px solid #444;
+    background-color: #2b2b2b;
+    top: -1px;
+}
+
+QTabWidget#RightSidebar QTabBar {
+    qproperty-drawBase: 0;
+}
+
+QTabWidget#RightSidebar QTabBar::tab {
+    background-color: #2b2b2b;
+    color: #aaa;
+    padding: 6px 14px;
+    border: 1px solid #444;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    margin-right: 2px;
+    font-size: 12px;
+    font-weight: bold;
+    min-width: 80px;
+}
+
+QTabWidget#RightSidebar QTabBar::tab:hover {
+    background-color: #3a3a3a;
+    color: #fff;
+}
+
+QTabWidget#RightSidebar QTabBar::tab:selected {
+    background-color: #3a3a3a;
+    color: #fff;
+    border-color: #666;
+}
+
+QTabWidget#RightSidebar QTabBar::tab:!selected {
+    margin-top: 2px;
+}
+
+/* Clip Library — Container */
+QWidget#ClipLibrary {
+    background-color: #2b2b2b;
+}
+
+/* Clip Library — QToolBox (one page per fixture) */
+QToolBox#ClipLibraryToolBox {
+    background-color: #2b2b2b;
+    border: none;
+}
+
+QToolBox#ClipLibraryToolBox::tab {
+    background-color: #383838;
+    color: #ddd;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QToolBox#ClipLibraryToolBox::tab:hover {
+    background-color: #4a4a4a;
+    color: #fff;
+    border-color: #666;
+}
+
+QToolBox#ClipLibraryToolBox::tab:selected {
+    background-color: #4a5568;
+    color: #fff;
+    border-color: #5a6578;
+}
+
+/* Clip Library — Clip List */
+QListWidget#ClipList {
+    background-color: #1a1a1a;
+    color: #ddd;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px;
+    font-size: 12px;
+    outline: 0;
+    show-decoration-selected: 1;
+}
+
+QListWidget#ClipList::item {
+    padding: 6px 8px;
+    border-radius: 3px;
+    margin: 1px 0;
+    color: #ddd;
+}
+
+QListWidget#ClipList::item:hover {
+    background-color: #3a4558;
+    color: #fff;
+}
+
+QListWidget#ClipList::item:selected {
+    background-color: #4a5568;
+    color: #fff;
+}
+
+QListWidget#ClipList::item:selected:!active {
+    background-color: #4a5568;
+    color: #fff;
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;
