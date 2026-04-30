@@ -670,6 +670,50 @@ class Timeline(QWidget):
                     f"MIDI event deleted: note={event_data['note']}, time={event_data['time']:.3f}s"
                 )
 
+    def fixture_at_y(self, scene_y: float):
+        """Return the fixture filter owning the given scene Y, or None.
+
+        Used by clip-library drops to validate that a dropped note targets
+        the matching fixture's track. Returns the same string stored in
+        each MidiEventsTrack.fixture_filter (e.g. "ledbar", "blinder").
+        """
+        height = self.midi_events_track_height
+        ledbar_y = self._midi_events_y()
+        blinder_y = self._midi_events_blinder_y()
+        if ledbar_y <= scene_y < ledbar_y + height:
+            return self.midi_events_track.fixture_filter
+        if blinder_y <= scene_y < blinder_y + height:
+            return self.midi_events_blinder_track.fixture_filter
+        return None
+
+    def can_accept_clip_drop(self, note: int, scene_y: float) -> bool:
+        """Return True if a clip carrying `note` may land at `scene_y`."""
+        if not self.midi_manager:
+            return False
+        note_info = self.midi_manager.midi_note_map.get(str(note))
+        if note_info is None:
+            return False
+        target_fixture = self.fixture_at_y(scene_y)
+        if target_fixture is None:
+            return False
+        return target_fixture == note_info.fixture
+
+    def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
+        """Validate and insert a dropped clip. Returns True on success."""
+        if not self.can_accept_clip_drop(note, scene_y):
+            return False
+        time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
+        clamped_velocity = max(1, min(127, int(velocity)))
+        event_id = self.midi_manager.add_event(note, time_seconds, clamped_velocity)
+        if not event_id:
+            return False
+        self.refresh_from_manager()
+        self.logger.info(
+            f"Clip dropped: note={note} at {time_seconds:.3f}s "
+            f"on {self.fixture_at_y(scene_y)} track"
+        )
+        return True
+
     def on_add_event_requested(self, time_seconds):
         """Handle request to add a new MIDI event at the specified time."""
         if not self.midi_manager:

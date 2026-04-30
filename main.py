@@ -6,7 +6,7 @@ import numpy as np
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QComboBox, QFileDialog, QGraphicsView, QGraphicsScene,
-                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox)
+                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox, QTabWidget)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
 from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
@@ -18,7 +18,8 @@ from timeline import Timeline
 from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
-from ui import MediaController, DMXDisplayWidget, AudioController, StageController, ToolbarManager, ErrorDialogManager
+from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
+                ToolbarManager, ErrorDialogManager, ClipLibraryWidget)
 
 
 def _base_dir() -> str:
@@ -123,7 +124,8 @@ class MainWindow(QMainWindow):
         self.media_controller.error_occurred.connect(self._on_media_error)
         
         self.dmx_display = DMXDisplayWidget(self.config)
-        
+        self.clip_library = ClipLibraryWidget(self.config)
+
         self.audio_controller = AudioController(self.config.metronome, self.config.volume.metronome)
         self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
@@ -164,8 +166,15 @@ class MainWindow(QMainWindow):
         stage_view = self.stage_controller.get_stage_view()
         self.main_content.addWidget(stage_view)
 
-        # Add DMX display
-        self.main_content.addWidget(self.dmx_display)
+        # Right sidebar: tabbed container hosting the clip library and the
+        # DMX channel monitor. Library is the default tab — most users open
+        # the app to edit clips, not to verify channel output.
+        self.right_sidebar = QTabWidget()
+        self.right_sidebar.setObjectName("RightSidebar")
+        self.right_sidebar.setMaximumWidth(260)
+        self.right_sidebar.addTab(self.clip_library, "Library")
+        self.right_sidebar.addTab(self.dmx_display, "DMX Channels")
+        self.main_content.addWidget(self.right_sidebar)
 
         # Create timeline with MidiManager reference
         self.timeline = Timeline(
@@ -218,7 +227,7 @@ class MainWindow(QMainWindow):
         total = sizes[0] + sizes[1]
         self._last_dmx_width = sizes[1] if sizes[1] > 0 else 250
         self.main_content.setSizes([total, 0])
-        self.dmx_display.setVisible(False)
+        self.right_sidebar.setVisible(False)
         self._dmx_panel_collapsed = True
         self._update_dmx_toggle_button()
 
@@ -241,7 +250,7 @@ class MainWindow(QMainWindow):
             start_value = sizes[1]
             end_value = 0
         else:
-            self.dmx_display.setVisible(True)
+            self.right_sidebar.setVisible(True)
             target = self._last_dmx_width if self._last_dmx_width > 0 else 250
             # Always leave at least 200px for the stage area
             target = max(0, min(target, total - 200))
@@ -260,7 +269,7 @@ class MainWindow(QMainWindow):
         def on_finished():
             self._dmx_panel_collapsed = will_be_collapsed
             if will_be_collapsed:
-                self.dmx_display.setVisible(False)
+                self.right_sidebar.setVisible(False)
             self._update_dmx_toggle_button()
             self.config.window.dmx_panel_collapsed = will_be_collapsed
             self.save_config()

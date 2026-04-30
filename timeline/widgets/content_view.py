@@ -4,12 +4,15 @@ Custom graphics view for timeline content.
 Provides zooming, context menus, and specialized mouse handling for timeline interaction.
 """
 
+import json
+
 from PyQt6.QtWidgets import QGraphicsView, QMenu
 from PyQt6.QtGui import QPainter
 from PyQt6.QtCore import Qt
 import librosa
 
 from .tooltip import CustomTooltip
+from ui.clip_library import CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY
 
 
 class ContentView(QGraphicsView):
@@ -22,11 +25,14 @@ class ContentView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        
+
+        # Accept drops from the clip library (custom MIME).
+        self.setAcceptDrops(True)
+
         # Enable context menu for right-clicks on empty areas
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
-        
+
         # Custom tooltip for piano roll notes
         self._piano_tooltip = None
         self._current_tooltip_item = None
@@ -136,5 +142,50 @@ class ContentView(QGraphicsView):
             if self._piano_tooltip:
                 self._piano_tooltip.hide_tooltip()
             self._current_tooltip_item = None
-        
+
         super().mouseMoveEvent(event)
+
+    # --- Clip library drag & drop ----------------------------------------
+
+    def _decode_clip_payload(self, mime):
+        """Return (note, velocity) from a clip-library MIME, or None."""
+        if not mime.hasFormat(CLIP_MIME_TYPE):
+            return None
+        try:
+            raw = bytes(mime.data(CLIP_MIME_TYPE)).decode("utf-8")
+            payload = json.loads(raw)
+            note = int(payload["note"])
+            velocity = int(payload.get("velocity", DEFAULT_DROP_VELOCITY))
+            return note, velocity
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return None
+
+    def dragEnterEvent(self, event):
+        if self._decode_clip_payload(event.mimeData()) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        decoded = self._decode_clip_payload(event.mimeData())
+        if decoded is None:
+            event.ignore()
+            return
+        note, _ = decoded
+        scene_pos = self.mapToScene(event.position().toPoint())
+        if self.timeline.can_accept_clip_drop(note, scene_pos.y()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        decoded = self._decode_clip_payload(event.mimeData())
+        if decoded is None:
+            event.ignore()
+            return
+        note, velocity = decoded
+        scene_pos = self.mapToScene(event.position().toPoint())
+        if self.timeline.handle_clip_drop(note, velocity, scene_pos.x(), scene_pos.y()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
