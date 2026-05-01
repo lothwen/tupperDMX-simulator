@@ -26,6 +26,33 @@ BLACKOUT_EPSILON = 1e-4
 # tiny drift from float arithmetic during a series of edits.
 NOTE_MATCH_TOLERANCE = 0.005
 
+# LED-bar channel-control mapping used by scene clips. Each tuple is
+# (json_channel_name, midi_note_number) and matches the cases in
+# software_controller/main.py:handle_note_on (notes 1-7).
+CHANNEL_NOTE_MAP: Tuple[Tuple[str, int], ...] = (
+    ("brightness", 1),
+    ("blue", 2),
+    ("green", 3),
+    ("red", 4),
+    ("animation", 5),
+    ("speed", 6),
+    ("direction", 7),
+)
+CHANNEL_CONTROL_NOTES = frozenset(n for _, n in CHANNEL_NOTE_MAP)
+
+
+def _channel_to_velocity(value: int) -> int:
+    """Map a 0..255 DMX channel value to a 0..127 MIDI velocity (floor).
+
+    The software controller doubles velocity to recover the channel value, so
+    this conversion is intentionally lossy at odd inputs (255 → 127 → 254).
+    """
+    try:
+        v = int(value) // 2
+    except (TypeError, ValueError):
+        v = 0
+    return max(0, min(127, v))
+
 
 class MidiManager(QObject):
     """
@@ -100,27 +127,34 @@ class MidiManager(QObject):
         """Parse the loaded MIDI data into events and notes for UI display."""
         if not self.midi_data:
             return
-            
+
         self.midi_events.clear()
         self.midi_notes.clear()
-        
+
         # Parse for MIDI events (using note map)
         current_time = 0
         for msg in self.midi_data:
             current_time += msg.time
-            if msg.type == 'note_on' and msg.velocity > 0:
-                # Check if this note is in our note map (for events track)
-                note_info = self.midi_note_map.get(str(msg.note))
-                if note_info:
-                    event_id = str(uuid.uuid4())
-                    self.midi_events.append({
-                        "id": event_id,
-                        "note": msg.note,
-                        "time": current_time,
-                        "velocity": msg.velocity,
-                        "info": note_info
-                    })
-        
+            if msg.type != 'note_on':
+                continue
+            # Channel-control notes (1-7) are scene channels and a velocity of
+            # 0 carries a real "channel = 0" value, so they're admitted. Other
+            # notes follow the standard "note_on velocity 0 == note_off"
+            # convention and are skipped here.
+            if msg.velocity == 0 and msg.note not in CHANNEL_CONTROL_NOTES:
+                continue
+            note_info = self.midi_note_map.get(str(msg.note))
+            if note_info:
+                self.midi_events.append({
+                    "id": str(uuid.uuid4()),
+                    "note": msg.note,
+                    "time": current_time,
+                    "velocity": msg.velocity,
+                    "info": note_info,
+                    "group_id": None,
+                    "scene_name": None,
+                })
+
         # Parse for piano roll notes
         current_time = 0
         active_notes = {}
@@ -140,6 +174,47 @@ class MidiManager(QObject):
                         "velocity": active_notes[msg.note]["velocity"]
                     })
                     del active_notes[msg.note]
+
+        # Reattach scene groups: clusters of ≥2 channel-control events at
+        # (essentially) the same time get a fresh shared group_id. Groups
+        # are ephemeral — they live only in memory; persistence relies on
+        # the same-time clustering rule on every reload.
+        self._reattach_scene_groups()
+
+    def _reattach_scene_groups(self) -> None:
+        """Cluster channel-control events at the same time into scene groups.
+
+        Heuristic: any 2+ events whose times match within BLACKOUT_EPSILON and
+        whose note number is in CHANNEL_CONTROL_NOTES form one scene clip.
+        Existing group_id assignments are preserved (idempotent re-entry).
+        """
+        self.midi_events.sort(key=lambda x: x["time"])
+        i = 0
+        while i < len(self.midi_events):
+            e = self.midi_events[i]
+            if (e["note"] not in CHANNEL_CONTROL_NOTES
+                    or e.get("group_id")):
+                i += 1
+                continue
+            cluster = [e]
+            j = i + 1
+            while j < len(self.midi_events):
+                f = self.midi_events[j]
+                if abs(f["time"] - e["time"]) > BLACKOUT_EPSILON:
+                    break
+                if (f["note"] in CHANNEL_CONTROL_NOTES
+                        and not f.get("group_id")):
+                    cluster.append(f)
+                j += 1
+            if len(cluster) >= 2:
+                gid = str(uuid.uuid4())
+                # Default name; the UI may overwrite this by matching
+                # channel values against the scene library.
+                scene_name = f"Scene @ {e['time']:.2f}s"
+                for c in cluster:
+                    c["group_id"] = gid
+                    c["scene_name"] = scene_name
+            i += 1
                     
     def get_events_for_ui(self) -> List[Dict[str, Any]]:
         """Get MIDI events formatted for Timeline display."""
@@ -162,14 +237,16 @@ class MidiManager(QObject):
         if str(note) not in self.midi_note_map:
             self.logger.warning(f"Note {note} not in MIDI note map")
             return ""
-            
+
         event_id = str(uuid.uuid4())
         new_event = {
             "id": event_id,
             "note": note,
             "time": time,
             "velocity": velocity,
-            "info": self.midi_note_map[str(note)]
+            "info": self.midi_note_map[str(note)],
+            "group_id": None,
+            "scene_name": None,
         }
         
         # Insert in chronological order
@@ -443,6 +520,8 @@ class MidiManager(QObject):
             "time": time,
             "velocity": 100,
             "info": info,
+            "group_id": None,
+            "scene_name": None,
         })
         self.midi_events.sort(key=lambda x: x['time'])
 
@@ -811,6 +890,366 @@ class MidiManager(QObject):
         self.logger.info(
             f"Replaced event {event_id} (note={old_note}, "
             f"time={old_time:.3f}s, fixture={fixture!r}) with BLACKOUT"
+        )
+        return True
+
+    # ------------------------------------------------------------------
+    # Scene-clip ops (atomic operations on a group of 7 channel events)
+    # ------------------------------------------------------------------
+    #
+    # A "scene" is 7 simultaneous note_on events on the LED-bar fixture, one
+    # per DMX channel (notes 1..7). They share a `group_id` while in memory;
+    # on file save the group_id is dropped and only the 7 same-time note_ons
+    # remain — _reattach_scene_groups() rebuilds the group on next load.
+
+    def _add_event_internal(self, note: int, time: float, velocity: int,
+                            *, group_id: Optional[str] = None,
+                            scene_name: Optional[str] = None) -> Optional[str]:
+        """Insert one event+note without rebuild/commit. Returns event_id."""
+        if str(note) not in self.midi_note_map:
+            return None
+        event_id = str(uuid.uuid4())
+        self.midi_events.append({
+            "id": event_id,
+            "note": note,
+            "time": time,
+            "velocity": velocity,
+            "info": self.midi_note_map[str(note)],
+            "group_id": group_id,
+            "scene_name": scene_name,
+        })
+        self.midi_events.sort(key=lambda x: x["time"])
+
+        self.midi_notes.append({
+            "id": str(uuid.uuid4()),
+            "note": note,
+            "time": time,
+            "velocity": velocity,
+            "duration": 0.1,
+        })
+        self.midi_notes.sort(key=lambda x: x["time"])
+        return event_id
+
+    def _group_members(self, group_id: str) -> List[Dict[str, Any]]:
+        return [e for e in self.midi_events if e.get("group_id") == group_id]
+
+    def _group_right_edge(self, group_id: str,
+                          fixture: Optional[str]) -> float:
+        """Time of the first non-member same-fixture event after the group."""
+        members = self._group_members(group_id)
+        if not members:
+            return float('inf')
+        group_time = members[0]["time"]
+        member_ids = {e["id"] for e in members}
+        nearest = float('inf')
+        for e in self.midi_events:
+            if (self._event_fixture(e) == fixture
+                    and e["id"] not in member_ids
+                    and e["time"] > group_time + BLACKOUT_EPSILON
+                    and e["time"] < nearest):
+                nearest = e["time"]
+        return nearest
+
+    def _free_slots_for_group_move(self, group_id: str,
+                                   fixture: Optional[str]
+                                   ) -> List[Tuple[float, float]]:
+        """Slots where the group can land. All group members excluded as obstacles."""
+        member_ids = {e["id"] for e in self._group_members(group_id)}
+        candidates = [e for e in self.midi_events
+                      if self._event_fixture(e) == fixture]
+        obstacles: List[Tuple[float, float]] = []
+        for i, e in enumerate(candidates):
+            if self.is_blackout(e) or e["id"] in member_ids:
+                continue
+            end = float('inf')
+            for j in range(i + 1, len(candidates)):
+                if candidates[j]["id"] in member_ids:
+                    continue
+                end = candidates[j]["time"]
+                break
+            if end == float('inf'):
+                end = self._song_end_time()
+            obstacles.append((e["time"], end))
+        obstacles.sort(key=lambda x: x[0])
+
+        slots: List[Tuple[float, float]] = []
+        cursor = 0.0
+        for start, end in obstacles:
+            if start > cursor:
+                slots.append((cursor, start))
+            cursor = max(cursor, end)
+        song_end = self._song_end_time()
+        if cursor < song_end:
+            slots.append((cursor, song_end))
+        return slots
+
+    def add_scene(self, time: float, channels: Dict[str, int],
+                  name: str) -> Optional[str]:
+        """Create a 7-event LED scene group at `time`. Returns group_id or None."""
+        group_id = str(uuid.uuid4())
+        added = 0
+        for ch_name, note in CHANNEL_NOTE_MAP:
+            if ch_name not in channels:
+                continue
+            velocity = _channel_to_velocity(channels[ch_name])
+            if self._add_event_internal(note, time, velocity,
+                                        group_id=group_id,
+                                        scene_name=name) is not None:
+                added += 1
+        if added == 0:
+            self.logger.warning(
+                f"add_scene at {time:.3f}s produced 0 events "
+                "(channel-control notes missing from midi_note_map?)"
+            )
+            return None
+        self._commit()
+        self.logger.info(
+            f"Added scene '{name}' at {time:.3f}s ({added} channels, "
+            f"group_id={group_id})"
+        )
+        return group_id
+
+    def move_scene(self, group_id: str, new_time: float) -> bool:
+        """Move all events sharing group_id to new_time atomically."""
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        fixture = self._event_fixture(members[0])
+        old_time = members[0]["time"]
+        member_ids = {e["id"] for e in members}
+
+        target_old_right = self._group_right_edge(group_id, fixture)
+        song_end = self._song_end_time()
+        # When nothing follows the group, target width is just the minimum —
+        # the group can move freely. Otherwise preserve the clip's visible
+        # width so it doesn't overlap its successor after the move.
+        if target_old_right == float('inf'):
+            target_width = MIN_EVENT_DURATION
+        else:
+            target_width = max(MIN_EVENT_DURATION, target_old_right - old_time)
+        if new_time < 0:
+            new_time = 0.0
+
+        # Snapshot intended ends for OTHER same-fixture non-BLACKOUT clips.
+        intended_ends: Dict[str, float] = {}
+        for i, e in enumerate(self.midi_events):
+            if (self._event_fixture(e) != fixture
+                    or self.is_blackout(e)
+                    or e.get("group_id") == group_id):
+                continue
+            end = self._right_edge_of(i, fixture)
+            if end == float('inf'):
+                end = song_end
+            intended_ends[e["id"]] = end
+
+        slots = self._free_slots_for_group_move(group_id, fixture)
+        best_new_time: Optional[float] = None
+        best_distance = float('inf')
+        for slot_start, slot_end in slots:
+            if slot_end - slot_start + BLACKOUT_EPSILON < target_width:
+                continue
+            clamped = max(slot_start, min(new_time, slot_end - target_width))
+            d = abs(clamped - new_time)
+            if d < best_distance:
+                best_distance = d
+                best_new_time = clamped
+        if best_new_time is None:
+            self.logger.debug(
+                f"move_scene {group_id}: no slot fits target width "
+                f"{target_width:.3f}s"
+            )
+            return False
+        if abs(best_new_time - old_time) < BLACKOUT_EPSILON:
+            return False
+
+        new_target_end = best_new_time + target_width
+
+        for eid in member_ids:
+            self._set_event_time_internal(eid, best_new_time)
+
+        # Drop stale BLACKOUTs strictly inside the group's new visible span.
+        stale = [e["id"] for e in self.midi_events
+                 if e["id"] not in member_ids
+                 and self._event_fixture(e) == fixture
+                 and self.is_blackout(e)
+                 and best_new_time + BLACKOUT_EPSILON < e["time"]
+                 < new_target_end - BLACKOUT_EPSILON]
+        for bid in stale:
+            self._delete_event_internal(bid)
+
+        # Restore intended ends for other same-fixture clips.
+        for eid, intended_end in intended_ends.items():
+            idx = self._index_of(eid)
+            if idx < 0:
+                continue
+            actual_end = self._right_edge_of(idx, fixture)
+            if actual_end == float('inf'):
+                actual_end = song_end
+            if actual_end > intended_end + BLACKOUT_EPSILON:
+                self._insert_blackout_internal(intended_end, fixture)
+
+        self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Moved scene {group_id} from {old_time:.3f}s to "
+            f"{best_new_time:.3f}s"
+        )
+        return True
+
+    def update_scene(self, group_id: str, channels: Dict[str, int],
+                     name: Optional[str] = None) -> bool:
+        """Update channel velocities (and optionally name) of a scene group.
+
+        Time and group membership stay unchanged. For each known channel in
+        `channels`, the matching event's velocity is set to channel_value//2.
+        Channels missing from the dict are left alone.
+        """
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        members_by_note = {m["note"]: m for m in members}
+
+        for ch_name, note in CHANNEL_NOTE_MAP:
+            if ch_name not in channels:
+                continue
+            evt = members_by_note.get(note)
+            if evt is None:
+                continue
+            new_vel = _channel_to_velocity(channels[ch_name])
+            evt["velocity"] = new_vel
+            # Mirror in midi_notes (matched by note + time)
+            for n in self.midi_notes:
+                if (n["note"] == note
+                        and abs(n["time"] - evt["time"]) < NOTE_MATCH_TOLERANCE):
+                    n["velocity"] = new_vel
+                    break
+
+        if name is not None:
+            for m in members:
+                m["scene_name"] = name
+
+        self._commit()
+        self.logger.info(
+            f"Updated scene {group_id}"
+            + (f" (renamed to '{name}')" if name is not None else "")
+        )
+        return True
+
+    def delete_scene(self, group_id: str) -> bool:
+        """Remove all members of the group; insert a single BLACKOUT at group_time."""
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        fixture = self._event_fixture(members[0])
+        group_time = members[0]["time"]
+        for e in list(members):
+            self._delete_event_internal(e["id"])
+        self._insert_blackout_internal(group_time, fixture)
+        self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(f"Deleted scene {group_id} (replaced with BLACKOUT)")
+        return True
+
+    def set_scene_left_edge(self, group_id: str, new_time: float) -> bool:
+        """Resize a scene from the left — shifts all members' time together."""
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        fixture = self._event_fixture(members[0])
+        old_time = members[0]["time"]
+        member_ids = {e["id"] for e in members}
+
+        right_edge = self._group_right_edge(group_id, fixture)
+        max_new_time = (right_edge - MIN_EVENT_DURATION
+                        if right_edge != float('inf') else float('inf'))
+
+        # Walk back through same-fixture non-member events sorted by time.
+        prev_candidates = sorted(
+            (e for e in self.midi_events
+             if self._event_fixture(e) == fixture
+             and e["id"] not in member_ids
+             and e["time"] < old_time - BLACKOUT_EPSILON),
+            key=lambda e: e["time"],
+        )
+        prev_same: Optional[Dict[str, Any]] = (
+            prev_candidates[-1] if prev_candidates else None
+        )
+        min_new_time = 0.0
+        for e in reversed(prev_candidates):
+            if not self.is_blackout(e):
+                min_new_time = e["time"] + MIN_EVENT_DURATION
+                break
+
+        new_time = max(min_new_time, min(new_time, max_new_time))
+        delta = new_time - old_time
+        if abs(delta) < BLACKOUT_EPSILON:
+            return False
+
+        prev_was_blackout = (prev_same is not None
+                             and self.is_blackout(prev_same))
+
+        for eid in member_ids:
+            self._set_event_time_internal(eid, new_time)
+
+        # If we shrunk and the immediate predecessor is non-BLACKOUT, fill the
+        # exposed gap with a fixture-matching BLACKOUT.
+        if delta > 0 and not prev_was_blackout and prev_same is not None:
+            self._insert_blackout_internal(old_time, fixture)
+
+        self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Resized scene {group_id} left edge {old_time:.3f}s → "
+            f"{new_time:.3f}s"
+        )
+        return True
+
+    def set_scene_right_edge(self, group_id: str,
+                             new_right_time: float) -> bool:
+        """Resize a scene from the right — moves/inserts the trailing BLACKOUT."""
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        fixture = self._event_fixture(members[0])
+        group_time = members[0]["time"]
+        member_ids = {e["id"] for e in members}
+
+        min_right = group_time + MIN_EVENT_DURATION
+
+        # Find the next non-member same-fixture non-BLACKOUT (caps the right edge)
+        # and the next non-member same-fixture event of any kind (the gap marker
+        # we may need to move).
+        max_right = float('inf')
+        next_event: Optional[Dict[str, Any]] = None
+        for e in self.midi_events:
+            if (self._event_fixture(e) != fixture
+                    or e["id"] in member_ids
+                    or e["time"] <= group_time + BLACKOUT_EPSILON):
+                continue
+            if next_event is None:
+                next_event = e
+            if not self.is_blackout(e):
+                max_right = e["time"]
+                break
+
+        new_right_time = max(min_right, min(new_right_time, max_right))
+
+        if next_event is not None and self.is_blackout(next_event):
+            if abs(next_event["time"] - new_right_time) < BLACKOUT_EPSILON:
+                return False
+            self._set_event_time_internal(next_event["id"], new_right_time)
+        else:
+            current_right = (max_right if max_right != float('inf')
+                             else self._song_end_time())
+            if new_right_time < current_right - BLACKOUT_EPSILON:
+                self._insert_blackout_internal(new_right_time, fixture)
+            else:
+                return False
+
+        self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Resized scene {group_id} right edge to {new_right_time:.3f}s"
         )
         return True
 

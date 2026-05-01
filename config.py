@@ -93,6 +93,22 @@ class LoggingConfig:
     backup_count: int = 5
 
 
+# LED-bar channel-control MIDI notes. These mirror cases 1-7 in
+# software_controller/main.py:handle_note_on — each note carries one DMX
+# channel value (velocity * 2) for the LED bar. They're auto-registered in
+# midi_note_map so the clip library can drop scenes (which expand into 7
+# simultaneous note-on messages) through the existing add_event pipeline.
+LEDBAR_CHANNEL_NOTES: Dict[str, MidiNoteConfig] = {
+    "1": MidiNoteConfig(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
+    "2": MidiNoteConfig(part="CH:BLUE",       color="#3333aa", fixture="ledbar"),
+    "3": MidiNoteConfig(part="CH:GREEN",      color="#33aa33", fixture="ledbar"),
+    "4": MidiNoteConfig(part="CH:RED",        color="#aa3333", fixture="ledbar"),
+    "5": MidiNoteConfig(part="CH:ANIM",       color="#555555", fixture="ledbar"),
+    "6": MidiNoteConfig(part="CH:SPEED",      color="#555555", fixture="ledbar"),
+    "7": MidiNoteConfig(part="CH:DIRECTION",  color="#555555", fixture="ledbar"),
+}
+
+
 @dataclass
 class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
@@ -105,6 +121,12 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     last_dmx_source: Optional[str] = None
     last_midi_port: Optional[str] = None
+
+    def __post_init__(self):
+        # Ensure channel-control notes are registered even when constructed
+        # via Config() directly (defaults path), not just via _from_dict.
+        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
+            self.midi_note_map.setdefault(note_str, note_cfg)
 
     @classmethod
     def load(cls, config_path: str = "config.json") -> "Config":
@@ -181,6 +203,12 @@ class Config:
                         fixture=str(note_data.get("fixture", "ledbar")),
                     )
             config.midi_note_map = note_map
+
+        # Auto-register LED-bar channel-control notes (1-7). User entries in
+        # config.json override; missing notes are filled with defaults so
+        # scene drops always have a target in the note map.
+        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
+            config.midi_note_map.setdefault(note_str, note_cfg)
         
         # Metronome configuration
         if "metronome" in data:
