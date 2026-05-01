@@ -35,7 +35,7 @@ class TrackResizeHandle(QGraphicsObject):
 
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
-        self.setZValue(6)  # Above headers, below the piano-roll toggle proxy isn't relevant
+        self.setZValue(6)  # Above track headers
 
     def boundingRect(self):
         return QRectF(0, 0, self._width, self.HANDLE_THICKNESS)

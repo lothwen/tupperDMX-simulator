@@ -75,7 +75,8 @@ class MidiManager(QObject):
         # MIDI Data Storage - Single Source of Truth
         self.midi_data: Optional[mido.MidiFile] = None
         self.midi_events: List[Dict[str, Any]] = []  # Events for UI display with unique IDs
-        self.midi_notes: List[Dict[str, Any]] = []   # Notes for piano roll with unique IDs
+        # note_on/note_off pairs (with duration) used to rebuild the MIDI file on save
+        self.midi_notes: List[Dict[str, Any]] = []
         self.midi_note_map = midi_note_map or {}
         
         # Track current playback position for in-place updates
@@ -155,7 +156,8 @@ class MidiManager(QObject):
                     "scene_name": None,
                 })
 
-        # Parse for piano roll notes
+        # Parse note_on/note_off pairs into duration-bearing entries so the
+        # MIDI file can be reconstructed on save (see _rebuild_midi_data).
         current_time = 0
         active_notes = {}
         for msg in self.midi_data:
@@ -219,11 +221,7 @@ class MidiManager(QObject):
     def get_events_for_ui(self) -> List[Dict[str, Any]]:
         """Get MIDI events formatted for Timeline display."""
         return copy.deepcopy(self.midi_events)
-    
-    def get_notes_for_ui(self) -> List[Dict[str, Any]]:
-        """Get MIDI notes formatted for piano roll display.""" 
-        return copy.deepcopy(self.midi_notes)
-    
+
     def get_duration(self) -> float:
         """Get the total duration of the MIDI data."""
         if self.midi_data:
@@ -259,7 +257,7 @@ class MidiManager(QObject):
         if not inserted:
             self.midi_events.append(new_event)
         
-        # Also add to piano roll
+        # Mirror in midi_notes so the MIDI file rebuilds with the new note
         note_id = str(uuid.uuid4())
         new_note = {
             "id": note_id,

@@ -1,8 +1,8 @@
 """
 Timeline module for TupperDMX Simulator.
 
-This module provides an advanced timeline widget with waveform visualization, 
-MIDI event editing, and piano roll functionality.
+This module provides an advanced timeline widget with waveform visualization
+and MIDI event editing.
 """
 
 from .manager import Timeline

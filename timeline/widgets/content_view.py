@@ -9,16 +9,14 @@ import json
 from PyQt6.QtWidgets import QGraphicsView, QMenu
 from PyQt6.QtGui import QPainter
 from PyQt6.QtCore import Qt
-import librosa
 
-from .tooltip import CustomTooltip
 from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
                              SCENE_MIME_TYPE)
 
 
 class ContentView(QGraphicsView):
     """Custom graphics view with timeline-specific functionality."""
-    
+
     def __init__(self, timeline, parent=None):
         super().__init__(parent)
         self.timeline = timeline
@@ -34,10 +32,7 @@ class ContentView(QGraphicsView):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
 
-        # Custom tooltip for piano roll notes
-        self._piano_tooltip = None
-        self._current_tooltip_item = None
-        
+
     def show_context_menu(self, position):
         """Show context menu for adding events on empty timeline areas."""
         # Convert position to scene coordinates
@@ -101,50 +96,6 @@ class ContentView(QGraphicsView):
             self.timeline.update_midi_text_truncation()
         else:
             super().wheelEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Handle piano roll note tooltips."""
-        scene_pos = self.mapToScene(event.pos())
-        
-        # Check for piano roll notes
-        current_item = None
-        for item in self.timeline.note_items:
-            if item.contains(scene_pos):
-                current_item = item
-                break
-        
-        # Handle tooltip based on current item
-        if current_item:
-            # If this is a new item or first time, show tooltip
-            if current_item != self._current_tooltip_item:
-                # Hide any existing tooltip
-                if self._piano_tooltip:
-                    self._piano_tooltip.hide_tooltip()
-                
-                # Create custom tooltip if it doesn't exist
-                if not self._piano_tooltip:
-                    self._piano_tooltip = CustomTooltip(self.window())
-                
-                # Show tooltip for this note
-                note_info = current_item.data(0)
-                note_name = librosa.midi_to_note(note_info['note'])
-                seconds_per_beat = 60.0 / self.timeline.bpm
-                beat_number = note_info['time'] / seconds_per_beat
-                bar_number = int(beat_number / 4) + 1
-                beat_in_bar = int(beat_number % 4) + 1
-                tooltip_text = f"{note_name}\nTime: {note_info['time']:.2f}s\nBar: {bar_number}, Beat: {beat_in_bar}\nVelocity: {note_info['velocity']}"
-                
-                global_pos = event.globalPosition().toPoint()
-                global_pos.setY(global_pos.y() + 20)  # Offset to avoid cursor
-                self._piano_tooltip.show_at(global_pos, tooltip_text)
-                self._current_tooltip_item = current_item
-        else:
-            # No item under cursor, hide tooltip
-            if self._piano_tooltip:
-                self._piano_tooltip.hide_tooltip()
-            self._current_tooltip_item = None
-
-        super().mouseMoveEvent(event)
 
     # --- Clip library drag & drop ----------------------------------------
 

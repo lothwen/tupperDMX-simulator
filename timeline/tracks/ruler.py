@@ -30,7 +30,7 @@ class RulerTrack(BaseTrack):
         """Draw the ruler header with metronome controls."""
         # Only create permanent items (metronome controls) once
         if not self.permanent_header_items:
-            ruler_header_bg = QGraphicsRectItem(0, 0, self.timeline_manager.PIANO_WIDTH, self.get_track_height())
+            ruler_header_bg = QGraphicsRectItem(0, 0, self.timeline_manager.HEADER_WIDTH, self.get_track_height())
             ruler_header_bg.setBrush(QBrush(QColor(50, 50, 50)))
             ruler_header_bg.setPen(QPen(QColor(20, 20, 20)))
             self.header_scene.addItem(ruler_header_bg)
