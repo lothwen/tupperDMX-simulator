@@ -97,7 +97,7 @@ jobs:
       if: matrix.platform == 'macos'
       run: |
         if [ -d "dist/TupperDMX-Simulator.app" ]; then
-          hdiutil create -srcfolder "dist/TupperDMX-Simulator.app" \
+          hdiutil create -ov -srcfolder "dist/TupperDMX-Simulator.app" \
             -volname "TupperDMX Simulator" "dist/TupperDMX-Simulator.dmg"
         fi
         
