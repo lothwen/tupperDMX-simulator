@@ -12,7 +12,8 @@ from PyQt6.QtCore import Qt
 import librosa
 
 from .tooltip import CustomTooltip
-from ui.clip_library import CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY
+from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
+                             SCENE_MIME_TYPE)
 
 
 class ContentView(QGraphicsView):
@@ -160,32 +161,72 @@ class ContentView(QGraphicsView):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
+    def _decode_scene_payload(self, mime):
+        """Return (name, channels) from a scene-library MIME, or None."""
+        if not mime.hasFormat(SCENE_MIME_TYPE):
+            return None
+        try:
+            raw = bytes(mime.data(SCENE_MIME_TYPE)).decode("utf-8")
+            payload = json.loads(raw)
+            name = str(payload["name"])
+            channels = payload["channels"]
+            if not isinstance(channels, dict):
+                return None
+            return name, channels
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return None
+
     def dragEnterEvent(self, event):
-        if self._decode_clip_payload(event.mimeData()) is not None:
+        mime = event.mimeData()
+        if (self._decode_clip_payload(mime) is not None
+                or self._decode_scene_payload(mime) is not None):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
-        decoded = self._decode_clip_payload(event.mimeData())
-        if decoded is None:
+        mime = event.mimeData()
+        scene_pos = self.mapToScene(event.position().toPoint())
+
+        scene_decoded = self._decode_scene_payload(mime)
+        if scene_decoded is not None:
+            if self.timeline.can_accept_scene_drop(scene_pos.y()):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
+
+        clip_decoded = self._decode_clip_payload(mime)
+        if clip_decoded is None:
             event.ignore()
             return
-        note, _ = decoded
-        scene_pos = self.mapToScene(event.position().toPoint())
+        note, _ = clip_decoded
         if self.timeline.can_accept_clip_drop(note, scene_pos.y()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        decoded = self._decode_clip_payload(event.mimeData())
-        if decoded is None:
+        mime = event.mimeData()
+        scene_pos = self.mapToScene(event.position().toPoint())
+
+        scene_decoded = self._decode_scene_payload(mime)
+        if scene_decoded is not None:
+            name, channels = scene_decoded
+            if self.timeline.handle_scene_drop(name, channels,
+                                               scene_pos.x(), scene_pos.y()):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
+
+        clip_decoded = self._decode_clip_payload(mime)
+        if clip_decoded is None:
             event.ignore()
             return
-        note, velocity = decoded
-        scene_pos = self.mapToScene(event.position().toPoint())
-        if self.timeline.handle_clip_drop(note, velocity, scene_pos.x(), scene_pos.y()):
+        note, velocity = clip_decoded
+        if self.timeline.handle_clip_drop(note, velocity,
+                                          scene_pos.x(), scene_pos.y()):
             event.acceptProposedAction()
         else:
             event.ignore()

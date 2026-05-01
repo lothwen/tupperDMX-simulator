@@ -28,6 +28,50 @@ from ..widgets.tooltip import CustomTooltip
 from tupperlogger import get_logger
 
 
+def build_render_units(events):
+    """Collapse same-fixture events into render units (singles or groups).
+
+    A "render unit" is the visual atom on the timeline track: either a
+    single ungrouped event or a scene group whose members share a
+    `group_id`. Returns a list sorted by time. Pure function — used by
+    MidiEventsTrack.redraw_events but also unit-tested in isolation.
+    """
+    if not events:
+        return []
+    sorted_events = sorted(events, key=lambda e: e["time"])
+
+    units = []
+    by_group: dict = {}
+    for e in sorted_events:
+        gid = e.get("group_id")
+        if gid:
+            by_group.setdefault(gid, []).append(e)
+        else:
+            units.append({
+                "kind": "single",
+                "time": e["time"],
+                "event_ids": [e["id"]],
+                "representative": e,
+                "group_id": None,
+            })
+
+    for gid, members in by_group.items():
+        # Defensive: if a group has only 1 member (corrupt / partial data),
+        # still emit it but flagged as a degenerate single so callers don't
+        # have to handle that edge case.
+        kind = "group" if len(members) >= 2 else "single"
+        units.append({
+            "kind": kind,
+            "time": members[0]["time"],
+            "event_ids": [m["id"] for m in members],
+            "representative": members[0],
+            "group_id": gid if kind == "group" else None,
+        })
+
+    units.sort(key=lambda u: u["time"])
+    return units
+
+
 # Edge-zone widths (pixels in scene space) for resize gestures.
 RESIZE_ZONE_PX = 8
 # Snap radius — if a dragged edge ends within this many scene-pixels of a
@@ -82,7 +126,10 @@ class DraggableMidiEvent(QGraphicsObject):
     MODE_RESIZE_RIGHT = "resize_right"
 
     def __init__(self, x, y, width, height, event_id: str, event_data: dict,
-                 bounds: ClipBounds, is_blackout: bool = False, parent=None):
+                 bounds: ClipBounds, is_blackout: bool = False,
+                 group_id: Optional[str] = None,
+                 group_event_ids: Optional[List[str]] = None,
+                 parent=None):
         super().__init__(parent)
         self.rect = QRectF(0, 0, max(width, MIN_HIT_WIDTH_PX), height)
         self.setPos(x, y)
@@ -91,6 +138,11 @@ class DraggableMidiEvent(QGraphicsObject):
         self.event_data = event_data
         self.bounds = bounds
         self.is_blackout_clip = is_blackout
+        # Scene-clip grouping: when set, this DraggableMidiEvent represents a
+        # whole scene group; the Timeline routes drag signals to the scene API
+        # rather than the single-event API.
+        self.group_id = group_id
+        self.group_event_ids = list(group_event_ids) if group_event_ids else []
 
         # Qt item flags
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
@@ -473,25 +525,33 @@ class MidiEventsTrack(BaseTrack):
         part = getattr(info, 'part', '') if info else ''
         return (part or '').upper().startswith("BLACKOUT")
 
-    def _compute_bounds(self, events, idx: int, song_end_time: float) -> ClipBounds:
-        """Return pixel-space bounds for clip at index `idx` of the sorted list."""
+    def _is_blackout_unit(self, unit) -> bool:
+        """A render unit is a blackout iff its representative event is."""
+        return self._is_blackout_event(unit.get("representative"))
+
+    def _compute_bounds(self, units, idx: int, song_end_time: float) -> ClipBounds:
+        """Return pixel-space bounds for the unit at index `idx`.
+
+        Operates on render units (single events or scene groups) so that a
+        7-event scene clip moves/resizes as a single occupant.
+        """
         pps = self.timeline_manager.PIXELS_PER_SECOND
         from midi.manager import MIN_EVENT_DURATION
 
-        cur = events[idx]
-        cur_time = cur['time']
-        cur_right = (events[idx + 1]['time'] if idx + 1 < len(events) else song_end_time)
+        cur = units[idx]
+        cur_time = cur["time"]
+        cur_right = (units[idx + 1]["time"]
+                     if idx + 1 < len(units) else song_end_time)
         cur_width_t = max(MIN_EVENT_DURATION, cur_right - cur_time)
 
-        # MOVE bounds: collect every slot of free space (visible space NOT
-        # occupied by another non-BLACKOUT clip) wide enough to fit cur_width_t.
-        # This enables jumping over neighbors when there's room on the far side.
+        # MOVE bounds: free-space slots wide enough to fit the current unit.
         obstacles: List[Tuple[float, float]] = []
-        for j, e in enumerate(events):
-            if j == idx or self._is_blackout_event(e):
+        for j, u in enumerate(units):
+            if j == idx or self._is_blackout_unit(u):
                 continue
-            j_end = (events[j + 1]['time'] if j + 1 < len(events) else song_end_time)
-            obstacles.append((e['time'], j_end))
+            j_end = (units[j + 1]["time"]
+                     if j + 1 < len(units) else song_end_time)
+            obstacles.append((u["time"], j_end))
         obstacles.sort()
 
         slots: List[Tuple[float, float]] = []
@@ -507,34 +567,35 @@ class MidiEventsTrack(BaseTrack):
         for slot_start, slot_end in slots:
             if slot_end - slot_start + 1e-6 < cur_width_t:
                 continue
-            # Valid range for the LEFT edge inside this slot.
             move_intervals.append((slot_start * pps,
                                    (slot_end - cur_width_t) * pps))
 
-        # RESIZE_LEFT bounds (only B.time changes).
-        # min: just past the closest non-BLACKOUT predecessor (consume any BO).
+        # RESIZE_LEFT bounds — the unit's start time can move toward the
+        # closest non-BLACKOUT predecessor.
         resize_left_min_t = 0.0
         for j in range(idx - 1, -1, -1):
-            if not self._is_blackout_event(events[j]):
-                resize_left_min_t = events[j]['time'] + MIN_EVENT_DURATION
+            if not self._is_blackout_unit(units[j]):
+                resize_left_min_t = units[j]["time"] + MIN_EVENT_DURATION
                 break
         resize_left_max_t = cur_right - MIN_EVENT_DURATION
 
-        # RESIZE_RIGHT bounds (B's right edge changes).
+        # RESIZE_RIGHT bounds — the unit's right edge can move toward the
+        # closest non-BLACKOUT successor.
         resize_right_min_t = cur_time + MIN_EVENT_DURATION
         resize_right_max_t = song_end_time
-        for j in range(idx + 1, len(events)):
-            if not self._is_blackout_event(events[j]):
-                resize_right_max_t = events[j]['time']
+        for j in range(idx + 1, len(units)):
+            if not self._is_blackout_unit(units[j]):
+                resize_right_max_t = units[j]["time"]
                 break
 
-        # Snap targets: every other clip's edges (start & end) in pixel-space.
+        # Snap targets: every other unit's start & end edges.
         snap_xs: List[float] = []
-        for j, e in enumerate(events):
+        for j, u in enumerate(units):
             if j == idx:
                 continue
-            snap_xs.append(e['time'] * pps)
-            j_right = (events[j + 1]['time'] if j + 1 < len(events) else song_end_time)
+            snap_xs.append(u["time"] * pps)
+            j_right = (units[j + 1]["time"]
+                       if j + 1 < len(units) else song_end_time)
             snap_xs.append(j_right * pps)
         snap_xs.extend([0.0, song_end_time * pps])
 
@@ -546,6 +607,29 @@ class MidiEventsTrack(BaseTrack):
             resize_right_max_x=resize_right_max_t * pps,
             snap_xs=snap_xs,
         )
+
+    def _scene_clip_color(self, members: List[dict]) -> QColor:
+        """Derive a clip color from a scene group's RGB channel values.
+
+        Notes 2/3/4 carry blue/green/red. Velocity * 2 = channel value.
+        Brightness (note 1) scales the resulting color so dim scenes read dim.
+        """
+        red = green = blue = 0
+        brightness = 255
+        for m in members:
+            v2 = min(255, m["velocity"] * 2)
+            if m["note"] == 1:
+                brightness = v2
+            elif m["note"] == 2:
+                blue = v2
+            elif m["note"] == 3:
+                green = v2
+            elif m["note"] == 4:
+                red = v2
+        # Apply brightness as a 0..1 multiplier; floor to a visible minimum so
+        # near-black scenes don't disappear against the dark track background.
+        scale = max(brightness / 255.0, 0.18)
+        return QColor(int(red * scale), int(green * scale), int(blue * scale))
 
     def redraw_events(self, cached_events, y_offset: int):
         # Clear existing content items
@@ -564,7 +648,6 @@ class MidiEventsTrack(BaseTrack):
             pps = self.timeline_manager.PIXELS_PER_SECOND
             track_height = self.get_track_height()
 
-            # Pre-sort defensively (manager already sorts; cheap insurance).
             # Filter by fixture so each track only handles its own clips —
             # neighbor lookups, MOVE bounds, and BLACKOUT gap logic all
             # operate on the per-track slice, not the global event list.
@@ -572,27 +655,35 @@ class MidiEventsTrack(BaseTrack):
             if not events:
                 return
 
-            for i, event in enumerate(events):
-                start_time = event['time']
-                if i < len(events) - 1:
-                    end_time = events[i + 1]['time']
-                else:
-                    end_time = song_end_time
+            # Collapse same-time scene groups into single render units before
+            # drawing. A 7-event group becomes ONE clip box.
+            units = build_render_units(events)
+            if not units:
+                return
+
+            for i, unit in enumerate(units):
+                start_time = unit["time"]
+                end_time = (units[i + 1]["time"]
+                            if i + 1 < len(units) else song_end_time)
                 duration = max(0.0, end_time - start_time)
+                rep = unit["representative"]
 
                 x_pos = start_time * pps
                 width = max(duration * pps, MIN_HIT_WIDTH_PX)
-                is_blackout = self._is_blackout_event(event)
-                bounds = self._compute_bounds(events, i, song_end_time)
+                is_blackout = self._is_blackout_unit(unit)
+                bounds = self._compute_bounds(units, i, song_end_time)
 
+                is_group = unit["kind"] == "group"
                 event_rect = DraggableMidiEvent(
                     x_pos, y_offset, width, track_height,
-                    event_id=event['id'], event_data=event,
+                    event_id=rep["id"], event_data=rep,
                     bounds=bounds, is_blackout=is_blackout,
+                    group_id=unit["group_id"] if is_group else None,
+                    group_event_ids=unit["event_ids"] if is_group else None,
                 )
                 event_rect.set_timeline(self.timeline_manager)
 
-                # Connect new signals (event_id-based).
+                # The Timeline routes group vs single via the carried group_id.
                 event_rect.move_committed.connect(self.timeline_manager.on_midi_event_moved)
                 event_rect.left_edge_committed.connect(self.timeline_manager.on_midi_event_left_edge)
                 event_rect.right_edge_committed.connect(self.timeline_manager.on_midi_event_right_edge)
@@ -600,11 +691,19 @@ class MidiEventsTrack(BaseTrack):
                 event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_by_id)
                 event_rect.add_at_position_requested.connect(self.timeline_manager.on_add_event_requested)
 
+                # Pick the clip color: scene groups derive from their RGB
+                # channel values; single events use their info.color.
                 if is_blackout:
                     event_rect.setBrush(QBrush(Qt.GlobalColor.transparent))
                     event_rect.setPen(QPen(Qt.PenStyle.NoPen))
+                elif is_group:
+                    members = [e for e in events
+                               if e.get("group_id") == unit["group_id"]]
+                    color = self._scene_clip_color(members)
+                    event_rect.setBrush(QBrush(color))
+                    event_rect.setPen(QPen(QColor(20, 20, 20)))
                 else:
-                    info = event['info']
+                    info = rep['info']
                     color = QColor(info.color)
                     event_rect.setBrush(QBrush(color))
                     event_rect.setPen(QPen(QColor(20, 20, 20)))
@@ -613,14 +712,21 @@ class MidiEventsTrack(BaseTrack):
                 self.items.append(event_rect)
 
                 if not is_blackout:
-                    info = event['info']
-                    color = QColor(info.color)
+                    if is_group:
+                        label_text = rep.get("scene_name") or "Scene"
+                        members = [e for e in events
+                                   if e.get("group_id") == unit["group_id"]]
+                        color = self._scene_clip_color(members)
+                    else:
+                        info = rep['info']
+                        label_text = info.part
+                        color = QColor(info.color)
                     brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
                     text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
                     zoom_factor = self.timeline_manager.content_view.transform().m11()
                     available_width = (width - 10) * zoom_factor
                     fm = self.timeline_manager.content_view.fontMetrics()
-                    text_to_display = self.timeline_manager.get_truncated_text(info.part, available_width, fm)
+                    text_to_display = self.timeline_manager.get_truncated_text(label_text, available_width, fm)
 
                     text_item = QGraphicsTextItem(text_to_display)
                     text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
@@ -631,8 +737,8 @@ class MidiEventsTrack(BaseTrack):
                     text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
                     text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                     text_item.setAcceptHoverEvents(False)
-                    text_item.setData(0, info.part)
-                    text_item.setData(1, event['id'])
+                    text_item.setData(0, label_text)
+                    text_item.setData(1, rep['id'])
 
                     event_rect.set_text_item(text_item)
 

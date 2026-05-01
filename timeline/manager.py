@@ -16,6 +16,8 @@ from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import ContentView, MidiEventEditDialog, TrackResizeHandle
+from .widgets.scene_edit import SceneEditDialog
+from midi.manager import CHANNEL_NOTE_MAP
 from .tracks import WaveformTrack, MidiEventsTrack, PianoRollTrack, RulerTrack
 from tupperlogger import get_logger
 
@@ -602,33 +604,66 @@ class Timeline(QWidget):
                 return e
         return None
 
+    def _group_id_for_event(self, event_id: str):
+        """Return the scene group_id for an event_id, or None for singles."""
+        evt = self._find_cached_event(event_id)
+        return evt.get('group_id') if evt else None
+
     def on_midi_event_moved(self, event_id: str, new_time: float):
-        """Whole-clip MOVE drag committed."""
+        """Whole-clip MOVE drag committed.
+
+        Routes to scene API when the event is part of a scene group so that
+        all 7 channel-control events move atomically.
+        """
         if not self.midi_manager or not event_id:
             return
-        if self.midi_manager.move_event(event_id, new_time):
+        group_id = self._group_id_for_event(event_id)
+        if group_id:
+            ok = self.midi_manager.move_scene(group_id, new_time)
+        else:
+            ok = self.midi_manager.move_event(event_id, new_time)
+        if ok:
             self.refresh_from_manager()
 
     def on_midi_event_left_edge(self, event_id: str, new_time: float):
         """Left-edge resize drag committed."""
         if not self.midi_manager or not event_id:
             return
-        if self.midi_manager.set_event_left_edge(event_id, new_time):
+        group_id = self._group_id_for_event(event_id)
+        if group_id:
+            ok = self.midi_manager.set_scene_left_edge(group_id, new_time)
+        else:
+            ok = self.midi_manager.set_event_left_edge(event_id, new_time)
+        if ok:
             self.refresh_from_manager()
 
     def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
         """Right-edge resize drag committed."""
         if not self.midi_manager or not event_id:
             return
-        if self.midi_manager.set_event_right_edge(event_id, new_right_time):
+        group_id = self._group_id_for_event(event_id)
+        if group_id:
+            ok = self.midi_manager.set_scene_right_edge(group_id, new_right_time)
+        else:
+            ok = self.midi_manager.set_event_right_edge(event_id, new_right_time)
+        if ok:
             self.refresh_from_manager()
 
     def on_midi_event_edit_by_id(self, event_id: str):
-        """Edit dialog request for the event with `event_id`."""
+        """Edit dialog request for the event with `event_id`.
+
+        Routes to a scene-specific dialog when the event belongs to a
+        scene group, otherwise falls back to the per-event dialog.
+        """
         if not self.midi_manager or not event_id:
             return
         event_data = self._find_cached_event(event_id)
         if not event_data:
+            return
+
+        group_id = event_data.get('group_id')
+        if group_id:
+            self._edit_scene(group_id)
             return
 
         dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
@@ -639,6 +674,32 @@ class Timeline(QWidget):
                 self.logger.info(
                     f"MIDI event edited: note={new_values['note']}, "
                     f"time={new_values['time']:.3f}s, velocity={new_values['velocity']}"
+                )
+
+    def _edit_scene(self, group_id: str):
+        """Open the scene editing dialog for the group with `group_id`."""
+        members = [e for e in self._cached_events
+                   if e.get('group_id') == group_id]
+        if not members:
+            return
+        # Reconstruct channels dict from per-note velocities (controller's
+        # convention: channel value = velocity * 2). Default to 0 for any
+        # missing channels (partial groups).
+        velocity_by_note = {m['note']: m['velocity'] for m in members}
+        channels = {ch_name: min(255, velocity_by_note.get(note, 0) * 2)
+                    for ch_name, note in CHANNEL_NOTE_MAP}
+        current_name = (members[0].get('scene_name')
+                        or f"Scene @ {members[0]['time']:.2f}s")
+
+        dialog = SceneEditDialog(current_name, channels)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            values = dialog.get_values()
+            if self.midi_manager.update_scene(group_id,
+                                              channels=values['channels'],
+                                              name=values['name']):
+                self.refresh_from_manager()
+                self.logger.info(
+                    f"Scene '{values['name']}' updated (group_id={group_id})"
                 )
 
     def on_midi_event_delete_by_id(self, event_id: str):
@@ -655,21 +716,28 @@ class Timeline(QWidget):
         if not event_data:
             return
 
-        info = event_data.get('info', None)
-        if info and hasattr(info, 'part'):
-            event_name = info.part
+        group_id = event_data.get('group_id')
+        if group_id:
+            scene_label = (event_data.get('scene_name')
+                           or f"scene at {event_data['time']:.2f}s")
+            title = "Delete Scene"
+            prompt = (f"Replace the scene '{scene_label}' "
+                      f"with a blackout? (All 7 channel events removed.)")
         else:
-            event_name = f"Note {event_data['note']}"
-
-        is_blackout = self.midi_manager.is_blackout(event_data)
-        if is_blackout:
-            title = "Remove Blackout"
-            prompt = (f"Remove the blackout '{event_name}' "
-                      f"at {event_data['time']:.2f}s?")
-        else:
-            title = "Delete MIDI Event"
-            prompt = (f"Replace the MIDI event '{event_name}' at "
-                      f"{event_data['time']:.2f}s with a blackout?")
+            info = event_data.get('info', None)
+            if info and hasattr(info, 'part'):
+                event_name = info.part
+            else:
+                event_name = f"Note {event_data['note']}"
+            is_blackout = self.midi_manager.is_blackout(event_data)
+            if is_blackout:
+                title = "Remove Blackout"
+                prompt = (f"Remove the blackout '{event_name}' "
+                          f"at {event_data['time']:.2f}s?")
+            else:
+                title = "Delete MIDI Event"
+                prompt = (f"Replace the MIDI event '{event_name}' at "
+                          f"{event_data['time']:.2f}s with a blackout?")
 
         reply = QMessageBox.question(
             None, title, prompt,
@@ -679,7 +747,9 @@ class Timeline(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        if is_blackout:
+        if group_id:
+            ok = self.midi_manager.delete_scene(group_id)
+        elif self.midi_manager.is_blackout(event_data):
             ok = self.midi_manager.delete_event(event_id)
         else:
             ok = self.midi_manager.replace_with_blackout(event_id)
@@ -727,6 +797,28 @@ class Timeline(QWidget):
         self.logger.info(
             f"Clip dropped: note={note} at {time_seconds:.3f}s "
             f"on {self.fixture_at_y(scene_y)} track"
+        )
+        return True
+
+    def can_accept_scene_drop(self, scene_y: float) -> bool:
+        """LED scenes only target the ledbar track."""
+        if not self.midi_manager:
+            return False
+        return self.fixture_at_y(scene_y) == "ledbar"
+
+    def handle_scene_drop(self, name: str, channels: dict,
+                          scene_x: float, scene_y: float) -> bool:
+        """Validate and insert a dropped scene. Returns True on success."""
+        if not self.can_accept_scene_drop(scene_y):
+            return False
+        time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
+        group_id = self.midi_manager.add_scene(time_seconds, channels, name)
+        if not group_id:
+            return False
+        self.refresh_from_manager()
+        self.logger.info(
+            f"Scene dropped: '{name}' at {time_seconds:.3f}s "
+            f"(group_id={group_id})"
         )
         return True
 

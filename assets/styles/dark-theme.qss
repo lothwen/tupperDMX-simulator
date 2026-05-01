@@ -618,8 +618,9 @@ QToolBox#ClipLibraryToolBox::tab:selected {
     border-color: #5a6578;
 }
 
-/* Clip Library — Clip List */
-QListWidget#ClipList {
+/* Clip Library — Clip List & Scene List (per-fixture clips and LED scenes) */
+QListWidget#ClipList,
+QListWidget#SceneList {
     background-color: #1a1a1a;
     color: #ddd;
     border: 1px solid #444;
@@ -630,24 +631,28 @@ QListWidget#ClipList {
     show-decoration-selected: 1;
 }
 
-QListWidget#ClipList::item {
+QListWidget#ClipList::item,
+QListWidget#SceneList::item {
     padding: 6px 8px;
     border-radius: 3px;
     margin: 1px 0;
     color: #ddd;
 }
 
-QListWidget#ClipList::item:hover {
+QListWidget#ClipList::item:hover,
+QListWidget#SceneList::item:hover {
     background-color: #3a4558;
     color: #fff;
 }
 
-QListWidget#ClipList::item:selected {
+QListWidget#ClipList::item:selected,
+QListWidget#SceneList::item:selected {
     background-color: #4a5568;
     color: #fff;
 }
 
-QListWidget#ClipList::item:selected:!active {
+QListWidget#ClipList::item:selected:!active,
+QListWidget#SceneList::item:selected:!active {
     background-color: #4a5568;
     color: #fff;
 }

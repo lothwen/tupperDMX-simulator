@@ -3,6 +3,7 @@
 
 import json
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolBox, QListWidget,
@@ -11,6 +12,7 @@ from PyQt6.QtGui import QColor, QPixmap, QIcon, QPainter
 from PyQt6.QtCore import Qt, QMimeData, QSize
 
 from config import Config, MidiNoteConfig
+from software_controller.scene_loader import LedScene, load_led_scenes
 from tupperlogger import get_logger
 
 
@@ -20,9 +22,18 @@ from tupperlogger import get_logger
 CLIP_MIME_TYPE = "application/x-tupperdmx-midi-clip"
 DEFAULT_DROP_VELOCITY = 127
 
+# MIME type for LED-scene drops. The payload is a JSON object with the
+# scene's name and full 7-channel dict; on drop the timeline expands it
+# into 7 simultaneous note-on events sharing a group_id.
+SCENE_MIME_TYPE = "application/x-tupperdmx-led-scene"
+
 # Fixtures listed first in the toolbox; anything else falls in alphabetical
 # order after these.
 FIXTURE_PAGE_PRIORITY = {"ledbar": 0, "blinder": 1}
+
+# Default location of the LED scene definitions, relative to the project root.
+DEFAULT_SCENE_CONFIG_PATH = (Path(__file__).resolve().parent.parent
+                             / "software_controller" / "dmx_config.json")
 
 
 class ClipListWidget(QListWidget):
@@ -53,8 +64,45 @@ class ClipListWidget(QListWidget):
         return mime
 
 
+class SceneListWidget(QListWidget):
+    """A list of LED scenes for a single bank; emits SCENE_MIME_TYPE on drag.
+
+    Each item carries the full scene payload (name + 7-channel dict) so the
+    drop handler doesn't need to look anything up. On drop, the timeline
+    expands the payload into a 7-event scene group.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("SceneList")
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        self.setIconSize(QSize(16, 16))
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.setUniformItemSizes(True)
+
+    def mimeData(self, items):
+        if not items:
+            return None
+        item = items[0]
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(payload, dict):
+            return None
+        encoded = json.dumps(payload).encode("utf-8")
+        mime = QMimeData()
+        mime.setData(SCENE_MIME_TYPE, encoded)
+        mime.setText(json.dumps(payload))
+        return mime
+
+
 class ClipLibraryWidget(QWidget):
     """Panel listing draggable MIDI clips grouped by fixture."""
+
+    # Notes 1-7 are channel-control entries used internally by scene drops;
+    # the dedicated scene pages already cover them, so we hide them from the
+    # per-fixture clip pages to avoid clutter and accidental single drops.
+    HIDDEN_CHANNEL_NOTES = frozenset(range(1, 8))
 
     def __init__(self, config: Config, parent=None):
         super().__init__(parent)
@@ -78,7 +126,7 @@ class ClipLibraryWidget(QWidget):
         self._populate()
 
     def _populate(self) -> None:
-        """Rebuild the toolbox from the current midi_note_map."""
+        """Rebuild the toolbox from the current midi_note_map and scene library."""
         while self.toolbox.count() > 0:
             widget = self.toolbox.widget(0)
             self.toolbox.removeItem(0)
@@ -91,17 +139,9 @@ class ClipLibraryWidget(QWidget):
                 note_num = int(note_str)
             except (ValueError, TypeError):
                 continue
+            if note_num in self.HIDDEN_CHANNEL_NOTES:
+                continue
             groups[info.fixture].append((note_num, info))
-
-        if not groups:
-            placeholder = QLabel(
-                "No MIDI notes configured.\n"
-                "Edit config.json to add clips to the library."
-            )
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setWordWrap(True)
-            self.toolbox.addItem(placeholder, "Library")
-            return
 
         for fixture in sorted(
             groups.keys(),
@@ -115,10 +155,87 @@ class ClipLibraryWidget(QWidget):
                 page.addItem(item)
             self.toolbox.addItem(page, fixture.capitalize())
 
+        self._populate_scene_pages()
+
+        if self.toolbox.count() == 0:
+            placeholder = QLabel(
+                "No clips configured.\n"
+                "Edit config.json or dmx_config.json to add clips."
+            )
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setWordWrap(True)
+            self.toolbox.addItem(placeholder, "Library")
+            return
+
         self.logger.info(
             f"Clip library populated: {len(groups)} fixture group(s), "
-            f"{sum(len(v) for v in groups.values())} clip(s)"
+            f"{self.toolbox.count()} toolbox section(s) total"
         )
+
+    def _populate_scene_pages(self) -> None:
+        """Add one toolbox section per LED scene bank from dmx_config.json."""
+        try:
+            scenes = load_led_scenes(DEFAULT_SCENE_CONFIG_PATH)
+        except FileNotFoundError:
+            self.logger.warning(
+                f"Scene config not found at {DEFAULT_SCENE_CONFIG_PATH}; "
+                "scene pages skipped"
+            )
+            return
+
+        by_bank: Dict[str, List[LedScene]] = defaultdict(list)
+        for s in scenes:
+            by_bank[s.bank].append(s)
+
+        for bank in sorted(by_bank.keys()):
+            page = SceneListWidget()
+            for scene in sorted(by_bank[bank], key=lambda s: s.index):
+                payload = self._scene_to_payload(scene)
+                item = QListWidgetItem(scene.name)
+                item.setIcon(self._scene_swatch(scene))
+                item.setData(Qt.ItemDataRole.UserRole, payload)
+                page.addItem(item)
+            self.toolbox.addItem(page, bank)
+
+    @staticmethod
+    def _scene_to_payload(scene: LedScene) -> Dict:
+        return {
+            "name": scene.name,
+            "channels": {
+                "brightness": scene.brightness,
+                "blue": scene.blue,
+                "green": scene.green,
+                "red": scene.red,
+                "animation": scene.animation,
+                "speed": scene.speed,
+                "direction": scene.direction,
+            },
+        }
+
+    def _scene_swatch(self, scene: LedScene) -> QIcon:
+        """Color swatch from RGB; near-white scenes get a small star marker
+        because they trigger the controller's color-passthrough behavior."""
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        scale = max(scene.brightness / 255.0, 0.18)
+        color = QColor(int(scene.red * scale),
+                       int(scene.green * scale),
+                       int(scene.blue * scale))
+        painter.setBrush(color)
+        painter.setPen(QColor(0, 0, 0, 80))
+        painter.drawRect(0, 0, 15, 15)
+        # Mark white-passthrough scenes (R==G==B and ≥254) with a tiny star.
+        if (scene.red == scene.green == scene.blue
+                and scene.red >= 254):
+            painter.setPen(QColor(0, 0, 0))
+            font = painter.font()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(2, 13, "*")
+        painter.end()
+        return QIcon(pixmap)
 
     def _color_swatch(self, hex_color: str) -> QIcon:
         pixmap = QPixmap(16, 16)
