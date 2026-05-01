@@ -9,9 +9,10 @@ from typing import Dict, List, Tuple
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolBox, QListWidget,
                              QListWidgetItem, QLabel, QAbstractItemView)
 from PyQt6.QtGui import QColor, QPixmap, QIcon, QPainter
-from PyQt6.QtCore import Qt, QMimeData, QSize
+from PyQt6.QtCore import Qt, QMimeData, QSize, pyqtSignal
 
 from config import Config, MidiNoteConfig
+from midi.manager import CHANNEL_NOTE_MAP
 from software_controller.scene_loader import LedScene, load_led_scenes
 from tupperlogger import get_logger
 
@@ -99,6 +100,11 @@ class SceneListWidget(QListWidget):
 class ClipLibraryWidget(QWidget):
     """Panel listing draggable MIDI clips grouped by fixture."""
 
+    # Emitted when an item is clicked. Payload is a list of (note, velocity)
+    # tuples — length 1 for a single clip, length 7 for an LED scene
+    # expanded into channel-control notes (matches CHANNEL_NOTE_MAP).
+    preview_requested = pyqtSignal(list)
+
     # Notes 1-7 are channel-control entries used internally by scene drops;
     # the dedicated scene pages already cover them, so we hide them from the
     # per-fixture clip pages to avoid clutter and accidental single drops.
@@ -153,6 +159,7 @@ class ClipLibraryWidget(QWidget):
                 item.setIcon(self._color_swatch(info.color))
                 item.setData(Qt.ItemDataRole.UserRole, note_num)
                 page.addItem(item)
+            page.itemClicked.connect(self._on_clip_item_clicked)
             self.toolbox.addItem(page, fixture.capitalize())
 
         self._populate_scene_pages()
@@ -195,6 +202,7 @@ class ClipLibraryWidget(QWidget):
                 item.setIcon(self._scene_swatch(scene))
                 item.setData(Qt.ItemDataRole.UserRole, payload)
                 page.addItem(item)
+            page.itemClicked.connect(self._on_scene_item_clicked)
             self.toolbox.addItem(page, bank)
 
     @staticmethod
@@ -252,3 +260,30 @@ class ClipLibraryWidget(QWidget):
         self.config = config
         self._populate()
         self.logger.info("Clip library refreshed with new configuration")
+
+    def _on_clip_item_clicked(self, item: QListWidgetItem) -> None:
+        """Auditioning a single clip emits one (note, velocity=127) tuple."""
+        note = item.data(Qt.ItemDataRole.UserRole)
+        if note is None:
+            return
+        self.preview_requested.emit([(int(note), DEFAULT_DROP_VELOCITY)])
+
+    def _on_scene_item_clicked(self, item: QListWidgetItem) -> None:
+        """Auditioning a scene emits 7 (note, velocity) tuples — one per
+        channel-control note — mirroring how a scene drop is encoded in the
+        timeline (see midi.manager.add_scene)."""
+        payload = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(payload, dict):
+            return
+        channels = payload.get("channels") or {}
+        if not isinstance(channels, dict):
+            return
+        messages: List[Tuple[int, int]] = []
+        for ch_name, note in CHANNEL_NOTE_MAP:
+            if ch_name not in channels:
+                continue
+            # Same lossy 0..255 → 0..127 mapping the controller doubles back.
+            velocity = max(0, min(127, int(channels[ch_name]) // 2))
+            messages.append((note, velocity))
+        if messages:
+            self.preview_requested.emit(messages)
