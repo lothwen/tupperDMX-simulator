@@ -11,14 +11,14 @@ from typing import Optional, List, Dict, Any
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QGraphicsView, QGraphicsScene,
                              QSlider, QPushButton, QSizePolicy, QGraphicsLineItem,
-                             QGraphicsItem, QDialog, QMessageBox, QGraphicsProxyWidget)
+                             QDialog, QMessageBox)
 from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import ContentView, MidiEventEditDialog, TrackResizeHandle
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
-from .tracks import WaveformTrack, MidiEventsTrack, PianoRollTrack, RulerTrack
+from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from tupperlogger import get_logger
 
 
@@ -34,37 +34,30 @@ class Timeline(QWidget):
     audio_volume_changed = pyqtSignal(int)
     audio_mute_toggled = pyqtSignal(bool)
     midi_data_changed = pyqtSignal()  # Emitted when MIDI data is modified
-    piano_roll_visibility_changed = pyqtSignal(bool)  # Emitted when piano roll is hidden/shown
     track_heights_changed = pyqtSignal(int, int)  # waveform_height, midi_events_height (on commit)
 
     # Constants
-    KEY_HEIGHT = 20
-    PIANO_WIDTH = 100
+    HEADER_WIDTH = 100
     RULER_TRACK_HEIGHT = 30
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
     DEFAULT_MIDI_EVENTS_TRACK_HEIGHT = 50
     MIN_TRACK_HEIGHT = 30
     TRACK_SPACING = 5
-    PIANO_ROLL_TOGGLE_HEIGHT = 26  # Header strip hosting the piano-roll show/hide button
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
 
-    # Preferred widget heights (px) for the timeline container, by piano-roll visibility
-    HEIGHT_WITH_PIANO_ROLL = 300
-    HEIGHT_WITHOUT_PIANO_ROLL = 230
+    # Preferred widget height (px) for the timeline container
+    DEFAULT_HEIGHT = 230
 
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
-                 initial_audio_volume=0.5, initial_piano_roll_visible=False,
+                 initial_audio_volume=0.5,
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
                  parent=None):
         super().__init__(parent)
         self.audio_file = audio_file
         self.midi_manager = midi_manager
 
-        self.min_note = 21
-        self.max_note = 108
         self.bpm = 120
-        self.piano_roll_visible = bool(initial_piano_roll_visible)
 
         # Resizable track heights (instance attributes so they can be changed at runtime)
         self.waveform_track_height = max(
@@ -81,15 +74,13 @@ class Timeline(QWidget):
         # Resize handle items (created in _init_tracks)
         self.waveform_resize_handle = None
         self.midi_events_resize_handle = None
-        
-        # Legacy compatibility - these will be populated by tracks
-        self.note_items = []
+
+        # Legacy compatibility - populated by tracks
         self.midi_event_items = []
-        
+
         # Cache for current UI data (refreshed from MidiManager)
         self._cached_events = []
-        self._cached_notes = []
-        
+
         # Time grid items (managed centrally)
         self.time_grid_items = []
         
@@ -161,7 +152,7 @@ class Timeline(QWidget):
         self.header_view = QGraphicsView(self)
         self.header_scene = QGraphicsScene(self)
         self.header_view.setScene(self.header_scene)
-        self.header_view.setFixedWidth(self.PIANO_WIDTH)
+        self.header_view.setFixedWidth(self.HEADER_WIDTH)
         self.header_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.header_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.header_view.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding) 
@@ -185,7 +176,7 @@ class Timeline(QWidget):
         self.content_scene.setBackgroundBrush(QColor(30, 30, 30))
 
         self._recompute_scene_height()
-        self.header_scene.setSceneRect(0, 0, self.PIANO_WIDTH, self.scene_height)
+        self.header_scene.setSceneRect(0, 0, self.HEADER_WIDTH, self.scene_height)
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
 
         self.draw_playhead()
@@ -203,21 +194,11 @@ class Timeline(QWidget):
         """Y offset of the Blinder MIDI events track (shares the same height)."""
         return self._midi_events_y() + self.midi_events_track_height + self.TRACK_SPACING
 
-    def _piano_roll_toggle_y(self) -> int:
-        """Y offset of the piano-roll toggle strip in the header scene."""
-        return self._midi_events_blinder_y() + self.midi_events_track_height + self.TRACK_SPACING
-
-    def _piano_roll_content_y(self) -> int:
-        """Y offset where piano-roll keys/notes start (below the toggle strip)."""
-        return self._piano_roll_toggle_y() + self.PIANO_ROLL_TOGGLE_HEIGHT
-
     def _recompute_scene_height(self):
-        """Compute scene height based on current piano-roll visibility."""
-        base = self._piano_roll_toggle_y() + self.PIANO_ROLL_TOGGLE_HEIGHT
-        if self.piano_roll_visible:
-            note_range = self.max_note - self.min_note
-            base += self.KEY_HEIGHT * note_range
-        self.scene_height = base
+        """Compute total scene height from the current track layout."""
+        self.scene_height = (self._midi_events_blinder_y()
+                             + self.midi_events_track_height
+                             + self.TRACK_SPACING)
 
     def _init_tracks(self):
         """Initialize all timeline tracks."""
@@ -227,7 +208,6 @@ class Timeline(QWidget):
                                                  fixture_filter="ledbar")
         self.midi_events_blinder_track = MidiEventsTrack(self, self.content_scene, self.header_scene,
                                                          fixture_filter="blinder")
-        self.piano_roll_track = PianoRollTrack(self, self.content_scene, self.header_scene)
 
         # Draw initial track layout
         self.ruler_track.draw_header()
@@ -240,15 +220,6 @@ class Timeline(QWidget):
         # Resize handles for the two resizable tracks
         self._create_resize_handles()
 
-        # Piano-roll show/hide toggle button (always present)
-        self._create_piano_roll_toggle()
-
-        # Piano keys/grid only drawn when visible
-        if self.piano_roll_visible:
-            piano_y = self._piano_roll_content_y()
-            self.piano_roll_track.draw_piano_keys(piano_y)
-            self.piano_roll_track.draw_piano_roll_grid(piano_y)
-
         # Draw initial waveform if audio file provided
         if self.audio_file:
             self.waveform_track.draw_waveform(self.audio_file, self._waveform_y())
@@ -257,7 +228,7 @@ class Timeline(QWidget):
         """Create draggable resize handles at the bottom of the resizable tracks."""
         # Waveform handle
         self.waveform_resize_handle = TrackResizeHandle(
-            self.PIANO_WIDTH, self.MIN_TRACK_HEIGHT,
+            self.HEADER_WIDTH, self.MIN_TRACK_HEIGHT,
             lambda: self.waveform_track_height
         )
         self.waveform_resize_handle.height_preview.connect(self._on_waveform_height_preview)
@@ -266,7 +237,7 @@ class Timeline(QWidget):
 
         # MIDI events handle
         self.midi_events_resize_handle = TrackResizeHandle(
-            self.PIANO_WIDTH, self.MIN_TRACK_HEIGHT,
+            self.HEADER_WIDTH, self.MIN_TRACK_HEIGHT,
             lambda: self.midi_events_track_height
         )
         self.midi_events_resize_handle.height_preview.connect(self._on_midi_events_height_preview)
@@ -316,28 +287,16 @@ class Timeline(QWidget):
         self.track_heights_changed.emit(self.waveform_track_height, self.midi_events_track_height)
 
     def _reflow_layout(self, redraw_waveform: bool = False):
-        """Reposition headers, content, and overlays after a height/visibility change."""
+        """Reposition headers, content, and overlays after a height change."""
         # Recompute scene height and update both scene rects
         self._recompute_scene_height()
-        self.header_scene.setSceneRect(0, 0, self.PIANO_WIDTH, self.scene_height)
+        self.header_scene.setSceneRect(0, 0, self.HEADER_WIDTH, self.scene_height)
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
 
         # Headers
         self.waveform_track.draw_header(self._waveform_y())
         self.midi_events_track.draw_header(self._midi_events_y())
         self.midi_events_blinder_track.draw_header(self._midi_events_blinder_y())
-
-        # Piano-roll toggle proxy
-        if hasattr(self, 'piano_roll_toggle_proxy') and self.piano_roll_toggle_proxy is not None:
-            self.piano_roll_toggle_proxy.setPos(1, self._piano_roll_toggle_y())
-
-        # Piano roll content (only redraw if currently visible)
-        if self.piano_roll_visible:
-            piano_y = self._piano_roll_content_y()
-            self.piano_roll_track.draw_piano_keys(piano_y)
-            self.piano_roll_track.draw_piano_roll_grid(piano_y)
-            if self._cached_notes:
-                self.piano_roll_track.redraw_notes(self._cached_notes, piano_y)
 
         # MIDI events content (cheap to redraw — keeps box heights in sync)
         if self._cached_events:
@@ -358,71 +317,6 @@ class Timeline(QWidget):
 
         # Move resize handles to their new positions
         self._reposition_resize_handles()
-
-    def _create_piano_roll_toggle(self):
-        """Create the persistent show/hide button for the piano roll track."""
-        self.piano_roll_toggle_button = QPushButton()
-        self.piano_roll_toggle_button.setObjectName("PianoRollToggleButton")
-        self.piano_roll_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.piano_roll_toggle_button.setFlat(True)
-        self.piano_roll_toggle_button.setFixedSize(self.PIANO_WIDTH - 2,
-                                                   self.PIANO_ROLL_TOGGLE_HEIGHT - 2)
-        self.piano_roll_toggle_button.clicked.connect(self._on_piano_roll_toggle_clicked)
-        self._refresh_piano_roll_toggle_label()
-
-        self.piano_roll_toggle_proxy = QGraphicsProxyWidget()
-        self.piano_roll_toggle_proxy.setWidget(self.piano_roll_toggle_button)
-        self.piano_roll_toggle_proxy.setPos(1, self._piano_roll_toggle_y())
-        self.piano_roll_toggle_proxy.setZValue(5)
-        self.header_scene.addItem(self.piano_roll_toggle_proxy)
-
-    def _refresh_piano_roll_toggle_label(self):
-        """Update toggle button text/tooltip to reflect current visibility."""
-        if self.piano_roll_visible:
-            self.piano_roll_toggle_button.setText("▼  Piano Roll")
-            self.piano_roll_toggle_button.setToolTip("Hide piano roll track")
-        else:
-            self.piano_roll_toggle_button.setText("▶  Piano Roll")
-            self.piano_roll_toggle_button.setToolTip("Show piano roll track")
-
-    def _on_piano_roll_toggle_clicked(self):
-        """Handle clicks on the piano-roll show/hide toggle."""
-        self.set_piano_roll_visible(not self.piano_roll_visible)
-
-    def set_piano_roll_visible(self, visible: bool):
-        """Show or hide the piano roll track and reflow the timeline."""
-        visible = bool(visible)
-        if visible == self.piano_roll_visible:
-            return
-
-        self.piano_roll_visible = visible
-        self._refresh_piano_roll_toggle_label()
-
-        if visible:
-            piano_y = self._piano_roll_content_y()
-            self.piano_roll_track.draw_piano_keys(piano_y)
-            self.piano_roll_track.draw_piano_roll_grid(piano_y)
-            if self._cached_notes:
-                self.piano_roll_track.redraw_notes(self._cached_notes, piano_y)
-        else:
-            self.piano_roll_track.clear_items()
-            self.note_items.clear()
-
-        self._recompute_scene_height()
-        self.header_scene.setSceneRect(0, 0, self.PIANO_WIDTH, self.scene_height)
-        self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
-
-        # Playhead and grid lines span the full scene height; redraw them
-        if hasattr(self, 'playhead') and self.playhead is not None:
-            self.playhead.setLine(0, 0, 0, self.scene_height)
-        self.draw_time_grid()
-
-        # Adjust the timeline widget height so we don't leave dead space
-        self.setFixedHeight(self.HEIGHT_WITH_PIANO_ROLL if visible
-                            else self.HEIGHT_WITHOUT_PIANO_ROLL)
-
-        self.logger.info(f"Piano roll {'shown' if visible else 'hidden'}")
-        self.piano_roll_visibility_changed.emit(visible)
 
     def draw_playhead(self):
         """Draw the playhead line."""
@@ -458,23 +352,15 @@ class Timeline(QWidget):
         """Refresh timeline display from MidiManager data."""
         if not self.midi_manager:
             return
-            
+
         # Get current data from MidiManager
         self._cached_events = self.midi_manager.get_events_for_ui()
-        self._cached_notes = self.midi_manager.get_notes_for_ui()
-        
+
         # Redraw tracks with cached data
         midi_events_y = self._midi_events_y()
-        piano_roll_y = self._piano_roll_content_y()
-
         self.midi_events_track.redraw_events(self._cached_events, midi_events_y)
         self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
-        if self.piano_roll_visible:
-            self.piano_roll_track.redraw_notes(self._cached_notes, piano_roll_y)
-        else:
-            # Keep tooltip list consistent with what's drawn
-            self.note_items.clear()
-        
+
         # Detect BPM from first event if available
         if self._cached_events:
             # Try to get BPM from MIDI data
@@ -864,13 +750,12 @@ class Timeline(QWidget):
         self.audio_file = audio_file
 
         # Clear existing items
-        self.note_items.clear()
         self.midi_event_items.clear()
-        
+
         # Redraw waveform if audio file provided
         if audio_file:
             self.waveform_track.draw_waveform(audio_file, self._waveform_y())
-        
+
         QTimer.singleShot(0, self.fit_to_width)
     
     def set_waveform_offset(self, offset_sec: float) -> None:
@@ -916,10 +801,6 @@ class Timeline(QWidget):
         else:
             super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        """Handle mouse move events - delegated to ContentView for piano roll tooltips."""
-        super().mouseMoveEvent(event)
-
     def cleanup(self):
         """Cleanup all tracks when timeline is destroyed."""
         if hasattr(self, 'ruler_track'):
@@ -930,5 +811,3 @@ class Timeline(QWidget):
             self.midi_events_track.clear_items()
         if hasattr(self, 'midi_events_blinder_track'):
             self.midi_events_blinder_track.clear_items()
-        if hasattr(self, 'piano_roll_track'):
-            self.piano_roll_track.clear_items()

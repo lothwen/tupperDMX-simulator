@@ -499,7 +499,7 @@ class MidiEventsTrack(BaseTrack):
 
         header_rect = QGraphicsRectItem(
             0, y_offset,
-            self.timeline_manager.PIANO_WIDTH,
+            self.timeline_manager.HEADER_WIDTH,
             self.get_track_height()
         )
         header_rect.setBrush(QBrush(QColor(50, 50, 50)))

@@ -183,14 +183,10 @@ class MainWindow(QMainWindow):
             midi_manager=self.midi_manager,
             initial_metronome_volume=self.config.volume.metronome,
             initial_audio_volume=self.config.volume.audio,
-            initial_piano_roll_visible=self.config.window.piano_roll_visible,
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height
         )
-        self.timeline.setFixedHeight(
-            Timeline.HEIGHT_WITH_PIANO_ROLL if self.config.window.piano_roll_visible
-            else Timeline.HEIGHT_WITHOUT_PIANO_ROLL
-        )
+        self.timeline.setFixedHeight(Timeline.DEFAULT_HEIGHT)
         self.timeline.seek_requested.connect(self.seek_playback)
         self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
@@ -198,7 +194,6 @@ class MainWindow(QMainWindow):
         self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
         self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
-        self.timeline.piano_roll_visibility_changed.connect(self.on_piano_roll_visibility_changed)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         self.main_layout.addWidget(self.timeline)
@@ -638,11 +633,6 @@ class MainWindow(QMainWindow):
     def on_audio_mute_toggled(self, muted):
         """Handle audio mute toggle from timeline."""
         self.media_controller.set_audio_muted(muted)
-
-    def on_piano_roll_visibility_changed(self, visible):
-        """Persist piano-roll visibility when toggled from the timeline."""
-        self.config.window.piano_roll_visible = bool(visible)
-        self.save_config()
 
     def on_track_heights_changed(self, waveform_height, midi_events_height):
         """Persist track heights when the user finishes resizing."""
