@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import time
+import mido
 import numpy as np
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
         
         self.dmx_display = DMXDisplayWidget(self.config)
         self.clip_library = ClipLibraryWidget(self.config)
+        self.clip_library.preview_requested.connect(self._preview_clip)
 
         self.audio_controller = AudioController(self.config.metronome, self.config.volume.metronome)
         self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
@@ -546,6 +548,58 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Software controller changed: {controller}")
         self.software_controller = controller
         self.midi_manager.set_software_controller(controller)
+
+    def _preview_clip(self, messages):
+        """Audition clip-library items live: route note_on(s) to the current
+        MIDI output without modifying the timeline. `messages` is a list of
+        (note, velocity) tuples — length 1 for clips, 7 for LED scenes."""
+        if not messages:
+            return
+        port_name = self.media_controller.port_name
+        if not port_name:
+            self.logger.debug("Preview ignored: no MIDI port selected")
+            return
+
+        if port_name == "Software emulated":
+            controller = getattr(self, "software_controller", None)
+            if controller is None:
+                self.logger.debug(
+                    "Preview ignored: software controller not active "
+                    "(set Art-Net target to 127.0.0.1)"
+                )
+                return
+            for note, velocity in messages:
+                try:
+                    controller.handle_note_on(0, int(note), int(velocity))
+                except Exception as e:
+                    self.logger.warning(
+                        f"Preview to software controller failed: {e}"
+                    )
+            return
+
+        # Hardware port: reuse the running worker's open handle when it
+        # matches, since some MIDI backends refuse a second open on the
+        # same device. Otherwise open a transient port for this preview.
+        worker = self.midi_manager.current_worker
+        if (worker and worker.isRunning() and worker.port
+                and worker.port_name == port_name):
+            for note, velocity in messages:
+                try:
+                    worker.port.send(mido.Message(
+                        'note_on', note=int(note), velocity=int(velocity)))
+                except Exception as e:
+                    self.logger.warning(
+                        f"Preview via worker port failed: {e}")
+            return
+
+        try:
+            with mido.open_output(port_name) as port:
+                for note, velocity in messages:
+                    port.send(mido.Message(
+                        'note_on', note=int(note), velocity=int(velocity)))
+        except Exception as e:
+            self.logger.warning(
+                f"Preview open/send on '{port_name}' failed: {e}")
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""
