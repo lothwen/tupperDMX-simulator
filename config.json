@@ -3,9 +3,8 @@
     "width": 1920,
     "height": 1080,
     "dmx_panel_collapsed": false,
-    "piano_roll_visible": false,
-    "waveform_track_height": 77,
-    "midi_events_track_height": 77
+    "waveform_track_height": 30,
+    "midi_events_track_height": 60
   },
   "artnet": {
     "ip": "127.0.0.1",
@@ -15,17 +14,67 @@
   "playlist": {
     "songs": [
       {
-        "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/01-leve-temblor-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/01_El_leve_temblor_de_los_charcos.wav",
-        "offset": -0.7962293293672588
+        "midi": "/home/lothwen/Desktop/Billares/midis/04+capitanes-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/01_Capitanes.mp3",
+        "offset": 0.0
       },
       {
         "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
         "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav",
         "offset": 6.198446749508021
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/test.mid",
+        "audio": "/home/lothwen/Desktop/Billares/03_La_espina.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/03-letras-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/04_Letras_minusculas.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/",
+        "audio": "/home/lothwen/Desktop/Billares/05_El_acantilado.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/05-espias-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/06_Espias_en_Berlin.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/06-notre-dame-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/07_Notre-Dame.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/07-mobius-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/08-Mobius.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/02+la-ciudad-de-lona-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/09_La Ciudad de Lona.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/",
+        "audio": "/home/lothwen/Desktop/Billares/10_Supersubmarina.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/",
+        "audio": "/home/lothwen/Desktop/Billares/11_No_decirnos_nada.mp3",
+        "offset": 0.0
+      },
+      {
+        "midi": "/home/lothwen/Desktop/Billares/midis/04+fluzo-v0.5.mid",
+        "audio": "/home/lothwen/Desktop/Billares/12_Fluzo.mp3",
+        "offset": 0.0
       }
     ],
-    "current_song_index": 1
+    "current_song_index": 2
   },
   "fixtures": {
     "led_bar_controllers": [
@@ -84,6 +133,41 @@
     ]
   },
   "midi_note_map": {
+    "1": {
+      "part": "CH:BRIGHTNESS",
+      "color": "#555555",
+      "fixture": "ledbar"
+    },
+    "2": {
+      "part": "CH:BLUE",
+      "color": "#3333aa",
+      "fixture": "ledbar"
+    },
+    "3": {
+      "part": "CH:GREEN",
+      "color": "#33aa33",
+      "fixture": "ledbar"
+    },
+    "4": {
+      "part": "CH:RED",
+      "color": "#aa3333",
+      "fixture": "ledbar"
+    },
+    "5": {
+      "part": "CH:ANIM",
+      "color": "#555555",
+      "fixture": "ledbar"
+    },
+    "6": {
+      "part": "CH:SPEED",
+      "color": "#555555",
+      "fixture": "ledbar"
+    },
+    "7": {
+      "part": "CH:DIRECTION",
+      "color": "#555555",
+      "fixture": "ledbar"
+    },
     "26": {
       "part": "WARM LOW",
       "color": "#c73737",
@@ -147,12 +231,12 @@
     "45": {
       "part": "BRIDGE",
       "color": "#461c64",
-      "fixture": "blinder"
+      "fixture": "ledbar"
     },
     "46": {
       "part": "INST",
       "color": "#802da4",
-      "fixture": "blinder"
+      "fixture": "ledbar"
     },
     "47": {
       "part": "SOLO",

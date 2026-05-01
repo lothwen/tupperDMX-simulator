@@ -13,8 +13,14 @@ A PyQt6-based lighting control application that synchronizes MP3 audio playback 
 
 ### MIDI Control
 - Load and play MIDI files synchronized to audio
-- Interactive MIDI event editing — drag, add, delete, and reposition events on the timeline
+- Clip-style MIDI event editing — move, resize, snap, add, and delete events on per-fixture timeline tracks (ledbar, blinder)
 - Real-time MIDI output to hardware ports or the built-in software controller
+
+### Clip Library
+- Right-sidebar panel with draggable clips grouped per fixture and per LED scene bank (FILLS, ANIMATIONS, TUBES, ...)
+- Drag a clip onto the matching fixture's timeline track to insert an event
+- Drag an LED scene to drop a 7-channel scene group at the cursor time
+- Click any item to audition it live through the active MIDI output without modifying the timeline
 
 ### DMX Lighting Output
 - **Art-Net (UDP)**: Send DMX data over the network to Art-Net-compatible fixtures
@@ -37,7 +43,7 @@ No hardware? No problem. When Art-Net is pointed at localhost, a pure-Python DMX
 ### Timeline
 - Waveform visualization with beat markers
 - Zoomable and pannable content view
-- Piano roll with interactive note visualization
+- Per-fixture MIDI event tracks with resizable track heights and BLACKOUT-aware gap handling
 
 ---
 
@@ -113,4 +119,4 @@ Produces a standalone executable in `dist/`. Cross-platform builds (Windows, mac
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+See [LICENSE.txt](LICENSE.txt) for details.
