@@ -772,6 +772,48 @@ class MidiManager(QObject):
         )
         return True
 
+    def replace_with_blackout(self, event_id: str) -> bool:
+        """Convert a non-BLACKOUT event into the BLACKOUT for its fixture.
+
+        Preserves the event's time slot so neighboring clips don't visually
+        expand into the freed space. Adjacent BLACKOUTs are merged afterwards
+        via reconcile_blackouts(). No-op (returns False) if the event is
+        already a BLACKOUT or its fixture has no BLACKOUT mapping.
+        """
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+        event = self.midi_events[idx]
+        if self.is_blackout(event):
+            return False
+
+        fixture = self._event_fixture(event)
+        bo_note = self._blackout_note_number(fixture)
+        if bo_note is None:
+            self.logger.warning(
+                f"Cannot replace event {event_id} with BLACKOUT: "
+                f"no BLACKOUT note mapped for fixture={fixture!r}"
+            )
+            return False
+
+        old_note = event['note']
+        old_time = event['time']
+        event['note'] = bo_note
+        event['info'] = self.midi_note_map[str(bo_note)]
+        for note in self.midi_notes:
+            if (note['note'] == old_note
+                    and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
+                note['note'] = bo_note
+                break
+
+        self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Replaced event {event_id} (note={old_note}, "
+            f"time={old_time:.3f}s, fixture={fixture!r}) with BLACKOUT"
+        )
+        return True
+
     def _rebuild_midi_data(self) -> None:
         """Rebuild the MIDI file from current event and note data."""
         if not self.midi_data:

@@ -642,7 +642,13 @@ class Timeline(QWidget):
                 )
 
     def on_midi_event_delete_by_id(self, event_id: str):
-        """Delete request for the event with `event_id`."""
+        """Delete request for the event with `event_id`.
+
+        BLACKOUT clips are removed outright (the user is clearing a gap).
+        Regular clips are converted into a fixture-matching BLACKOUT instead
+        of being deleted, so the time slot remains accounted for and adjacent
+        clips don't visually expand into the freed space.
+        """
         if not self.midi_manager or not event_id:
             return
         event_data = self._find_cached_event(event_id)
@@ -655,20 +661,30 @@ class Timeline(QWidget):
         else:
             event_name = f"Note {event_data['note']}"
 
+        is_blackout = self.midi_manager.is_blackout(event_data)
+        if is_blackout:
+            title = "Remove Blackout"
+            prompt = (f"Remove the blackout '{event_name}' "
+                      f"at {event_data['time']:.2f}s?")
+        else:
+            title = "Delete MIDI Event"
+            prompt = (f"Replace the MIDI event '{event_name}' at "
+                      f"{event_data['time']:.2f}s with a blackout?")
+
         reply = QMessageBox.question(
-            None,
-            "Delete MIDI Event",
-            f"Are you sure you want to delete the MIDI event '{event_name}' at {event_data['time']:.2f}s?",
+            None, title, prompt,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
-        if reply == QMessageBox.StandardButton.Yes:
-            if self.midi_manager.delete_event(event_id):
-                self.refresh_from_manager()
-                self.logger.info(
-                    f"MIDI event deleted: note={event_data['note']}, time={event_data['time']:.3f}s"
-                )
+        if is_blackout:
+            ok = self.midi_manager.delete_event(event_id)
+        else:
+            ok = self.midi_manager.replace_with_blackout(event_id)
+        if ok:
+            self.refresh_from_manager()
 
     def fixture_at_y(self, scene_y: float):
         """Return the fixture filter owning the given scene Y, or None.
