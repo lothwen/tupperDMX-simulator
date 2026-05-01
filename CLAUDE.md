@@ -100,8 +100,9 @@ python main.py
 
 The application uses a modular UI design:
 - `ToolbarManager` (`ui/toolbar_manager.py`): Creates media controls, BPM spinner, source selectors, and playlist navigation (prev/next/remove song with counter)
-- `Timeline` (`timeline/manager.py`): Waveform visualization with beat detection, seeking, and MIDI event editing
+- `Timeline` (`timeline/manager.py`): Waveform visualization with beat detection, seeking, and clip-style MIDI event editing across one track per fixture (ledbar, blinder)
 - `DMXDisplayWidget` (`ui/dmx_display.py`): Real-time DMX channel monitor
+- `ClipLibraryWidget` (`ui/clip_library.py`): Right-sidebar clip library with draggable per-fixture clips and LED-scene banks; click to preview, drag to drop on the timeline
 - `AudioController` (`ui/audio_controller.py`): Drift-free metronome generation and audio processing
 - `ErrorDialogManager` (`ui/error_dialogs.py`): Centralized error handling with user-friendly dialogs and retry functionality
 
@@ -140,10 +141,24 @@ When starting/resuming metronome:
 - Comprehensive dataclass-based structure with automatic migration and error recovery
 
 **MIDI Event Management**
-- Interactive MIDI event editing via timeline right-click context menus
-- Drag-and-drop event timing adjustment with visual feedback
+- Clip-style editing: each event renders as a movable, resizable rectangle on a per-fixture track (one row for ledbar, one for blinder)
+- Three drag modes per clip: MOVE (body grab), RESIZE_LEFT, RESIZE_RIGHT — with neighbor clamping and edge-snap
+- Persistence happens on `mouseRelease` only via `*_committed` signals; mid-drag is purely visual
+- BLACKOUT events serve as gap markers between visible clips. They are scoped per fixture (`BLACKOUT` for ledbar, `BLACKOUT_BLINDERS` for blinders) and identified by part-name PREFIX (case-insensitive), not by note number
+- `MidiManager.reconcile_blackouts()` enforces invariants: no zero-duration BLACKOUTs, no adjacent BLACKOUTs (later one merged away), and BLACKOUTs reinserted to maintain intended clip extents
+- Deleting a regular clip converts it into a fixture-matching BLACKOUT rather than producing a hole — keeps the gap-marker invariant intact
+- Scene clips: 7 simultaneous channel-control note_on events sharing a `group_id`, rendered as a single grouped clip; drag operations route to the scene API (`add_scene`, group move/resize)
+- Right-click context menus for add/edit/delete; drag-and-drop event timing adjustment with visual feedback
 - Real-time synchronization between timeline display and MidiManager data
-- Support for adding, editing, and deleting events with proper validation
+
+**Clip Library & Drag-and-Drop**
+- Right sidebar tabs: "Library" (default) and "DMX Channels"
+- `ClipLibraryWidget` builds a `QToolBox` with one section per fixture (from `config.midi_note_map`) and one section per LED scene bank (from `software_controller/dmx_config.json`)
+- Per-fixture pages hide notes 1–7 (channel-control notes) since those are covered by the dedicated scene pages
+- Two custom MIME types: `application/x-tupperdmx-midi-clip` (single note + velocity) and `application/x-tupperdmx-led-scene` (full 7-channel scene payload)
+- Drop targets validated by track: `Timeline.can_accept_clip_drop()` checks the fixture under the cursor matches the clip's fixture; scene drops are restricted to the ledbar track
+- `Timeline.handle_scene_drop()` calls `MidiManager.add_scene()` to expand a scene payload into 7 grouped events at the drop time
+- Click-to-preview: `ClipLibraryWidget.preview_requested` emits `[(note, velocity), ...]` and `MainWindow._preview_clip()` routes those messages to the active MIDI output (or directly to the software controller) without modifying the timeline
 
 **Error Handling & Recovery**
 - Centralized error dialog system with user-friendly messages
@@ -166,6 +181,7 @@ When starting/resuming metronome:
   - `audio_controller.py`: Drift-free metronome generation and audio processing
   - `stage_controller.py`: Virtual stage visualization with fixture rendering
   - `dmx_display.py`: Real-time DMX channel monitoring widget
+  - `clip_library.py`: Draggable clip library panel — per-fixture clip lists and LED scene banks with click-to-preview and drag-to-drop onto the timeline
   - `toolbar_manager.py`: Application toolbar with controls, playlist navigation, and status displays
   - `error_dialogs.py`: User-friendly error handling and recovery dialogs
 - `dmx/`: DMX protocol implementations and workers
@@ -181,37 +197,42 @@ When starting/resuming metronome:
   - `main.py`: `DMXController` — manages 96-channel DMX universe with 53 MIDI note mappings, scene banks, chase sequences, color palette generation, and HSL blending
   - `artnet_sender.py`: `ArtNetSender` — sends Art-Net UDP packets to DMX receivers
   - `dmx.py`: `LedScene`/`BlinderScene` dataclasses for fixture configuration
+  - `scene_loader.py`: `load_led_scenes()` — reads `led_banks` from `dmx_config.json` into immutable `LedScene` records consumed by the clip library
   - `dmx_config.json`: Scene banks (FILLS, TUBES, ANIMATIONS, etc.) and chase definitions
 - `tupperlogger/`: Custom logging system with file rotation
 - `timeline/`: Modular timeline package with track-based architecture
-  - `manager.py`: Main Timeline coordinator and public interface
+  - `manager.py`: Main Timeline coordinator and public interface; instantiates one `MidiEventsTrack` per fixture filter (`ledbar`, `blinder`) and routes drag/drop to the matching track
   - `tracks/base.py`: BaseTrack interface for all timeline tracks
   - `tracks/ruler.py`: Time ruler with persistent metronome controls
   - `tracks/waveform.py`: Audio waveform visualization with DraggableWaveform
-  - `tracks/midi_events.py`: Interactive MIDI event boxes with drag-and-drop editing
-  - `tracks/piano_roll.py`: Piano keys and note visualization
+  - `tracks/midi_events.py`: Clip-style MIDI event boxes with move/resize-left/resize-right drag modes, BLACKOUT-aware bounds, edge snapping, and scene-group rendering
   - `widgets/tooltip.py`: CustomTooltip for detailed event information
   - `widgets/content_view.py`: ContentView with zoom/pan functionality
-  - `widgets/midi_event_edit.py`: MidiEventEditDialog for event editing
+  - `widgets/midi_event_edit.py`: MidiEventEditDialog for single-event editing
+  - `widgets/scene_edit.py`: SceneEditDialog for editing 7-channel scene groups
+  - `widgets/resize_handle.py`: TrackResizeHandle for dragging waveform/MIDI track heights
 - `config.py`: Comprehensive configuration management with dataclass validation
 - `fixtures.py`: DMX fixture definitions and channel mapping utilities
 
 ## Important Development Patterns
 
 ### Timeline Architecture (Modular Design)
-- **Track-Based System**: Timeline uses individual track objects for different content types
+- **Track-Based System**: Timeline uses individual track objects for different content types — `RulerTrack`, `WaveformTrack`, and one `MidiEventsTrack` per fixture (`fixture_filter="ledbar"` and `fixture_filter="blinder"`)
 - **BaseTrack Interface**: All tracks inherit from BaseTrack providing common functionality
-- **Separation of Concerns**: Each track handles its own rendering and interaction logic
+- **Separation of Concerns**: Each track handles its own rendering and interaction logic; `MidiEventsTrack.fixture_filter` decides which events from the manager belong to that lane
 - **Persistent Controls**: Metronome and audio controls persist across BPM changes and redraws
+- **Resizable Heights**: Waveform and MIDI events tracks expose drag handles (`TrackResizeHandle`); heights persist via `window.waveform_track_height` / `window.midi_events_track_height`
 - **Content vs Header Separation**: Tracks maintain separate item lists for content and headers
-- **Coordinate Management**: Timeline manager provides PIXELS_PER_SECOND conversion utilities
+- **Coordinate Management**: Timeline manager provides `PIXELS_PER_SECOND` conversion utilities and `fixture_at_y()` for routing drops to the correct track
 
 ### Timeline and MIDI Integration
 - Timeline manager coordinates all tracks via `refresh_from_manager()` calls
-- MIDI events cached in `_cached_events` and `_cached_notes` for UI performance
-- Event editing emits `data_changed` signal for cross-component synchronization
+- MIDI events cached in `_cached_events` for UI performance
+- Event editing emits `data_changed` signal from `MidiManager` for cross-component synchronization
 - Track coordinate conversion: `time_seconds = x_pos / timeline.PIXELS_PER_SECOND`
-- Interactive editing: DraggableMidiEvent handles mouse events and emits timing changes
+- Interactive editing: `DraggableMidiEvent` handles mouse events and emits `move_committed` / `left_edge_committed` / `right_edge_committed` on release; mid-drag is purely visual
+- Scene groups are collapsed into a single `DraggableMidiEvent` via `build_render_units()`; group drag operations route to `MidiManager`'s scene-aware methods
+- Drop routing: `Timeline.handle_clip_drop()` checks fixture compatibility before inserting; `Timeline.handle_scene_drop()` calls `MidiManager.add_scene()` to expand a 7-channel payload into a grouped event set
 
 ### Error Handling Standards
 - All file operations wrapped with try/catch and user-friendly error dialogs
