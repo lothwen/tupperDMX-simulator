@@ -6,7 +6,11 @@ from pathlib import Path
 app_name = "TupperDMX-Simulator"
 main_script = "main.py"
 
-# Data files and assets
+# Data files and assets.
+# config.json holds shipped, read-only data (fixtures + midi_note_map) and is
+# resolved at runtime via sys._MEIPASS. User-writable preferences live in
+# userprefs.json under the platform's user-config dir (see config.userprefs_path)
+# and are intentionally NOT bundled here.
 data_files = [
     ("assets", "assets"),
     ("config.json", "."),

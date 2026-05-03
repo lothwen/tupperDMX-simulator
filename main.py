@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
                           QVariantAnimation, QAbstractAnimation, QEasingCurve)
 
-from config import Config
+from config import Config, userprefs_path
 from fixtures import LedBar, Blinder
 from timeline import Timeline
 from dmx import DMXManager
@@ -33,17 +33,6 @@ def _base_dir() -> str:
 def asset_path(*parts: str) -> str:
     """Return the absolute path to a file inside the assets/ directory."""
     return os.path.join(_base_dir(), "assets", *parts)
-
-
-def config_path(filename: str = "config.json") -> str:
-    """Return a writable path for config files.
-
-    When frozen the config lives next to the executable so the user can write it.
-    When running from source it lives in the project root.
-    """
-    if getattr(sys, "frozen", False):
-        return os.path.join(os.path.dirname(sys.executable), filename)
-    return os.path.join(_base_dir(), filename)
 
 
 class MainWindow(QMainWindow):
@@ -790,12 +779,13 @@ class MainWindow(QMainWindow):
 
     def save_config(self):
         """Save configuration with error handling."""
+        prefs_file = str(userprefs_path())
         try:
-            if not self.config.save(config_path()):
-                ErrorDialogManager.show_file_permission_error(self, config_path(), 'save')
+            if not self.config.save():
+                ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
         except Exception as e:
             self.logger.error(f"Failed to save configuration: {e}")
-            ErrorDialogManager.show_file_permission_error(self, config_path(), 'save')
+            ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
 
     def start_playback(self):
         """Start media playback using media controller."""
@@ -873,17 +863,18 @@ def main():
         with open(qss_path, 'r', encoding='utf-8') as f:
             app.setStyleSheet(f.read())
 
-    cfg_file = config_path()
     try:
-        config = Config.load(cfg_file)
+        config = Config.load()
     except Exception as e:
         # Show configuration error before main window is created
         from ui.error_dialogs import ErrorDialogManager
         if ErrorDialogManager.show_configuration_error(None, str(e), can_reset=True):
-            # User chose to reset configuration
+            # User chose to reset: remove userprefs.json (shipped config.json is read-only)
             try:
-                os.remove(cfg_file)
-                config = Config.load(cfg_file)  # Will create new default config
+                prefs = userprefs_path()
+                if prefs.exists():
+                    os.remove(prefs)
+                config = Config.load()  # Will recreate userprefs.json with defaults
             except Exception as reset_error:
                 # If we can't even reset, use default config in memory
                 config = Config()
@@ -910,7 +901,7 @@ def main():
     
     logger = get_logger("system.startup")
     logger.info("Starting TupperDMX Simulator")
-    logger.info(f"Configuration loaded from config.json")
+    logger.info(f"Configuration loaded (data: config.json, prefs: {userprefs_path()})")
     logger.debug(f"Logging level: {config.logging.level}")
 
     try:

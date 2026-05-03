@@ -1,285 +1,52 @@
 {
-  "window": {
-    "width": 1920,
-    "height": 1080,
-    "dmx_panel_collapsed": false,
-    "waveform_track_height": 30,
-    "midi_events_track_height": 60
-  },
-  "artnet": {
-    "ip": "127.0.0.1",
-    "port": 6454,
-    "universe": 0
-  },
-  "playlist": {
-    "songs": [
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/04+capitanes-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/01_Capitanes.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/TUPPERWARE/tupperware-lightning/MIDIs/MIDI-ELT/02-salidas-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/TUPPERWARE/ELT-WAV-tupperware/02_Salidas_de_emergencia.wav",
-        "offset": 6.198446749508021
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/test.mid",
-        "audio": "/home/lothwen/Desktop/Billares/03_La_espina.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/03-letras-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/04_Letras_minusculas.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/",
-        "audio": "/home/lothwen/Desktop/Billares/05_El_acantilado.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/05-espias-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/06_Espias_en_Berlin.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/06-notre-dame-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/07_Notre-Dame.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/07-mobius-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/08-Mobius.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/02+la-ciudad-de-lona-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/09_La Ciudad de Lona.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/",
-        "audio": "/home/lothwen/Desktop/Billares/10_Supersubmarina.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/",
-        "audio": "/home/lothwen/Desktop/Billares/11_No_decirnos_nada.mp3",
-        "offset": 0.0
-      },
-      {
-        "midi": "/home/lothwen/Desktop/Billares/midis/04+fluzo-v0.5.mid",
-        "audio": "/home/lothwen/Desktop/Billares/12_Fluzo.mp3",
-        "offset": 0.0
-      }
-    ],
-    "current_song_index": 2
-  },
   "fixtures": {
     "led_bar_controllers": [
       {
         "dmx_start": 1,
         "dmx_channel_count": 7,
         "bars": [
-          {
-            "x": 150,
-            "y": 350
-          },
-          {
-            "x": 325,
-            "y": 350
-          },
-          {
-            "x": 500,
-            "y": 350
-          },
-          {
-            "x": 675,
-            "y": 350
-          },
-          {
-            "x": 875,
-            "y": 350
-          },
-          {
-            "x": 1025,
-            "y": 350
-          },
-          {
-            "x": 1200,
-            "y": 350
-          },
-          {
-            "x": 1375,
-            "y": 350
-          }
+          { "x": 150,  "y": 350 },
+          { "x": 325,  "y": 350 },
+          { "x": 500,  "y": 350 },
+          { "x": 675,  "y": 350 },
+          { "x": 875,  "y": 350 },
+          { "x": 1025, "y": 350 },
+          { "x": 1200, "y": 350 },
+          { "x": 1375, "y": 350 }
         ]
       }
     ],
     "blinders": [
-      {
-        "x": 575,
-        "y": 500,
-        "dmx_start": 33,
-        "multiply_factor": 2.0
-      },
-      {
-        "x": 925,
-        "y": 500,
-        "dmx_start": 65,
-        "multiply_factor": 2.0
-      }
+      { "x": 575, "y": 500, "dmx_start": 33, "multiply_factor": 2.0 },
+      { "x": 925, "y": 500, "dmx_start": 65, "multiply_factor": 2.0 }
     ]
   },
   "midi_note_map": {
-    "1": {
-      "part": "CH:BRIGHTNESS",
-      "color": "#555555",
-      "fixture": "ledbar"
-    },
-    "2": {
-      "part": "CH:BLUE",
-      "color": "#3333aa",
-      "fixture": "ledbar"
-    },
-    "3": {
-      "part": "CH:GREEN",
-      "color": "#33aa33",
-      "fixture": "ledbar"
-    },
-    "4": {
-      "part": "CH:RED",
-      "color": "#aa3333",
-      "fixture": "ledbar"
-    },
-    "5": {
-      "part": "CH:ANIM",
-      "color": "#555555",
-      "fixture": "ledbar"
-    },
-    "6": {
-      "part": "CH:SPEED",
-      "color": "#555555",
-      "fixture": "ledbar"
-    },
-    "7": {
-      "part": "CH:DIRECTION",
-      "color": "#555555",
-      "fixture": "ledbar"
-    },
-    "26": {
-      "part": "WARM LOW",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "27": {
-      "part": "WARM HIGH",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "28": {
-      "part": "WARM FULL POWER",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "29": {
-      "part": "WARM STROBE",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "30": {
-      "part": "BLINDER UNK",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "38": {
-      "part": "PRECOUNT BEAT",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "39": {
-      "part": "PRECOUNT DOWNBEAT",
-      "color": "#c73737",
-      "fixture": "blinder"
-    },
-    "40": {
-      "part": "START",
-      "color": "#c73737",
-      "fixture": "ledbar"
-    },
-    "41": {
-      "part": "INTRO",
-      "color": "#c77f37",
-      "fixture": "ledbar"
-    },
-    "42": {
-      "part": "VERSE",
-      "color": "#c6c737",
-      "fixture": "ledbar"
-    },
-    "43": {
-      "part": "CHORUS",
-      "color": "#37c737",
-      "fixture": "ledbar"
-    },
-    "44": {
-      "part": "BREAK",
-      "color": "#3737c7",
-      "fixture": "ledbar"
-    },
-    "45": {
-      "part": "BRIDGE",
-      "color": "#461c64",
-      "fixture": "ledbar"
-    },
-    "46": {
-      "part": "INST",
-      "color": "#802da4",
-      "fixture": "ledbar"
-    },
-    "47": {
-      "part": "SOLO",
-      "color": "#ffffff",
-      "fixture": "ledbar"
-    },
-    "48": {
-      "part": "OUTRO",
-      "color": "#c79337",
-      "fixture": "ledbar"
-    },
-    "49": {
-      "part": "END",
-      "color": "#808080",
-      "fixture": "ledbar"
-    },
-    "50": {
-      "part": "BLACKOUT",
-      "color": "#363636",
-      "fixture": "ledbar"
-    },
-    "51": {
-      "part": "BLACKOUT_BLINDERS",
-      "color": "#363636",
-      "fixture": "blinder"
-    }
-  },
-  "metronome": {
-    "high_pitch_freq": 1200,
-    "low_pitch_freq": 800
-  },
-  "volume": {
-    "metronome": 0.11,
-    "audio": 0.13
-  },
-  "logging": {
-    "level": "INFO",
-    "console_output": true,
-    "file_output": true,
-    "log_dir": "logs",
-    "max_file_size": 10485760,
-    "backup_count": 5
-  },
-  "last_dmx_source": "Art-Net",
-  "last_midi_port": "Software emulated"
+    "1":  { "part": "CH:BRIGHTNESS",       "color": "#555555", "fixture": "ledbar"  },
+    "2":  { "part": "CH:BLUE",             "color": "#3333aa", "fixture": "ledbar"  },
+    "3":  { "part": "CH:GREEN",            "color": "#33aa33", "fixture": "ledbar"  },
+    "4":  { "part": "CH:RED",              "color": "#aa3333", "fixture": "ledbar"  },
+    "5":  { "part": "CH:ANIM",             "color": "#555555", "fixture": "ledbar"  },
+    "6":  { "part": "CH:SPEED",            "color": "#555555", "fixture": "ledbar"  },
+    "7":  { "part": "CH:DIRECTION",        "color": "#555555", "fixture": "ledbar"  },
+    "26": { "part": "WARM LOW",            "color": "#c73737", "fixture": "blinder" },
+    "27": { "part": "WARM HIGH",           "color": "#c73737", "fixture": "blinder" },
+    "28": { "part": "WARM FULL POWER",     "color": "#c73737", "fixture": "blinder" },
+    "29": { "part": "WARM STROBE",         "color": "#c73737", "fixture": "blinder" },
+    "30": { "part": "BLINDER UNK",         "color": "#c73737", "fixture": "blinder" },
+    "38": { "part": "PRECOUNT BEAT",       "color": "#c73737", "fixture": "blinder" },
+    "39": { "part": "PRECOUNT DOWNBEAT",   "color": "#c73737", "fixture": "blinder" },
+    "40": { "part": "START",               "color": "#c73737", "fixture": "ledbar"  },
+    "41": { "part": "INTRO",               "color": "#c77f37", "fixture": "ledbar"  },
+    "42": { "part": "VERSE",               "color": "#c6c737", "fixture": "ledbar"  },
+    "43": { "part": "CHORUS",              "color": "#37c737", "fixture": "ledbar"  },
+    "44": { "part": "BREAK",               "color": "#3737c7", "fixture": "ledbar"  },
+    "45": { "part": "BRIDGE",              "color": "#461c64", "fixture": "ledbar"  },
+    "46": { "part": "INST",                "color": "#802da4", "fixture": "ledbar"  },
+    "47": { "part": "SOLO",                "color": "#ffffff", "fixture": "ledbar"  },
+    "48": { "part": "OUTRO",               "color": "#c79337", "fixture": "ledbar"  },
+    "49": { "part": "END",                 "color": "#808080", "fixture": "ledbar"  },
+    "50": { "part": "BLACKOUT",            "color": "#363636", "fixture": "ledbar"  },
+    "51": { "part": "BLACKOUT_BLINDERS",   "color": "#363636", "fixture": "blinder" }
+  }
 }
