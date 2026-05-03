@@ -297,12 +297,11 @@ class MidiWorker(QThread):
     @staticmethod
     def get_available_ports() -> List[str]:
         """Get list of available MIDI output ports."""
+        ports = []
+        ports.insert(0, "Software emulated")
         try:
-            ports = mido.get_output_names()
-            ports.insert(0, "Software emulated")
-            return ports
-
+            ports.extend(mido.get_output_names())
         except Exception as e:
             logger = get_logger("midi.worker")
             logger.error(f"Error getting MIDI ports: {e}")
-            return []
+        return ports
