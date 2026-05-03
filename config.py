@@ -1,8 +1,55 @@
+# ABOUTME: Configuration management for TupperDMX. Splits storage across two files:
+# ABOUTME: shipped config.json (read-only fixtures + midi_note_map) and userprefs.json (writable user prefs).
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 import json
 import os
+import sys
 from pathlib import Path
+
+import platformdirs
+
+
+_APP_NAME = "tupperDMX"
+
+
+def _bundle_dir() -> str:
+    """Directory containing read-only resources shipped with the app.
+
+    Mirrors main._base_dir(): when frozen via PyInstaller, resources are
+    extracted to sys._MEIPASS; in development, they sit beside this file.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def shipped_config_path() -> str:
+    """Path to the shipped, read-only config.json.
+
+    Contains fixtures and midi_note_map. Bundled with the app via
+    PyInstaller (see build.spec datas) and never written at runtime.
+    """
+    return os.path.join(_bundle_dir(), "config.json")
+
+
+def userprefs_dir() -> Path:
+    """Platform-conventional directory for the writable userprefs.json.
+
+    Windows: %APPDATA%\\tupperDMX  (Roaming)
+    macOS:   ~/Library/Application Support/tupperDMX
+    Linux:   ~/.config/tupperDMX
+    """
+    if sys.platform == "win32":
+        return Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False, roaming=True))
+    if sys.platform == "darwin":
+        return Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False))
+    return Path(platformdirs.user_config_dir(_APP_NAME, appauthor=False))
+
+
+def userprefs_path() -> Path:
+    """Full path to the user-writable userprefs.json file."""
+    return userprefs_dir() / "userprefs.json"
 
 
 @dataclass
@@ -123,34 +170,73 @@ class Config:
 
     def __post_init__(self):
         # Ensure channel-control notes are registered even when constructed
-        # via Config() directly (defaults path), not just via _from_dict.
+        # via Config() directly (defaults path), not just via load().
         for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
             self.midi_note_map.setdefault(note_str, note_cfg)
 
     @classmethod
-    def load(cls, config_path: str = "config.json") -> "Config":
-        """Load configuration from JSON file with validation and defaults."""
-        if not os.path.exists(config_path):
-            config = cls()
-            config.save(config_path)
-            return config
-        
-        try:
-            with open(config_path, 'r') as f:
-                data = json.load(f)
-            
-            return cls._from_dict(data)
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
-            print(f"Warning: Error loading config file '{config_path}': {e}")
-            print("Using default configuration.")
-            return cls()
+    def load(cls) -> "Config":
+        """Load full configuration from shipped config.json + userprefs.json.
+
+        On first launch (or whenever userprefs.json is absent), the file is
+        created eagerly in the platform-conventional location with defaults.
+        """
+        config = cls()
+
+        # Shipped, read-only data — fixtures + midi_note_map.
+        shipped = shipped_config_path()
+        if os.path.exists(shipped):
+            try:
+                with open(shipped, 'r') as f:
+                    cls._apply_shipped(config, json.load(f))
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                print(f"Warning: error parsing shipped config '{shipped}': {e}")
+                print("Using default fixtures and MIDI note map.")
+        else:
+            print(f"Warning: shipped config '{shipped}' is missing.")
+            print("Using default fixtures and MIDI note map.")
+
+        # Writable user preferences.
+        prefs = userprefs_path()
+        if prefs.exists():
+            try:
+                with open(prefs, 'r') as f:
+                    cls._apply_userprefs(config, json.load(f))
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                print(f"Warning: error parsing userprefs '{prefs}': {e}")
+                print("Using default user preferences.")
+        else:
+            # First launch: create userprefs.json eagerly with defaults.
+            config.save()
+
+        return config
 
     @classmethod
-    def _from_dict(cls, data: Dict[str, Any]) -> "Config":
-        """Create Config instance from dictionary with validation."""
-        config = cls()
-        
-        # Window configuration
+    def _apply_shipped(cls, config: "Config", data: Dict[str, Any]) -> None:
+        """Populate fixtures and midi_note_map from shipped config data."""
+        if "fixtures" in data:
+            config.fixtures = cls._parse_fixtures(data["fixtures"])
+
+        if "midi_note_map" in data:
+            note_map = {}
+            for note, note_data in data["midi_note_map"].items():
+                if isinstance(note_data, dict) and "part" in note_data and "color" in note_data:
+                    note_map[note] = MidiNoteConfig(
+                        part=str(note_data["part"]),
+                        color=cls._validate_color(note_data["color"]),
+                        fixture=str(note_data.get("fixture", "ledbar")),
+                    )
+            config.midi_note_map = note_map
+
+        # Auto-register LED-bar channel-control notes (1-7). The shipped
+        # file should already include these; this is a safety net so that
+        # scene drops always have a target in the note map.
+        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
+            config.midi_note_map.setdefault(note_str, note_cfg)
+
+    @classmethod
+    def _apply_userprefs(cls, config: "Config", data: Dict[str, Any]) -> None:
+        """Populate user-editable sections from userprefs.json data."""
         if "window" in data:
             window_data = data["window"]
             config.window = WindowConfig(
@@ -160,8 +246,7 @@ class Config:
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000)
             )
-        
-        # Art-Net configuration
+
         if "artnet" in data:
             artnet_data = data["artnet"]
             config.artnet = ArtNetConfig(
@@ -169,8 +254,7 @@ class Config:
                 port=cls._validate_int(artnet_data.get("port", 6454), 1, 65535),
                 universe=cls._validate_int(artnet_data.get("universe", 0), 0, 32767)
             )
-        
-        # Playlist configuration
+
         if "playlist" in data:
             playlist_data = data["playlist"]
             songs = []
@@ -184,47 +268,21 @@ class Config:
                 songs=songs,
                 current_song_index=cls._validate_int(playlist_data.get("current_song_index", 0), 0, max(0, len(songs) - 1))
             )
-        
-        # Fixtures configuration
-        if "fixtures" in data:
-            fixtures_data = data["fixtures"]
-            config.fixtures = cls._parse_fixtures(fixtures_data)
-        
-        # MIDI note mapping
-        if "midi_note_map" in data:
-            note_map = {}
-            for note, note_data in data["midi_note_map"].items():
-                if isinstance(note_data, dict) and "part" in note_data and "color" in note_data:
-                    note_map[note] = MidiNoteConfig(
-                        part=str(note_data["part"]),
-                        color=cls._validate_color(note_data["color"]),
-                        fixture=str(note_data.get("fixture", "ledbar")),
-                    )
-            config.midi_note_map = note_map
 
-        # Auto-register LED-bar channel-control notes (1-7). User entries in
-        # config.json override; missing notes are filled with defaults so
-        # scene drops always have a target in the note map.
-        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
-            config.midi_note_map.setdefault(note_str, note_cfg)
-        
-        # Metronome configuration
         if "metronome" in data:
             metronome_data = data["metronome"]
             config.metronome = MetronomeConfig(
                 high_pitch_freq=cls._validate_int(metronome_data.get("high_pitch_freq", 1200), 100, 20000),
                 low_pitch_freq=cls._validate_int(metronome_data.get("low_pitch_freq", 800), 100, 20000)
             )
-        
-        # Volume configuration
+
         if "volume" in data:
             volume_data = data["volume"]
             config.volume = VolumeConfig(
                 metronome=cls._validate_float(volume_data.get("metronome", 0.5), 0.0, 1.0),
                 audio=cls._validate_float(volume_data.get("audio", 0.5), 0.0, 1.0)
             )
-        
-        # Logging configuration
+
         if "logging" in data:
             logging_data = data["logging"]
             config.logging = LoggingConfig(
@@ -235,24 +293,20 @@ class Config:
                 max_file_size=cls._validate_int(logging_data.get("max_file_size", 10 * 1024 * 1024), 1024, 100 * 1024 * 1024),
                 backup_count=cls._validate_int(logging_data.get("backup_count", 5), 1, 20)
             )
-        
-        # Last used settings
+
         config.last_dmx_source = data.get("last_dmx_source")
         config.last_midi_port = data.get("last_midi_port")
-        
-        return config
 
     @staticmethod
     def _parse_fixtures(fixtures_data: Dict[str, Any]) -> FixturesConfig:
         """Parse fixtures configuration with validation."""
         fixtures = FixturesConfig()
-        
-        # LED bar controllers
+
         if "led_bar_controllers" in fixtures_data:
             for controller_data in fixtures_data["led_bar_controllers"]:
                 if not isinstance(controller_data, dict):
                     continue
-                
+
                 bars = []
                 for bar_data in controller_data.get("bars", []):
                     if isinstance(bar_data, dict) and "x" in bar_data and "y" in bar_data:
@@ -260,15 +314,14 @@ class Config:
                             x=Config._validate_int(bar_data["x"], 0, 10000),
                             y=Config._validate_int(bar_data["y"], 0, 10000)
                         ))
-                
+
                 controller = LedBarController(
                     dmx_start=Config._validate_int(controller_data.get("dmx_start", 1), 1, 512),
                     dmx_channel_count=Config._validate_int(controller_data.get("dmx_channel_count", 7), 1, 32),
                     bars=bars
                 )
                 fixtures.led_bar_controllers.append(controller)
-        
-        # Blinders
+
         if "blinders" in fixtures_data:
             for blinder_data in fixtures_data["blinders"]:
                 if isinstance(blinder_data, dict) and all(k in blinder_data for k in ["x", "y", "dmx_start"]):
@@ -279,7 +332,7 @@ class Config:
                         multiply_factor=Config._validate_float(blinder_data.get("multiply_factor", 2.0), 0.1, 10.0)
                     )
                     fixtures.blinders.append(blinder)
-        
+
         return fixtures
 
     @staticmethod
@@ -305,11 +358,11 @@ class Config:
         """Basic IP address validation."""
         if not isinstance(value, str):
             return "127.0.0.1"
-        
+
         parts = value.split('.')
         if len(parts) != 4:
             return "127.0.0.1"
-        
+
         try:
             for part in parts:
                 num = int(part)
@@ -324,14 +377,14 @@ class Config:
         """Validate hex color format."""
         if not isinstance(value, str):
             return "#ffffff"
-        
+
         if value.startswith("#") and len(value) == 7:
             try:
                 int(value[1:], 16)
                 return value
             except ValueError:
                 pass
-        
+
         return "#ffffff"
 
     @staticmethod
@@ -339,71 +392,62 @@ class Config:
         """Validate file path exists."""
         if not isinstance(value, str):
             return None
-        
+
         if os.path.exists(value):
             return value
-        
+
         return None
-    
+
     @staticmethod
     def _validate_log_level(value: Any) -> str:
         """Validate logging level."""
         if not isinstance(value, str):
             return "INFO"
-        
+
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         level = value.upper()
-        
+
         if level in valid_levels:
             return level
-        
+
         return "INFO"
 
-    def save(self, config_path: str = "config.json") -> bool:
-        """Save configuration to JSON file."""
+    def save(self) -> bool:
+        """Save user-editable preferences to userprefs.json.
+
+        The shipped config.json is never modified — fixtures and
+        midi_note_map are read-only at runtime.
+        """
         try:
-            # Convert to dictionary, handling nested dataclasses
-            data = self._to_dict()
-            
-            with open(config_path, 'w') as f:
+            data = self._userprefs_to_dict()
+            path = userprefs_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, 'w') as f:
                 json.dump(data, f, indent=2)
-            
             return True
         except Exception as e:
-            print(f"Error saving config: {e}")
+            print(f"Error saving userprefs: {e}")
             return False
 
-    def _to_dict(self) -> Dict[str, Any]:
-        """Convert config to dictionary for JSON serialization."""
-        data = {}
-        
+    def _userprefs_to_dict(self) -> Dict[str, Any]:
+        """Convert user-editable sections to a dictionary for JSON serialization."""
+        data: Dict[str, Any] = {}
+
         data["window"] = asdict(self.window)
         data["artnet"] = asdict(self.artnet)
         data["playlist"] = {
             "songs": [asdict(song) for song in self.playlist.songs],
             "current_song_index": self.playlist.current_song_index
         }
-        
-        # Handle fixtures
-        data["fixtures"] = {
-            "led_bar_controllers": [asdict(controller) for controller in self.fixtures.led_bar_controllers],
-            "blinders": [asdict(blinder) for blinder in self.fixtures.blinders]
-        }
-        
-        # Handle MIDI note map
-        data["midi_note_map"] = {
-            note: asdict(note_config) for note, note_config in self.midi_note_map.items()
-        }
-        
         data["metronome"] = asdict(self.metronome)
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
-        
+
         if self.last_dmx_source:
             data["last_dmx_source"] = self.last_dmx_source
         if self.last_midi_port:
             data["last_midi_port"] = self.last_midi_port
-        
+
         return data
 
     # Playlist management methods
@@ -415,21 +459,21 @@ class Config:
         if 0 <= index < len(self.playlist.songs):
             return self.playlist.songs[index]
         return None
-    
+
     def set_current_song_index(self, index: int) -> bool:
         """Set the current song index. Returns True if successful."""
         if 0 <= index < len(self.playlist.songs):
             self.playlist.current_song_index = index
             return True
         return False
-    
+
     def find_song_by_audio(self, audio_path: str) -> Optional[int]:
         """Find a song index by audio file path. Returns None if not found."""
         for i, song in enumerate(self.playlist.songs):
             if song.audio == audio_path:
                 return i
         return None
-    
+
     def add_song(self, audio: str, midi: Optional[str] = None, offset: float = 0.0) -> int:
         """Add a new song to the playlist. Returns the new song's index."""
         song = SongConfig(
@@ -439,7 +483,7 @@ class Config:
         )
         self.playlist.songs.append(song)
         return len(self.playlist.songs) - 1
-    
+
     def remove_song(self, index: int) -> bool:
         """Remove a song from the playlist. Returns True if successful."""
         if 0 <= index < len(self.playlist.songs):
@@ -451,7 +495,7 @@ class Config:
                 self.playlist.current_song_index -= 1
             return True
         return False
-    
+
     def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None) -> None:
         """Update the current song's MIDI or offset."""
         song = self.get_current_song()
@@ -471,14 +515,14 @@ class Config:
     def get_used_dmx_channels(self) -> Dict[str, List[int]]:
         """Get mapping of fixture names to their DMX channels."""
         used_channels = {}
-        
+
         # LED bar controllers
         for i, controller in enumerate(self.fixtures.led_bar_controllers):
             fixture_name = f"Led Bar Controller {i+1}"
             channels = list(range(controller.dmx_start, controller.dmx_start + controller.dmx_channel_count))
             if channels:
                 used_channels[fixture_name] = channels
-        
+
         # Blinders
         for i, blinder in enumerate(self.fixtures.blinders):
             fixture_name = f"Blinder {i+1}"
@@ -486,5 +530,5 @@ class Config:
             channels = list(range(blinder.dmx_start, blinder.dmx_start + 8))
             if channels:
                 used_channels[fixture_name] = channels
-        
+
         return used_channels

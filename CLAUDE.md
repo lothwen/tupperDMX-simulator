@@ -92,8 +92,11 @@ python main.py
 
 **Configuration (`config.py`)**
 - Comprehensive dataclass-based configuration with validation
-- Handles fixture definitions, MIDI note mapping, and user preferences
-- Automatic config file generation and migration
+- Storage is split across two files:
+  - `config.json` (shipped, read-only): `fixtures` and `midi_note_map`. Bundled with the app via PyInstaller (`build.spec` `datas`) and resolved at runtime through `shipped_config_path()`, which uses `sys._MEIPASS` when frozen
+  - `userprefs.json` (user-writable): everything else (`window`, `artnet`, `playlist`, `metronome`, `volume`, `logging`, `last_dmx_source`, `last_midi_port`). Lives in the platform-conventional user dir resolved by `userprefs_path()` via `platformdirs` — Windows: `%APPDATA%\tupperDMX`, macOS: `~/Library/Application Support/tupperDMX`, Linux: `~/.config/tupperDMX`
+- `Config.load()` reads both files; `Config.save()` writes only `userprefs.json` — the shipped file is never modified at runtime
+- On first launch, `userprefs.json` is created eagerly with defaults
 - Includes playlist management (song list with current index), audio offset, and window geometry
 
 ### UI Architecture
@@ -135,10 +138,11 @@ When starting/resuming metronome:
 - Handles pause/resume with precise timing calculations
 
 **Configuration System**
-- All settings auto-persist to `config.json` with validation and defaults
+- Two-file split (see "Configuration (`config.py`)" above): shipped read-only `config.json` (fixtures + midi_note_map) plus a user-writable `userprefs.json` in the platform's user-config dir
+- User-mutable settings auto-persist to `userprefs.json` via `Config.save()`; the shipped `config.json` is never written
 - File paths validated for existence before saving
 - DMX channel mapping calculated dynamically from fixture definitions
-- Comprehensive dataclass-based structure with automatic migration and error recovery
+- Comprehensive dataclass-based structure with validation and error recovery
 
 **MIDI Event Management**
 - Clip-style editing: each event renders as a movable, resizable rectangle on a per-fixture track (one row for ledbar, one for blinder)
@@ -211,7 +215,7 @@ When starting/resuming metronome:
   - `widgets/midi_event_edit.py`: MidiEventEditDialog for single-event editing
   - `widgets/scene_edit.py`: SceneEditDialog for editing 7-channel scene groups
   - `widgets/resize_handle.py`: TrackResizeHandle for dragging waveform/MIDI track heights
-- `config.py`: Comprehensive configuration management with dataclass validation
+- `config.py`: Comprehensive configuration management with dataclass validation. Splits storage between shipped `config.json` (fixtures + midi_note_map, read-only) and user-writable `userprefs.json` resolved via `platformdirs`
 - `fixtures.py`: DMX fixture definitions and channel mapping utilities
 
 ## Important Development Patterns
@@ -433,8 +437,11 @@ tail -f logs/tupperDMX_$(date +%Y%m%d).log
 # Art-Net: Usually 127.0.0.1:6454
 # USB: Check device enumeration in /dev/
 
-# Reset configuration if corrupted
-rm config.json && python main.py
+# Reset user preferences if corrupted (shipped config.json is read-only and stays put)
+# Linux:   rm ~/.config/tupperDMX/userprefs.json
+# macOS:   rm ~/Library/Application\ Support/tupperDMX/userprefs.json
+# Windows: del %APPDATA%\tupperDMX\userprefs.json
+python main.py
 
 # Debug MIDI devices
 python -c "import mido; print(mido.get_output_names())"
