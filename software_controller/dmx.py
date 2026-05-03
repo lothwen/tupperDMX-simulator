@@ -1,7 +1,7 @@
 # DMX data structures
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 @dataclass
 class LedScene:
@@ -30,8 +30,13 @@ def load_dmx_config():
     with open(config_path, 'r') as f:
         config = json.load(f)
 
-    led_banks = {bank_name: [LedScene(**scene) for scene in scenes] for bank_name, scenes in config['led_banks'].items()}
-    blinder_banks = {bank_name: [BlinderScene(**scene) for scene in scenes] for bank_name, scenes in config['blinder_banks'].items()}
+    def _only_fields(cls, scene):
+        # Drop metadata keys (e.g. "name") that aren't dataclass channels.
+        allowed = {f.name for f in fields(cls)}
+        return {k: v for k, v in scene.items() if k in allowed}
+
+    led_banks = {bank_name: [LedScene(**_only_fields(LedScene, scene)) for scene in scenes] for bank_name, scenes in config['led_banks'].items()}
+    blinder_banks = {bank_name: [BlinderScene(**_only_fields(BlinderScene, scene)) for scene in scenes] for bank_name, scenes in config['blinder_banks'].items()}
     
     return led_banks, blinder_banks, config['led_chases'], config['blinder_chases']
 
