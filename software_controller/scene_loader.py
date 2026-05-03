@@ -57,6 +57,10 @@ def load_led_scenes(config_path: Union[str, Path]) -> List[LedScene]:
             if not all(k in scene_dict for k in _CHANNEL_KEYS):
                 # Skip scenes missing channel data rather than crash.
                 continue
+            if all(int(scene_dict[k]) == 0 for k in _CHANNEL_KEYS):
+                # Skip placeholder scenes with all-zero channels — these are
+                # reserved slots waiting to be defined.
+                continue
             name = str(scene_dict.get("name") or f"{bank_name} #{index + 1}")
             scenes.append(LedScene(
                 bank=str(bank_name),
