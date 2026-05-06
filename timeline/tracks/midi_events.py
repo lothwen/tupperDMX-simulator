@@ -84,6 +84,9 @@ MIN_HIT_WIDTH_PX = 1
 CLIP_CORNER_RADIUS_PX = 4
 CLIP_GRADIENT_LIGHTEN = 118   # top of gradient = base.lighter(LIGHTEN)
 CLIP_GRADIENT_DARKEN = 140    # bottom of gradient = base.darker(DARKEN)
+# Selection-border styling.
+SELECTION_BORDER_COLOR = QColor(255, 215, 0)  # warm gold — visible on any clip color
+SELECTION_BORDER_WIDTH_PX = 1
 
 
 @dataclass
@@ -193,8 +196,19 @@ class DraggableMidiEvent(QGraphicsObject):
         gradient.setColorAt(0.0, base_color.lighter(CLIP_GRADIENT_LIGHTEN))
         gradient.setColorAt(1.0, base_color.darker(CLIP_GRADIENT_DARKEN))
         painter.setBrush(QBrush(gradient))
-        painter.setPen(self._pen)
+        if self.isSelected():
+            sel_pen = QPen(SELECTION_BORDER_COLOR)
+            sel_pen.setWidth(SELECTION_BORDER_WIDTH_PX)
+            sel_pen.setCosmetic(True)
+            painter.setPen(sel_pen)
+        else:
+            painter.setPen(self._pen)
         painter.drawRoundedRect(rect, CLIP_CORNER_RADIUS_PX, CLIP_CORNER_RADIUS_PX)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self.update()
+        return super().itemChange(change, value)
 
     def setBrush(self, brush):
         self._brush = brush
@@ -279,6 +293,21 @@ class DraggableMidiEvent(QGraphicsObject):
 
     # --- Mouse events -----------------------------------------------------
 
+    def _select_exclusive(self):
+        """Make this clip the sole selection in the scene.
+
+        BLACKOUT clips are skipped — they're invisible gap markers, not
+        user-actionable items.
+        """
+        if self.is_blackout_clip:
+            return
+        scene = self.scene()
+        if scene is not None:
+            for item in scene.selectedItems():
+                if item is not self:
+                    item.setSelected(False)
+        self.setSelected(True)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             zone = self._zone_at(event.pos().x())
@@ -286,6 +315,7 @@ class DraggableMidiEvent(QGraphicsObject):
                 self._custom_tooltip.hide_tooltip()
             self._tooltip_shown = False
 
+            self._select_exclusive()
             self._mode = zone
             self._press_scene_pos = event.scenePos()
             self._press_self_pos = self.pos()
@@ -294,6 +324,7 @@ class DraggableMidiEvent(QGraphicsObject):
             return
 
         if event.button() == Qt.MouseButton.RightButton:
+            self._select_exclusive()
             self.last_right_click_scene_pos = event.scenePos()
             self.show_context_menu(event.screenPos())
             event.accept()
@@ -328,16 +359,24 @@ class DraggableMidiEvent(QGraphicsObject):
             super().mouseReleaseEvent(event)
             return
 
-        pps = self.timeline.PIXELS_PER_SECOND
-        if self._mode == self.MODE_MOVE:
-            new_time = self.pos().x() / pps
-            self.move_committed.emit(self.event_id, new_time)
-        elif self._mode == self.MODE_RESIZE_LEFT:
-            new_time = self.pos().x() / pps
-            self.left_edge_committed.emit(self.event_id, new_time)
-        elif self._mode == self.MODE_RESIZE_RIGHT:
-            new_right_x = self.pos().x() + self.rect.width()
-            self.right_edge_committed.emit(self.event_id, new_right_x / pps)
+        # A pure click (no drag) must NOT commit — committing triggers a
+        # full timeline refresh that destroys this item and wipes the
+        # selection the press just established.
+        moved = False
+        if self._press_scene_pos is not None:
+            moved = abs(event.scenePos().x() - self._press_scene_pos.x()) >= 1.0
+
+        if moved:
+            pps = self.timeline.PIXELS_PER_SECOND
+            if self._mode == self.MODE_MOVE:
+                new_time = self.pos().x() / pps
+                self.move_committed.emit(self.event_id, new_time)
+            elif self._mode == self.MODE_RESIZE_LEFT:
+                new_time = self.pos().x() / pps
+                self.left_edge_committed.emit(self.event_id, new_time)
+            elif self._mode == self.MODE_RESIZE_RIGHT:
+                new_right_x = self.pos().x() + self.rect.width()
+                self.right_edge_committed.emit(self.event_id, new_right_x / pps)
 
         self._mode = self.MODE_IDLE
         self._press_scene_pos = None
