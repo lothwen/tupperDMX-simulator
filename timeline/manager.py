@@ -407,7 +407,7 @@ class Timeline(QWidget):
         zoom_factor = self.content_view.transform().m11()
         font_metrics = self.content_view.fontMetrics()
         sorted_events = sorted(self._cached_events, key=lambda x: x['time'])
-        song_length = self.midi_manager.get_duration() if self.midi_manager else 240
+        song_length = self.midi_manager.song_end_time() if self.midi_manager else 240
         extended_end = song_length * 1.05
 
         from PyQt6.QtWidgets import QGraphicsTextItem
@@ -499,41 +499,46 @@ class Timeline(QWidget):
         """Whole-clip MOVE drag committed.
 
         Routes to scene API when the event is part of a scene group so that
-        all 7 channel-control events move atomically.
+        all 7 channel-control events move atomically. Always refreshes — even
+        on rejected commits — so the clip snaps back to its data-derived
+        position instead of leaving a ghost preview at the dragged x.
         """
         if not self.midi_manager or not event_id:
             return
         group_id = self._group_id_for_event(event_id)
         if group_id:
-            ok = self.midi_manager.move_scene(group_id, new_time)
+            self.midi_manager.move_scene(group_id, new_time)
         else:
-            ok = self.midi_manager.move_event(event_id, new_time)
-        if ok:
-            self.refresh_from_manager()
+            self.midi_manager.move_event(event_id, new_time)
+        self.refresh_from_manager()
 
     def on_midi_event_left_edge(self, event_id: str, new_time: float):
-        """Left-edge resize drag committed."""
+        """Left-edge resize drag committed.
+
+        Always refreshes (see on_midi_event_moved for rationale).
+        """
         if not self.midi_manager or not event_id:
             return
         group_id = self._group_id_for_event(event_id)
         if group_id:
-            ok = self.midi_manager.set_scene_left_edge(group_id, new_time)
+            self.midi_manager.set_scene_left_edge(group_id, new_time)
         else:
-            ok = self.midi_manager.set_event_left_edge(event_id, new_time)
-        if ok:
-            self.refresh_from_manager()
+            self.midi_manager.set_event_left_edge(event_id, new_time)
+        self.refresh_from_manager()
 
     def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
-        """Right-edge resize drag committed."""
+        """Right-edge resize drag committed.
+
+        Always refreshes (see on_midi_event_moved for rationale).
+        """
         if not self.midi_manager or not event_id:
             return
         group_id = self._group_id_for_event(event_id)
         if group_id:
-            ok = self.midi_manager.set_scene_right_edge(group_id, new_right_time)
+            self.midi_manager.set_scene_right_edge(group_id, new_right_time)
         else:
-            ok = self.midi_manager.set_event_right_edge(event_id, new_right_time)
-        if ok:
-            self.refresh_from_manager()
+            self.midi_manager.set_event_right_edge(event_id, new_right_time)
+        self.refresh_from_manager()
 
     def on_midi_event_edit_by_id(self, event_id: str):
         """Edit dialog request for the event with `event_id`.

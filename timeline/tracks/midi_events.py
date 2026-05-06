@@ -540,9 +540,17 @@ class MidiEventsTrack(BaseTrack):
 
         cur = units[idx]
         cur_time = cur["time"]
-        cur_right = (units[idx + 1]["time"]
-                     if idx + 1 < len(units) else song_end_time)
-        cur_width_t = max(MIN_EVENT_DURATION, cur_right - cur_time)
+        # cur_right is the unit's visual right edge — used by RESIZE_RIGHT
+        # bounds and snap targets. cur_width_t is the *collision* width used
+        # by MOVE bounds: when this is the last unit on the track the visual
+        # extent stretches to song_end, but we treat the clip as point-sized
+        # so it can be moved freely (matches manager.move_event behavior).
+        if idx + 1 < len(units):
+            cur_right = units[idx + 1]["time"]
+            cur_width_t = max(MIN_EVENT_DURATION, cur_right - cur_time)
+        else:
+            cur_right = song_end_time
+            cur_width_t = MIN_EVENT_DURATION
 
         # MOVE bounds: free-space slots wide enough to fit the current unit.
         obstacles: List[Tuple[float, float]] = []
@@ -642,8 +650,11 @@ class MidiEventsTrack(BaseTrack):
             return
 
         try:
-            song_length_seconds = (self.timeline_manager.midi_manager.get_duration()
-                                   if self.timeline_manager.midi_manager else 240.0)
+            mm = self.timeline_manager.midi_manager
+            # song_end_time() falls back to the audio duration / 240s default
+            # when MIDI is sparse, so the visual extent of last clips matches
+            # the move-bounds the manager will enforce on commit.
+            song_length_seconds = (mm.song_end_time() if mm else 240.0)
             song_end_time = song_length_seconds * 1.05
             pps = self.timeline_manager.PIXELS_PER_SECOND
             track_height = self.get_track_height()
@@ -662,6 +673,15 @@ class MidiEventsTrack(BaseTrack):
                 return
 
             for i, unit in enumerate(units):
+                # BLACKOUTs are pure data — gap markers used by the manager
+                # for placement bounds and snap targets. They have no visual
+                # representation and must not catch mouse events (no hover
+                # cursor changes, no left-drag, no context menu): rendering
+                # an invisible-but-hit-active rect would steal hover/drag
+                # gestures from the empty space behind it. Skip entirely.
+                if self._is_blackout_unit(unit):
+                    continue
+
                 start_time = unit["time"]
                 end_time = (units[i + 1]["time"]
                             if i + 1 < len(units) else song_end_time)
@@ -670,14 +690,13 @@ class MidiEventsTrack(BaseTrack):
 
                 x_pos = start_time * pps
                 width = max(duration * pps, MIN_HIT_WIDTH_PX)
-                is_blackout = self._is_blackout_unit(unit)
                 bounds = self._compute_bounds(units, i, song_end_time)
 
                 is_group = unit["kind"] == "group"
                 event_rect = DraggableMidiEvent(
                     x_pos, y_offset, width, track_height,
                     event_id=rep["id"], event_data=rep,
-                    bounds=bounds, is_blackout=is_blackout,
+                    bounds=bounds, is_blackout=False,
                     group_id=unit["group_id"] if is_group else None,
                     group_event_ids=unit["event_ids"] if is_group else None,
                 )
@@ -693,10 +712,7 @@ class MidiEventsTrack(BaseTrack):
 
                 # Pick the clip color: scene groups derive from their RGB
                 # channel values; single events use their info.color.
-                if is_blackout:
-                    event_rect.setBrush(QBrush(Qt.GlobalColor.transparent))
-                    event_rect.setPen(QPen(Qt.PenStyle.NoPen))
-                elif is_group:
+                if is_group:
                     members = [e for e in events
                                if e.get("group_id") == unit["group_id"]]
                     color = self._scene_clip_color(members)
@@ -711,39 +727,38 @@ class MidiEventsTrack(BaseTrack):
                 self.content_scene.addItem(event_rect)
                 self.items.append(event_rect)
 
-                if not is_blackout:
-                    if is_group:
-                        label_text = rep.get("scene_name") or "Scene"
-                        members = [e for e in events
-                                   if e.get("group_id") == unit["group_id"]]
-                        color = self._scene_clip_color(members)
-                    else:
-                        info = rep['info']
-                        label_text = info.part
-                        color = QColor(info.color)
-                    brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
-                    text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
-                    zoom_factor = self.timeline_manager.content_view.transform().m11()
-                    available_width = (width - 10) * zoom_factor
-                    fm = self.timeline_manager.content_view.fontMetrics()
-                    text_to_display = self.timeline_manager.get_truncated_text(label_text, available_width, fm)
+                if is_group:
+                    label_text = rep.get("scene_name") or "Scene"
+                    members = [e for e in events
+                               if e.get("group_id") == unit["group_id"]]
+                    color = self._scene_clip_color(members)
+                else:
+                    info = rep['info']
+                    label_text = info.part
+                    color = QColor(info.color)
+                brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
+                text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
+                zoom_factor = self.timeline_manager.content_view.transform().m11()
+                available_width = (width - 10) * zoom_factor
+                fm = self.timeline_manager.content_view.fontMetrics()
+                text_to_display = self.timeline_manager.get_truncated_text(label_text, available_width, fm)
 
-                    text_item = QGraphicsTextItem(text_to_display)
-                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-                    text_item.setDefaultTextColor(text_color)
-                    text_item.setPos(x_pos + 5, y_offset + 5)
-                    text_item.setZValue(2)
-                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-                    text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
-                    text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                    text_item.setAcceptHoverEvents(False)
-                    text_item.setData(0, label_text)
-                    text_item.setData(1, rep['id'])
+                text_item = QGraphicsTextItem(text_to_display)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+                text_item.setDefaultTextColor(text_color)
+                text_item.setPos(x_pos + 5, y_offset + 5)
+                text_item.setZValue(2)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+                text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+                text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                text_item.setAcceptHoverEvents(False)
+                text_item.setData(0, label_text)
+                text_item.setData(1, rep['id'])
 
-                    event_rect.set_text_item(text_item)
+                event_rect.set_text_item(text_item)
 
-                    self.content_scene.addItem(text_item)
-                    self.items.append(text_item)
+                self.content_scene.addItem(text_item)
+                self.items.append(text_item)
 
         except Exception as e:
             self.logger.error(f"Error redrawing midi events: {e}")
