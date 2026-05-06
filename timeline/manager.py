@@ -19,6 +19,7 @@ from .widgets import ContentView, MidiEventEditDialog, TrackResizeHandle
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
+from .tracks.midi_events import build_render_units
 from tupperlogger import get_logger
 
 
@@ -413,15 +414,19 @@ class Timeline(QWidget):
         from PyQt6.QtWidgets import QGraphicsTextItem
         # Each track has its own filtered slice — so end-times must be
         # recomputed per track or the blinder text would inherit gaps from
-        # ledbar neighbors (and vice-versa).
+        # ledbar neighbors (and vice-versa). Iterate over render units (which
+        # collapse 7-event scene groups into a single visual clip) so a
+        # group's text gets the full clip width, not the ~0 gap between two
+        # group members at the same time.
         for track in (self.midi_events_track, self.midi_events_blinder_track):
             if not track.items:
                 continue
             track_events = [e for e in sorted_events if track.matches_filter(e)]
-            id_to_end = {}
-            for i, e in enumerate(track_events):
-                end = track_events[i + 1]['time'] if i + 1 < len(track_events) else extended_end
-                id_to_end[e['id']] = end
+            units = build_render_units(track_events)
+            rep_id_to_end = {}
+            for i, unit in enumerate(units):
+                end = units[i + 1]["time"] if i + 1 < len(units) else extended_end
+                rep_id_to_end[unit["representative"]["id"]] = (unit["time"], end)
 
             for item in track.items:
                 if not isinstance(item, QGraphicsTextItem):
@@ -430,12 +435,10 @@ class Timeline(QWidget):
                 if not full_text:
                     continue
                 event_id = item.data(1)
-                if event_id not in id_to_end:
+                if event_id not in rep_id_to_end:
                     continue
-                event = next((e for e in track_events if e['id'] == event_id), None)
-                if event is None:
-                    continue
-                duration = max(0.01, id_to_end[event_id] - event['time'])
+                start, end = rep_id_to_end[event_id]
+                duration = max(0.01, end - start)
                 width = max(duration * self.PIXELS_PER_SECOND, 20)
                 available_width = (width - 10) * zoom_factor
                 item.setPlainText(self.get_truncated_text(full_text, available_width, font_metrics))

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Tuple
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
@@ -5,7 +6,13 @@ import uuid
 import copy
 
 from tupperlogger import get_logger
+from software_controller.scene_loader import LedScene, load_led_scenes
 from .worker import MidiWorker, MidiConnectionStatus
+
+# Default location of the LED scene definitions used to resolve scene names
+# when reconstructing scene groups from a freshly-loaded MIDI file.
+_DEFAULT_SCENE_CONFIG_PATH = (Path(__file__).resolve().parent.parent
+                              / "software_controller" / "dmx_config.json")
 
 
 # Identification of BLACKOUT events is by part-name PREFIX (case-insensitive),
@@ -89,9 +96,13 @@ class MidiManager(QObject):
         self._song_duration_override: float = 0.0
 
         self.logger = get_logger("midi.manager")
-        
+
         # Software controller reference
         self.software_controller = None
+
+        # Lazy-loaded LED scene library used to resolve human-readable names
+        # for scene clusters reconstructed from MIDI files.
+        self._led_scenes: Optional[List[LedScene]] = None
 
     def set_software_controller(self, controller):
         """Set the software controller instance."""
@@ -216,13 +227,60 @@ class MidiManager(QObject):
                 j += 1
             if len(cluster) >= 2:
                 gid = str(uuid.uuid4())
-                # Default name; the UI may overwrite this by matching
-                # channel values against the scene library.
-                scene_name = f"Scene @ {e['time']:.2f}s"
+                # Prefer the real name from the LED scene library; fall back
+                # to a time-based label for partial or hand-edited clusters
+                # that don't match any library entry.
+                scene_name = (self._lookup_scene_name(cluster)
+                              or f"Scene @ {e['time']:.2f}s")
                 for c in cluster:
                     c["group_id"] = gid
                     c["scene_name"] = scene_name
             i += 1
+
+    def _get_led_scenes(self) -> List[LedScene]:
+        """Return the cached LED scene library, loading it on first access."""
+        if self._led_scenes is None:
+            try:
+                self._led_scenes = load_led_scenes(_DEFAULT_SCENE_CONFIG_PATH)
+            except Exception as exc:
+                self.logger.warning(
+                    f"Could not load LED scene library from "
+                    f"{_DEFAULT_SCENE_CONFIG_PATH}: {exc}"
+                )
+                self._led_scenes = []
+        return self._led_scenes
+
+    def _lookup_scene_name(self, cluster: List[Dict[str, Any]]) -> Optional[str]:
+        """Match a freshly-clustered scene against the LED scene library.
+
+        Comparison happens in MIDI-velocity space (the same lossy domain the
+        scene values live in once embedded in a MIDI file), so 254/255 raw
+        channel values both collapse to velocity 127 and still match.
+        Returns the matching scene's name, or None if no exact match exists.
+        """
+        note_to_channel = {note: ch for ch, note in CHANNEL_NOTE_MAP}
+        cluster_vels: Dict[str, int] = {}
+        for ev in cluster:
+            ch = note_to_channel.get(ev["note"])
+            if ch is None:
+                continue
+            cluster_vels[ch] = int(ev["velocity"])
+        # Need all 7 channels present for an unambiguous match.
+        if len(cluster_vels) != len(CHANNEL_NOTE_MAP):
+            return None
+        for scene in self._get_led_scenes():
+            scene_vels = {
+                "brightness": _channel_to_velocity(scene.brightness),
+                "blue": _channel_to_velocity(scene.blue),
+                "green": _channel_to_velocity(scene.green),
+                "red": _channel_to_velocity(scene.red),
+                "animation": _channel_to_velocity(scene.animation),
+                "speed": _channel_to_velocity(scene.speed),
+                "direction": _channel_to_velocity(scene.direction),
+            }
+            if scene_vels == cluster_vels:
+                return scene.name
+        return None
                     
     def get_events_for_ui(self) -> List[Dict[str, Any]]:
         """Get MIDI events formatted for Timeline display."""
