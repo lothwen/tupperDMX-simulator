@@ -113,6 +113,13 @@ class WaveformTrack(BaseTrack):
             y, sr = librosa.load(audio_file, sr=None)
             song_length_seconds = librosa.get_duration(y=y, sr=sr)
 
+            # Tell the MIDI manager the real song length so its clip-edit
+            # bounds aren't pinned to the (potentially tiny) duration of
+            # whatever MIDI events happen to be present.
+            mm = getattr(self.timeline_manager, "midi_manager", None)
+            if mm is not None and hasattr(mm, "set_song_duration"):
+                mm.set_song_duration(song_length_seconds)
+
             # Extend content width by 5% beyond song duration to show final MIDI events
             extended_duration = song_length_seconds * 1.05
             self.timeline_manager.content_width = int(extended_duration * self.timeline_manager.PIXELS_PER_SECOND)

@@ -81,7 +81,13 @@ class MidiManager(QObject):
         
         # Track current playback position for in-place updates
         self._current_playback_time: float = 0.0
-        
+
+        # Externally-provided song duration (e.g. the audio file's length).
+        # Used as a floor when computing the song-end clamp so clip-edit
+        # operations have a sensible range even when the loaded MIDI is
+        # sparse — see song_end_time().
+        self._song_duration_override: float = 0.0
+
         self.logger = get_logger("midi.manager")
         
         # Software controller reference
@@ -228,6 +234,26 @@ class MidiManager(QObject):
             return self.midi_data.length
         return 0.0
 
+    def set_song_duration(self, duration: float) -> None:
+        """Hint at the song's actual end time (e.g. the audio file's length).
+
+        Used as a floor for song_end_time() so clip-edit bounds aren't
+        pinned to the (potentially tiny) MIDI duration after the first
+        clip is dropped on an otherwise-empty track.
+        """
+        self._song_duration_override = max(0.0, float(duration))
+
+    def song_end_time(self) -> float:
+        """Effective end-of-timeline for clip placement and visual extents.
+
+        Returns the maximum of:
+          * the loaded MIDI's actual length;
+          * any externally-provided audio duration (set_song_duration);
+          * a 240s default fallback.
+        """
+        midi_length = self.midi_data.length if self.midi_data else 0.0
+        return max(midi_length, self._song_duration_override, 240.0)
+
     # MIDI Modification Methods
     
     def add_event(self, note: int, time: float, velocity: int) -> str:
@@ -275,10 +301,12 @@ class MidiManager(QObject):
                 break
         if not inserted:
             self.midi_notes.append(new_note)
-            
-        self._rebuild_midi_data()
-        self._auto_update_worker()
-        self.data_changed.emit()
+
+        # Reconcile so that dropping a clip exactly where a BLACKOUT cap
+        # already sits drops the now-zero-duration BLACKOUT instead of
+        # leaving it as a width-0 ghost in front of the new clip.
+        self.reconcile_blackouts(self._event_fixture(new_event))
+        self._commit()
         self.logger.info(f"Added MIDI event: note={note}, time={time:.3f}s")
         return event_id
     
@@ -448,12 +476,8 @@ class MidiManager(QObject):
         return float('inf')
 
     def _song_end_time(self) -> float:
-        """Effective end-of-timeline used as the song-end clamp for moves."""
-        duration = self.get_duration()
-        if duration and duration > 0:
-            return duration
-        # Fallback for empty/missing MIDI data — match the timeline's UI default.
-        return 240.0
+        """Backwards-compatible alias for song_end_time()."""
+        return self.song_end_time()
 
     def _non_blackout_intervals(self, exclude_event_id: Optional[str] = None,
                                 fixture: Optional[str] = None
@@ -637,12 +661,15 @@ class MidiManager(QObject):
         fixture = self._event_fixture(target)
         old_time = target['time']
         target_old_right = self._right_edge_of(idx, fixture)
-        # Clamp width — may be infinite if the target was the last event.
         song_end = self._song_end_time()
-        target_width = (target_old_right - old_time
-                        if target_old_right != float('inf')
-                        else max(MIN_EVENT_DURATION, song_end - old_time))
-        target_width = max(MIN_EVENT_DURATION, target_width)
+        # Last clip on the track has no successor: its visual extent stretches
+        # to song_end, but for collision/move purposes we treat it as
+        # point-sized so it can be moved freely. Otherwise preserve its
+        # visible width so the clip doesn't overlap its successor.
+        if target_old_right == float('inf'):
+            target_width = MIN_EVENT_DURATION
+        else:
+            target_width = max(MIN_EVENT_DURATION, target_old_right - old_time)
 
         if new_time < 0:
             new_time = 0.0
@@ -684,23 +711,49 @@ class MidiManager(QObject):
             return False
 
         # Update target's intended end now that we know its new position.
+        # Skip when the target had no successor (was the last clip on its
+        # track): its intended end is song_end, and overriding it with the
+        # collision-only target_width (MIN_EVENT_DURATION) would cause the
+        # post-move loop to spuriously insert a cap-BLACKOUT right after.
         new_target_end = best_new_time + target_width
-        intended_ends[event_id] = new_target_end
+        if target_old_right != float('inf'):
+            intended_ends[event_id] = new_target_end
+
+        # Capture target's "trailing cap" — the immediate same-fixture
+        # BLACKOUT after the clip's old position — BEFORE the move. The
+        # cap belongs to the clip and should travel with it; otherwise it
+        # would be left behind as a stale gap-marker at the old position.
+        # The new cap is re-inserted later by the intended-ends restoration
+        # loop. We capture by id (stable across the upcoming sort).
+        old_trailing_cap_id: Optional[str] = None
+        for j in range(idx + 1, len(self.midi_events)):
+            e = self.midi_events[j]
+            if self._event_fixture(e) != fixture:
+                continue
+            if self.is_blackout(e):
+                old_trailing_cap_id = e['id']
+            break
 
         # Apply the move.
         self._set_event_time_internal(event_id, best_new_time)
 
-        # Drop any same-fixture BLACKOUT that now sits strictly inside
-        # target's new visible span. Without this step the target's "next
-        # event" can land in the middle of its own extent, visually
-        # shrinking the clip. Other fixtures' BLACKOUTs are untouched.
+        # Drop any same-fixture BLACKOUT that now sits inside target's new
+        # visible span (including at the very start). Without this step the
+        # target's "next event" can be a BLACKOUT at distance 0 (sort
+        # stability puts a same-time BLACKOUT after the moved event),
+        # collapsing the clip's visible width to zero — i.e. it disappears.
+        # Other fixtures' BLACKOUTs are untouched.
         stale_blackouts = [
             e['id'] for e in self.midi_events
             if e['id'] != event_id
             and self._event_fixture(e) == fixture
             and self.is_blackout(e)
-            and best_new_time + BLACKOUT_EPSILON < e['time'] < new_target_end - BLACKOUT_EPSILON
+            and best_new_time - BLACKOUT_EPSILON <= e['time'] < new_target_end - BLACKOUT_EPSILON
         ]
+        # The old trailing cap may sit outside the new visible span (e.g.
+        # for a long-range move) but still needs to go.
+        if old_trailing_cap_id is not None and old_trailing_cap_id not in stale_blackouts:
+            stale_blackouts.append(old_trailing_cap_id)
         for bo_id in stale_blackouts:
             self._delete_event_internal(bo_id)
 
@@ -739,11 +792,13 @@ class MidiManager(QObject):
 
         # Clamp range
         # Right limit: keep at least MIN_EVENT_DURATION before next event of
-        # the same fixture (or 0 if no next — unconstrained on the right).
+        # the same fixture. If the clip is the last on its track, its visual
+        # extent stretches to song_end, so clamp to song_end - MIN_DURATION
+        # rather than leaving max_new_time unbounded.
         right_edge = self._right_edge_of(idx, fixture)
         max_new_time = (right_edge - MIN_EVENT_DURATION
                         if right_edge != float('inf')
-                        else float('inf'))
+                        else self._song_end_time() - MIN_EVENT_DURATION)
         # Left limit: cannot cross immediate non-BLACKOUT same-fixture
         # predecessor + MIN_DURATION. If prev is a BLACKOUT of the same
         # fixture, we can extend through it (consuming) up to that BLACKOUT's
@@ -1000,6 +1055,12 @@ class MidiManager(QObject):
                 "(channel-control notes missing from midi_note_map?)"
             )
             return None
+        # Reconcile in case the scene landed on top of a cap-BLACKOUT;
+        # otherwise reconcile would have to wait for a later mutation to
+        # clear the now-zero-duration BLACKOUT.
+        members = self._group_members(group_id)
+        if members:
+            self.reconcile_blackouts(self._event_fixture(members[0]))
         self._commit()
         self.logger.info(
             f"Added scene '{name}' at {time:.3f}s ({added} channels, "
@@ -1062,16 +1123,34 @@ class MidiManager(QObject):
 
         new_target_end = best_new_time + target_width
 
+        # Capture the group's old trailing cap (if any) BEFORE the move so
+        # it travels with the clip — same reason as move_event. We look for
+        # the first non-member same-fixture event after the group's start.
+        old_trailing_cap_id: Optional[str] = None
+        sorted_after: List[Dict[str, Any]] = sorted(
+            (e for e in self.midi_events
+             if self._event_fixture(e) == fixture
+             and e["id"] not in member_ids
+             and e["time"] > old_time + BLACKOUT_EPSILON),
+            key=lambda e: e["time"],
+        )
+        if sorted_after and self.is_blackout(sorted_after[0]):
+            old_trailing_cap_id = sorted_after[0]["id"]
+
         for eid in member_ids:
             self._set_event_time_internal(eid, best_new_time)
 
-        # Drop stale BLACKOUTs strictly inside the group's new visible span.
+        # Drop stale BLACKOUTs inside the group's new visible span (start
+        # inclusive — same reason as move_event: a same-time BLACKOUT at
+        # the new position would otherwise collapse the visible width).
         stale = [e["id"] for e in self.midi_events
                  if e["id"] not in member_ids
                  and self._event_fixture(e) == fixture
                  and self.is_blackout(e)
-                 and best_new_time + BLACKOUT_EPSILON < e["time"]
+                 and best_new_time - BLACKOUT_EPSILON <= e["time"]
                  < new_target_end - BLACKOUT_EPSILON]
+        if old_trailing_cap_id is not None and old_trailing_cap_id not in stale:
+            stale.append(old_trailing_cap_id)
         for bid in stale:
             self._delete_event_internal(bid)
 
@@ -1085,6 +1164,19 @@ class MidiManager(QObject):
                 actual_end = song_end
             if actual_end > intended_end + BLACKOUT_EPSILON:
                 self._insert_blackout_internal(intended_end, fixture)
+
+        # Re-cap the group itself: when the group had a trailing cap before
+        # the move, that cap was deleted (it travels with the clip). The
+        # equivalent of move_event's `intended_ends[event_id] override`
+        # lives here — group members are excluded from `intended_ends`,
+        # so we have to insert the new cap explicitly. We use
+        # _group_right_edge to look at non-member same-fixture neighbors.
+        if target_old_right != float('inf'):
+            group_actual_end = self._group_right_edge(group_id, fixture)
+            if group_actual_end == float('inf'):
+                group_actual_end = song_end
+            if group_actual_end > new_target_end + BLACKOUT_EPSILON:
+                self._insert_blackout_internal(new_target_end, fixture)
 
         self.reconcile_blackouts(fixture)
         self._commit()
