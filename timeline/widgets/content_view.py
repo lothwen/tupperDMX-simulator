@@ -69,6 +69,26 @@ class ContentView(QGraphicsView):
                 # Show menu at the clicked position
                 menu.exec(self.mapToGlobal(position))
 
+    def keyPressEvent(self, event):
+        """Handle Delete on the currently selected MIDI clip.
+
+        Routes through the same delete_requested signal as the right-click
+        "Delete Event" menu so the confirmation dialog and BLACKOUT-conversion
+        logic are shared. We deliberately delete only the first selected clip:
+        the delete handler triggers a full timeline refresh, invalidating any
+        further references in our local list.
+        """
+        if event.key() == Qt.Key.Key_Delete:
+            from ..tracks.midi_events import DraggableMidiEvent
+            scene = self.scene()
+            if scene is not None:
+                for item in scene.selectedItems():
+                    if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
+                        item.delete_requested.emit(item.event_id)
+                        event.accept()
+                        return
+        super().keyPressEvent(event)
+
     def wheelEvent(self, event):
         """Handle zooming with Ctrl+wheel."""
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
