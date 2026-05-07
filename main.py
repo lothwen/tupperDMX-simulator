@@ -20,7 +20,7 @@ from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
-                ToolbarManager, ErrorDialogManager, ClipLibraryWidget)
+                ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog)
 
 
 def _base_dir() -> str:
@@ -142,6 +142,8 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.prev_song_requested.connect(self.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.next_song)
         self.toolbar_manager.remove_song_requested.connect(self.remove_current_song)
+        # Application menu signals
+        self.toolbar_manager.about_requested.connect(self.show_about_dialog)
     
     def setup_ui(self):
         """Setup the main UI layout."""
@@ -611,6 +613,11 @@ class MainWindow(QMainWindow):
         self.audio_controller.set_metronome_muted(muted)
         # Update timeline 'M' button to reflect mute state
         self.timeline.metronome_mute_button.setChecked(muted)
+
+    def show_about_dialog(self):
+        """Show the About dialog with build provenance."""
+        dialog = AboutDialog(self)
+        dialog.exec()
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""

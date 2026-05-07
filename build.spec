@@ -1,10 +1,51 @@
 # -*- mode: python ; coding: utf-8 -*-
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Build configuration
 app_name = "TupperDMX-Simulator"
 main_script = "main.py"
+
+# Capture git metadata at build time and freeze it into _buildinfo.py.
+# The runtime accessor in buildinfo.py imports this module when the app is
+# frozen by PyInstaller; in dev runs the file may be absent and a live `git`
+# fallback is used instead.
+def _generate_buildinfo() -> None:
+    project_root = Path(SPECPATH).resolve()
+
+    def git(*args: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return ""
+
+    commit = git("rev-parse", "--short", "HEAD") or "unknown"
+    tag = git("describe", "--tags", "--always", "--dirty") or "unknown"
+    build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    output = project_root / "_buildinfo.py"
+    output.write_text(
+        "# ABOUTME: Auto-generated at PyInstaller build time. Do not edit by hand.\n"
+        "# ABOUTME: Captures git metadata so the frozen app can show its provenance.\n"
+        f"BUILD_DATE = {build_date!r}\n"
+        f"GIT_COMMIT = {commit!r}\n"
+        f"GIT_TAG = {tag!r}\n",
+        encoding="utf-8",
+    )
+
+_generate_buildinfo()
 
 # Data files and assets.
 # config.json holds shipped, read-only data (fixtures + midi_note_map) and is
@@ -61,6 +102,10 @@ hidden_imports = [
     "matplotlib",
     "numpy",
     "scipy",
+
+    # Build metadata
+    "buildinfo",
+    "_buildinfo",
 ]
 
 # Excluded modules to reduce size
