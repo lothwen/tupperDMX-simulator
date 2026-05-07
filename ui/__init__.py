@@ -5,6 +5,7 @@ from .stage_controller import StageController, StageView
 from .toolbar_manager import ToolbarManager
 from .error_dialogs import ErrorDialogManager
 from .clip_library import ClipLibraryWidget, CLIP_MIME_TYPE
+from .about_dialog import AboutDialog
 
 __all__ = [
     'MediaController',
@@ -16,4 +17,5 @@ __all__ = [
     'ErrorDialogManager',
     'ClipLibraryWidget',
     'CLIP_MIME_TYPE',
+    'AboutDialog',
 ]

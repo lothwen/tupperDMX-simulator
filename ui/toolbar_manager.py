@@ -1,7 +1,8 @@
 import os
 import sys
 from typing import Callable, Optional
-from PyQt6.QtWidgets import QToolBar, QSpinBox, QComboBox, QLabel, QWidget, QSizePolicy, QFrame, QHBoxLayout, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import (QToolBar, QSpinBox, QComboBox, QLabel, QWidget, QSizePolicy,
+                             QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QToolButton, QMenu)
 from PyQt6.QtGui import QAction, QIcon, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
@@ -28,6 +29,8 @@ class ToolbarManager(QObject):
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
     remove_song_requested = pyqtSignal()
+    # Application menu signals
+    about_requested = pyqtSignal()
     
     def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
                  play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon):
@@ -58,6 +61,7 @@ class ToolbarManager(QObject):
         self.next_button: Optional[QPushButton] = None
         self.remove_button: Optional[QPushButton] = None
         self.song_counter_label: Optional[QLabel] = None
+        self.menu_button: Optional[QToolButton] = None
         
         # State
         self.is_playing = False
@@ -97,7 +101,11 @@ class ToolbarManager(QObject):
         # Sources Section (right - expandable to fill right space)
         sources_section = self._create_sources_section()
         container_layout.addWidget(sources_section, 1)  # stretch factor 1 = expandable
-        
+
+        # Menu Section (far right - fixed width hamburger button)
+        menu_section = self._create_menu_section()
+        container_layout.addWidget(menu_section, 0)
+
         # Add the container to the toolbar
         self.toolbar.addWidget(container)
         
@@ -359,6 +367,38 @@ class ToolbarManager(QObject):
         layout.addLayout(sources_layout)
         
         self.logger.debug("Sources section created")
+        return section
+
+    def _create_menu_section(self) -> QFrame:
+        """Create the hamburger application menu section (far-right)."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.Shape.StyledPanel)
+        section.setObjectName("ToolbarSection")
+
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        button = QToolButton()
+        button.setText("☰")  # U+2630 TRIGRAM FOR HEAVEN — three horizontal bars
+        button.setObjectName("MenuButton")
+        button.setFixedSize(36, 36)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        button.setToolTip("Menu")
+        font = button.font()
+        font.setPointSize(font.pointSize() + 4)
+        button.setFont(font)
+
+        menu = QMenu(button)
+        about_action = menu.addAction("About TupperDMX")
+        about_action.triggered.connect(self.about_requested.emit)
+        button.setMenu(menu)
+
+        layout.addWidget(button)
+
+        self.menu_button = button
+        self.logger.debug("Application menu section created")
         return section
 
     def update_audio_file_display(self, filename: str) -> None:
