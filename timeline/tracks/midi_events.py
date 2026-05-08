@@ -147,7 +147,9 @@ class FadeHandle(QGraphicsObject):
     def paint(self, painter, option, widget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(QBrush(FADE_HANDLE_COLOR))
-        painter.setPen(QPen(QColor(20, 20, 20)))
+        fade_handle_pen = QPen(QColor(20, 20, 20))
+        fade_handle_pen.setCosmetic(True)
+        painter.setPen(fade_handle_pen)
         painter.drawPolygon(self._triangle())
 
     def hoverEnterEvent(self, event):
@@ -288,6 +290,7 @@ class DraggableMidiEvent(QGraphicsObject):
         # Painting state (overridden by setBrush/setPen unless BLACKOUT)
         self._brush = QBrush(QColor(100, 100, 100))
         self._pen = QPen(QColor(20, 20, 20))
+        self._pen.setCosmetic(True)
 
         # Tooltip
         self._tooltip_shown = False
@@ -365,6 +368,7 @@ class DraggableMidiEvent(QGraphicsObject):
         self.update()
 
     def setPen(self, pen):
+        pen.setCosmetic(True)
         self._pen = pen
         self.update()
 
