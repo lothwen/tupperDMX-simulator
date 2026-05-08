@@ -543,6 +543,31 @@ class Timeline(QWidget):
             self.midi_manager.set_event_right_edge(event_id, new_right_time)
         self.refresh_from_manager()
 
+    def on_midi_event_fade_in(self, event_id: str, seconds: float):
+        """Fade-IN handle drag committed.
+
+        Routes to scene API for grouped clips so all members carry a uniform
+        fade. The manager's setters emit data_changed which already drives
+        the redraw — no explicit refresh_from_manager() needed here.
+        """
+        if not self.midi_manager or not event_id:
+            return
+        group_id = self._group_id_for_event(event_id)
+        if group_id:
+            self.midi_manager.set_scene_fade_in(group_id, seconds)
+        else:
+            self.midi_manager.set_event_fade_in(event_id, seconds)
+
+    def on_midi_event_fade_out(self, event_id: str, seconds: float):
+        """Fade-OUT handle drag committed. See on_midi_event_fade_in."""
+        if not self.midi_manager or not event_id:
+            return
+        group_id = self._group_id_for_event(event_id)
+        if group_id:
+            self.midi_manager.set_scene_fade_out(group_id, seconds)
+        else:
+            self.midi_manager.set_event_fade_out(event_id, seconds)
+
     def on_midi_event_edit_by_id(self, event_id: str):
         """Edit dialog request for the event with `event_id`.
 

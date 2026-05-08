@@ -33,6 +33,22 @@ BLACKOUT_EPSILON = 1e-4
 # tiny drift from float arithmetic during a series of edits.
 NOTE_MATCH_TOLERANCE = 0.005
 
+# Fade-generation constants (scene groups only). A "fade" is a chain of
+# brightness (note 1) note_on events at FADE_STEP_SECONDS apart whose
+# velocities ramp linearly between 0 and the group's brightness V.
+# Fade notes live ONLY in midi_notes (never in midi_events) so they don't
+# pollute scene clustering, timeline rendering, or per-clip mutation logic.
+# They round-trip through the saved MIDI file and are detected on load by
+# the consecutive-step-with-monotonic-velocity-and-zero-endpoint pattern.
+FADE_STEP_SECONDS = 0.10
+FADE_NOTE_DURATION = 0.05  # < step so consecutive note_ons don't overlap
+FADE_MIN_DURATION = 0.01   # below this, treat as no fade
+# Brightness channel-control note number — the fade's target channel.
+FADE_BRIGHTNESS_NOTE = 1
+# Velocity tolerance when matching a parsed midi_notes entry to a detected
+# fade-run member; absorbs the /2 quantization round-trip in MIDI export.
+FADE_VELOCITY_MATCH_TOLERANCE = 2
+
 # LED-bar channel-control mapping used by scene clips. Each tuple is
 # (json_channel_name, midi_note_number) and matches the cases in
 # software_controller/main.py:handle_note_on (notes 1-7).
@@ -171,6 +187,10 @@ class MidiManager(QObject):
                     "info": note_info,
                     "group_id": None,
                     "scene_name": None,
+                    # Fade durations in seconds. UI-only state for now —
+                    # not persisted to the MIDI file. Reset on every load.
+                    "fade_in": 0.0,
+                    "fade_out": 0.0,
                 })
 
         # Parse note_on/note_off pairs into duration-bearing entries so the
@@ -194,11 +214,23 @@ class MidiManager(QObject):
                     })
                     del active_notes[msg.note]
 
+        # Detect fade-in/out runs in the loaded note-1 events and migrate
+        # them out of midi_events into is_fade-tagged midi_notes entries.
+        # MUST run before _reattach_scene_groups so the cluster builder
+        # doesn't see the fade-in starter (a duplicate brightness event at
+        # scene start with velocity 0) and corrupt the scene-name lookup.
+        fade_runs = self._detect_fade_notes_on_load()
+
         # Reattach scene groups: clusters of ≥2 channel-control events at
         # (essentially) the same time get a fresh shared group_id. Groups
         # are ephemeral — they live only in memory; persistence relies on
         # the same-time clustering rule on every reload.
         self._reattach_scene_groups()
+
+        # Attach detected fade runs to the matching scene groups: sets
+        # fade_in/fade_out values on the group's members and stamps the
+        # parent_group_id on the corresponding midi_notes entries.
+        self._attach_fade_runs_to_groups(fade_runs)
 
     def _reattach_scene_groups(self) -> None:
         """Cluster channel-control events at the same time into scene groups.
@@ -236,6 +268,173 @@ class MidiManager(QObject):
                     c["group_id"] = gid
                     c["scene_name"] = scene_name
             i += 1
+
+    def _detect_fade_notes_on_load(self) -> List[Dict[str, Any]]:
+        """Spot fade ramps in freshly-parsed midi_events; migrate to midi_notes.
+
+        Heuristic: any contiguous run of note-1 events at FADE_STEP_SECONDS
+        apart (within NOTE_MATCH_TOLERANCE) with monotonic velocities and a
+        zero endpoint is a fade. Detected events are removed from
+        midi_events and the matching midi_notes entries are tagged
+        is_fade=True. The parent_group_id is filled in later by
+        _attach_fade_runs_to_groups once scene clustering has run.
+
+        Returns the list of detected runs so the attach pass can find them.
+        """
+        self.midi_events.sort(key=lambda x: x['time'])
+
+        # Filter to note-1 (brightness) events; secondary sort by velocity
+        # so at same-time conflicts the smaller velocity comes first. This
+        # is what lets fade endpoints (vel=0) win when they coincide with
+        # an original brightness note (vel=V): for fade-in, the original
+        # vel=V at scene_start sits next to the fade starter vel=0; for
+        # fade-out, the fade ender vel=0 at clip_end sits next to the next
+        # group's vel=V. Putting vel=0 first means the run-extender picks
+        # the fade member, keeping the run monotonic.
+        candidates = sorted(
+            (e for e in self.midi_events if e['note'] == FADE_BRIGHTNESS_NOTE),
+            key=lambda e: (e['time'], e['velocity']),
+        )
+
+        runs: List[Dict[str, Any]] = []
+        used_ids: set = set()
+
+        for i, anchor in enumerate(candidates):
+            if anchor['id'] in used_ids:
+                continue
+            run_members = [anchor]
+            for j in range(i + 1, len(candidates)):
+                cand = candidates[j]
+                if cand['id'] in used_ids:
+                    break
+                expected = run_members[-1]['time'] + FADE_STEP_SECONDS
+                if cand['time'] > expected + NOTE_MATCH_TOLERANCE:
+                    break  # gap too large — run ends here
+                if cand['time'] < expected - NOTE_MATCH_TOLERANCE:
+                    # Same-time / sub-step duplicate (e.g. the original
+                    # group's brightness note coincident with the fade
+                    # starter). Skip it without breaking the run.
+                    continue
+                run_members.append(cand)
+            if len(run_members) < 2:
+                continue
+            vels = [m['velocity'] for m in run_members]
+            mono_up = all(vels[k] <= vels[k + 1] for k in range(len(vels) - 1))
+            mono_dn = all(vels[k] >= vels[k + 1] for k in range(len(vels) - 1))
+            # Endpoint floor is 1 (not 0) — see _linear_fade_ramp on why
+            # velocity 0 can't be emitted into a MIDI file.
+            is_fade_in = mono_up and vels[0] <= 1 and vels[-1] > vels[0]
+            is_fade_out = mono_dn and vels[-1] <= 1 and vels[0] > vels[-1]
+            if not (is_fade_in or is_fade_out):
+                continue
+            kind = 'in' if is_fade_in else 'out'
+            runs.append({
+                'kind': kind,
+                'members': run_members,
+                'start_time': run_members[0]['time'],
+                'end_time': run_members[-1]['time'],
+                'peak_velocity': max(vels),
+            })
+            for m in run_members:
+                used_ids.add(m['id'])
+
+        if not runs:
+            return []
+
+        # Migrate: remove fade events from midi_events, tag corresponding
+        # midi_notes entries. We match midi_notes by (note, time, velocity)
+        # since a fade-in starter at scene start collides with the original
+        # brightness note in (note, time) but differs in velocity.
+        # Track which run each tagged midi_note belongs to via a temporary
+        # `_fade_run_idx` field — _attach_fade_runs_to_groups consumes and
+        # clears it.
+        for run_idx, run in enumerate(runs):
+            for m in run['members']:
+                # Find midi_notes entry — first untagged matching one wins.
+                for n in self.midi_notes:
+                    if n.get('is_fade'):
+                        continue
+                    if n['note'] != m['note']:
+                        continue
+                    if abs(n['time'] - m['time']) > NOTE_MATCH_TOLERANCE:
+                        continue
+                    if abs(n['velocity'] - m['velocity']) > FADE_VELOCITY_MATCH_TOLERANCE:
+                        continue
+                    n['is_fade'] = True
+                    n['parent_group_id'] = None  # filled in by attach pass
+                    n['_fade_run_idx'] = run_idx
+                    break
+
+        detected_ids = used_ids
+        self.midi_events = [e for e in self.midi_events
+                            if e['id'] not in detected_ids]
+        return runs
+
+    def _attach_fade_runs_to_groups(self,
+                                    fade_runs: List[Dict[str, Any]]) -> None:
+        """Match each detected fade run to a scene group and fill in metadata.
+
+        Fade-in matches a group whose start time aligns with the run's
+        first note. Fade-out matches a group whose visible-clip-end aligns
+        with the run's last note. Unmatched runs are dropped (their tagged
+        midi_notes get reverted to regular notes).
+        """
+        if not fade_runs:
+            return
+
+        all_groups: Dict[str, Dict[str, Any]] = {}
+        for e in self.midi_events:
+            gid = e.get('group_id')
+            if gid and gid not in all_groups:
+                all_groups[gid] = {
+                    'fixture': self._event_fixture(e),
+                    'time': e['time'],
+                }
+        # Pre-compute clip ends per group for fade-out matching.
+        for gid, info in all_groups.items():
+            re = self._group_right_edge(gid, info['fixture'])
+            if re == float('inf'):
+                re = self._song_end_time()
+            info['clip_end'] = re
+
+        matched_run_idxs: set = set()
+        for run_idx, run in enumerate(fade_runs):
+            if run['kind'] == 'in':
+                anchor = run['start_time']
+                target_gid = next(
+                    (gid for gid, info in all_groups.items()
+                     if abs(info['time'] - anchor) < NOTE_MATCH_TOLERANCE),
+                    None)
+            else:
+                anchor = run['end_time']
+                target_gid = next(
+                    (gid for gid, info in all_groups.items()
+                     if abs(info['clip_end'] - anchor) < NOTE_MATCH_TOLERANCE),
+                    None)
+            if target_gid is None:
+                continue  # orphan run — leave its midi_notes tags to be cleaned
+            duration = run['end_time'] - run['start_time']
+            for m in self._group_members(target_gid):
+                if run['kind'] == 'in':
+                    m['fade_in'] = duration
+                else:
+                    m['fade_out'] = duration
+            for n in self.midi_notes:
+                if n.get('_fade_run_idx') == run_idx:
+                    n['parent_group_id'] = target_gid
+            matched_run_idxs.add(run_idx)
+
+        # Clean up: clear the temporary _fade_run_idx on all is_fade notes,
+        # and revert is_fade flag for any orphan run that didn't match a
+        # group (so they play as regular brightness events instead of being
+        # silently dropped from regeneration).
+        for n in self.midi_notes:
+            if '_fade_run_idx' not in n:
+                continue
+            if n['_fade_run_idx'] not in matched_run_idxs:
+                n['is_fade'] = False
+                n.pop('parent_group_id', None)
+            n.pop('_fade_run_idx', None)
 
     def _get_led_scenes(self) -> List[LedScene]:
         """Return the cached LED scene library, loading it on first access."""
@@ -625,7 +824,11 @@ class MidiManager(QObject):
                 break
         if event is None:
             return False
+        # Skip is_fade entries — those are owned by their parent scene group,
+        # not by this event, even when their (note, time) coincide with it.
         for i, note in enumerate(self.midi_notes):
+            if note.get('is_fade'):
+                continue
             if note['note'] == event['note'] and abs(note['time'] - event['time']) < NOTE_MATCH_TOLERANCE:
                 self.midi_notes.pop(i)
                 break
@@ -637,8 +840,11 @@ class MidiManager(QObject):
             if e['id'] == event_id:
                 old_time = e['time']
                 e['time'] = new_time
-                # Mirror in midi_notes (matched by note + old time)
+                # Mirror in midi_notes (matched by note + old time). Skip
+                # fade notes — they are regenerated separately by the caller.
                 for note in self.midi_notes:
+                    if note.get('is_fade'):
+                        continue
                     if (note['note'] == e['note']
                             and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
                         note['time'] = new_time
@@ -1028,6 +1234,8 @@ class MidiManager(QObject):
             "info": self.midi_note_map[str(note)],
             "group_id": group_id,
             "scene_name": scene_name,
+            "fade_in": 0.0,
+            "fade_out": 0.0,
         })
         self.midi_events.sort(key=lambda x: x["time"])
 
@@ -1236,6 +1444,7 @@ class MidiManager(QObject):
             if group_actual_end > new_target_end + BLACKOUT_EPSILON:
                 self._insert_blackout_internal(new_target_end, fixture)
 
+        self._regenerate_group_fades(group_id)
         self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
@@ -1265,8 +1474,12 @@ class MidiManager(QObject):
                 continue
             new_vel = _channel_to_velocity(channels[ch_name])
             evt["velocity"] = new_vel
-            # Mirror in midi_notes (matched by note + time)
+            # Mirror in midi_notes (matched by note + time). Skip is_fade
+            # entries — they belong to the group's fade ramp, not the
+            # original channel-control event.
             for n in self.midi_notes:
+                if n.get("is_fade"):
+                    continue
                 if (n["note"] == note
                         and abs(n["time"] - evt["time"]) < NOTE_MATCH_TOLERANCE):
                     n["velocity"] = new_vel
@@ -1276,6 +1489,8 @@ class MidiManager(QObject):
             for m in members:
                 m["scene_name"] = name
 
+        # Brightness V may have changed → fade ramp endpoint changes.
+        self._regenerate_group_fades(group_id)
         self._commit()
         self.logger.info(
             f"Updated scene {group_id}"
@@ -1290,6 +1505,9 @@ class MidiManager(QObject):
             return False
         fixture = self._event_fixture(members[0])
         group_time = members[0]["time"]
+        # Wipe fade notes BEFORE deleting the members; once members are gone
+        # _regenerate_group_fades wouldn't know what to wipe (no group anchor).
+        self._wipe_group_fades(group_id)
         for e in list(members):
             self._delete_event_internal(e["id"])
         self._insert_blackout_internal(group_time, fixture)
@@ -1344,6 +1562,8 @@ class MidiManager(QObject):
         if delta > 0 and not prev_was_blackout and prev_same is not None:
             self._insert_blackout_internal(old_time, fixture)
 
+        self._clamp_group_fades_to_visible_duration(group_id)
+        self._regenerate_group_fades(group_id)
         self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
@@ -1394,11 +1614,228 @@ class MidiManager(QObject):
             else:
                 return False
 
+        self._clamp_group_fades_to_visible_duration(group_id)
+        self._regenerate_group_fades(group_id)
         self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
             f"Resized scene {group_id} right edge to {new_right_time:.3f}s"
         )
+        return True
+
+    # --- Fades ----------------------------------------------------------------
+    # UI-only state for now: fade_in / fade_out (seconds) live on the event
+    # dict and are not persisted to the MIDI file. data_changed is emitted on
+    # change so the timeline redraws; _commit is intentionally NOT called
+    # because no MIDI message rewrite is needed.
+
+    def _visible_duration_for_event(self, event_id: str) -> float:
+        """Visible width of a clip in seconds (next same-fixture event - this)."""
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return 0.0
+        fixture = self._event_fixture(self.midi_events[idx])
+        right = self._right_edge_of(idx, fixture)
+        if right == float('inf'):
+            right = self._song_end_time()
+        return max(0.0, right - self.midi_events[idx]['time'])
+
+    def _visible_duration_for_group(self, group_id: str) -> float:
+        members = self._group_members(group_id)
+        if not members:
+            return 0.0
+        fixture = self._event_fixture(members[0])
+        right = self._group_right_edge(group_id, fixture)
+        if right == float('inf'):
+            right = self._song_end_time()
+        return max(0.0, right - members[0]['time'])
+
+    def _clamp_fade(self, requested: float, other_fade: float,
+                    visible_duration: float) -> float:
+        """Clamp a fade duration to [0, visible_duration - other_fade]."""
+        room = max(0.0, visible_duration - max(0.0, other_fade))
+        return max(0.0, min(requested, room))
+
+    def _linear_fade_ramp(self, start_time: float, duration: float,
+                          vel_start: int, vel_end: int,
+                          step: float) -> List[Tuple[float, int]]:
+        """Generate (time, velocity) tuples for a fade ramp.
+
+        Notes are emitted at ``start_time, start_time+step, ...`` up to and
+        INCLUDING ``start_time+duration``. The last point always lands at
+        ``start_time+duration`` with velocity ``vel_end`` so endpoint values
+        are exact even when ``duration`` isn't a clean multiple of ``step``.
+
+        Velocities are clamped to a MINIMUM of 1: a MIDI ``note_on`` with
+        velocity 0 is conventionally interpreted as ``note_off`` on parse,
+        which would silently drop the fade endpoint on the next file load.
+        Velocity 1 yields a DMX channel value of 2 — visually indis-
+        tinguishable from 0 (~0.8% of full brightness) but round-trips
+        through the MIDI file cleanly.
+        """
+        if duration < FADE_MIN_DURATION:
+            return []
+        notes: List[Tuple[float, int]] = []
+        n_full = int(duration / step + 1e-9)
+        for i in range(n_full + 1):
+            t = start_time + i * step
+            if t > start_time + duration + 1e-9:
+                break
+            frac = (t - start_time) / duration
+            vel = round(vel_start + (vel_end - vel_start) * frac)
+            notes.append((t, max(1, min(127, int(vel)))))
+        end_time = start_time + duration
+        if not notes or abs(notes[-1][0] - end_time) > 1e-6:
+            notes.append((end_time, max(1, min(127, int(vel_end)))))
+        else:
+            notes[-1] = (end_time, max(1, min(127, int(vel_end))))
+        return notes
+
+    def _generate_fade_notes(self, group_id: str
+                             ) -> List[Tuple[float, int]]:
+        """Compute (time, velocity) tuples for a group's fade-in + fade-out.
+
+        Pure function over current state — caller is responsible for
+        wiping prior is_fade entries and inserting these into midi_notes.
+        Returns empty when the group has no brightness note (note 1) or
+        the brightness velocity is 0.
+        """
+        members = self._group_members(group_id)
+        if not members:
+            return []
+        brightness = next((m for m in members
+                           if m["note"] == FADE_BRIGHTNESS_NOTE), None)
+        if brightness is None or brightness["velocity"] <= 0:
+            return []
+        target_vel = int(brightness["velocity"])
+        fade_in = max(0.0, brightness.get("fade_in", 0.0))
+        fade_out = max(0.0, brightness.get("fade_out", 0.0))
+
+        start_time = brightness["time"]
+        fixture = self._event_fixture(brightness)
+        right_edge = self._group_right_edge(group_id, fixture)
+        if right_edge == float('inf'):
+            right_edge = self._song_end_time()
+
+        notes: List[Tuple[float, int]] = []
+        if fade_in >= FADE_MIN_DURATION:
+            notes.extend(self._linear_fade_ramp(
+                start_time, fade_in, 0, target_vel, FADE_STEP_SECONDS))
+        if fade_out >= FADE_MIN_DURATION:
+            notes.extend(self._linear_fade_ramp(
+                right_edge - fade_out, fade_out, target_vel, 0,
+                FADE_STEP_SECONDS))
+        return notes
+
+    def _regenerate_group_fades(self, group_id: str) -> None:
+        """Wipe and rewrite this group's fade notes in midi_notes.
+
+        Idempotent — call after any state change that affects the group's
+        position, extent, or brightness. Fade notes are appended after a
+        wipe so stable-sort by time keeps them after originals at the same
+        timestamp (the rebuild step relies on this for last-write-wins
+        ordering of the same-time brightness conflict at scene start).
+        """
+        self.midi_notes = [
+            n for n in self.midi_notes
+            if not (n.get("is_fade") and n.get("parent_group_id") == group_id)
+        ]
+        for t, vel in self._generate_fade_notes(group_id):
+            self.midi_notes.append({
+                "id": str(uuid.uuid4()),
+                "note": FADE_BRIGHTNESS_NOTE,
+                "time": t,
+                "duration": FADE_NOTE_DURATION,
+                "velocity": vel,
+                "is_fade": True,
+                "parent_group_id": group_id,
+            })
+        self.midi_notes.sort(key=lambda x: x["time"])
+
+    def _wipe_group_fades(self, group_id: str) -> None:
+        """Remove all fade notes for a group (used on delete)."""
+        self.midi_notes = [
+            n for n in self.midi_notes
+            if not (n.get("is_fade") and n.get("parent_group_id") == group_id)
+        ]
+
+    def _clamp_group_fades_to_visible_duration(self, group_id: str) -> None:
+        """Shrink fade_in/fade_out values that no longer fit a resized clip.
+
+        Called after a left/right resize. Preserves the relative balance
+        between in and out when both have to shrink. Idempotent.
+        """
+        members = self._group_members(group_id)
+        if not members:
+            return
+        visible = self._visible_duration_for_group(group_id)
+        fade_in = max(0.0, members[0].get('fade_in', 0.0))
+        fade_out = max(0.0, members[0].get('fade_out', 0.0))
+        if fade_in + fade_out <= visible + 1e-9:
+            return
+        if fade_in + fade_out <= 0:
+            return
+        scale = visible / (fade_in + fade_out)
+        new_in = max(0.0, fade_in * scale)
+        new_out = max(0.0, fade_out * scale)
+        for m in members:
+            m['fade_in'] = new_in
+            m['fade_out'] = new_out
+
+    def set_event_fade_in(self, event_id: str, seconds: float) -> bool:
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+        evt = self.midi_events[idx]
+        clamped = self._clamp_fade(seconds, evt.get('fade_out', 0.0),
+                                   self._visible_duration_for_event(event_id))
+        if abs(clamped - evt.get('fade_in', 0.0)) < 1e-6:
+            return False
+        evt['fade_in'] = clamped
+        self.data_changed.emit()
+        return True
+
+    def set_event_fade_out(self, event_id: str, seconds: float) -> bool:
+        idx = self._index_of(event_id)
+        if idx < 0:
+            return False
+        evt = self.midi_events[idx]
+        clamped = self._clamp_fade(seconds, evt.get('fade_in', 0.0),
+                                   self._visible_duration_for_event(event_id))
+        if abs(clamped - evt.get('fade_out', 0.0)) < 1e-6:
+            return False
+        evt['fade_out'] = clamped
+        self.data_changed.emit()
+        return True
+
+    def set_scene_fade_in(self, group_id: str, seconds: float) -> bool:
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        other = members[0].get('fade_out', 0.0)
+        clamped = self._clamp_fade(seconds, other,
+                                   self._visible_duration_for_group(group_id))
+        if abs(clamped - members[0].get('fade_in', 0.0)) < 1e-6:
+            return False
+        for m in members:
+            m['fade_in'] = clamped
+        self._regenerate_group_fades(group_id)
+        self._commit()
+        return True
+
+    def set_scene_fade_out(self, group_id: str, seconds: float) -> bool:
+        members = self._group_members(group_id)
+        if not members:
+            return False
+        other = members[0].get('fade_in', 0.0)
+        clamped = self._clamp_fade(seconds, other,
+                                   self._visible_duration_for_group(group_id))
+        if abs(clamped - members[0].get('fade_out', 0.0)) < 1e-6:
+            return False
+        for m in members:
+            m['fade_out'] = clamped
+        self._regenerate_group_fades(group_id)
+        self._commit()
         return True
 
     def _rebuild_midi_data(self) -> None:
@@ -1423,13 +1860,20 @@ class MidiManager(QObject):
             # Build all MIDI events from notes data
             all_events = []
             for note_data in self.midi_notes:
+                # Carry the is_fade flag through so the sort can place fade
+                # notes AFTER originals at the same timestamp — last-write-
+                # wins is the mechanism that makes brightness=0 win at scene
+                # start during a fade-in (the original group's brightness
+                # note also lives at that exact time).
+                is_fade = bool(note_data.get('is_fade', False))
                 # Note on
                 all_events.append({
                     'time': note_data['time'],
                     'type': 'note_on',
                     'note': note_data['note'],
                     'velocity': note_data['velocity'],
-                    'channel': 0
+                    'channel': 0,
+                    'is_fade': is_fade,
                 })
                 # Note off
                 all_events.append({
@@ -1437,11 +1881,13 @@ class MidiManager(QObject):
                     'type': 'note_off',
                     'note': note_data['note'],
                     'velocity': 0,
-                    'channel': 0
+                    'channel': 0,
+                    'is_fade': is_fade,
                 })
-            
-            # Sort by time and convert to MIDI messages
-            all_events.sort(key=lambda x: x['time'])
+
+            # Sort by time, then by is_fade so fade events follow originals
+            # at the same timestamp.
+            all_events.sort(key=lambda x: (x['time'], x['is_fade']))
             current_time_seconds = 0
             
             for event in all_events:

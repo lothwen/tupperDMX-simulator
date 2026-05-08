@@ -20,8 +20,8 @@ from typing import List, Optional, Tuple
 
 from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu)
-from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter
-from PyQt6.QtCore import pyqtSignal, QRectF, Qt
+from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter, QPolygonF
+from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
 
 from .base import BaseTrack
 from ..widgets.tooltip import CustomTooltip
@@ -86,7 +86,124 @@ CLIP_GRADIENT_LIGHTEN = 118   # top of gradient = base.lighter(LIGHTEN)
 CLIP_GRADIENT_DARKEN = 140    # bottom of gradient = base.darker(DARKEN)
 # Selection-border styling.
 SELECTION_BORDER_COLOR = QColor(255, 215, 0)  # warm gold — visible on any clip color
-SELECTION_BORDER_WIDTH_PX = 1
+SELECTION_BORDER_WIDTH_PX = 2
+
+# Fade-handle styling. The triangle marker sits at the top edge of the clip.
+# Its right-angle vertex marks the fade endpoint along the time axis; the
+# legs extend INWARD into the clip body so the marker stays visible at the
+# zero-fade default position (clip corner) and never paints outside the clip.
+FADE_HANDLE_SIZE_PX = 10
+FADE_HANDLE_COLOR = QColor(255, 215, 0)        # match the selection-border gold
+FADE_LINE_COLOR = QColor(255, 215, 0, 220)
+FADE_LINE_WIDTH_PX = 2
+
+
+class FadeHandle(QGraphicsObject):
+    """Triangle handle on a clip's top edge, draggable along the time axis.
+
+    `side` is "in" (left handle, marks fade-IN end) or "out" (right handle,
+    marks fade-OUT start). The handle's local origin (0, 0) sits at its
+    fade endpoint along the clip's top edge; the triangle is drawn inward
+    so the marker is always visible inside the clip body, including at
+    zero-fade where it tucks into the corner.
+
+    Drag commits go to `fade_committed(side, new_seconds)`. During a drag
+    the parent clip's `preview_fade(side, seconds)` is called continuously
+    so the diagonal fade line repaints in real time — the same "preview vs
+    commit" pattern used by clip move/resize.
+    """
+
+    fade_committed = pyqtSignal(str, float)  # side ("in"/"out"), seconds
+
+    def __init__(self, side: str, parent_clip):
+        super().__init__(parent_clip)
+        self.side = side
+        self._parent_clip = parent_clip
+        self._dragging = False
+        self._press_scene_x = 0.0
+        self._press_self_x = 0.0
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setAcceptHoverEvents(True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        # Sit above the clip body but below text labels so handles stay
+        # grabbable on top of the clip without occluding the part name.
+        self.setZValue(3)
+
+    def _triangle(self) -> QPolygonF:
+        s = FADE_HANDLE_SIZE_PX
+        if self.side == "in":
+            # Right-angle at (0, 0); legs go RIGHT and DOWN into the clip.
+            return QPolygonF([QPointF(0, 0), QPointF(s, 0), QPointF(0, s)])
+        # side == "out": legs go LEFT and DOWN.
+        return QPolygonF([QPointF(0, 0), QPointF(-s, 0), QPointF(0, s)])
+
+    def boundingRect(self) -> QRectF:
+        s = FADE_HANDLE_SIZE_PX
+        if self.side == "in":
+            return QRectF(0, 0, s, s)
+        return QRectF(-s, 0, s, s)
+
+    def paint(self, painter, option, widget):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QBrush(FADE_HANDLE_COLOR))
+        painter.setPen(QPen(QColor(20, 20, 20)))
+        painter.drawPolygon(self._triangle())
+
+    def hoverEnterEvent(self, event):
+        # Hover never leaves the parent clip when the cursor moves onto a
+        # child handle, so the parent's tooltip would otherwise stay frozen
+        # under the drag. Hiding it here mirrors what the parent does on
+        # its own hoverLeave / mousePress.
+        self._parent_clip.hide_tooltip()
+        if self.scene() and self.scene().views():
+            for view in self.scene().views():
+                view.setCursor(Qt.CursorShape.SizeHorCursor)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        if self.scene() and self.scene().views():
+            for view in self.scene().views():
+                view.setCursor(Qt.CursorShape.ArrowCursor)
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        # Belt-and-braces: also hide on press in case hoverEnter never
+        # fired (e.g. cursor was outside the handle's bounding rect when
+        # the press began due to a fast pointer move).
+        self._parent_clip.hide_tooltip()
+        self._dragging = True
+        self._press_scene_x = event.scenePos().x()
+        self._press_self_x = self.pos().x()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if not self._dragging:
+            super().mouseMoveEvent(event)
+            return
+        delta = event.scenePos().x() - self._press_scene_x
+        proposed_x = self._press_self_x + delta
+        clamped_x = self._parent_clip.clamp_fade_handle_x(self.side, proposed_x)
+        self.setPos(clamped_x, 0.0)
+        # Live preview — parent recomputes the diagonal fade line.
+        seconds = self._parent_clip.handle_x_to_fade_seconds(self.side, clamped_x)
+        self._parent_clip.preview_fade(self.side, seconds)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if not self._dragging:
+            super().mouseReleaseEvent(event)
+            return
+        self._dragging = False
+        seconds = self._parent_clip.handle_x_to_fade_seconds(self.side, self.pos().x())
+        # Only commit if there was meaningful motion. A pure click should
+        # not trigger a redraw — same convention as the clip-body drags.
+        if abs(event.scenePos().x() - self._press_scene_x) >= 1.0:
+            self.fade_committed.emit(self.side, seconds)
+        event.accept()
 
 
 @dataclass
@@ -118,6 +235,8 @@ class DraggableMidiEvent(QGraphicsObject):
     move_committed = pyqtSignal(str, float)         # event_id, new_time
     left_edge_committed = pyqtSignal(str, float)    # event_id, new_time
     right_edge_committed = pyqtSignal(str, float)   # event_id, new_right_time
+    fade_in_committed = pyqtSignal(str, float)      # event_id, fade_in seconds
+    fade_out_committed = pyqtSignal(str, float)     # event_id, fade_out seconds
     edit_requested = pyqtSignal(str)                # event_id
     delete_requested = pyqtSignal(str)              # event_id
     add_at_position_requested = pyqtSignal(float)   # time_seconds
@@ -174,6 +293,21 @@ class DraggableMidiEvent(QGraphicsObject):
         self._tooltip_shown = False
         self._custom_tooltip = None
 
+        # Fade durations (seconds). Sourced from event_data when present;
+        # default to 0 so a clip with no fades renders cleanly. The handles
+        # use these as their pixel positions and as the live-preview value
+        # during a drag.
+        self.fade_in_seconds = float(event_data.get("fade_in", 0.0)) if event_data else 0.0
+        self.fade_out_seconds = float(event_data.get("fade_out", 0.0)) if event_data else 0.0
+        self._fade_in_handle: Optional[FadeHandle] = None
+        self._fade_out_handle: Optional[FadeHandle] = None
+        if not is_blackout:
+            self._fade_in_handle = FadeHandle("in", self)
+            self._fade_out_handle = FadeHandle("out", self)
+            self._fade_in_handle.fade_committed.connect(self._on_handle_committed)
+            self._fade_out_handle.fade_committed.connect(self._on_handle_committed)
+            self._reposition_fade_handles()
+
         self.logger = get_logger("timeline.tracks.midi_events.draggable")
 
     # --- Geometry / paint -------------------------------------------------
@@ -205,6 +339,22 @@ class DraggableMidiEvent(QGraphicsObject):
             painter.setPen(self._pen)
         painter.drawRoundedRect(rect, CLIP_CORNER_RADIUS_PX, CLIP_CORNER_RADIUS_PX)
 
+        # Diagonal fade lines: from same-side bottom corner up to the fade
+        # handle on the top edge. Drawn only when the fade is non-zero so a
+        # plain clip stays clean. Uses cosmetic stroke so the line stays
+        # FADE_LINE_WIDTH_PX regardless of view zoom.
+        fade_pen = QPen(FADE_LINE_COLOR)
+        fade_pen.setWidth(FADE_LINE_WIDTH_PX)
+        fade_pen.setCosmetic(True)
+        if self.fade_in_seconds > 0.0:
+            x = self._fade_in_pixels()
+            painter.setPen(fade_pen)
+            painter.drawLine(QPointF(0, rect.height()), QPointF(x, 0))
+        if self.fade_out_seconds > 0.0:
+            x = rect.width() - self._fade_out_pixels()
+            painter.setPen(fade_pen)
+            painter.drawLine(QPointF(rect.width(), rect.height()), QPointF(x, 0))
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
             self.update()
@@ -225,9 +375,66 @@ class DraggableMidiEvent(QGraphicsObject):
 
     def set_timeline(self, timeline):
         self.timeline = timeline
+        # Now that PIXELS_PER_SECOND is known, place the fade handles at
+        # their real x coords. Without this, they sit at pps=1 fallback
+        # positions until the first resize event re-computes them.
+        self._reposition_fade_handles()
 
     def set_text_item(self, text_item):
         self.text_item = text_item
+
+    # --- Fade handles -----------------------------------------------------
+
+    def _pps(self) -> float:
+        """PIXELS_PER_SECOND from the timeline; 1.0 fallback when unwired."""
+        return self.timeline.PIXELS_PER_SECOND if self.timeline else 1.0
+
+    def _fade_in_pixels(self) -> float:
+        return max(0.0, self.fade_in_seconds * self._pps())
+
+    def _fade_out_pixels(self) -> float:
+        return max(0.0, self.fade_out_seconds * self._pps())
+
+    def _reposition_fade_handles(self):
+        """Place handles at the current fade endpoints along the top edge."""
+        if self._fade_in_handle is not None:
+            self._fade_in_handle.setPos(self._fade_in_pixels(), 0.0)
+        if self._fade_out_handle is not None:
+            self._fade_out_handle.setPos(
+                self.rect.width() - self._fade_out_pixels(), 0.0)
+
+    def clamp_fade_handle_x(self, side: str, proposed_x: float) -> float:
+        """Clamp a fade handle's x to keep fades inside the clip and not crossing.
+
+        Called by FadeHandle during a drag. The opposite handle is treated
+        as a hard wall — no cross-fades, per Mr. Lothwen's spec.
+        """
+        w = self.rect.width()
+        if side == "in":
+            return max(0.0, min(proposed_x, w - self._fade_out_pixels()))
+        return max(self._fade_in_pixels(), min(proposed_x, w))
+
+    def handle_x_to_fade_seconds(self, side: str, x: float) -> float:
+        """Convert a clamped handle x position back into fade duration seconds."""
+        pps = self._pps()
+        if side == "in":
+            return max(0.0, x / pps) if pps else 0.0
+        # side == "out": fade_out is the distance from clip's right edge.
+        return max(0.0, (self.rect.width() - x) / pps) if pps else 0.0
+
+    def preview_fade(self, side: str, seconds: float):
+        """Live-update fade lines while a handle is being dragged."""
+        if side == "in":
+            self.fade_in_seconds = max(0.0, seconds)
+        else:
+            self.fade_out_seconds = max(0.0, seconds)
+        self.update()
+
+    def _on_handle_committed(self, side: str, seconds: float):
+        if side == "in":
+            self.fade_in_committed.emit(self.event_id, seconds)
+        else:
+            self.fade_out_committed.emit(self.event_id, seconds)
 
     # --- Cursor / hit-test ------------------------------------------------
 
@@ -432,6 +639,7 @@ class DraggableMidiEvent(QGraphicsObject):
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
         self._reposition_text(new_x)
         self._refresh_text_truncation(new_width)
+        self._clamp_fades_to_width(new_width)
 
     def _apply_resize_right_preview(self, delta_x: float):
         # The left edge is fixed; right edge moves.
@@ -443,6 +651,29 @@ class DraggableMidiEvent(QGraphicsObject):
         new_width = max(MIN_HIT_WIDTH_PX, new_right - original_left)
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
         self._refresh_text_truncation(new_width)
+        self._clamp_fades_to_width(new_width)
+
+    def _clamp_fades_to_width(self, new_width: float):
+        """Shrink fades visually if a clip resize would push them off-clip.
+
+        Display-only — the manager re-clamps on its own setters and we'll
+        also re-clamp on the next data redraw. This just keeps the preview
+        line/handle from drifting outside the clip during a live resize.
+        """
+        pps = self._pps()
+        if pps <= 0:
+            return
+        max_total_px = max(0.0, new_width)
+        in_px = self._fade_in_pixels()
+        out_px = self._fade_out_pixels()
+        if in_px + out_px > max_total_px:
+            # Proportionally shrink to fit, preserving the relative balance.
+            total = in_px + out_px
+            scale = max_total_px / total if total > 0 else 0.0
+            self.fade_in_seconds = (in_px * scale) / pps
+            self.fade_out_seconds = (out_px * scale) / pps
+        self._reposition_fade_handles()
+        self.update()
 
     def _reposition_text(self, new_x: float):
         if self.text_item is None:
@@ -477,11 +708,21 @@ class DraggableMidiEvent(QGraphicsObject):
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
+        self.hide_tooltip()
+        self._set_view_cursor(Qt.CursorShape.ArrowCursor)
+        super().hoverLeaveEvent(event)
+
+    def hide_tooltip(self):
+        """Dismiss the persistent tooltip, if showing.
+
+        Exposed publicly so child items (fade handles) can dismiss it when
+        they take over a gesture — Qt does not auto-fire hoverLeave on this
+        item when the cursor moves onto a child, so the tooltip would
+        otherwise stay frozen for the duration of the child interaction.
+        """
         if self._custom_tooltip:
             self._custom_tooltip.hide_tooltip()
         self._tooltip_shown = False
-        self._set_view_cursor(Qt.CursorShape.ArrowCursor)
-        super().hoverLeaveEvent(event)
 
     # --- Context menu -----------------------------------------------------
 
@@ -745,6 +986,8 @@ class MidiEventsTrack(BaseTrack):
                 event_rect.move_committed.connect(self.timeline_manager.on_midi_event_moved)
                 event_rect.left_edge_committed.connect(self.timeline_manager.on_midi_event_left_edge)
                 event_rect.right_edge_committed.connect(self.timeline_manager.on_midi_event_right_edge)
+                event_rect.fade_in_committed.connect(self.timeline_manager.on_midi_event_fade_in)
+                event_rect.fade_out_committed.connect(self.timeline_manager.on_midi_event_fade_out)
                 event_rect.edit_requested.connect(self.timeline_manager.on_midi_event_edit_by_id)
                 event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_by_id)
                 event_rect.add_at_position_requested.connect(self.timeline_manager.on_add_event_requested)
