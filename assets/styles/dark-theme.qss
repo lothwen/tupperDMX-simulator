@@ -408,8 +408,22 @@ QLabel#TimeDisplay {
     font-weight: bold;
 }
 
+/* Line Edits */
+QLineEdit {
+    background-color: #1a1a1a;
+    color: white;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+QLineEdit:focus {
+    border-color: #555;
+}
+
 /* BPM Spinbox */
-QSpinBox {
+QSpinBox, QDoubleSpinBox {
     background-color: #1a1a1a;
     color: white;
     border: 1px solid #444;
@@ -418,26 +432,28 @@ QSpinBox {
     font-size: 16px;
 }
 
-QSpinBox:focus {
+QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #555;
 }
 
-QSpinBox::up-button, QSpinBox::down-button {
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
     background-color: #1a1a1a;
     /*border: 1px solid #444;*/
     padding-right: 10px;
 }
 
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
     background-color: #444;
 }
 
-QSpinBox::up-arrow {
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
     image: url('assets/icons/up-arrow.png');
     color: white;
 }
 
-QSpinBox::down-arrow {
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
     image: url('assets/icons/dropdown-arrow.png');
     color: white;
 }

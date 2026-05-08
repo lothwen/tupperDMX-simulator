@@ -322,6 +322,7 @@ class Timeline(QWidget):
     def draw_playhead(self):
         """Draw the playhead line."""
         pen = QPen(QColor(255, 0, 0, 200), 2)
+        pen.setCosmetic(True)
         self.playhead = QGraphicsLineItem(0, 0, 0, self.scene_height)
         self.playhead.setPen(pen)
         self.playhead.setZValue(10)
@@ -344,7 +345,12 @@ class Timeline(QWidget):
         for beat in range(total_beats):
             x_pos = beat * seconds_per_beat * self.PIXELS_PER_SECOND
             line = QGraphicsLineItem(x_pos, self.RULER_TRACK_HEIGHT, x_pos, self.scene_height)
-            line.setPen(QPen(QColor(80, 80, 80), 1.5) if beat % 4 == 0 else QPen(QColor(60, 60, 60), 0.8))
+            if beat % 4 == 0:
+                grid_pen = QPen(QColor(80, 80, 80), 1.5)
+            else:
+                grid_pen = QPen(QColor(60, 60, 60), 0.8)
+            grid_pen.setCosmetic(True)
+            line.setPen(grid_pen)
             line.setZValue(-1)  # Keep grid lines in background
             self.content_scene.addItem(line)
             self.time_grid_items.append(line)

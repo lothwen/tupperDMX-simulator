@@ -71,7 +71,9 @@ class RulerTrack(BaseTrack):
             bar_x = bar_num * seconds_per_bar * self.timeline_manager.PIXELS_PER_SECOND
             
             bar_tick = QGraphicsLineItem(bar_x, 0, bar_x, self.get_track_height())
-            bar_tick.setPen(QPen(QColor(200, 200, 200)))
+            bar_pen = QPen(QColor(200, 200, 200))
+            bar_pen.setCosmetic(True)
+            bar_tick.setPen(bar_pen)
             self.content_scene.addItem(bar_tick)
             self.items.append(bar_tick)
 
@@ -86,7 +88,9 @@ class RulerTrack(BaseTrack):
             for beat_num in range(1, 4):
                 beat_x = bar_x + (beat_num * seconds_per_beat * self.timeline_manager.PIXELS_PER_SECOND)
                 beat_tick = QGraphicsLineItem(beat_x, self.get_track_height() * 0.5, beat_x, self.get_track_height())
-                beat_tick.setPen(QPen(QColor(150, 150, 150)))
+                beat_pen = QPen(QColor(150, 150, 150))
+                beat_pen.setCosmetic(True)
+                beat_tick.setPen(beat_pen)
                 self.content_scene.addItem(beat_tick)
                 self.items.append(beat_tick)
         
