@@ -81,7 +81,7 @@ SNAP_PX = 6
 # clickable until the user zooms in).
 MIN_HIT_WIDTH_PX = 1
 # Visual styling for clip boxes.
-CLIP_CORNER_RADIUS_PX = 4
+CLIP_CORNER_RADIUS_PX = 8
 CLIP_GRADIENT_LIGHTEN = 118   # top of gradient = base.lighter(LIGHTEN)
 CLIP_GRADIENT_DARKEN = 140    # bottom of gradient = base.darker(DARKEN)
 # Selection-border styling.
@@ -130,19 +130,27 @@ class FadeHandle(QGraphicsObject):
         # grabbable on top of the clip without occluding the part name.
         self.setZValue(3)
 
-    def _triangle(self) -> QPolygonF:
-        s = FADE_HANDLE_SIZE_PX
+    def _zoom_x(self) -> float:
+        """Horizontal scale factor from the view transform."""
+        scene = self.scene()
+        if scene and scene.views():
+            return scene.views()[0].transform().m11()
+        return 1.0
+
+    def _triangle_for_paint(self, zoom_x: float) -> QPolygonF:
+        sx = FADE_HANDLE_SIZE_PX / zoom_x if zoom_x > 0 else FADE_HANDLE_SIZE_PX
+        sy = FADE_HANDLE_SIZE_PX
         if self.side == "in":
-            # Right-angle at (0, 0); legs go RIGHT and DOWN into the clip.
-            return QPolygonF([QPointF(0, 0), QPointF(s, 0), QPointF(0, s)])
-        # side == "out": legs go LEFT and DOWN.
-        return QPolygonF([QPointF(0, 0), QPointF(-s, 0), QPointF(0, s)])
+            return QPolygonF([QPointF(0, 0), QPointF(sx, 0), QPointF(0, sy)])
+        return QPolygonF([QPointF(0, 0), QPointF(-sx, 0), QPointF(0, sy)])
 
     def boundingRect(self) -> QRectF:
-        s = FADE_HANDLE_SIZE_PX
+        zoom_x = self._zoom_x()
+        sx = FADE_HANDLE_SIZE_PX / zoom_x if zoom_x > 0 else FADE_HANDLE_SIZE_PX
+        sy = FADE_HANDLE_SIZE_PX
         if self.side == "in":
-            return QRectF(0, 0, s, s)
-        return QRectF(-s, 0, s, s)
+            return QRectF(0, 0, sx, sy)
+        return QRectF(-sx, 0, sx, sy)
 
     def paint(self, painter, option, widget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -150,7 +158,8 @@ class FadeHandle(QGraphicsObject):
         fade_handle_pen = QPen(QColor(20, 20, 20))
         fade_handle_pen.setCosmetic(True)
         painter.setPen(fade_handle_pen)
-        painter.drawPolygon(self._triangle())
+        zoom_x = painter.transform().m11()
+        painter.drawPolygon(self._triangle_for_paint(zoom_x))
 
     def hoverEnterEvent(self, event):
         # Hover never leaves the parent clip when the cursor moves onto a
@@ -340,7 +349,10 @@ class DraggableMidiEvent(QGraphicsObject):
             painter.setPen(sel_pen)
         else:
             painter.setPen(self._pen)
-        painter.drawRoundedRect(rect, CLIP_CORNER_RADIUS_PX, CLIP_CORNER_RADIUS_PX)
+        tx = painter.transform()
+        corner_rx = CLIP_CORNER_RADIUS_PX / tx.m11() if tx.m11() > 0 else CLIP_CORNER_RADIUS_PX
+        corner_ry = CLIP_CORNER_RADIUS_PX / abs(tx.m22()) if tx.m22() != 0 else CLIP_CORNER_RADIUS_PX
+        painter.drawRoundedRect(rect, corner_rx, corner_ry)
 
         # Diagonal fade lines: from same-side bottom corner up to the fade
         # handle on the top edge. Drawn only when the fade is non-zero so a
