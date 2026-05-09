@@ -307,14 +307,28 @@ class MidiManager(QObject):
                 cand = candidates[j]
                 if cand['id'] in used_ids:
                     break
-                expected = run_members[-1]['time'] + FADE_STEP_SECONDS
+                last_time = run_members[-1]['time']
+                expected = last_time + FADE_STEP_SECONDS
                 if cand['time'] > expected + NOTE_MATCH_TOLERANCE:
                     break  # gap too large — run ends here
-                if cand['time'] < expected - NOTE_MATCH_TOLERANCE:
-                    # Same-time / sub-step duplicate (e.g. the original
+                if cand['time'] < last_time + NOTE_MATCH_TOLERANCE:
+                    # Same-time / sub-tolerance duplicate (e.g. original
                     # group's brightness note coincident with the fade
-                    # starter). Skip it without breaking the run.
+                    # starter). Skip without breaking the run.
                     continue
+                if cand['time'] < expected - NOTE_MATCH_TOLERANCE:
+                    # Off-step endpoint: strictly between the last step
+                    # and the next expected step. _linear_fade_ramp
+                    # emits one of these whenever the user's chosen
+                    # fade duration isn't a clean multiple of
+                    # FADE_STEP_SECONDS (which is the common case —
+                    # arbitrary drag positions rarely land on the grid).
+                    # It is always the FINAL note in the ramp; absorb
+                    # it and stop. Without this branch, fade-out's
+                    # vels[-1]=1 endpoint is missed and the whole run
+                    # fails the `vels[-1] <= 1` check.
+                    run_members.append(cand)
+                    break
                 run_members.append(cand)
             if len(run_members) < 2:
                 continue
