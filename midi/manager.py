@@ -74,7 +74,7 @@ def _channel_to_velocity(value: int) -> int:
         v = int(value) // 2
     except (TypeError, ValueError):
         v = 0
-    return max(0, min(127, v))
+    return max(1, min(127, v))
 
 
 class MidiManager(QObject):
