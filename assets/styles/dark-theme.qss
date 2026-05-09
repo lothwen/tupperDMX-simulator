@@ -678,6 +678,43 @@ QListWidget#SceneList::item:selected:!active {
     color: #fff;
 }
 
+/* Scene Edit — Animation grid tiles */
+QFrame#AnimationTile {
+    background-color: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 4px;
+}
+
+QFrame#AnimationTile:hover {
+    border-color: #888;
+}
+
+QFrame#AnimationTile[selected="true"] {
+    border: 2px solid #4a90e2;
+    background-color: #2a3a55;
+}
+
+/* Scene Edit — Brightness slider (black → white gradient groove) */
+QSlider#BrightnessSlider::groove:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #000000, stop:1 #ffffff);
+    height: 10px;
+    border: 1px solid #555;
+    border-radius: 5px;
+}
+
+QSlider#BrightnessSlider::handle:horizontal {
+    background: #d0d0d0;
+    border: 1px solid #222;
+    width: 14px;
+    margin: -4px 0;
+    border-radius: 7px;
+}
+
+QSlider#BrightnessSlider::handle:horizontal:hover {
+    background: #ffffff;
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;
