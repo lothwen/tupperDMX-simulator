@@ -11,7 +11,8 @@ dependencies = [
     "platformdirs>=4.9.6",
     "pyartnet>=1.0.1",
     "pylibftdi>=0.23.0",
-    "pyqt6>=6.9.1",
+    "pyqt6>=6.8,<6.9",
+    "pyqt6-qt6>=6.8,<6.9",
     "pyserial>=3.5",
     "python-rtmidi>=1.5.8",
 ]
