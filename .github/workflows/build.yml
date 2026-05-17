@@ -101,15 +101,20 @@ jobs:
             -volname "TupperDMX Simulator" "dist/TupperDMX-Simulator.dmg"
         fi
         
-    - name: Prepare artifacts (Linux/macOS)
-      if: matrix.platform != 'windows'
+    - name: Prepare artifacts (Linux)
+      if: matrix.platform == 'linux'
       run: |
         mkdir -p artifacts
         if [ -f "dist/TupperDMX-Simulator" ]; then
           cp "dist/TupperDMX-Simulator" "artifacts/${{ matrix.artifact_name }}"
         fi
+
+    - name: Prepare artifacts (macOS)
+      if: matrix.platform == 'macos'
+      run: |
+        mkdir -p artifacts
         if [ -f "dist/TupperDMX-Simulator.dmg" ]; then
-          cp "dist/TupperDMX-Simulator.dmg" "artifacts/"
+          cp "dist/TupperDMX-Simulator.dmg" "artifacts/${{ matrix.artifact_name }}.dmg"
         fi
         
     - name: Prepare artifacts (Windows)
