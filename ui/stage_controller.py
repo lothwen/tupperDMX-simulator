@@ -193,7 +193,8 @@ class StageController(QObject):
         # Update the scene
         self.scene.update()
         
-        self.logger.debug(f"Updated fixtures with DMX data ({len(dmx_data)} bytes)")
+        # Commented because is too verbose
+        # self.logger.debug(f"Updated fixtures with DMX data ({len(dmx_data)} bytes)")
     
     def add_led_bar(self, x: float, y: float, index: int = None) -> LedBar:
         """Add a new LED bar to the stage."""

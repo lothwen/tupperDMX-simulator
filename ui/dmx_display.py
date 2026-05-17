@@ -129,7 +129,8 @@ class DMXDisplayWidget(QTableWidget):
                 if item:
                     item.setText(f"{value:03d}")
         
-        self.logger.debug(f"Updated DMX display with {len(dmx_data)} bytes")
+        # Commented because is too verbose
+        # self.logger.debug(f"Updated DMX display with {len(dmx_data)} bytes")
     
     def get_channel_value(self, channel: int) -> int:
         """Get the current value for a specific DMX channel."""
