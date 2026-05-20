@@ -82,14 +82,23 @@ class FileRotatingHandler(logging.handlers.RotatingFileHandler):
 
 class ComponentFilter(logging.Filter):
     """Filter that adds component information to log records."""
-    
+
     def __init__(self, component_name: str):
         super().__init__()
         self.component_name = component_name
-        
+
     def filter(self, record: logging.LogRecord) -> bool:
         """Add component name to the log record."""
         record.component = self.component_name
+        return True
+
+
+class DefaultComponentFilter(logging.Filter):
+    """Backfills `component` from `record.name` for records that don't already have it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "component"):
+            record.component = record.name
         return True
 
 
