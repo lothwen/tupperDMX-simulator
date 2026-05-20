@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from .handlers import ColoredConsoleHandler, FileRotatingHandler, ComponentFilter, PerformanceFilter
+from .handlers import ColoredConsoleHandler, FileRotatingHandler, ComponentFilter, DefaultComponentFilter, PerformanceFilter
 
 
 class TupperDMXLogger:
@@ -91,11 +91,13 @@ class TupperDMXLogger:
             )
             file_handler.setLevel(logging.DEBUG)  # Always capture everything to file
             file_handler.setFormatter(file_formatter)
-            
+            file_handler.addFilter(DefaultComponentFilter())
+
             root_logger.addHandler(file_handler)
         
         # Set up specific logger levels
         self._configure_component_loggers()
+        self._silence_noisy_third_party_loggers()
         
         # Log the startup
         startup_logger = self.get_logger("system.startup")
@@ -161,6 +163,11 @@ class TupperDMXLogger:
             logger = logging.getLogger(logger_name)
             logger.addFilter(ComponentFilter("MEDIA"))
     
+    def _silence_noisy_third_party_loggers(self) -> None:
+        """Cap third-party libraries at WARNING so their DEBUG/INFO chatter doesn't flood our handlers."""
+        for name in ("numba", "matplotlib", "PIL", "librosa", "asyncio", "urllib3"):
+            logging.getLogger(name).setLevel(logging.WARNING)
+
     def get_logger(self, name: str) -> logging.Logger:
         """
         Get a logger instance for the specified component.
