@@ -84,7 +84,13 @@ class Timeline(QWidget):
 
         # Time grid items (managed centrally)
         self.time_grid_items = []
-        
+
+        # Deferred-refresh guard: coalesces multiple refresh requests
+        # (e.g. data_changed + explicit call) into a single repaint on
+        # the next event-loop tick, preventing scene rebuilds while
+        # QGraphicsItem event handlers are still on the call stack.
+        self._refresh_pending = False
+
         # Logger for debug messages
         self.logger = get_logger("timeline.manager")
 
@@ -160,6 +166,13 @@ class Timeline(QWidget):
         
         self.content_view = ContentView(self, self)
         self.content_scene = QGraphicsScene(self)
+        # Disable BSP spatial indexing.  The default BspTreeIndex defers
+        # internal tree rebuilds, and stale pointers in the index can
+        # survive across event-loop ticks when items are rapidly removed
+        # and re-added (e.g. during timeline redraws).  With NoIndex,
+        # Qt does a linear scan on each paint — acceptable for our item
+        # count (<200) — and eliminates the use-after-free SIGSEGV.
+        self.content_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.content_view.setScene(self.content_scene)
 
         layout.addWidget(self.header_view)
@@ -375,6 +388,24 @@ class Timeline(QWidget):
             if duration > 0:
                 self._detect_bpm_from_data()
 
+    def _schedule_refresh(self) -> None:
+        """Request a deferred refresh on the next event-loop tick.
+
+        Multiple calls before the tick coalesce into a single refresh.
+        Use this instead of refresh_from_manager() whenever the call
+        originates from a QGraphicsItem event handler (mouse release,
+        double-click, context-menu action, drop, etc.) to avoid
+        destroying scene items while Qt is still processing events on
+        them — which causes use-after-free SIGSEGV crashes.
+        """
+        if not self._refresh_pending:
+            self._refresh_pending = True
+            QTimer.singleShot(0, self._do_deferred_refresh)
+
+    def _do_deferred_refresh(self) -> None:
+        self._refresh_pending = False
+        self.refresh_from_manager()
+
     def _detect_bpm_from_data(self) -> None:
         """Detect BPM from MIDI data structure."""
         if not self.midi_manager or not self.midi_manager.midi_data:
@@ -519,7 +550,7 @@ class Timeline(QWidget):
             self.midi_manager.move_scene(group_id, new_time)
         else:
             self.midi_manager.move_event(event_id, new_time)
-        self.refresh_from_manager()
+        self._schedule_refresh()
 
     def on_midi_event_left_edge(self, event_id: str, new_time: float):
         """Left-edge resize drag committed.
@@ -533,7 +564,7 @@ class Timeline(QWidget):
             self.midi_manager.set_scene_left_edge(group_id, new_time)
         else:
             self.midi_manager.set_event_left_edge(event_id, new_time)
-        self.refresh_from_manager()
+        self._schedule_refresh()
 
     def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
         """Right-edge resize drag committed.
@@ -547,7 +578,7 @@ class Timeline(QWidget):
             self.midi_manager.set_scene_right_edge(group_id, new_right_time)
         else:
             self.midi_manager.set_event_right_edge(event_id, new_right_time)
-        self.refresh_from_manager()
+        self._schedule_refresh()
 
     def on_midi_event_fade_in(self, event_id: str, seconds: float):
         """Fade-IN handle drag committed.
@@ -595,7 +626,7 @@ class Timeline(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_values = dialog.get_values()
             if self.midi_manager.edit_event(event_id, **new_values):
-                self.refresh_from_manager()
+                self._schedule_refresh()
                 self.logger.info(
                     f"MIDI event edited: note={new_values['note']}, "
                     f"time={new_values['time']:.3f}s, velocity={new_values['velocity']}"
@@ -622,7 +653,7 @@ class Timeline(QWidget):
             if self.midi_manager.update_scene(group_id,
                                               channels=values['channels'],
                                               name=values['name']):
-                self.refresh_from_manager()
+                self._schedule_refresh()
                 self.logger.info(
                     f"Scene '{values['name']}' updated (group_id={group_id})"
                 )
@@ -679,7 +710,7 @@ class Timeline(QWidget):
         else:
             ok = self.midi_manager.replace_with_blackout(event_id)
         if ok:
-            self.refresh_from_manager()
+            self._schedule_refresh()
 
     def fixture_at_y(self, scene_y: float):
         """Return the fixture filter owning the given scene Y, or None.
@@ -718,7 +749,7 @@ class Timeline(QWidget):
         event_id = self.midi_manager.add_event(note, time_seconds, clamped_velocity)
         if not event_id:
             return False
-        self.refresh_from_manager()
+        self._schedule_refresh()
         self.logger.info(
             f"Clip dropped: note={note} at {time_seconds:.3f}s "
             f"on {self.fixture_at_y(scene_y)} track"
@@ -740,7 +771,7 @@ class Timeline(QWidget):
         group_id = self.midi_manager.add_scene(time_seconds, channels, name)
         if not group_id:
             return False
-        self.refresh_from_manager()
+        self._schedule_refresh()
         self.logger.info(
             f"Scene dropped: '{name}' at {time_seconds:.3f}s "
             f"(group_id={group_id})"
@@ -774,7 +805,7 @@ class Timeline(QWidget):
             
             if event_id:
                 # Refresh the timeline display
-                self.refresh_from_manager()
+                self._schedule_refresh()
                 
                 # Get part name for logging
                 note_info = self.midi_manager.midi_note_map.get(str(new_values['note']))
