@@ -640,11 +640,15 @@ class MainWindow(QMainWindow):
     def on_midi_data_changed_from_manager(self):
         """Handle when MIDI data is modified via MidiManager."""
         self.logger.info("MIDI data has been modified via MidiManager")
-        
-        # Refresh the timeline display
+
+        # Defer the timeline refresh — this signal often fires
+        # synchronously from inside a DraggableMidiEvent's
+        # mouseReleaseEvent (via MidiManager.move_event → data_changed).
+        # A synchronous refresh would destroy scene items while Qt is
+        # still processing events on them, causing SIGSEGV.
         if self.timeline:
-            self.timeline.refresh_from_manager()
-        
+            self.timeline._schedule_refresh()
+
         # Enable export button if we have MIDI data
         has_midi_data = self.midi_manager.midi_data is not None
         self.toolbar_manager.set_export_midi_enabled(has_midi_data)

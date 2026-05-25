@@ -776,6 +776,7 @@ class MidiEventsTrack(BaseTrack):
                  fixture_filter: Optional[str] = None):
         super().__init__(timeline_manager, content_scene, header_scene)
         self.fixture_filter = fixture_filter
+        self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
         self.logger = get_logger("timeline.tracks.midi_events")
 
     def matches_filter(self, event) -> bool:
@@ -936,11 +937,38 @@ class MidiEventsTrack(BaseTrack):
         return QColor(int(red * scale), int(green * scale), int(blue * scale))
 
     def redraw_events(self, cached_events, y_offset: int):
-        # Clear existing content items
-        for item in self.items:
+        # Safely dispose of old scene items.  The scene's BSP spatial index
+        # and internal dirty-item bookkeeping can retain pointers to items
+        # across event-loop ticks.  If the C++ QGraphicsItem is destroyed
+        # (via Python GC / SIP destructor) before those internal references
+        # are cleared, the next repaint dereferences freed memory → SIGSEGV.
+        #
+        # Defence-in-depth strategy:
+        #  1. Hide + disable so Qt's paint loop skips them.
+        #  2. prepareGeometryChange() evicts from the BSP index.
+        #  3. removeItem() detaches from the scene's item list.
+        #  4. For QGraphicsObject-derived items (which are QObjects),
+        #     schedule C++ destruction via deleteLater() — this defers the
+        #     destructor until Qt has fully finished processing the current
+        #     event batch, including any pending repaints.
+        #  5. Keep Python references alive in _stale_items until the next
+        #     redraw so that plain QGraphicsItems (like QGraphicsTextItem)
+        #     also survive at least one full event-loop cycle.
+        stale = list(self.items)
+        for item in stale:
+            item.setVisible(False)
+            item.setEnabled(False)
+            item.prepareGeometryChange()
             if item.scene():
                 item.scene().removeItem(item)
+            # QGraphicsObject (e.g. DraggableMidiEvent) inherits QObject
+            # and supports deleteLater(); plain QGraphicsItems don't.
+            if hasattr(item, 'deleteLater'):
+                item.deleteLater()
         self.items.clear()
+        # Previous stale batch can now be released (it survived a full cycle).
+        # Current batch replaces it and will survive until the next redraw.
+        self._stale_items = stale
 
         if not cached_events:
             return
