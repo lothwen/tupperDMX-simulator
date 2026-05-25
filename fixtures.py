@@ -290,11 +290,14 @@ class Blinder(QGraphicsObject):
         r1 = warm_color.red() * led1_warm_intensity + cool_color.red() * led1_cool_intensity
         g1 = warm_color.green() * led1_warm_intensity + cool_color.green() * led1_cool_intensity
         b1 = warm_color.blue() * led1_warm_intensity + cool_color.blue() * led1_cool_intensity
-        
-        r1 = min(255, r1) * brightness_factor
-        g1 = min(255, g1) * brightness_factor
-        b1 = min(255, b1) * brightness_factor
-        
+
+        # Clamp after applying brightness_factor: multiply_factor can push the
+        # product past 255, and QColor() with out-of-range channels is invalid
+        # and renders as nothing (would make the bulb appear off).
+        r1 = min(255, min(255, r1) * brightness_factor)
+        g1 = min(255, min(255, g1) * brightness_factor)
+        b1 = min(255, min(255, b1) * brightness_factor)
+
         bulb1_color = QColor(int(r1), int(g1), int(b1))
         self.bulb1.setGlowColor(bulb1_color, brightness_factor)
 
@@ -305,11 +308,11 @@ class Blinder(QGraphicsObject):
         r2 = warm_color.red() * led2_warm_intensity + cool_color.red() * led2_cool_intensity
         g2 = warm_color.green() * led2_warm_intensity + cool_color.green() * led2_cool_intensity
         b2 = warm_color.blue() * led2_warm_intensity + cool_color.blue() * led2_cool_intensity
-        
-        r2 = min(255, r2) * brightness_factor
-        g2 = min(255, g2) * brightness_factor  
-        b2 = min(255, b2) * brightness_factor
-        
+
+        r2 = min(255, min(255, r2) * brightness_factor)
+        g2 = min(255, min(255, g2) * brightness_factor)
+        b2 = min(255, min(255, b2) * brightness_factor)
+
         bulb2_color = QColor(int(r2), int(g2), int(b2))
         self.bulb2.setGlowColor(bulb2_color, brightness_factor)
 
