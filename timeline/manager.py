@@ -15,12 +15,17 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QGraphicsView, QGraphicsScene
 from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from .widgets import ContentView, MidiEventEditDialog, TrackResizeHandle
+from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
+                      TrackResizeHandle)
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units
 from tupperlogger import get_logger
+
+# MIDI note number for the song-part marker that triggers START handling in
+# the software controller (see software_controller/main.py:pick_scene_from_song_part).
+START_NOTE = 40
 
 
 class Timeline(QWidget):
@@ -417,13 +422,6 @@ class Timeline(QWidget):
                 tempo = mido.tempo2bpm(msg.tempo)
                 self.bpm_detected.emit(int(tempo))
                 return
-        
-        # Look for velocity-encoded BPM (specific to this application)
-        for msg in self.midi_manager.midi_data:
-            if not msg.is_meta and msg.type == 'note_on' and msg.note == 40:
-                tempo = msg.velocity * 2
-                self.bpm_detected.emit(int(tempo))
-                return
 
     def set_bpm(self, bpm):
         """Update BPM and redraw ruler and time grid to match new tempo."""
@@ -622,7 +620,10 @@ class Timeline(QWidget):
             self._edit_scene(group_id)
             return
 
-        dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
+        if int(event_data.get('note', -1)) == START_NOTE:
+            dialog = StartEventEditDialog(event_data)
+        else:
+            dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_values = dialog.get_values()
             if self.midi_manager.edit_event(event_id, **new_values):
