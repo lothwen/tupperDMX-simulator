@@ -20,7 +20,7 @@ LOOP_FREQUENCY_HZ = 40
 UNIVERSE_SIZE = 96
 
 # Color definitions
-COLOR32_WHITE = (255, 255, 255)
+COLOR32_WHITE = (255, 255, 230)
 COLOR32_ORANGE = (255, 165, 0)
 COLOR32_CYAN = (0, 255, 255)
 COLOR32_PINK = (255, 192, 203)
@@ -66,7 +66,6 @@ class DMXController:
             'chase_index': 0
         }
         self.song_tempo = 0
-        self.song_index = 0
         self.random_palette = []
         self.blinder1_status = {
             'bank': 0,
@@ -354,20 +353,25 @@ class DMXController:
         self.blackout_blinder(2)
 
         if song_part == 0: # START
-            self.song_tempo = velocity * 2
-            self.song_index += 1
-            self.generate_song_colors('ANALOGOUS', False)
+            self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
+            # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
+            hue_index = velocity // 6
+            palette_mode = velocity % 6
+            if palette_mode == 0: self.generate_song_colors('COMPLEMENTARY', hue_index)
+            elif palette_mode == 1: self.generate_song_colors('ANALOGOUS', hue_index)
+            elif palette_mode == 2: self.generate_song_colors('TRIADIC', hue_index)
+            elif palette_mode == 3: self.generate_song_colors('MONOCHROME', hue_index)
         elif song_part == 1: # INTRO
             if self.random_palette:
                 self.set_led_color(self.random_palette[1])
             self.update_led_scene('FILLS2', 2)
         elif song_part == 2: # VERSE
             if self.random_palette:
-                self.change_led_color_palette(self.random_palette, 0, 3, self.beat_duration(self.song_tempo) * 4, self.beat_duration(self.song_tempo) * 8)
+                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.update_led_scene('FILLS', random.randint(0, 7))
         elif song_part == 3: # CHORUS
             if self.random_palette:
-                self.change_led_color_palette(self.random_palette, 0, 3, self.beat_duration(self.song_tempo) * 4, self.beat_duration(self.song_tempo) * 8)
+                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.load_led_chase(random.randint(9, 14))
         elif 4 <= song_part <= 7: # BREAK, BRIDGE, INST, SOLO
             self.update_led_scene('FILLS2', random.randint(0, 7))
@@ -381,12 +385,12 @@ class DMXController:
             self.load_blinder_chase(1, 0)
             self.load_blinder_chase(2, 0)
 
-    def generate_song_colors(self, mode, random_hue):
+    def generate_song_colors(self, mode, hue_index):
         hue = 0
-        if random_hue:
+        if hue_index > 11: # Index of 12 means random
             hue = random.randint(0, 360)
         else:
-            hue = RAINBOW_HUE_12[self.song_index % 12] * 360
+            hue = RAINBOW_HUE_12[hue_index % 12] * 360
 
         if mode == 'COMPLEMENTARY':
             self.random_palette = [
@@ -405,6 +409,11 @@ class DMXController:
                 self.hsl_to_rgb((((hue - 120) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L),
                 self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
                 self.hsl_to_rgb((((hue + 120) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L)
+            ]
+        elif mode == 'MONOCHROME':
+            self.random_palette = [
+                COLOR32_WHITE,
+                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L)
             ]
 
     def hsl_to_rgb(self, h, s, l):
