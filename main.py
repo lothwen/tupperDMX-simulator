@@ -767,7 +767,7 @@ class MainWindow(QMainWindow):
                     path += '.mid'
                 
                 # Export via MidiManager
-                if self.midi_manager.export_to_file(path):
+                if self.midi_manager.export_to_file(path, self.toolbar_manager.get_bpm()):
                     self.logger.info(f"MIDI file exported successfully to: {path}")
                     QMessageBox.information(self, "Export Success", f"MIDI file exported to:\n{path}")
                 else:
