@@ -1969,12 +1969,62 @@ class MidiManager(QObject):
         """Set the current playback time (called by MediaController)."""
         self._current_playback_time = time_seconds
     
-    def export_to_file(self, file_path: str) -> bool:
-        """Export current MIDI data to file using safe temporary file approach."""
+    def _apply_tempo(self, bpm: int) -> None:
+        """Write bpm as a set_tempo meta message in self.midi_data.
+
+        Preserves the wall-clock time of every event: scales all delta ticks
+        by old_tempo / new_tempo (since absolute_seconds = absolute_ticks *
+        tempo / (ticks_per_beat * 1_000_000), keeping that product constant
+        requires the inverse scaling on the ticks). Then replaces every
+        existing set_tempo with the new value, or inserts one at time=0 in
+        track 0 if none was present.
+
+        Does NOT call _rebuild_midi_data(): that function accumulates meta
+        message deltas from merged_track before emitting notes, which would
+        offset note timings. In-place rescaling avoids that pitfall and is
+        also safe when self.midi_data is already in sync with self.midi_notes.
+        """
+        if not self.midi_data or not self.midi_data.tracks:
+            return
+
+        new_tempo = mido.bpm2tempo(bpm)
+        old_tempo = 500000
+        for track in self.midi_data.tracks:
+            for msg in track:
+                if msg.is_meta and msg.type == 'set_tempo':
+                    old_tempo = msg.tempo
+
+        if old_tempo != new_tempo:
+            scale = old_tempo / new_tempo
+            for track in self.midi_data.tracks:
+                for i, msg in enumerate(track):
+                    if msg.time:
+                        track[i] = msg.copy(time=int(round(msg.time * scale)))
+
+        found = False
+        for track in self.midi_data.tracks:
+            for i, msg in enumerate(track):
+                if msg.is_meta and msg.type == 'set_tempo':
+                    track[i] = mido.MetaMessage('set_tempo', tempo=new_tempo, time=msg.time)
+                    found = True
+        if not found:
+            self.midi_data.tracks[0].insert(
+                0, mido.MetaMessage('set_tempo', tempo=new_tempo, time=0)
+            )
+
+    def export_to_file(self, file_path: str, bpm: Optional[int] = None) -> bool:
+        """Export current MIDI data to file using safe temporary file approach.
+
+        If bpm is provided, the session tempo is written into the file as a
+        set_tempo meta message before saving.
+        """
         if not self.midi_data:
             self.logger.error("No MIDI data to export")
             return False
-        
+
+        if bpm is not None:
+            self._apply_tempo(bpm)
+
         import os
         import tempfile
         import shutil
