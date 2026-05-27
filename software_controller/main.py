@@ -358,19 +358,18 @@ class DMXController:
         self.blackout_blinder(1)
         self.blackout_blinder(2)
 
+        if self.random_palette:
+                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
+
         if song_part == 1: # INTRO
             if self.random_palette:
                 self.set_led_color(self.random_palette[1])
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
-            if self.random_palette:
-                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.update_led_scene('FILLS', random.randint(0, 7))
 
         elif song_part == 3: # CHORUS
-            if self.random_palette:
-                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.load_led_chase(random.randint(9, 14))
 
         elif song_part == 4: # BREAK
