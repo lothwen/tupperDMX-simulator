@@ -65,7 +65,7 @@ class DMXController:
             'chase': 0,
             'chase_index': 0
         }
-        self.song_tempo = 0
+        self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
         self.random_palette = []
         self.blinder1_status = {
             'bank': 0,
@@ -317,8 +317,14 @@ class DMXController:
                 case 39:  # D#2 - Precount downbeats
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
-                case 40:  # E2
-                    self.pick_scene_from_song_part(0, velocity) # START
+                case 40:  # E2 - START
+                    # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
+                    hue_index = velocity // 6
+                    palette_mode = velocity % 6
+                    if palette_mode == 0: self.generate_song_colors('COMPLEMENTARY', hue_index)
+                    elif palette_mode == 1: self.generate_song_colors('ANALOGOUS', hue_index)
+                    elif palette_mode == 2: self.generate_song_colors('TRIADIC', hue_index)
+                    elif palette_mode == 3: self.generate_song_colors('MONOCHROME', hue_index)
                 case 41:  # F2
                     self.pick_scene_from_song_part(1, velocity) # INTRO
                 case 42:  # F#2
@@ -352,35 +358,45 @@ class DMXController:
         self.blackout_blinder(1)
         self.blackout_blinder(2)
 
-        if song_part == 0: # START
-            self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
-            # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
-            hue_index = velocity // 6
-            palette_mode = velocity % 6
-            if palette_mode == 0: self.generate_song_colors('COMPLEMENTARY', hue_index)
-            elif palette_mode == 1: self.generate_song_colors('ANALOGOUS', hue_index)
-            elif palette_mode == 2: self.generate_song_colors('TRIADIC', hue_index)
-            elif palette_mode == 3: self.generate_song_colors('MONOCHROME', hue_index)
-        elif song_part == 1: # INTRO
+        if song_part == 1: # INTRO
             if self.random_palette:
                 self.set_led_color(self.random_palette[1])
             self.update_led_scene('FILLS2', 2)
+
         elif song_part == 2: # VERSE
             if self.random_palette:
                 self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.update_led_scene('FILLS', random.randint(0, 7))
+
         elif song_part == 3: # CHORUS
             if self.random_palette:
                 self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
             self.load_led_chase(random.randint(9, 14))
-        elif 4 <= song_part <= 7: # BREAK, BRIDGE, INST, SOLO
-            self.update_led_scene('FILLS2', random.randint(0, 7))
-            self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
-            self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+
+        elif song_part == 4: # BREAK
+            self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
+            self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+
+        elif song_part == 5: # BRIDGE
+            self.update_led_scene('ANIMATIONS', 5)
+            self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
+            self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+
+        elif song_part == 6: # INST
+            self.update_led_scene('ANIMATIONS', random.randint(5, 7))
+            self.load_blinder_chase(1, 1)
+            self.load_blinder_chase(2, 1)
+
+        elif song_part == 7: # SOLO
+            self.update_led_scene('ANIMATIONS', random.randint(5, 7))
+            self.load_blinder_chase(1, 1)
+            self.load_blinder_chase(2, 1)
+
         elif song_part == 8: # OUTRO
             self.load_led_chase(random.randint(0, 2))
             self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
             self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+
         elif song_part == 9: # END
             self.load_blinder_chase(1, 0)
             self.load_blinder_chase(2, 0)
