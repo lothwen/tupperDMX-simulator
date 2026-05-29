@@ -270,6 +270,18 @@ class DMXController:
     def set_channel(self, channel_name, value):
         setattr(self.led, channel_name, value)
 
+    def _enter_manual_led_control(self):
+        # Drop out of chase/palette so the background loop stops stomping the
+        # manual values, and clear any leftover blinder state (e.g. from a BREAK
+        # song part) so a manual scene starts from a clean slate.
+        self.led_status['is_chasing'] = False
+        self.led_status['is_blackout'] = False
+        self.led_status['palette_size'] = 0
+        self.led_status['palette_ptr'] = None
+        self.led_status['blend_time_elapsed'] = 0
+        self.blackout_blinder(1)
+        self.blackout_blinder(2)
+
     def set_led_color(self, color):
         self.led_status['color'] = color
         self.led.blue = color[2]
@@ -322,6 +334,11 @@ class DMXController:
                 case 4:   # E-1
                     self.set_channel('red', velocity * 2)
                 case 5:   # F-1
+                    # The animation note is sent once per manual scene (unlike
+                    # brightness, which streams during fades), so we use it as
+                    # the single trigger to take manual LED control. Assumes a
+                    # manual scene always includes all 7 channel notes (1-7).
+                    self._enter_manual_led_control()
                     self.set_channel('animation', velocity * 2)
                 case 6:   # F#-1
                     self.set_channel('speed', velocity * 2)
