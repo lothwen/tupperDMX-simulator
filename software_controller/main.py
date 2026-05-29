@@ -278,7 +278,6 @@ class DMXController:
         self.led_status['is_blackout'] = False
         self.led_status['palette_size'] = 0
         self.led_status['palette_ptr'] = None
-        self.led_status['blend_time_elapsed'] = 0
         self.blackout_blinder(1)
         self.blackout_blinder(2)
 
@@ -451,7 +450,7 @@ class DMXController:
 
         if song_part == 1: # INTRO
             if self.color_palette:
-                self.set_led_color(self.color_palette[0])
+                self.set_led_color(self.color_palette[1])
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
@@ -465,7 +464,7 @@ class DMXController:
             self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
 
         elif song_part == 5: # BRIDGE
-            self.update_led_scene('ANIMATIONS', 5)
+            self.update_led_scene('ANIMATIONS', 6)
             self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
             self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
 
