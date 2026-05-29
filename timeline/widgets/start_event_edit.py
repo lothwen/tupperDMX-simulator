@@ -220,7 +220,7 @@ class StartEventEditDialog(QDialog):
 
     def _refresh_previews(self):
         for idx, name in enumerate(PALETTE_MODES):
-            colors = generate_song_colors(name, self.hue_index)
+            colors = generate_song_colors(name, self.hue_index, True)
             self.preview_widgets[idx].set_colors(colors)
 
     def get_values(self):
