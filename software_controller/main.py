@@ -43,7 +43,7 @@ RAINBOW_HUE_12 = [0.0, 0.083, 0.166, 0.25, 0.333, 0.416, 0.5, 0.583, 0.666, 0.75
 DEFAULT_HSL_S = 1.0
 DEFAULT_HSL_L = 0.5
 
-PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'MONOCHROME']
+PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'COLOR+WHITE', 'MONOCHROMATIC', 'SINGLE']
 
 
 def hsl_to_rgb(h, s, l):
@@ -67,25 +67,21 @@ def hsl_to_rgb(h, s, l):
     return round(r * 255), round(g * 255), round(b * 255)
 
 
-def generate_song_colors(mode, hue_index, rng=None):
+def generate_song_colors(mode, hue_index, FromDialog=False):
     """Build a palette for the given mode and hue index.
 
-    When ``rng`` is None the function is deterministic: random hue requests
-    (index >= 12) return None, and modes with random offsets use midpoints.
-    When ``rng`` is supplied (e.g. the ``random`` module) it draws live values.
+    When ``dialog`` is None the function returns None to 
     """
     if hue_index >= 12:
-        if rng is None:
+        if FromDialog:
             return None
         hue = random.randint(0, 360)
     else:
         hue = RAINBOW_HUE_12[hue_index % len(RAINBOW_HUE_12)] * 360
-    print(mode)
-    print(hue_index)
+
     if mode == 'COMPLEMENTARY':
         return [
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L + 0.20),
             hsl_to_rgb(((hue + 180) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
         ]
     if mode == 'ANALOGOUS':
@@ -100,9 +96,19 @@ def generate_song_colors(mode, hue_index, rng=None):
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
             hsl_to_rgb(((hue + 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
         ]
-    if mode == 'MONOCHROME':
+    if mode == 'COLOR+WHITE':
         return [
             COLOR32_WHITE,
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+        ]
+    if mode == 'MONOCHROMATIC':
+        return [
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L + 0.15),
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L + 0.30),
+        ]
+    if mode == 'SINGLE':
+        return [
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
         ]
     return []
@@ -428,7 +434,7 @@ class DMXController:
 
         if song_part == 1: # INTRO
             if self.color_palette:
-                self.set_led_color(self.color_palette[1])
+                self.set_led_color(self.color_palette[0])
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
