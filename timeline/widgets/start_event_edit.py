@@ -2,69 +2,18 @@
 # ABOUTME: Encodes a hue choice (12 fixed hues + random) and palette mode
 # ABOUTME: into the event's velocity as: hue_index * 6 + palette_mode_index.
 
-import colorsys
-
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QLabel, QPushButton, QButtonGroup, QFrame,
                              QDialogButtonBox, QWidget)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QColor
 
-
-# Mirrors software_controller.main constants so the preview matches what the
-# controller will actually render at runtime.
-RAINBOW_HUE_12 = [0.0, 0.083, 0.166, 0.25, 0.333, 0.416,
-                  0.5, 0.583, 0.666, 0.75, 0.833, 0.916]
-DEFAULT_HSL_S = 1.0
-DEFAULT_HSL_L = 0.5
-COLOR32_WHITE = (255, 255, 230)
-
-PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'MONOCHROME']
+from software_controller.main import (
+    PALETTE_MODES, RAINBOW_HUE_12, DEFAULT_HSL_S, DEFAULT_HSL_L,
+    generate_song_colors, hsl_to_rgb,
+)
 
 RANDOM_HUE_INDEX = 12
-
-
-def _hsl_to_rgb(h, s, l):
-    r, g, b = colorsys.hls_to_rgb(h, l, s)
-    return round(r * 255), round(g * 255), round(b * 255)
-
-
-def _generate_palette(mode, hue_index):
-    """Preview-equivalent of DMXController.generate_song_colors().
-
-    Uses midpoint values where the controller draws random offsets, so the
-    preview is deterministic. Returns None for the random hue (index 12).
-    """
-    if hue_index >= RANDOM_HUE_INDEX:
-        return None
-    hue = RAINBOW_HUE_12[hue_index % 12] * 360
-
-    if mode == 'COMPLEMENTARY':
-        # Controller uses random.randint(15, 25)/100 for the 2nd entry;
-        # use the midpoint (0.20) here.
-        return [
-            _hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            _hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, min(1.0, DEFAULT_HSL_L + 0.20)),
-            _hsl_to_rgb(((hue + 180) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-        ]
-    if mode == 'ANALOGOUS':
-        return [
-            _hsl_to_rgb(((hue - 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            _hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            _hsl_to_rgb(((hue + 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-        ]
-    if mode == 'TRIADIC':
-        return [
-            _hsl_to_rgb(((hue - 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            _hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-            _hsl_to_rgb(((hue + 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-        ]
-    if mode == 'MONOCHROME':
-        return [
-            COLOR32_WHITE,
-            _hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-        ]
-    return []
 
 
 class _PalettePreview(QFrame):
@@ -156,7 +105,7 @@ class StartEventEditDialog(QDialog):
         grid.setSpacing(6)
 
         for i in range(12):
-            r, g, b = _hsl_to_rgb(RAINBOW_HUE_12[i], DEFAULT_HSL_S, DEFAULT_HSL_L)
+            r, g, b = hsl_to_rgb(RAINBOW_HUE_12[i], DEFAULT_HSL_S, DEFAULT_HSL_L)
             btn = self._make_swatch(f"rgb({r}, {g}, {b})")
             row, col = divmod(i, 4)
             grid.addWidget(btn, row, col)
@@ -271,7 +220,7 @@ class StartEventEditDialog(QDialog):
 
     def _refresh_previews(self):
         for idx, name in enumerate(PALETTE_MODES):
-            colors = _generate_palette(name, self.hue_index)
+            colors = generate_song_colors(name, self.hue_index)
             self.preview_widgets[idx].set_colors(colors)
 
     def get_values(self):

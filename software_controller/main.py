@@ -43,6 +43,71 @@ RAINBOW_HUE_12 = [0.0, 0.083, 0.166, 0.25, 0.333, 0.416, 0.5, 0.583, 0.666, 0.75
 DEFAULT_HSL_S = 1.0
 DEFAULT_HSL_L = 0.5
 
+PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'MONOCHROME']
+
+
+def hsl_to_rgb(h, s, l):
+    def hue_to_rgb(p, q, t):
+        if t < 0: t += 1
+        if t > 1: t -= 1
+        if t < 1/6: return p + (q - p) * 6 * t
+        if t < 1/2: return q
+        if t < 2/3: return p + (q - p) * (2/3 - t) * 6
+        return p
+
+    if s == 0:
+        r, g, b = l, l, l
+    else:
+        q = l * (1 + s) if l < 0.5 else l + s - l * s
+        p = 2 * l - q
+        r = hue_to_rgb(p, q, h + 1/3)
+        g = hue_to_rgb(p, q, h)
+        b = hue_to_rgb(p, q, h - 1/3)
+
+    return round(r * 255), round(g * 255), round(b * 255)
+
+
+def generate_song_colors(mode, hue_index, rng=None):
+    """Build a palette for the given mode and hue index.
+
+    When ``rng`` is None the function is deterministic: random hue requests
+    (index >= 12) return None, and modes with random offsets use midpoints.
+    When ``rng`` is supplied (e.g. the ``random`` module) it draws live values.
+    """
+    if hue_index >= 12:
+        if rng is None:
+            return None
+        hue = random.randint(0, 360)
+    else:
+        hue = RAINBOW_HUE_12[hue_index % len(RAINBOW_HUE_12)] * 360
+    print(mode)
+    print(hue_index)
+    if mode == 'COMPLEMENTARY':
+        return [
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L + 0.20),
+            hsl_to_rgb(((hue + 180) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+        ]
+    if mode == 'ANALOGOUS':
+        return [
+            hsl_to_rgb(((hue - 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(((hue + 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+        ]
+    if mode == 'TRIADIC':
+        return [
+            hsl_to_rgb(((hue - 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(((hue + 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+        ]
+    if mode == 'MONOCHROME':
+        return [
+            COLOR32_WHITE,
+            hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+        ]
+    return []
+
+
 class DMXController:
     def __init__(self):
         self.logger = get_logger("software_controller.main")
@@ -66,7 +131,7 @@ class DMXController:
             'chase_index': 0
         }
         self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
-        self.random_palette = []
+        self.color_palette = []
         self.blinder1_status = {
             'bank': 0,
             'scene': 0,
@@ -321,10 +386,8 @@ class DMXController:
                     # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
                     hue_index = velocity // 6
                     palette_mode = velocity % 6
-                    if palette_mode == 0: self.generate_song_colors('COMPLEMENTARY', hue_index)
-                    elif palette_mode == 1: self.generate_song_colors('ANALOGOUS', hue_index)
-                    elif palette_mode == 2: self.generate_song_colors('TRIADIC', hue_index)
-                    elif palette_mode == 3: self.generate_song_colors('MONOCHROME', hue_index)
+                    self.color_palette = generate_song_colors(
+                    PALETTE_MODES[palette_mode], hue_index)
                 case 41:  # F2
                     self.pick_scene_from_song_part(1, velocity) # INTRO
                 case 42:  # F#2
@@ -358,12 +421,14 @@ class DMXController:
         self.blackout_blinder(1)
         self.blackout_blinder(2)
 
-        if self.random_palette:
-                self.change_led_color_palette(self.random_palette, 0, len(self.random_palette), self.beat_duration(self.song_tempo) * 2, self.beat_duration(self.song_tempo) * 4)
+        if self.color_palette:
+                self.change_led_color_palette(self.color_palette, 0,
+                  len(self.color_palette), self.beat_duration(self.song_tempo) * 1,
+                  self.beat_duration(self.song_tempo) * 4)
 
         if song_part == 1: # INTRO
-            if self.random_palette:
-                self.set_led_color(self.random_palette[1])
+            if self.color_palette:
+                self.set_led_color(self.color_palette[1])
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
@@ -399,57 +464,6 @@ class DMXController:
         elif song_part == 9: # END
             self.load_blinder_chase(1, 0)
             self.load_blinder_chase(2, 0)
-
-    def generate_song_colors(self, mode, hue_index):
-        hue = 0
-        if hue_index > 11: # Index of 12 means random
-            hue = random.randint(0, 360)
-        else:
-            hue = RAINBOW_HUE_12[hue_index % 12] * 360
-
-        if mode == 'COMPLEMENTARY':
-            self.random_palette = [
-                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L + (random.randint(15, 25) / 100.0)),
-                self.hsl_to_rgb((((hue + 180) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L)
-            ]
-        elif mode == 'ANALOGOUS':
-            self.random_palette = [
-                self.hsl_to_rgb((((hue - 30) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L),
-                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-                self.hsl_to_rgb((((hue + 30) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L)
-            ]
-        elif mode == 'TRIADIC':
-            self.random_palette = [
-                self.hsl_to_rgb((((hue - 120) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L),
-                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
-                self.hsl_to_rgb((((hue + 120) % 360) / 360.0), DEFAULT_HSL_S, DEFAULT_HSL_L)
-            ]
-        elif mode == 'MONOCHROME':
-            self.random_palette = [
-                COLOR32_WHITE,
-                self.hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L)
-            ]
-
-    def hsl_to_rgb(self, h, s, l):
-        def hue_to_rgb(p, q, t):
-            if t < 0: t += 1
-            if t > 1: t -= 1
-            if t < 1/6: return p + (q - p) * 6 * t
-            if t < 1/2: return q
-            if t < 2/3: return p + (q - p) * (2/3 - t) * 6
-            return p
-
-        if s == 0:
-            r, g, b = l, l, l
-        else:
-            q = l * (1 + s) if l < 0.5 else l + s - l * s
-            p = 2 * l - q
-            r = hue_to_rgb(p, q, h + 1/3)
-            g = hue_to_rgb(p, q, h)
-            b = hue_to_rgb(p, q, h - 1/3)
-
-        return round(r * 255), round(g * 255), round(b * 255)
 
     def beat_duration(self, bpms):
         if bpms == 0:
