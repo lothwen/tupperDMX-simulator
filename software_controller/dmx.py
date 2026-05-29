@@ -5,21 +5,21 @@ from dataclasses import dataclass, fields
 
 @dataclass
 class LedScene:
-    brightness: int = 255
-    blue: int = 255
-    green: int = 255
-    red: int = 255
+    brightness: int = 0
+    blue: int = 0
+    green: int = 0
+    red: int = 0
     animation: int = 0
-    speed: int = 255
+    speed: int = 0
     direction: int = 0
 
 @dataclass
 class BlinderScene:
-    brightness: int = 255
-    cool1: int = 255
-    cool2: int = 255
-    warm1: int = 255
-    warm2: int = 255
+    brightness: int = 0
+    cool1: int = 0
+    cool2: int = 0
+    warm1: int = 0
+    warm2: int = 0
     strobe: int = 0
     mode: int = 0
     speed: int = 0
