@@ -93,7 +93,7 @@ class StartEventEditDialog(QDialog):
         layout = QVBoxLayout(self)
 
         color_header = QLabel("Base Color")
-        color_header.setStyleSheet("font-weight: bold;")
+        color_header.setObjectName("PaletteSectionHeader")
         layout.addWidget(color_header)
 
         self.color_group = QButtonGroup(self)
@@ -113,21 +113,9 @@ class StartEventEditDialog(QDialog):
             self.color_buttons.append(btn)
 
         self.random_button = QPushButton("?")
+        self.random_button.setObjectName("RandomHueButton")
         self.random_button.setCheckable(True)
         self.random_button.setFixedSize(self.SWATCH_SIZE, self.SWATCH_SIZE)
-        self.random_button.setStyleSheet(
-            "QPushButton {"
-            "  background-color: #2a2a2a;"
-            "  color: #dddddd;"
-            "  border: 2px solid #555;"
-            "  border-radius: 4px;"
-            "  font-size: 22px;"
-            "  font-weight: bold;"
-            "}"
-            "QPushButton:checked {"
-            "  border: 3px solid white;"
-            "}"
-        )
         self.color_group.addButton(self.random_button, RANDOM_HUE_INDEX)
 
         random_box = QVBoxLayout()
@@ -135,8 +123,8 @@ class StartEventEditDialog(QDialog):
         random_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         random_box.addWidget(self.random_button, alignment=Qt.AlignmentFlag.AlignCenter)
         random_label = QLabel("Random")
+        random_label.setObjectName("RandomHueLabel")
         random_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        random_label.setStyleSheet("color: #888; font-size: 10px;")
         random_box.addWidget(random_label)
 
         random_wrap = QWidget()
@@ -148,7 +136,7 @@ class StartEventEditDialog(QDialog):
         layout.addLayout(grid_row)
 
         mode_header = QLabel("Palette Mode")
-        mode_header.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        mode_header.setObjectName("PaletteModeHeader")
         layout.addWidget(mode_header)
 
         self.mode_group = QButtonGroup(self)
@@ -157,19 +145,9 @@ class StartEventEditDialog(QDialog):
         for idx, name in enumerate(PALETTE_MODES):
             row = QHBoxLayout()
             mode_btn = QPushButton(name)
+            mode_btn.setObjectName("PaletteModeButton")
             mode_btn.setCheckable(True)
             mode_btn.setFixedWidth(150)
-            mode_btn.setStyleSheet(
-                "QPushButton {"
-                "  padding: 8px;"
-                "  border: 2px solid #555;"
-                "  border-radius: 4px;"
-                "}"
-                "QPushButton:checked {"
-                "  border: 3px solid white;"
-                "  background-color: #444;"
-                "}"
-            )
             self.mode_group.addButton(mode_btn, idx)
             self.mode_buttons.append(mode_btn)
             row.addWidget(mode_btn)
@@ -190,18 +168,12 @@ class StartEventEditDialog(QDialog):
 
     def _make_swatch(self, css_color):
         btn = QPushButton()
+        btn.setObjectName("ColorSwatch")
         btn.setCheckable(True)
         btn.setFixedSize(self.SWATCH_SIZE, self.SWATCH_SIZE)
-        btn.setStyleSheet(
-            "QPushButton {"
-            f"  background-color: {css_color};"
-            "  border: 2px solid #555;"
-            "  border-radius: 4px;"
-            "}"
-            "QPushButton:checked {"
-            "  border: 3px solid white;"
-            "}"
-        )
+        # Only the per-swatch fill is data-driven; border/checked styling lives
+        # in the QSS theme under #ColorSwatch.
+        btn.setStyleSheet(f"QPushButton#ColorSwatch {{ background-color: {css_color}; }}")
         return btn
 
     def _apply_initial_selection(self):
