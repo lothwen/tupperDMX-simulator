@@ -212,7 +212,7 @@ class DMXController:
         # Immediately apply non-blended channels (animation, speed, direction) to universe_present
         self.universe_present[LED_START_CHANNEL + LED_NUM_BLEND_CHANNELS:LED_START_CHANNEL + LED_NUM_TOTAL_CHANNELS] = [self.led.animation, self.led.speed, self.led.direction]
 
-    def update_blinder_scene(self, blinder, bank_name, scene_index):
+    def update_blinder_scene(self, blinder, bank_name, scene_index, blend_time = DEFAULT_BLEND_TIME):
         status = self.blinder1_status if blinder == 1 else self.blinder2_status
         if not status['is_blackout'] and status['bank'] == bank_name and status['scene'] == scene_index and not status['is_chasing']:
             self.blackout_blinder(blinder)
@@ -232,6 +232,7 @@ class DMXController:
 
         status['bank'] = bank_name
         status['scene'] = scene_index
+        status['blend_time'] = blend_time
         status['is_blackout'] = False
         status['blend_time_elapsed'] = 0
         self.universe_past = copy.deepcopy(self.universe_present)
@@ -386,44 +387,44 @@ class DMXController:
                 case 25:  # C#1
                     self.led_status['bank'] = 'TUBES'
                 case 26:  # D1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0, velocity * 100)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 27:  # D#1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1, velocity * 100)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 28:  # E1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 2)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 2)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 2, velocity * 100)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 2, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 29:  # F1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 3, velocity * 100)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 3, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 30:  # F#1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 4)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 4)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 4, velocity * 100)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 4, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 31:  # G1
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1, velocity * 100)
                     self.blinder1_status['song_part_triggered'] = False
                     self.blinder1_status['is_chasing'] = False
                 case 32:  # G#1
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1, velocity * 100)
                     self.blinder2_status['song_part_triggered'] = False
                     self.blinder2_status['is_chasing'] = False
                 case 38:  # D2 - Precount beats
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 0, 1)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 0, 1)
                 case 39:  # D#2 - Precount downbeats
-                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
-                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                    self.update_blinder_scene(1, 'BLINDER_SCENES', 1, 1)
+                    self.update_blinder_scene(2, 'BLINDER_SCENES', 1, 1)
                 case 40:  # E2 - START
                     # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
                     hue_index = velocity // 6
@@ -480,13 +481,13 @@ class DMXController:
             self.load_led_chase(random.randint(9, 14))
 
         elif song_part == 4: # BREAK
-            self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
-            self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+            self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+            self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
 
         elif song_part == 5: # BRIDGE
             self.update_led_scene('ANIMATIONS', 6)
-            self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
-            self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+            self.load_blinder_chase(1, 1)
+            self.load_blinder_chase(2, 1)
 
         elif song_part == 6: # INST
             self.update_led_scene('ANIMATIONS', random.randint(5, 7))
