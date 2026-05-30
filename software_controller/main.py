@@ -86,20 +86,20 @@ def generate_song_colors(mode, hue_index, FromDialog=False):
         ]
     if mode == 'ANALOGOUS':
         return [
-            hsl_to_rgb(((hue - 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(((hue - 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
             hsl_to_rgb(((hue + 30) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
         ]
     if mode == 'TRIADIC':
         return [
-            hsl_to_rgb(((hue - 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            hsl_to_rgb(((hue - 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
             hsl_to_rgb(((hue + 120) % 360) / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
         ]
     if mode == 'COLOR+WHITE':
         return [
-            COLOR32_WHITE,
             hsl_to_rgb(hue / 360.0, DEFAULT_HSL_S, DEFAULT_HSL_L),
+            COLOR32_WHITE,
         ]
     if mode == 'MONOCHROMATIC':
         return [
@@ -450,7 +450,7 @@ class DMXController:
 
         if song_part == 1: # INTRO
             if self.color_palette:
-                self.set_led_color(self.color_palette[1])
+                self.set_led_color(self.color_palette[0])
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
