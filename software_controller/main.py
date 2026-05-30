@@ -143,6 +143,7 @@ class DMXController:
             'scene': 0,
             'is_blackout': True,
             'is_chasing': False,
+            'song_part_triggered': False,
             'chase': 0,
             'chase_index': 0,
             'chase_change_time': DEFAULT_CHASE_TIME,
@@ -257,10 +258,12 @@ class DMXController:
             self.blinder1 = BlinderScene(brightness=0, cool1=0, cool2=0, warm1=0, warm2=0, strobe=0, mode=0, speed=0)
             self.blinder1_status['is_blackout'] = True
             self.blinder1_status['is_chasing'] = False
+            self.blinder1_status['song_part_triggered'] = False
         else:
             self.blinder2 = BlinderScene(brightness=0, cool1=0, cool2=0, warm1=0, warm2=0, strobe=0, mode=0, speed=0)
             self.blinder2_status['is_blackout'] = True
             self.blinder2_status['is_chasing'] = False
+            self.blinder2_status['song_part_triggered'] = False
         self.update_universe()
 
     def blackout_all(self):
@@ -272,14 +275,17 @@ class DMXController:
 
     def _enter_manual_led_control(self):
         # Drop out of chase/palette so the background loop stops stomping the
-        # manual values, and clear any leftover blinder state (e.g. from a BREAK
-        # song part) so a manual scene starts from a clean slate.
+        # manual values, and clear blinders that the automatic song-part program
+        # left on (e.g. from a BREAK) so a manual scene starts clean. Blinders
+        # the user triggered by hand (notes 26-32) are left running.
         self.led_status['is_chasing'] = False
         self.led_status['is_blackout'] = False
         self.led_status['palette_size'] = 0
         self.led_status['palette_ptr'] = None
-        self.blackout_blinder(1)
-        self.blackout_blinder(2)
+        if self.blinder1_status['song_part_triggered']:
+            self.blackout_blinder(1)
+        if self.blinder2_status['song_part_triggered']:
+            self.blackout_blinder(2)
 
     def set_led_color(self, color):
         self.led_status['color'] = color
@@ -382,22 +388,36 @@ class DMXController:
                 case 26:  # D1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
+                    self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 27:  # D#1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                    self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 28:  # E1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 2)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 2)
+                    self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 29:  # F1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 3)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 3)
+                    self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 30:  # F#1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 4)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 4)
+                    self.blinder1_status['song_part_triggered'] = self.blinder2_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = self.blinder2_status['is_chasing'] = False
                 case 31:  # G1
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 1)
+                    self.blinder1_status['song_part_triggered'] = False
+                    self.blinder1_status['is_chasing'] = False
                 case 32:  # G#1
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 1)
+                    self.blinder2_status['song_part_triggered'] = False
+                    self.blinder2_status['is_chasing'] = False
                 case 38:  # D2 - Precount beats
                     self.update_blinder_scene(1, 'BLINDER_SCENES', 0)
                     self.update_blinder_scene(2, 'BLINDER_SCENES', 0)
@@ -486,6 +506,13 @@ class DMXController:
         elif song_part == 9: # END
             self.load_blinder_chase(1, 0)
             self.load_blinder_chase(2, 0)
+
+        # Mark blinders as owned by the automatic program so a later manual LED
+        # scene clears them (see _enter_manual_led_control). Parts that leave the
+        # blinders blacked out get the flag too, but blacking out an off blinder
+        # is a harmless no-op.
+        self.blinder1_status['song_part_triggered'] = True
+        self.blinder2_status['song_part_triggered'] = True
 
     def beat_duration(self, bpms):
         if bpms == 0:
