@@ -16,7 +16,7 @@ from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
-                      TrackResizeHandle)
+                      TrackResizeHandle, CustomTooltip)
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
@@ -86,6 +86,12 @@ class Timeline(QWidget):
 
         # Cache for current UI data (refreshed from MidiManager)
         self._cached_events = []
+
+        # Single shared clip tooltip. Created lazily, reused by every clip.
+        # A per-clip tooltip would be orphaned on screen when a redraw
+        # destroys the hovered clip before its hoverLeaveEvent fires; one
+        # shared widget that redraw_events hides cannot leave a ghost.
+        self._clip_tooltip = None
 
         # Time grid items (managed centrally)
         self.time_grid_items = []
@@ -372,6 +378,21 @@ class Timeline(QWidget):
             line.setZValue(-1)  # Keep grid lines in background
             self.content_scene.addItem(line)
             self.time_grid_items.append(line)
+
+    def clip_tooltip(self) -> CustomTooltip:
+        """Return the single shared clip tooltip, creating it on first use.
+
+        Reused by every clip so its lifetime is decoupled from the transient
+        clip items (which are destroyed and rebuilt on every redraw).
+        """
+        if self._clip_tooltip is None:
+            self._clip_tooltip = CustomTooltip(self.window())
+        return self._clip_tooltip
+
+    def hide_clip_tooltip(self) -> None:
+        """Hide the shared clip tooltip if it exists (no-op otherwise)."""
+        if self._clip_tooltip is not None:
+            self._clip_tooltip.hide_tooltip()
 
     def refresh_from_manager(self) -> None:
         """Refresh timeline display from MidiManager data."""

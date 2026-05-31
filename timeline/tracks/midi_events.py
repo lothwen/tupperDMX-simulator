@@ -24,7 +24,6 @@ from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter, QPolygo
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
 
 from .base import BaseTrack
-from ..widgets.tooltip import CustomTooltip
 from tupperlogger import get_logger
 
 
@@ -304,9 +303,10 @@ class DraggableMidiEvent(QGraphicsObject):
         self._pen = QPen(QColor(20, 20, 20))
         self._pen.setCosmetic(True)
 
-        # Tooltip
+        # Tooltip — a single shared widget owned by the Timeline manager is
+        # reused by every clip (see Timeline.clip_tooltip). This clip only
+        # tracks whether it currently has one shown.
         self._tooltip_shown = False
-        self._custom_tooltip = None
 
         # Fade durations (seconds). Sourced from event_data when present;
         # default to 0 so a clip with no fades renders cleanly. The handles
@@ -496,12 +496,9 @@ class DraggableMidiEvent(QGraphicsObject):
         if not self.event_data or self.is_blackout_clip:
             # No tooltip on BLACKOUTs — they're just gaps.
             return
-        if not self._custom_tooltip:
-            if self.scene() and self.scene().views():
-                main_window = self.scene().views()[0].window()
-                self._custom_tooltip = CustomTooltip(main_window)
-        if not self._custom_tooltip:
+        if not self.timeline:
             return
+        tooltip = self.timeline.clip_tooltip()
 
         event_info = self.event_data.get('info', {})
         part_name = getattr(event_info, 'part', f'Note {self.event_data["note"]}')
@@ -509,28 +506,22 @@ class DraggableMidiEvent(QGraphicsObject):
         time = self.event_data.get('time', 0.0)
         note = self.event_data.get('note', 0)
 
-        if self.timeline:
-            seconds_per_beat = 60.0 / self.timeline.bpm
-            beat_number = time / seconds_per_beat
-            bar_number = int(beat_number / 4) + 1
-            beat_in_bar = int(beat_number % 4) + 1
-            tooltip_text = (f"{part_name}\n"
-                            f"MIDI Note: {note}\n"
-                            f"Time: {time:.3f}s\n"
-                            f"Bar: {bar_number}, Beat: {beat_in_bar}\n"
-                            f"Velocity: {velocity}")
-        else:
-            tooltip_text = (f"{part_name}\n"
-                            f"MIDI Note: {note}\n"
-                            f"Time: {time:.3f}s\n"
-                            f"Velocity: {velocity}")
+        seconds_per_beat = 60.0 / self.timeline.bpm
+        beat_number = time / seconds_per_beat
+        bar_number = int(beat_number / 4) + 1
+        beat_in_bar = int(beat_number % 4) + 1
+        tooltip_text = (f"{part_name}\n"
+                        f"MIDI Note: {note}\n"
+                        f"Time: {time:.3f}s\n"
+                        f"Bar: {bar_number}, Beat: {beat_in_bar}\n"
+                        f"Velocity: {velocity}")
 
         scene_pos = self.mapToScene(local_pos)
         if self.scene() and self.scene().views():
             for view in self.scene().views():
                 global_pos = view.mapToGlobal(view.mapFromScene(scene_pos))
                 global_pos.setY(global_pos.y() + 20)
-                self._custom_tooltip.show_at(global_pos, tooltip_text)
+                tooltip.show_at(global_pos, tooltip_text)
                 break
 
     # --- Mouse events -----------------------------------------------------
@@ -553,8 +544,8 @@ class DraggableMidiEvent(QGraphicsObject):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             zone = self._zone_at(event.pos().x())
-            if self._custom_tooltip:
-                self._custom_tooltip.hide_tooltip()
+            if self.timeline:
+                self.timeline.hide_clip_tooltip()
             self._tooltip_shown = False
 
             self._select_exclusive()
@@ -785,8 +776,8 @@ class DraggableMidiEvent(QGraphicsObject):
         item when the cursor moves onto a child, so the tooltip would
         otherwise stay frozen for the duration of the child interaction.
         """
-        if self._custom_tooltip:
-            self._custom_tooltip.hide_tooltip()
+        if self.timeline:
+            self.timeline.hide_clip_tooltip()
         self._tooltip_shown = False
 
     # --- Context menu -----------------------------------------------------
@@ -986,6 +977,13 @@ class MidiEventsTrack(BaseTrack):
         return QColor(int(red * scale), int(green * scale), int(blue * scale))
 
     def redraw_events(self, cached_events, y_offset: int):
+        # Hide the shared clip tooltip before destroying the clips. If the
+        # cursor is hovering a clip when a redraw fires, that clip is deleted
+        # below without ever receiving hoverLeaveEvent — without this the
+        # tooltip would be left orphaned on screen.
+        if self.timeline_manager:
+            self.timeline_manager.hide_clip_tooltip()
+
         # Safely dispose of old scene items.  The scene's BSP spatial index
         # and internal dirty-item bookkeeping can retain pointers to items
         # across event-loop ticks.  If the C++ QGraphicsItem is destroyed
