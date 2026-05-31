@@ -72,7 +72,9 @@ def build_render_units(events):
     return units
 
 
-# Edge-zone widths (pixels in scene space) for resize gestures.
+# Edge-zone width (screen pixels) for resize gestures. Converted to
+# scene-space at the current zoom in _zone_at so the edges stay a constant
+# on-screen width regardless of zoom level.
 RESIZE_ZONE_PX = 8
 # Snap radius — if a dragged edge ends within this many screen-pixels of a
 # neighboring clip edge, snap to it. Converted to scene-space at the current
@@ -455,15 +457,31 @@ class DraggableMidiEvent(QGraphicsObject):
 
     # --- Cursor / hit-test ------------------------------------------------
 
+    def _zoom_x(self) -> float:
+        """Horizontal view zoom (m11); 1.0 when the view isn't available.
+
+        Screen-pixel UI constants (snap radius, resize-zone width) are divided
+        by this so they stay a constant on-screen size regardless of zoom.
+        """
+        if self.timeline is not None:
+            m11 = self.timeline.content_view.transform().m11()
+            if m11 > 0:
+                return m11
+        return 1.0
+
     def _zone_at(self, local_x: float) -> str:
         """Classify a local x position into a drag zone."""
         w = self.rect.width()
-        if w <= 2 * RESIZE_ZONE_PX:
+        # RESIZE_ZONE_PX is a screen-space width; convert to scene-space at the
+        # current zoom so the resize edges stay ~8px on-screen and don't
+        # swallow the whole clip (and its MOVE zone) when zoomed in.
+        resize_zone = RESIZE_ZONE_PX / self._zoom_x()
+        if w <= 2 * resize_zone:
             # Narrow clip: no MOVE zone; split half/half between resize zones.
             return self.MODE_RESIZE_LEFT if local_x < w / 2 else self.MODE_RESIZE_RIGHT
-        if local_x <= RESIZE_ZONE_PX:
+        if local_x <= resize_zone:
             return self.MODE_RESIZE_LEFT
-        if local_x >= w - RESIZE_ZONE_PX:
+        if local_x >= w - resize_zone:
             return self.MODE_RESIZE_RIGHT
         return self.MODE_MOVE
 
@@ -633,12 +651,7 @@ class DraggableMidiEvent(QGraphicsObject):
         # SNAP_PX is a screen-space radius. Convert it to scene-space by
         # dividing by the view's horizontal zoom, so the snap zone stays a
         # constant on-screen distance regardless of zoom level.
-        zoom_x = 1.0
-        if self.timeline is not None:
-            m11 = self.timeline.content_view.transform().m11()
-            if m11 > 0:
-                zoom_x = m11
-        snap_scene = SNAP_PX / zoom_x
+        snap_scene = SNAP_PX / self._zoom_x()
 
         # Snap targets: neighbor clip edges plus the nearest beat grid line,
         # so a dragged edge lands on the same beats the ruler draws.
