@@ -22,6 +22,14 @@ from tupperlogger import get_logger
 # only inspect text/plain (handy for debugging the drop chain).
 CLIP_MIME_TYPE = "application/x-tupperdmx-midi-clip"
 DEFAULT_DROP_VELOCITY = 127
+# Blinder notes encode blend time in velocity, so 127 would mean an extremely
+# long blend. Default blinder drops/previews to a short blend instead.
+DEFAULT_BLINDER_DROP_VELOCITY = 3
+
+
+def default_drop_velocity(fixture: str) -> int:
+    """Default velocity for a dropped/previewed clip on the given fixture."""
+    return DEFAULT_BLINDER_DROP_VELOCITY if fixture == "blinder" else DEFAULT_DROP_VELOCITY
 
 # MIME type for LED-scene drops. The payload is a JSON object with the
 # scene's name and full 7-channel dict; on drop the timeline expands it
@@ -40,8 +48,9 @@ DEFAULT_SCENE_CONFIG_PATH = (Path(__file__).resolve().parent.parent
 class ClipListWidget(QListWidget):
     """A list of clips for a single fixture; emits the custom MIME on drag."""
 
-    def __init__(self, parent=None):
+    def __init__(self, fixture: str, parent=None):
         super().__init__(parent)
+        self.fixture = fixture
         self.setObjectName("ClipList")
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
@@ -57,7 +66,8 @@ class ClipListWidget(QListWidget):
         note = item.data(Qt.ItemDataRole.UserRole)
         if note is None:
             return None
-        payload = {"note": int(note), "velocity": DEFAULT_DROP_VELOCITY}
+        payload = {"note": int(note),
+                   "velocity": default_drop_velocity(self.fixture)}
         encoded = json.dumps(payload).encode("utf-8")
         mime = QMimeData()
         mime.setData(CLIP_MIME_TYPE, encoded)
@@ -153,7 +163,7 @@ class ClipLibraryWidget(QWidget):
             groups.keys(),
             key=lambda f: (FIXTURE_PAGE_PRIORITY.get(f, 99), f),
         ):
-            page = ClipListWidget()
+            page = ClipListWidget(fixture)
             for note_num, info in sorted(groups[fixture], key=lambda x: x[0]):
                 item = QListWidgetItem(f"{info.part}")
                 item.setIcon(self._color_swatch(info.color))
@@ -262,11 +272,14 @@ class ClipLibraryWidget(QWidget):
         self.logger.info("Clip library refreshed with new configuration")
 
     def _on_clip_item_clicked(self, item: QListWidgetItem) -> None:
-        """Auditioning a single clip emits one (note, velocity=127) tuple."""
+        """Auditioning a single clip emits one (note, velocity) tuple, using
+        the same fixture-aware default velocity as a drop."""
         note = item.data(Qt.ItemDataRole.UserRole)
         if note is None:
             return
-        self.preview_requested.emit([(int(note), DEFAULT_DROP_VELOCITY)])
+        note_info = self.config.midi_note_map.get(str(int(note)))
+        velocity = default_drop_velocity(note_info.fixture if note_info else "")
+        self.preview_requested.emit([(int(note), velocity)])
 
     def _on_scene_item_clicked(self, item: QListWidgetItem) -> None:
         """Auditioning a scene emits 7 (note, velocity) tuples — one per
