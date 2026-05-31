@@ -74,8 +74,9 @@ def build_render_units(events):
 
 # Edge-zone widths (pixels in scene space) for resize gestures.
 RESIZE_ZONE_PX = 8
-# Snap radius — if a dragged edge ends within this many scene-pixels of a
-# neighboring clip edge, snap to it.
+# Snap radius — if a dragged edge ends within this many screen-pixels of a
+# neighboring clip edge, snap to it. Converted to scene-space at the current
+# zoom in _snap so the snap zone stays a constant on-screen distance.
 SNAP_PX = 6
 # Minimum visible width for a clip's hit area (so sub-pixel clips remain
 # clickable until the user zooms in).
@@ -610,11 +611,46 @@ class DraggableMidiEvent(QGraphicsObject):
     # Each preview computes the proposed new position/width, clamps to bounds,
     # snaps to nearby targets, and updates the visual state. No data mutation.
 
+    def _nearest_beat_x(self, x: float) -> Optional[float]:
+        """Scene-x of the beat grid line nearest to `x`.
+
+        Beats are uniform from t=0 at 60/bpm spacing — the same grid the
+        RulerTrack draws. Computed analytically so we never enumerate every
+        beat in the song. Returns None when the timeline/bpm is unavailable.
+        """
+        if self.timeline is None:
+            return None
+        bpm = self.timeline.bpm
+        pps = self.timeline.PIXELS_PER_SECOND
+        if bpm <= 0 or pps <= 0:
+            return None
+        beat_px = (60.0 / bpm) * pps
+        if beat_px <= 0:
+            return None
+        return round(x / beat_px) * beat_px
+
     def _snap(self, x: float) -> float:
+        # SNAP_PX is a screen-space radius. Convert it to scene-space by
+        # dividing by the view's horizontal zoom, so the snap zone stays a
+        # constant on-screen distance regardless of zoom level.
+        zoom_x = 1.0
+        if self.timeline is not None:
+            m11 = self.timeline.content_view.transform().m11()
+            if m11 > 0:
+                zoom_x = m11
+        snap_scene = SNAP_PX / zoom_x
+
+        # Snap targets: neighbor clip edges plus the nearest beat grid line,
+        # so a dragged edge lands on the same beats the ruler draws.
+        candidates = list(self.bounds.snap_xs)
+        beat_x = self._nearest_beat_x(x)
+        if beat_x is not None:
+            candidates.append(beat_x)
+
         nearest = None
-        for tx in self.bounds.snap_xs:
+        for tx in candidates:
             d = abs(tx - x)
-            if d <= SNAP_PX and (nearest is None or d < abs(nearest - x)):
+            if d <= snap_scene and (nearest is None or d < abs(nearest - x)):
                 nearest = tx
         return nearest if nearest is not None else x
 
