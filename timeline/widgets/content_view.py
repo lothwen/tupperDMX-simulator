@@ -6,12 +6,16 @@ Provides zooming, context menus, and specialized mouse handling for timeline int
 
 import json
 
-from PyQt6.QtWidgets import QGraphicsView, QMenu
+from PyQt6.QtWidgets import QGraphicsView, QMenu, QRubberBand
 from PyQt6.QtGui import QPainter
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRect
 
 from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
                              SCENE_MIME_TYPE)
+
+# Drag distance (viewport pixels) before an empty-space press becomes a
+# rubber-band selection instead of a plain click (which seeks).
+RUBBER_BAND_THRESHOLD_PX = 4
 
 
 class ContentView(QGraphicsView):
@@ -27,6 +31,14 @@ class ContentView(QGraphicsView):
 
         # Accept drops from the clip library (custom MIME).
         self.setAcceptDrops(True)
+
+        # Rubber-band selection state (custom — so a plain click still seeks).
+        self._rubber_band = None
+        self._rubber_origin = None       # viewport QPoint of the press
+        self._rubber_press_scene = None  # scene QPointF of the press
+        self._rubber_active = False      # True once the drag passes threshold
+        self._rubber_ctrl = False        # additive (keep prior selection)
+        self._rubber_base_ids = set()    # selection to preserve in additive mode
 
         # Enable context menu for right-clicks on empty areas
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -69,24 +81,107 @@ class ContentView(QGraphicsView):
                 # Show menu at the clicked position
                 menu.exec(self.mapToGlobal(position))
 
-    def keyPressEvent(self, event):
-        """Handle Delete on the currently selected MIDI clip.
+    # --- Selection (Ctrl+click handled by clips; rubber-band here) --------
 
-        Routes through the same delete_requested signal as the right-click
-        "Delete Event" menu so the confirmation dialog and BLACKOUT-conversion
-        logic are shared. We deliberately delete only the first selected clip:
-        the delete handler triggers a full timeline refresh, invalidating any
-        further references in our local list.
+    def _all_clips(self):
+        """Every non-BLACKOUT clip currently in the scene."""
+        from ..tracks.midi_events import DraggableMidiEvent
+        if self.scene() is None:
+            return []
+        return [it for it in self.scene().items()
+                if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
+
+    def _selected_clips(self):
+        return [it for it in self._all_clips() if it.isSelected()]
+
+    def _clip_at(self, scene_pos):
+        """Topmost non-BLACKOUT clip under a scene position, or None."""
+        from ..tracks.midi_events import DraggableMidiEvent
+        for item in self.scene().items(scene_pos):
+            if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
+                return item
+        return None
+
+    def mousePressEvent(self, event):
+        # A left press on empty space inside a MIDI lane starts a potential
+        # rubber-band. Presses on a clip, or outside the lanes (ruler/waveform),
+        # fall through to the default handling (clip drag / seek propagation).
+        if event.button() == Qt.MouseButton.LeftButton:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            in_lane = self.timeline.fixture_at_y(scene_pos.y()) is not None
+            if in_lane and self._clip_at(scene_pos) is None:
+                self._rubber_origin = event.position().toPoint()
+                self._rubber_press_scene = scene_pos
+                self._rubber_active = False
+                self._rubber_ctrl = bool(
+                    event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                if self._rubber_ctrl:
+                    self._rubber_base_ids = {c.event_id for c in self._selected_clips()}
+                else:
+                    self._rubber_base_ids = set()
+                    self.scene().clearSelection()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._rubber_origin is not None
+                and event.buttons() & Qt.MouseButton.LeftButton):
+            cur = event.position().toPoint()
+            if not self._rubber_active:
+                if (cur - self._rubber_origin).manhattanLength() < RUBBER_BAND_THRESHOLD_PX:
+                    return
+                self._rubber_active = True
+                if self._rubber_band is None:
+                    self._rubber_band = QRubberBand(
+                        QRubberBand.Shape.Rectangle, self.viewport())
+            rect = QRect(self._rubber_origin, cur).normalized()
+            self._rubber_band.setGeometry(rect)
+            self._rubber_band.show()
+            self._update_rubber_selection(rect)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if (self._rubber_origin is not None
+                and event.button() == Qt.MouseButton.LeftButton):
+            was_active = self._rubber_active
+            press_scene = self._rubber_press_scene
+            ctrl = self._rubber_ctrl
+            if self._rubber_band is not None:
+                self._rubber_band.hide()
+            self._rubber_origin = None
+            self._rubber_press_scene = None
+            self._rubber_active = False
+            self._rubber_base_ids = set()
+            # A plain click (no drag) seeks — except a bare Ctrl+click on empty
+            # space, which is a no-op so it doesn't disturb the playhead.
+            if not was_active and not ctrl:
+                self.timeline._seek_to_scene_x(press_scene.x())
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _update_rubber_selection(self, viewport_rect):
+        """Select clips intersecting the band (plus the additive-mode base)."""
+        scene_rect = self.mapToScene(viewport_rect).boundingRect()
+        for clip in self._all_clips():
+            inside = clip.sceneBoundingRect().intersects(scene_rect)
+            clip.setSelected(inside or clip.event_id in self._rubber_base_ids)
+
+    def keyPressEvent(self, event):
+        """Delete every selected MIDI clip via the batch delete path.
+
+        Routes through Timeline.delete_selected() so one confirmation dialog
+        covers the whole selection and the BLACKOUT-conversion logic is shared
+        with the right-click menu.
         """
         if event.key() == Qt.Key.Key_Delete:
-            from ..tracks.midi_events import DraggableMidiEvent
-            scene = self.scene()
-            if scene is not None:
-                for item in scene.selectedItems():
-                    if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
-                        item.delete_requested.emit(item.event_id)
-                        event.accept()
-                        return
+            if self._selected_clips():
+                self.timeline.delete_selected()
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def wheelEvent(self, event):

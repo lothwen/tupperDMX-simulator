@@ -253,12 +253,14 @@ class DraggableMidiEvent(QGraphicsObject):
     edit_requested = pyqtSignal(str)                # event_id
     delete_requested = pyqtSignal(str)              # event_id
     add_at_position_requested = pyqtSignal(float)   # time_seconds
+    group_move_committed = pyqtSignal(float)        # delta_seconds (whole selection)
 
     # Drag-mode enum (string-based for readability).
     MODE_IDLE = "idle"
     MODE_MOVE = "move"
     MODE_RESIZE_LEFT = "resize_left"
     MODE_RESIZE_RIGHT = "resize_right"
+    MODE_GROUP_MOVE = "group_move"  # rigid move of the whole multi-selection
 
     def __init__(self, x, y, width, height, event_id: str, event_data: dict,
                  bounds: ClipBounds, is_blackout: bool = False,
@@ -292,6 +294,20 @@ class DraggableMidiEvent(QGraphicsObject):
         self._press_scene_pos = None
         self._press_self_pos = None         # self.pos() at press time
         self._press_width = float(width)    # rect width at press time
+
+        # Multi-selection state. When this clip is part of a 2+ selection it
+        # enters "multi" mode: fade handles hidden, edge-resize disabled (the
+        # whole clip is a MOVE handle), and a drag slides the entire selection.
+        self._multi_selected = False
+        # Set when a Ctrl+click toggled selection on press, so the matching
+        # release can be swallowed (otherwise Qt's default mouseReleaseEvent
+        # re-toggles the selection on a no-move click, undoing ours).
+        self._ctrl_toggle_pending = False
+        # Captured at the start of a group move: list of
+        # (clip, start_pos, text_start_pos) plus the clamped pixel delta range.
+        self._group_move_peers = []
+        self._group_min_dx = 0.0
+        self._group_max_dx = 0.0
 
         # External hooks
         self.timeline = None
@@ -471,6 +487,10 @@ class DraggableMidiEvent(QGraphicsObject):
 
     def _zone_at(self, local_x: float) -> str:
         """Classify a local x position into a drag zone."""
+        # While part of a multi-selection the whole clip is a MOVE handle —
+        # edge-resize is disabled (no resizing of multiple clips at once).
+        if self._multi_selected:
+            return self.MODE_MOVE
         w = self.rect.width()
         # RESIZE_ZONE_PX is a screen-space width; convert to scene-space at the
         # current zoom so the resize edges stay ~8px on-screen and don't
@@ -541,15 +561,73 @@ class DraggableMidiEvent(QGraphicsObject):
                     item.setSelected(False)
         self.setSelected(True)
 
+    def _selected_sibling_clips(self):
+        """All currently-selected non-BLACKOUT clips in the scene (incl. self)."""
+        scene = self.scene()
+        if scene is None:
+            return []
+        return [it for it in scene.selectedItems()
+                if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
+
+    def set_multi_selected(self, value: bool):
+        """Toggle multi-selection mode: hide fade handles, disable resize.
+
+        Driven centrally by the Timeline whenever the selection count changes.
+        """
+        if self._multi_selected == value:
+            return
+        self._multi_selected = value
+        for handle in (self._fade_in_handle, self._fade_out_handle):
+            if handle is not None:
+                handle.setVisible(not value)
+
+    def _begin_group_move(self, press_scene_pos):
+        """Capture peer positions + clamp range for a whole-selection move."""
+        self._mode = self.MODE_GROUP_MOVE
+        self._press_scene_pos = press_scene_pos
+        self._group_move_peers = []
+        for clip in self._selected_sibling_clips():
+            text_pos = clip.text_item.pos() if clip.text_item is not None else None
+            self._group_move_peers.append((clip, clip.pos(), text_pos))
+        if self.timeline is not None:
+            self._group_min_dx, self._group_max_dx = \
+                self.timeline.selection_move_bounds_px()
+        else:
+            self._group_min_dx, self._group_max_dx = 0.0, 0.0
+
+    def _apply_group_move_preview(self, delta_x: float):
+        """Slide every selected clip (and its label) by a clamped delta."""
+        clamped = max(self._group_min_dx, min(delta_x, self._group_max_dx))
+        for clip, start_pos, text_start in self._group_move_peers:
+            clip.setPos(start_pos.x() + clamped, start_pos.y())
+            if clip.text_item is not None and text_start is not None:
+                clip.text_item.setPos(text_start.x() + clamped, text_start.y())
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            zone = self._zone_at(event.pos().x())
             if self.timeline:
                 self.timeline.hide_clip_tooltip()
             self._tooltip_shown = False
+            ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
 
+            if ctrl and not self.is_blackout_clip:
+                # Ctrl+click toggles this clip in/out of the selection; no drag.
+                self.setSelected(not self.isSelected())
+                self._mode = self.MODE_IDLE
+                self._press_scene_pos = None
+                self._ctrl_toggle_pending = True
+                event.accept()
+                return
+
+            if self.isSelected() and len(self._selected_sibling_clips()) >= 2:
+                # Drag the whole multi-selection as a rigid block.
+                self._begin_group_move(event.scenePos())
+                event.accept()
+                return
+
+            # Single-clip behavior (unchanged).
             self._select_exclusive()
-            self._mode = zone
+            self._mode = self._zone_at(event.pos().x())
             self._press_scene_pos = event.scenePos()
             self._press_self_pos = self.pos()
             self._press_width = self.rect.width()
@@ -557,7 +635,10 @@ class DraggableMidiEvent(QGraphicsObject):
             return
 
         if event.button() == Qt.MouseButton.RightButton:
-            self._select_exclusive()
+            # Keep the selection intact when right-clicking a clip that's part
+            # of a multi-selection (so "Delete N events" acts on all of them).
+            if not (self.isSelected() and len(self._selected_sibling_clips()) >= 2):
+                self._select_exclusive()
             self.last_right_click_scene_pos = event.scenePos()
             self.show_context_menu(event.screenPos())
             event.accept()
@@ -579,7 +660,9 @@ class DraggableMidiEvent(QGraphicsObject):
 
         delta_x = event.scenePos().x() - self._press_scene_pos.x()
 
-        if self._mode == self.MODE_MOVE:
+        if self._mode == self.MODE_GROUP_MOVE:
+            self._apply_group_move_preview(delta_x)
+        elif self._mode == self.MODE_MOVE:
             self._apply_move_preview(delta_x)
         elif self._mode == self.MODE_RESIZE_LEFT:
             self._apply_resize_left_preview(delta_x)
@@ -588,6 +671,12 @@ class DraggableMidiEvent(QGraphicsObject):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        # A Ctrl+click already toggled selection on press; swallow the release
+        # so Qt's default item selection handling doesn't toggle it back.
+        if self._ctrl_toggle_pending:
+            self._ctrl_toggle_pending = False
+            event.accept()
+            return
         if self._mode == self.MODE_IDLE or not self.timeline:
             super().mouseReleaseEvent(event)
             return
@@ -601,7 +690,12 @@ class DraggableMidiEvent(QGraphicsObject):
 
         if moved:
             pps = self.timeline.PIXELS_PER_SECOND
-            if self._mode == self.MODE_MOVE:
+            if self._mode == self.MODE_GROUP_MOVE:
+                clamped = max(self._group_min_dx,
+                              min(event.scenePos().x() - self._press_scene_pos.x(),
+                                  self._group_max_dx))
+                self.group_move_committed.emit(clamped / pps)
+            elif self._mode == self.MODE_MOVE:
                 new_time = self.pos().x() / pps
                 self.move_committed.emit(self.event_id, new_time)
             elif self._mode == self.MODE_RESIZE_LEFT:
@@ -614,6 +708,7 @@ class DraggableMidiEvent(QGraphicsObject):
         self._mode = self.MODE_IDLE
         self._press_scene_pos = None
         self._press_self_pos = None
+        self._group_move_peers = []
         super().mouseReleaseEvent(event)
 
     # --- Drag previews ----------------------------------------------------
@@ -787,6 +882,15 @@ class DraggableMidiEvent(QGraphicsObject):
         while main_window and not hasattr(main_window, 'centralWidget'):
             main_window = main_window.parent()
         menu = QMenu(main_window)
+
+        selected_clips = self._selected_sibling_clips()
+        if self.isSelected() and len(selected_clips) >= 2:
+            # Multi-selection: a single action that deletes them all at once.
+            delete_action = menu.addAction(f"Delete {len(selected_clips)} events")
+            if self.timeline is not None:
+                delete_action.triggered.connect(self.timeline.delete_selected)
+            menu.exec(global_pos)
+            return
 
         if not self.is_blackout_clip:
             edit_action = menu.addAction("Edit Properties...")
@@ -1082,6 +1186,7 @@ class MidiEventsTrack(BaseTrack):
                 event_rect.edit_requested.connect(self.timeline_manager.on_midi_event_edit_by_id)
                 event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_by_id)
                 event_rect.add_at_position_requested.connect(self.timeline_manager.on_add_event_requested)
+                event_rect.group_move_committed.connect(self.timeline_manager.on_selection_moved)
 
                 # Pick the clip color: scene groups derive from their RGB
                 # channel values; single events use their info.color.

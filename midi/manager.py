@@ -1194,33 +1194,227 @@ class MidiManager(QObject):
         if idx < 0:
             return False
         event = self.midi_events[idx]
-        if self.is_blackout(event):
-            return False
-
-        fixture = self._event_fixture(event)
-        bo_note = self._blackout_note_number(fixture)
-        if bo_note is None:
-            self.logger.warning(
-                f"Cannot replace event {event_id} with BLACKOUT: "
-                f"no BLACKOUT note mapped for fixture={fixture!r}"
-            )
-            return False
-
         old_note = event['note']
         old_time = event['time']
-        event['note'] = bo_note
-        event['info'] = self.midi_note_map[str(bo_note)]
-        for note in self.midi_notes:
-            if (note['note'] == old_note
-                    and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
-                note['note'] = bo_note
-                break
+        fixture = self._event_fixture(event)
+        if not self._replace_with_blackout_internal(event):
+            return False
 
         self.reconcile_blackouts(fixture)
         self._commit()
         self.logger.info(
             f"Replaced event {event_id} (note={old_note}, "
             f"time={old_time:.3f}s, fixture={fixture!r}) with BLACKOUT"
+        )
+        return True
+
+    def _replace_with_blackout_internal(self, event: Dict[str, Any]) -> bool:
+        """Swap an event's note to its fixture's BLACKOUT note in place.
+
+        No reconcile/rebuild/commit — the caller batches those. Returns False
+        when the event is already a BLACKOUT or its fixture has no BLACKOUT
+        mapping (same no-op semantics as replace_with_blackout()).
+        """
+        if self.is_blackout(event):
+            return False
+        fixture = self._event_fixture(event)
+        bo_note = self._blackout_note_number(fixture)
+        if bo_note is None:
+            self.logger.warning(
+                f"Cannot replace event {event['id']} with BLACKOUT: "
+                f"no BLACKOUT note mapped for fixture={fixture!r}"
+            )
+            return False
+        old_note = event['note']
+        old_time = event['time']
+        event['note'] = bo_note
+        event['info'] = self.midi_note_map[str(bo_note)]
+        for note in self.midi_notes:
+            if note.get('is_fade'):
+                continue
+            if (note['note'] == old_note
+                    and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
+                note['note'] = bo_note
+                break
+        return True
+
+    # ------------------------------------------------------------------
+    # Multi-selection batch ops (move / delete a set of clips as a block)
+    # ------------------------------------------------------------------
+    #
+    # The timeline lets the user select many clips (across both fixture
+    # lanes) and act on them together. Moves treat the selection as a RIGID
+    # block: every clip keeps its width and the group is clamped so no
+    # selected clip overlaps a non-selected non-BLACKOUT clip. Deletes reuse
+    # the single-clip "replace with BLACKOUT" semantics but commit once.
+
+    def _selected_non_blackout(self, event_ids) -> List[Dict[str, Any]]:
+        selected_ids = set(event_ids)
+        return [e for e in self.midi_events
+                if e['id'] in selected_ids and not self.is_blackout(e)]
+
+    def selection_move_bounds(self, event_ids) -> Tuple[float, float]:
+        """Allowed (min_delta, max_delta) seconds for a rigid-block move.
+
+        For each selected non-BLACKOUT clip, leftward room is bounded by the
+        right edge of the nearest non-selected non-BLACKOUT clip to its left
+        (0.0 if none) and rightward room by the start of the nearest such clip
+        to its right (song_end if none). Selected and BLACKOUT clips are never
+        obstacles, so the block glides over gaps. Returns (0.0, 0.0) when the
+        block cannot move.
+        """
+        selected_ids = set(event_ids)
+        selected = self._selected_non_blackout(event_ids)
+        if not selected:
+            return (0.0, 0.0)
+        song_end = self._song_end_time()
+        # Lower bound is the tightest (greatest) of the per-clip leftward
+        # limits; upper bound is the tightest (least) rightward limit.
+        min_delta = float('-inf')
+        max_delta = float('inf')
+        for e in selected:
+            fixture = self._event_fixture(e)
+            idx = self._index_of(e['id'])
+            right = self._right_edge_of(idx, fixture)
+            width = (MIN_EVENT_DURATION if right == float('inf')
+                     else max(MIN_EVENT_DURATION, right - e['time']))
+            clip_right = e['time'] + width
+
+            right_obstacle = song_end
+            left_obstacle = 0.0
+            for j, o in enumerate(self.midi_events):
+                if (self._event_fixture(o) != fixture
+                        or o['id'] in selected_ids
+                        or self.is_blackout(o)):
+                    continue
+                o_right = self._right_edge_of(j, fixture)
+                if o_right == float('inf'):
+                    o_right = song_end
+                if o['time'] >= clip_right - BLACKOUT_EPSILON:
+                    right_obstacle = min(right_obstacle, o['time'])
+                elif o_right <= e['time'] + BLACKOUT_EPSILON:
+                    left_obstacle = max(left_obstacle, o_right)
+            max_delta = min(max_delta, right_obstacle - clip_right)
+            min_delta = max(min_delta, left_obstacle - e['time'])
+
+        # Guard against float drift producing an inverted range.
+        return (min(0.0, min_delta), max(0.0, max_delta))
+
+    def move_selection(self, event_ids, delta_sec: float) -> bool:
+        """Slide every selected clip by the same delta, as a rigid block.
+
+        Preserves the timing between selected clips. BLACKOUT gap markers on
+        the affected fixtures are rebuilt from each clip's intended extent
+        (the same technique move_event uses), reconstructing the vacated hole,
+        internal block gaps, and boundary caps in one pass.
+        """
+        selected = self._selected_non_blackout(event_ids)
+        if not selected:
+            return False
+        selected_ids = {e['id'] for e in selected}
+        min_d, max_d = self.selection_move_bounds(event_ids)
+        delta = max(min_d, min(delta_sec, max_d))
+        if abs(delta) < BLACKOUT_EPSILON:
+            return False
+
+        fixtures = {self._event_fixture(e) for e in selected}
+        song_end = self._song_end_time()
+
+        # Snapshot each non-BLACKOUT clip's intended right edge per affected
+        # fixture. Selected clips carry their extent with them (+= delta).
+        intended_ends: Dict[str, float] = {}
+        for i, e in enumerate(self.midi_events):
+            fixture = self._event_fixture(e)
+            if fixture not in fixtures or self.is_blackout(e):
+                continue
+            end = self._right_edge_of(i, fixture)
+            if end == float('inf'):
+                end = song_end
+            if e['id'] in selected_ids:
+                end += delta
+            intended_ends[e['id']] = end
+
+        # Shift selected events (read original time before each single shift).
+        for e in selected:
+            self._set_event_time_internal(e['id'], e['time'] + delta)
+
+        # Drop every BLACKOUT on the affected fixtures; rebuild below.
+        for fixture in fixtures:
+            for bid in [e['id'] for e in self.midi_events
+                        if self._event_fixture(e) == fixture
+                        and self.is_blackout(e)]:
+                self._delete_event_internal(bid)
+
+        # Re-cap any clip whose post-move next event over-extends past its
+        # intended end.
+        for eid, intended_end in intended_ends.items():
+            idx = self._index_of(eid)
+            if idx < 0:
+                continue
+            fixture = self._event_fixture(self.midi_events[idx])
+            actual_end = self._right_edge_of(idx, fixture)
+            if actual_end == float('inf'):
+                actual_end = song_end
+            if actual_end > intended_end + BLACKOUT_EPSILON:
+                self._insert_blackout_internal(intended_end, fixture)
+
+        for gid in {e['group_id'] for e in selected if e.get('group_id')}:
+            self._regenerate_group_fades(gid)
+        for fixture in fixtures:
+            self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Moved selection of {len(selected)} events by {delta:.3f}s"
+        )
+        return True
+
+    def delete_selection(self, event_ids) -> bool:
+        """Delete a multi-selection behind one commit.
+
+        Scene groups (detected via any selected member's group_id) are removed
+        whole and replaced by a single BLACKOUT; single non-BLACKOUT clips are
+        replaced in place with a BLACKOUT; already-BLACKOUT ids are removed.
+        """
+        selected_ids = set(event_ids)
+        group_ids = set()
+        singles: List[Dict[str, Any]] = []
+        for e in self.midi_events:
+            if e['id'] not in selected_ids:
+                continue
+            gid = e.get('group_id')
+            if gid:
+                group_ids.add(gid)
+            else:
+                singles.append(e)
+        if not group_ids and not singles:
+            return False
+
+        affected_fixtures = set()
+        for gid in group_ids:
+            members = self._group_members(gid)
+            if not members:
+                continue
+            fixture = self._event_fixture(members[0])
+            affected_fixtures.add(fixture)
+            group_time = members[0]['time']
+            self._wipe_group_fades(gid)
+            for m in list(members):
+                self._delete_event_internal(m['id'])
+            self._insert_blackout_internal(group_time, fixture)
+
+        for e in singles:
+            affected_fixtures.add(self._event_fixture(e))
+            if self.is_blackout(e):
+                self._delete_event_internal(e['id'])
+            else:
+                self._replace_with_blackout_internal(e)
+
+        for fixture in affected_fixtures:
+            self.reconcile_blackouts(fixture)
+        self._commit()
+        self.logger.info(
+            f"Deleted selection: {len(group_ids)} scene(s), "
+            f"{len(singles)} event(s)"
         )
         return True
 
