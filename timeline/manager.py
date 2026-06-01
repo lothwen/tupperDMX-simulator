@@ -20,7 +20,7 @@ from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
-from .tracks.midi_events import build_render_units
+from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
 
 # MIDI note number for the song-part marker that triggers START handling in
@@ -86,6 +86,13 @@ class Timeline(QWidget):
 
         # Cache for current UI data (refreshed from MidiManager)
         self._cached_events = []
+
+        # Multi-selection: event ids of selected clips, persisted across the
+        # full item rebuild that every redraw performs so a selection survives
+        # a move/delete (and can be nudged repeatedly). `_applying_selection`
+        # guards the selectionChanged handler from recursing while we restore.
+        self._selected_event_ids = set()
+        self._applying_selection = False
 
         # Single shared clip tooltip. Created lazily, reused by every clip.
         # A per-clip tooltip would be orphaned on screen when a redraw
@@ -185,6 +192,9 @@ class Timeline(QWidget):
         # count (<200) — and eliminates the use-after-free SIGSEGV.
         self.content_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.content_view.setScene(self.content_scene)
+        # Track selection centrally so multi-select affordances and the
+        # persisted id set stay in sync as clips are (de)selected.
+        self.content_scene.selectionChanged.connect(self._on_selection_changed)
 
         layout.addWidget(self.header_view)
         layout.addWidget(self.content_view)
@@ -325,8 +335,13 @@ class Timeline(QWidget):
 
         # MIDI events content (cheap to redraw — keeps box heights in sync)
         if self._cached_events:
-            self.midi_events_track.redraw_events(self._cached_events, self._midi_events_y())
-            self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+            self._applying_selection = True
+            try:
+                self.midi_events_track.redraw_events(self._cached_events, self._midi_events_y())
+                self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+            finally:
+                self._applying_selection = False
+            self._reapply_selection()
 
         # Waveform — only do the expensive pixmap rebuild on commit
         if redraw_waveform and self.audio_file:
@@ -402,10 +417,20 @@ class Timeline(QWidget):
         # Get current data from MidiManager
         self._cached_events = self.midi_manager.get_events_for_ui()
 
-        # Redraw tracks with cached data
+        # Redraw tracks with cached data. Guard selectionChanged while the old
+        # (possibly selected) items are torn down — removing a selected item
+        # fires selectionChanged, which would otherwise wipe the persisted id
+        # set before we can restore it below.
         midi_events_y = self._midi_events_y()
-        self.midi_events_track.redraw_events(self._cached_events, midi_events_y)
-        self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+        self._applying_selection = True
+        try:
+            self.midi_events_track.redraw_events(self._cached_events, midi_events_y)
+            self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+        finally:
+            self._applying_selection = False
+
+        # Restore the selection (the redraw rebuilt every clip from scratch).
+        self._reapply_selection()
 
         # Detect BPM from first event if available
         if self._cached_events:
@@ -431,6 +456,105 @@ class Timeline(QWidget):
     def _do_deferred_refresh(self) -> None:
         self._refresh_pending = False
         self.refresh_from_manager()
+
+    # --- Multi-selection --------------------------------------------------
+
+    def selected_clip_items(self):
+        """All currently-selected non-BLACKOUT clip items in the scene."""
+        if self.content_scene is None:
+            return []
+        return [it for it in self.content_scene.selectedItems()
+                if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
+
+    def _expanded_selected_event_ids(self):
+        """Selected clips expanded to underlying event ids (scene members too)."""
+        ids = set()
+        for clip in self.selected_clip_items():
+            if clip.group_event_ids:
+                ids.update(clip.group_event_ids)
+            else:
+                ids.add(clip.event_id)
+        return list(ids)
+
+    def _on_selection_changed(self):
+        """Keep the persisted id set + multi-select affordances in sync."""
+        if self._applying_selection or not hasattr(self, 'midi_events_track'):
+            return
+        clips = self.selected_clip_items()
+        self._selected_event_ids = {c.event_id for c in clips}
+        multi = len(clips) >= 2
+        for track in (self.midi_events_track, self.midi_events_blinder_track):
+            for item in track.items:
+                if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
+                    item.set_multi_selected(multi and item.isSelected())
+
+    def _reapply_selection(self):
+        """Re-select clips by id after a redraw rebuilt every clip item."""
+        if not self._selected_event_ids:
+            return
+        self._applying_selection = True
+        try:
+            restored = []
+            for track in (self.midi_events_track, self.midi_events_blinder_track):
+                for item in track.items:
+                    if (isinstance(item, DraggableMidiEvent)
+                            and not item.is_blackout_clip
+                            and item.event_id in self._selected_event_ids):
+                        item.setSelected(True)
+                        restored.append(item)
+            # Drop ids that no longer exist (merged / deleted clips).
+            self._selected_event_ids = {it.event_id for it in restored}
+            multi = len(restored) >= 2
+            for it in restored:
+                it.set_multi_selected(multi)
+        finally:
+            self._applying_selection = False
+
+    def selection_move_bounds_px(self):
+        """(min_dx, max_dx) in scene pixels for moving the current selection."""
+        ids = self._expanded_selected_event_ids()
+        if not self.midi_manager or not ids:
+            return (0.0, 0.0)
+        lo, hi = self.midi_manager.selection_move_bounds(ids)
+        return (lo * self.PIXELS_PER_SECOND, hi * self.PIXELS_PER_SECOND)
+
+    def on_selection_moved(self, delta_sec: float):
+        """Group-move drag committed — shift the whole selection by delta."""
+        if not self.midi_manager:
+            return
+        ids = self._expanded_selected_event_ids()
+        if not ids:
+            return
+        if self.midi_manager.move_selection(ids, delta_sec):
+            self._schedule_refresh()
+
+    def delete_selected(self):
+        """Delete every selected clip behind a single confirmation dialog."""
+        if not self.midi_manager:
+            return
+        clips = self.selected_clip_items()
+        if not clips:
+            return
+        ids = [c.event_id for c in clips]
+        count = len(clips)
+        noun = "event" if count == 1 else "events"
+        reply = QMessageBox.question(
+            None, "Delete Events",
+            f"Replace {count} selected {noun} with blackouts?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._selected_event_ids = set()
+        if self.midi_manager.delete_selection(ids):
+            self._schedule_refresh()
+
+    def _seek_to_scene_x(self, scene_x: float):
+        """Move the playhead + request a seek for a plain empty-lane click."""
+        time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
+        self.update_playhead(time_seconds)
+        self.seek_requested.emit(time_seconds)
 
     def _detect_bpm_from_data(self) -> None:
         """Detect BPM from MIDI data structure."""
