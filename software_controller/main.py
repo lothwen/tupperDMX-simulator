@@ -475,7 +475,7 @@ class DMXController:
             self.update_led_scene('FILLS2', 2)
 
         elif song_part == 2: # VERSE
-            self.update_led_scene('FILLS', random.randint(0, 7))
+            self.update_led_scene('FILLS2', 1) # Hardcoded animation for all VERSEs
 
         elif song_part == 3: # CHORUS
             self.load_led_chase(random.randint(9, 14))
