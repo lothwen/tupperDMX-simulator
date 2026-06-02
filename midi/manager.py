@@ -1300,6 +1300,46 @@ class MidiManager(QObject):
         # Guard against float drift producing an inverted range.
         return (min(0.0, min_delta), max(0.0, max_delta))
 
+    def _units_on_fixtures(self, fixtures) -> List[Dict[str, Any]]:
+        """Render units (single events / scene groups) on the given fixtures.
+
+        Each unit dict carries: fixture, group_id (or None), rep_id (a stable
+        member event id) and key (group_id or rep_id). BLACKOUTs are excluded —
+        they're the derived gap markers this rebuild reconstructs.
+        """
+        units: List[Dict[str, Any]] = []
+        seen_groups = set()
+        for e in self.midi_events:
+            fixture = self._event_fixture(e)
+            if fixture not in fixtures or self.is_blackout(e):
+                continue
+            gid = e.get('group_id')
+            if gid:
+                if gid in seen_groups:
+                    continue
+                seen_groups.add(gid)
+                units.append({'fixture': fixture, 'group_id': gid,
+                              'rep_id': e['id'], 'key': gid})
+            else:
+                units.append({'fixture': fixture, 'group_id': None,
+                              'rep_id': e['id'], 'key': e['id']})
+        return units
+
+    def _unit_is_selected(self, unit: Dict[str, Any], selected_ids) -> bool:
+        if unit['group_id']:
+            return any(m['id'] in selected_ids
+                       for m in self._group_members(unit['group_id']))
+        return unit['rep_id'] in selected_ids
+
+    def _unit_right_edge(self, unit: Dict[str, Any]) -> float:
+        """Visual right edge — time of the next non-member same-fixture event."""
+        if unit['group_id']:
+            return self._group_right_edge(unit['group_id'], unit['fixture'])
+        idx = self._index_of(unit['rep_id'])
+        if idx < 0:
+            return float('inf')
+        return self._right_edge_of(idx, unit['fixture'])
+
     def move_selection(self, event_ids, delta_sec: float) -> bool:
         """Slide every selected clip by the same delta, as a rigid block.
 
@@ -1320,19 +1360,23 @@ class MidiManager(QObject):
         fixtures = {self._event_fixture(e) for e in selected}
         song_end = self._song_end_time()
 
-        # Snapshot each non-BLACKOUT clip's intended right edge per affected
-        # fixture. Selected clips carry their extent with them (+= delta).
-        intended_ends: Dict[str, float] = {}
-        for i, e in enumerate(self.midi_events):
-            fixture = self._event_fixture(e)
-            if fixture not in fixtures or self.is_blackout(e):
-                continue
-            end = self._right_edge_of(i, fixture)
-            if end == float('inf'):
-                end = song_end
-            if e['id'] in selected_ids:
-                end += delta
-            intended_ends[e['id']] = end
+        # Snapshot each render UNIT's intended right edge per affected fixture.
+        # A "unit" is a single event OR a whole scene group — the right
+        # granularity, because a group's 7 members share one timestamp. Keying
+        # by individual event would give each member a zero-width extent and,
+        # after the post-shift re-sort, spray a BLACKOUT at the group's own
+        # start (turning the LED bar off). Selected units carry their extent
+        # with them (+= delta).
+        units = self._units_on_fixtures(fixtures)
+        intended = {}  # unit key -> (intended_end, unit)
+        for u in units:
+            u['selected'] = self._unit_is_selected(u, selected_ids)
+            edge = self._unit_right_edge(u)
+            if edge == float('inf'):
+                edge = song_end
+            if u['selected']:
+                edge += delta
+            intended[u['key']] = (edge, u)
 
         # Shift selected events (read original time before each single shift).
         for e in selected:
@@ -1345,18 +1389,19 @@ class MidiManager(QObject):
                         and self.is_blackout(e)]:
                 self._delete_event_internal(bid)
 
-        # Re-cap any clip whose post-move next event over-extends past its
-        # intended end.
-        for eid, intended_end in intended_ends.items():
-            idx = self._index_of(eid)
-            if idx < 0:
-                continue
-            fixture = self._event_fixture(self.midi_events[idx])
-            actual_end = self._right_edge_of(idx, fixture)
-            if actual_end == float('inf'):
-                actual_end = song_end
-            if actual_end > intended_end + BLACKOUT_EPSILON:
-                self._insert_blackout_internal(intended_end, fixture)
+        # Re-cap any unit whose post-move right edge over-extends past its
+        # intended end. Decisions are computed against the now blackout-free
+        # state first, then inserted together so a just-added cap can't
+        # perturb a later unit's measurement.
+        caps = []
+        for _key, (intended_end, u) in intended.items():
+            actual = self._unit_right_edge(u)
+            if actual == float('inf'):
+                actual = song_end
+            if actual > intended_end + BLACKOUT_EPSILON:
+                caps.append((intended_end, u['fixture']))
+        for cap_time, fixture in caps:
+            self._insert_blackout_internal(cap_time, fixture)
 
         for gid in {e['group_id'] for e in selected if e.get('group_id')}:
             self._regenerate_group_fades(gid)
