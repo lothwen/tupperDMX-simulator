@@ -409,8 +409,14 @@ class Timeline(QWidget):
         if self._clip_tooltip is not None:
             self._clip_tooltip.hide_tooltip()
 
-    def refresh_from_manager(self) -> None:
-        """Refresh timeline display from MidiManager data."""
+    def refresh_from_manager(self, detect_bpm: bool = False) -> None:
+        """Refresh timeline display from MidiManager data.
+
+        BPM is auto-detected from the MIDI tempo only when ``detect_bpm`` is
+        True (i.e. a file was just loaded). Edit-driven refreshes leave it
+        False so a manually-set BPM survives moves/resizes/deletes — the
+        loaded tempo meta is stale once the user overrides BPM in the toolbar.
+        """
         if not self.midi_manager:
             return
 
@@ -432,8 +438,8 @@ class Timeline(QWidget):
         # Restore the selection (the redraw rebuilt every clip from scratch).
         self._reapply_selection()
 
-        # Detect BPM from first event if available
-        if self._cached_events:
+        # Detect BPM from first event if available (load-time only).
+        if detect_bpm and self._cached_events:
             # Try to get BPM from MIDI data
             duration = self.midi_manager.get_duration()
             if duration > 0:
