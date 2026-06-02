@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
         # Load MIDI file via MidiManager
         if song.midi:
             if self.midi_manager.load_from_file(song.midi):
-                self.timeline.refresh_from_manager()
+                self.timeline.refresh_from_manager(detect_bpm=True)
                 self.toolbar_manager.set_export_midi_enabled(True)
                 self.toolbar_manager.update_midi_file_display(song.midi)
             else:
@@ -709,7 +709,7 @@ class MainWindow(QMainWindow):
                     
                     # Load MIDI file via MidiManager and update display
                     if self.midi_manager.load_from_file(path):
-                        self.timeline.refresh_from_manager()
+                        self.timeline.refresh_from_manager(detect_bpm=True)
                         self.toolbar_manager.update_midi_file_display(path)
                         self.toolbar_manager.set_export_midi_enabled(True)
                     else:
