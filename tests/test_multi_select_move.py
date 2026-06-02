@@ -31,6 +31,14 @@ class FakeNoteInfo:
 
 
 FAKE_NOTE_MAP = {
+    # LED-bar channel-control notes (1-7) so add_scene() can build groups.
+    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
+    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
+    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
+    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
+    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
+    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
+    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
     "12": FakeNoteInfo(part="Scene Select 1", color="#ff0000", fixture="ledbar"),
     "13": FakeNoteInfo(part="Scene Select 2", color="#00ff00", fixture="ledbar"),
     "14": FakeNoteInfo(part="Scene Select 3", color="#0000ff", fixture="ledbar"),
@@ -38,6 +46,9 @@ FAKE_NOTE_MAP = {
     "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
     "39": FakeNoteInfo(part="BLACKOUT_BLINDERS", color="#000000", fixture="blinder"),
 }
+
+SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
+            "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
@@ -132,6 +143,53 @@ def test_delete_selection_mixed():
     _assert_invariants(m)
 
 
+def test_move_selection_scene_groups_no_spurious_blackout():
+    print("test_move_selection_scene_groups_no_spurious_blackout")
+    # Regression: moving multiple scene groups used to spray a BLACKOUT at
+    # each group's start time (LED bar never turned on), because the rebuild
+    # treated the 7 same-time members as zero-width clips.
+    m = _make_manager()
+    g1 = m.add_scene(4.0, SCENE_CH, "A")
+    g2 = m.add_scene(10.0, SCENE_CH, "B")
+    ids = [e["id"] for e in m.midi_events if e.get("group_id") in (g1, g2)]
+
+    m.move_selection(ids, 2.0)
+
+    group_starts = {round(e["time"], 3) for e in m.midi_events
+                    if e.get("group_id") in (g1, g2)}
+    for e in m.midi_events:
+        if m.is_blackout(e):
+            _assert(round(e["time"], 3) not in group_starts,
+                    f"no BLACKOUT lands on a group start ({e['time']:.2f}s)")
+    a_t = min(e["time"] for e in m.midi_events if e.get("group_id") == g1)
+    b_t = min(e["time"] for e in m.midi_events if e.get("group_id") == g2)
+    _assert(abs(a_t - 6.0) < 1e-6 and abs(b_t - 12.0) < 1e-6,
+            f"groups shifted to 6.0s & 12.0s (got {a_t:.2f}, {b_t:.2f})")
+    _assert_invariants(m)
+
+
+def test_move_selection_scene_group_keeps_trailing_gap():
+    print("test_move_selection_scene_group_keeps_trailing_gap")
+    # A group with a real trailing gap keeps that gap (its BLACKOUT cap is
+    # rebuilt at the shifted position), not at the group start.
+    m = _make_manager()
+    g1 = m.add_scene(4.0, SCENE_CH, "A")
+    g2 = m.add_scene(20.0, SCENE_CH, "B")
+    m.set_scene_right_edge(g1, 8.0)   # carve A's visible end → gap [8, 20)
+    ids = [e["id"] for e in m.midi_events if e.get("group_id") in (g1, g2)]
+
+    m.move_selection(ids, 3.0)
+
+    a_t = min(e["time"] for e in m.midi_events if e.get("group_id") == g1)
+    _assert(abs(a_t - 7.0) < 1e-6, f"group A shifted to 7.0s (got {a_t:.2f})")
+    bos = _ledbar_blackout_times(m)
+    _assert(any(abs(t - 11.0) < 1e-6 for t in bos),
+            f"trailing-gap cap rebuilt at 11.0s (got {bos})")
+    _assert(all(abs(t - 7.0) > 1e-6 for t in bos),
+            f"no cap at group A's start 7.0s (got {bos})")
+    _assert_invariants(m)
+
+
 def _assert_invariants(m):
     """reconcile_blackouts invariants: no zero-dur / no adjacent BLACKOUTs."""
     for fixture in ("ledbar", "blinder"):
@@ -151,6 +209,8 @@ def _assert_invariants(m):
 def main():
     test_selection_move_bounds()
     test_move_selection_preserves_timing_and_rebuilds_blackouts()
+    test_move_selection_scene_groups_no_spurious_blackout()
+    test_move_selection_scene_group_keeps_trailing_gap()
     test_delete_selection_mixed()
     print("\nALL TESTS PASSED")
 
