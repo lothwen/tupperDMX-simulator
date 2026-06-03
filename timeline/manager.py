@@ -571,7 +571,7 @@ class Timeline(QWidget):
         for msg in self.midi_manager.midi_data:
             if msg.is_meta and msg.type == 'set_tempo':
                 tempo = mido.tempo2bpm(msg.tempo)
-                self.bpm_detected.emit(int(tempo))
+                self.bpm_detected.emit(round(tempo))
                 return
 
     def set_bpm(self, bpm):
