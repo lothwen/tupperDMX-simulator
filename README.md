@@ -13,7 +13,7 @@ A PyQt6-based lighting control application that synchronizes MP3 audio playback 
 
 ### MIDI Control
 - Load and play MIDI files synchronized to audio
-- Clip-style MIDI event editing — move, resize, snap, add, and delete events on per-fixture timeline tracks (ledbar, blinder)
+- Clip-style MIDI event editing — move, resize, snap, fade, multi-select, add, and delete events on per-fixture timeline tracks (ledbar, blinder)
 - Real-time MIDI output to hardware ports or the built-in software controller
 
 ### Clip Library
@@ -32,7 +32,7 @@ No hardware? No problem. When Art-Net is pointed at localhost, a pure-Python DMX
 - 7-channel LED bar with scene banks (FILLS, ANIMATIONS, TUBES, STROBES, MULTICOLOR, and more)
 - Two blinder fixtures with independent scene control
 - 53 MIDI note mappings covering scenes, colors, song parts, and fixture control
-- Smooth scene blending and color palette generation (analogous, complementary, triadic modes)
+- Smooth scene blending and color palette generation (complementary, analogous, triadic, color+white, monochromatic, and single-hue modes)
 - Chase sequences and animated lighting effects
 - Song part markers: INTRO, VERSE, CHORUS, BRIDGE, SOLO, OUTRO, and more
 
@@ -49,7 +49,7 @@ No hardware? No problem. When Art-Net is pointed at localhost, a pure-Python DMX
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.13+
 - [uv](https://docs.astral.sh/uv/) package manager (recommended)
 - Audio output device
 - Optional: MIDI interface, Art-Net device, or USB DMX interface
