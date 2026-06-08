@@ -556,6 +556,25 @@ class Timeline(QWidget):
         if self.midi_manager.delete_selection(ids):
             self._schedule_refresh()
 
+    def copy_selected(self):
+        """Copy the current clip selection into the clip clipboard."""
+        if not self.midi_manager:
+            return
+        ids = self._expanded_selected_event_ids()
+        if not ids:
+            return
+        self.midi_manager.copy_selection(ids)
+
+    def paste_at_playhead(self):
+        """Paste clipboard clips starting at the current playhead time."""
+        if not self.midi_manager or not self.midi_manager.has_clipboard():
+            return
+        if not hasattr(self, 'playhead') or self.playhead is None:
+            return
+        time_seconds = max(0.0, self.playhead.x() / self.PIXELS_PER_SECOND)
+        if self.midi_manager.paste(time_seconds):
+            self._schedule_refresh()
+
     def _seek_to_scene_x(self, scene_x: float):
         """Move the playhead + request a seek for a plain empty-lane click."""
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
