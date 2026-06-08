@@ -848,21 +848,29 @@ class MainWindow(QMainWindow):
         # Remove global event filter
         QApplication.instance().removeEventFilter(self)
         
-        # Stop playback and cleanup components
-        self.media_controller.cleanup()
-        self.audio_controller.cleanup()
-        self.dmx_manager.cleanup()
-        self.midi_manager.cleanup()
-        
+        # Stop playback and cleanup components — guard each so one failure
+        # doesn't abort the rest of the shutdown.
+        for name, cleanup in (
+            ("media_controller", self.media_controller.cleanup),
+            ("audio_controller", self.audio_controller.cleanup),
+            ("dmx_manager", self.dmx_manager.cleanup),
+            ("midi_manager", self.midi_manager.cleanup),
+        ):
+            try:
+                cleanup()
+            except Exception as e:
+                self.logger.error(f"Error cleaning up {name}: {e}")
+
         if hasattr(self, 'software_controller') and self.software_controller:
-            self.software_controller.stop()
-        
+            try:
+                self.software_controller.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping software controller: {e}")
+
         # Save configuration
         self.save_config()
-        
+
         # Accept the close event
-        event.accept()
-        self.midi_manager.cleanup()
         event.accept()
 
 def main():
@@ -938,7 +946,7 @@ def main():
                 "error"
             )
             crash_dialog.exec()
-        except:
+        except Exception:
             pass  # If we can't show dialog, just exit
         
         raise

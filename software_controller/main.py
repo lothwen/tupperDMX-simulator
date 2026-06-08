@@ -540,8 +540,6 @@ class DMXController:
             
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._running = True
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         self.logger.info("Software Controller started in background")
 

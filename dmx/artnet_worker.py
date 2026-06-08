@@ -157,11 +157,7 @@ class ArtNetWorker(DMXWorkerBase):
     def stop(self) -> None:
         """Stop the Art-Net worker."""
         self.stop_event.set()
-        
-        # If we have a running loop, schedule the shutdown
-        # The loop is running _async_worker which checks stop_event
-        pass
-            
+
     def get_connection_info(self) -> dict:
         """Get detailed connection information."""
         return {
