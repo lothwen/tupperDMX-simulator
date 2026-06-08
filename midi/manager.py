@@ -1,4 +1,5 @@
 from typing import Optional, List, Dict, Any, Tuple
+from contextlib import contextmanager
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
 import copy
@@ -27,6 +28,9 @@ class MidiManager(QObject):
     """
     Manages MIDI worker lifecycle and provides a high-level interface.
     """
+
+    # Maximum number of undo/redo snapshots to retain.
+    MAX_HISTORY = 50
 
     # Signals
     connection_status_changed = pyqtSignal(str, str)  # port_name, status
@@ -68,6 +72,13 @@ class MidiManager(QObject):
 
         # Software controller reference
         self.software_controller = None
+
+        # Undo/redo snapshot history of the editable document state.
+        # Seeded on load_from_file / create_empty_track.
+        self._history: List[Dict[str, Any]] = []
+        self._history_index: int = -1
+        self._restoring: bool = False
+        self._batching: bool = False
 
     def set_software_controller(self, controller):
         """Set the software controller instance."""
@@ -135,6 +146,7 @@ class MidiManager(QObject):
             self.midi_data = self._codec.read(file_path)
             self.current_filename = file_path
             self._parse_midi_data()
+            self._reset_history()
             self.logger.info(f"Loaded MIDI file: {file_path}")
             self.data_changed.emit()
             return True
@@ -149,6 +161,7 @@ class MidiManager(QObject):
         self.midi_events.clear()
         self.midi_notes.clear()
         self.current_filename = None
+        self._reset_history()
         self.logger.info("Created empty MIDI track")
         self.data_changed.emit()
 
@@ -275,11 +288,89 @@ class MidiManager(QObject):
             return self.midi_data.length
         return 0.0
 
+    # ------------------------------------------------------------------
+    # Undo / redo — linear snapshot history of the editable doc state
+    # ------------------------------------------------------------------
+    # Every committed mutation funnels through _commit(), so recording a
+    # deep-copied snapshot of (midi_data, midi_events, midi_notes) there gives
+    # undo/redo for the whole editing surface without the editors knowing.
+
+    def _snapshot_state(self) -> Dict[str, Any]:
+        return {
+            "midi_data": copy.deepcopy(self._doc.midi_data),
+            "midi_events": copy.deepcopy(self._doc.midi_events),
+            "midi_notes": copy.deepcopy(self._doc.midi_notes),
+        }
+
+    def _reset_history(self) -> None:
+        """Drop history and seed it with the current state as the baseline."""
+        self._history = [self._snapshot_state()]
+        self._history_index = 0
+
+    def _push_history(self) -> None:
+        """Record current state as a new undo step (dropping any redo tail)."""
+        if self._history_index < len(self._history) - 1:
+            del self._history[self._history_index + 1:]
+        self._history.append(self._snapshot_state())
+        if len(self._history) > self.MAX_HISTORY:
+            del self._history[:len(self._history) - self.MAX_HISTORY]
+        self._history_index = len(self._history) - 1
+
+    def _apply_history_state(self, snap: Dict[str, Any]) -> None:
+        """Restore doc state from a snapshot, refresh worker + UI (no push)."""
+        self._restoring = True
+        try:
+            self._doc.midi_data = copy.deepcopy(snap["midi_data"])
+            self._doc.midi_events = copy.deepcopy(snap["midi_events"])
+            self._doc.midi_notes = copy.deepcopy(snap["midi_notes"])
+            self._auto_update_worker()
+            self.data_changed.emit()
+        finally:
+            self._restoring = False
+
+    def can_undo(self) -> bool:
+        return self._history_index > 0
+
+    def can_redo(self) -> bool:
+        return self._history_index < len(self._history) - 1
+
+    def undo(self) -> bool:
+        if not self.can_undo():
+            return False
+        self._history_index -= 1
+        self._apply_history_state(self._history[self._history_index])
+        self.logger.debug(f"Undo -> history index {self._history_index}")
+        return True
+
+    def redo(self) -> bool:
+        if not self.can_redo():
+            return False
+        self._history_index += 1
+        self._apply_history_state(self._history[self._history_index])
+        self.logger.debug(f"Redo -> history index {self._history_index}")
+        return True
+
+    @contextmanager
+    def history_batch(self):
+        """Group edits inside this block into a single undo step."""
+        if self._batching:
+            yield
+            return
+        self._batching = True
+        try:
+            yield
+        finally:
+            self._batching = False
+            if not self._restoring:
+                self._push_history()
+
     def _commit(self) -> None:
         """Final step of any mutation: rebuild MIDI, push to worker, notify."""
         self._rebuild_midi_data()
         self._auto_update_worker()
         self.data_changed.emit()
+        if not self._restoring and not self._batching:
+            self._push_history()
 
     def _auto_update_worker(self) -> None:
         """Automatically update the worker with current MIDI data if running."""
