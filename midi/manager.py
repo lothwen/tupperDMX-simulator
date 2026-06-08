@@ -79,6 +79,10 @@ class MidiManager(QObject):
         self._history_index: int = -1
         self._restoring: bool = False
         self._batching: bool = False
+        self._batch_dirty: bool = False
+
+        # In-memory clip clipboard (list of unit payloads). See copy_selection.
+        self._clipboard: List[Dict[str, Any]] = []
 
     def set_software_controller(self, controller):
         """Set the software controller instance."""
@@ -352,24 +356,162 @@ class MidiManager(QObject):
 
     @contextmanager
     def history_batch(self):
-        """Group edits inside this block into a single undo step."""
+        """Group edits inside this block into a single undo step.
+
+        Pushes one snapshot on exit, but only if at least one commit actually
+        happened inside (so a batch that mutates nothing leaves no empty step).
+        """
         if self._batching:
             yield
             return
         self._batching = True
+        self._batch_dirty = False
         try:
             yield
         finally:
             self._batching = False
-            if not self._restoring:
+            if self._batch_dirty and not self._restoring:
                 self._push_history()
+
+    # ------------------------------------------------------------------
+    # Clip clipboard — copy/paste of clips and scene groups
+    # ------------------------------------------------------------------
+
+    def has_clipboard(self) -> bool:
+        return bool(self._clipboard)
+
+    def copy_selection(self, event_ids) -> int:
+        """Capture selected clips / scene groups into the clipboard.
+
+        Each unit stores its start time RELATIVE to the earliest selected clip
+        (so paste can drop the block at any playhead position), its visible
+        width (None when it extends to the song end), and its fades. Scene
+        groups store per-channel values; single clips store note + velocity.
+        BLACKOUT gap markers are skipped. Returns the number of units captured.
+        """
+        selected_ids = set(event_ids)
+        group_ids: List[str] = []
+        singles: List[Dict[str, Any]] = []
+        seen_groups = set()
+        for e in self._doc.midi_events:
+            if e['id'] not in selected_ids or self._doc.is_blackout(e):
+                continue
+            gid = e.get('group_id')
+            if gid:
+                if gid not in seen_groups:
+                    seen_groups.add(gid)
+                    group_ids.append(gid)
+            else:
+                singles.append(e)
+        if not group_ids and not singles:
+            return 0
+
+        starts: List[float] = []
+        for gid in group_ids:
+            members = self._doc._group_members(gid)
+            if members:
+                starts.append(members[0]['time'])
+        starts.extend(e['time'] for e in singles)
+        sel_start = min(starts)
+
+        note_to_ch = {note: ch for ch, note in CHANNEL_NOTE_MAP}
+        units: List[Dict[str, Any]] = []
+
+        for gid in group_ids:
+            members = self._doc._group_members(gid)
+            if not members:
+                continue
+            fixture = self._doc._event_fixture(members[0])
+            start = members[0]['time']
+            right = self._doc._group_right_edge(gid, fixture)
+            width = None if right == float('inf') else max(0.0, right - start)
+            channels: Dict[str, int] = {}
+            for m in members:
+                ch = note_to_ch.get(m['note'])
+                if ch is not None:
+                    # *2 round-trips through _channel_to_velocity (value // 2).
+                    channels[ch] = int(m['velocity']) * 2
+            units.append({
+                'kind': 'scene',
+                'rel_time': start - sel_start,
+                'width': width,
+                'fade_in': float(members[0].get('fade_in', 0.0)),
+                'fade_out': float(members[0].get('fade_out', 0.0)),
+                'channels': channels,
+                'name': members[0].get('scene_name') or 'Scene',
+            })
+
+        for e in singles:
+            fixture = self._doc._event_fixture(e)
+            idx = self._doc._index_of(e['id'])
+            right = (self._doc._right_edge_of(idx, fixture)
+                     if idx >= 0 else float('inf'))
+            width = None if right == float('inf') else max(0.0, right - e['time'])
+            units.append({
+                'kind': 'single',
+                'rel_time': e['time'] - sel_start,
+                'width': width,
+                'fade_in': float(e.get('fade_in', 0.0)),
+                'fade_out': float(e.get('fade_out', 0.0)),
+                'note': e['note'],
+                'velocity': int(e['velocity']),
+            })
+
+        self._clipboard = units
+        self.logger.info(f"Copied {len(units)} clip unit(s) to clipboard")
+        return len(units)
+
+    def paste(self, at_time: float) -> bool:
+        """Recreate clipboard units starting at at_time, as one undo step.
+
+        Reuses add_event / add_scene (which handle BLACKOUT reconciliation) and
+        the existing right-edge / fade setters. Units are pasted left-to-right
+        so each clip's trailing cap is inserted with the next clip already in
+        place, reconstructing internal gaps.
+        """
+        if not self._clipboard:
+            return False
+        at_time = max(0.0, at_time)
+        pasted = 0
+        with self.history_batch():
+            for unit in sorted(self._clipboard, key=lambda u: u['rel_time']):
+                target = at_time + unit['rel_time']
+                if unit['kind'] == 'scene':
+                    gid = self.add_scene(target, unit['channels'], unit['name'])
+                    if not gid:
+                        continue
+                    if unit['width'] is not None:
+                        self.set_scene_right_edge(gid, target + unit['width'])
+                    if unit['fade_in'] > 0:
+                        self.set_scene_fade_in(gid, unit['fade_in'])
+                    if unit['fade_out'] > 0:
+                        self.set_scene_fade_out(gid, unit['fade_out'])
+                    pasted += 1
+                else:
+                    eid = self.add_event(unit['note'], target, unit['velocity'])
+                    if not eid:
+                        continue
+                    if unit['width'] is not None:
+                        self.set_event_right_edge(eid, target + unit['width'])
+                    if unit['fade_in'] > 0:
+                        self.set_event_fade_in(eid, unit['fade_in'])
+                    if unit['fade_out'] > 0:
+                        self.set_event_fade_out(eid, unit['fade_out'])
+                    pasted += 1
+        if pasted:
+            self.logger.info(f"Pasted {pasted} clip unit(s) at {at_time:.3f}s")
+        return pasted > 0
 
     def _commit(self) -> None:
         """Final step of any mutation: rebuild MIDI, push to worker, notify."""
         self._rebuild_midi_data()
         self._auto_update_worker()
         self.data_changed.emit()
-        if not self._restoring and not self._batching:
+        if self._restoring:
+            return
+        if self._batching:
+            self._batch_dirty = True
+        else:
             self._push_history()
 
     def _auto_update_worker(self) -> None:

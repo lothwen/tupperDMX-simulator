@@ -7,7 +7,7 @@ Provides zooming, context menus, and specialized mouse handling for timeline int
 import json
 
 from PyQt6.QtWidgets import QGraphicsView, QMenu, QRubberBand
-from PyQt6.QtGui import QPainter
+from PyQt6.QtGui import QPainter, QKeySequence
 from PyQt6.QtCore import Qt, QRect
 
 from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
@@ -171,15 +171,26 @@ class ContentView(QGraphicsView):
             clip.setSelected(inside or clip.event_id in self._rubber_base_ids)
 
     def keyPressEvent(self, event):
-        """Delete every selected MIDI clip via the batch delete path.
+        """Delete / copy / paste selected MIDI clips.
 
-        Routes through Timeline.delete_selected() so one confirmation dialog
-        covers the whole selection and the BLACKOUT-conversion logic is shared
-        with the right-click menu.
+        Delete and copy route through Timeline so the selection logic, BLACKOUT
+        conversion, and clipboard live in one place (shared with the right-click
+        menu); paste drops the clipboard at the current playhead. Scoped to the
+        timeline view so text fields keep their native copy/paste.
         """
         if event.key() == Qt.Key.Key_Delete:
             if self._selected_clips():
                 self.timeline.delete_selected()
+                event.accept()
+                return
+        elif event.matches(QKeySequence.StandardKey.Copy):
+            if self._selected_clips():
+                self.timeline.copy_selected()
+                event.accept()
+                return
+        elif event.matches(QKeySequence.StandardKey.Paste):
+            if self.timeline.midi_manager and self.timeline.midi_manager.has_clipboard():
+                self.timeline.paste_at_playhead()
                 event.accept()
                 return
         super().keyPressEvent(event)
