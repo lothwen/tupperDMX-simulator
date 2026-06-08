@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QPushButton, QComboBox, QFileDialog, QGraphicsView, QGraphicsScene,
                              QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox, QTabWidget)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
-from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent
+from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent, QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
                           QVariantAnimation, QAbstractAnimation, QEasingCurve)
 
@@ -99,7 +99,23 @@ class MainWindow(QMainWindow):
         
         # Install global event filter for spacebar handling
         QApplication.instance().installEventFilter(self)
-    
+
+        # Undo / redo shortcuts (Ctrl+Z / Ctrl+Shift+Z)
+        self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self.undo_shortcut.activated.connect(self._on_undo)
+        self.redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, self)
+        self.redo_shortcut.activated.connect(self._on_redo)
+
+    def _on_undo(self):
+        """Undo the last timeline edit."""
+        if not self.midi_manager.undo():
+            self.logger.debug("Nothing to undo")
+
+    def _on_redo(self):
+        """Redo the last undone timeline edit."""
+        if not self.midi_manager.redo():
+            self.logger.debug("Nothing to redo")
+
     def _setup_ui_components(self):
         """Initialize all UI component managers."""
         # Get icons
