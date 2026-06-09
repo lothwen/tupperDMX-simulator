@@ -5,7 +5,13 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from PyQt6.QtMultimedia import QAudioSink, QAudioFormat
 
 from tupperlogger import get_logger
-from config import MetronomeConfig
+
+
+# Metronome beep frequencies in Hz. Hardcoded by design — tweak here if needed;
+# intentionally not exposed via config or the Settings UI. High = downbeat
+# (beat 1), low = the other beats.
+METRONOME_HIGH_PITCH_HZ = 1200
+METRONOME_LOW_PITCH_HZ = 800
 
 
 class AudioController(QObject):
@@ -17,11 +23,10 @@ class AudioController(QObject):
     beat_occurred = pyqtSignal(int)  # beat number
     audio_error_occurred = pyqtSignal(str, str)  # error message, error type
     
-    def __init__(self, metronome_config: MetronomeConfig, initial_volume: float = 0.5):
+    def __init__(self, initial_volume: float = 0.5):
         super().__init__()
         self.logger = get_logger("ui.audio")
-        self.metronome_config = metronome_config
-        
+
         # Metronome state
         self.bpm = 120
         self.beat_count = 0
@@ -74,12 +79,12 @@ class AudioController(QObject):
         t = np.linspace(0, duration, n_samples, False)
         
         # Generate high pitch beep (downbeat)
-        high_freq = self.metronome_config.high_pitch_freq
+        high_freq = METRONOME_HIGH_PITCH_HZ
         high_wave = np.sin(high_freq * t * 2 * np.pi)
         self.high_beep_data = (high_wave * 32767).astype(np.int16).tobytes()
-        
+
         # Generate low pitch beep (other beats)
-        low_freq = self.metronome_config.low_pitch_freq
+        low_freq = METRONOME_LOW_PITCH_HZ
         low_wave = np.sin(low_freq * t * 2 * np.pi)
         self.low_beep_data = (low_wave * 32767).astype(np.int16).tobytes()
         
@@ -222,12 +227,6 @@ class AudioController(QObject):
         """Reset beat count to 0."""
         self.beat_count = 0
         self.logger.debug("Beat count reset")
-    
-    def update_metronome_config(self, config: MetronomeConfig) -> None:
-        """Update metronome configuration and regenerate sounds."""
-        self.metronome_config = config
-        self._generate_beep_sounds()
-        self.logger.info("Metronome configuration updated")
     
     def cleanup(self) -> None:
         """Clean up audio resources."""

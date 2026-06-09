@@ -6,6 +6,7 @@ from .toolbar_manager import ToolbarManager
 from .error_dialogs import ErrorDialogManager
 from .clip_library import ClipLibraryWidget, CLIP_MIME_TYPE
 from .about_dialog import AboutDialog
+from .settings_dialog import SettingsDialog
 
 __all__ = [
     'MediaController',
@@ -18,4 +19,5 @@ __all__ = [
     'ClipLibraryWidget',
     'CLIP_MIME_TYPE',
     'AboutDialog',
+    'SettingsDialog',
 ]

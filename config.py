@@ -118,12 +118,6 @@ class MidiNoteConfig:
 
 
 @dataclass
-class MetronomeConfig:
-    high_pitch_freq: int = 1200
-    low_pitch_freq: int = 800
-
-
-@dataclass
 class VolumeConfig:
     metronome: float = 0.5
     audio: float = 0.5
@@ -162,7 +156,6 @@ class Config:
     playlist: PlaylistConfig = field(default_factory=PlaylistConfig)
     fixtures: FixturesConfig = field(default_factory=FixturesConfig)
     midi_note_map: Dict[str, MidiNoteConfig] = field(default_factory=dict)
-    metronome: MetronomeConfig = field(default_factory=MetronomeConfig)
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     last_dmx_source: Optional[str] = None
@@ -267,13 +260,6 @@ class Config:
             config.playlist = PlaylistConfig(
                 songs=songs,
                 current_song_index=cls._validate_int(playlist_data.get("current_song_index", 0), 0, max(0, len(songs) - 1))
-            )
-
-        if "metronome" in data:
-            metronome_data = data["metronome"]
-            config.metronome = MetronomeConfig(
-                high_pitch_freq=cls._validate_int(metronome_data.get("high_pitch_freq", 1200), 100, 20000),
-                low_pitch_freq=cls._validate_int(metronome_data.get("low_pitch_freq", 800), 100, 20000)
             )
 
         if "volume" in data:
@@ -439,7 +425,6 @@ class Config:
             "songs": [asdict(song) for song in self.playlist.songs],
             "current_song_index": self.playlist.current_song_index
         }
-        data["metronome"] = asdict(self.metronome)
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
 
