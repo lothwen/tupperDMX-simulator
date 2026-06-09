@@ -21,7 +21,7 @@ from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
                 ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog,
-                SettingsDialog)
+                SettingsDialog, PlaylistController)
 
 
 def _base_dir() -> str:
@@ -41,7 +41,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.logger = get_logger("ui.main")
-        
+
+        # Playlist navigation + per-song load orchestration. Created early
+        # (only needs the window ref) so toolbar signal wiring can target it.
+        self.playlist_controller = PlaylistController(self)
+
         # Initialize managers
         self.dmx_manager = DMXManager(self.config)
         self.dmx_manager.dmx_data_received.connect(self.update_dmx)
@@ -75,16 +79,16 @@ class MainWindow(QMainWindow):
         # Load current song from playlist
         current_song = self.config.get_current_song()
         if current_song:
-            self._apply_song_config(current_song)
+            self.playlist_controller.apply_song_config(current_song)
         else:
             # Create empty MIDI track if no songs in playlist
             self.midi_manager.create_empty_track()
             self.timeline.refresh_from_manager()
             self.toolbar_manager.update_midi_file_display("")
             self.toolbar_manager.update_audio_file_display("")
-        
+
         # Update song counter in toolbar
-        self._update_song_counter()
+        self.playlist_controller.update_song_counter()
         
         # Set initial MIDI port
         initial_midi_port = self.toolbar_manager.get_selected_midi_port()
@@ -156,9 +160,9 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.midi_port_changed.connect(self.set_midi_port)
         self.toolbar_manager.metronome_mute_toggled.connect(self.on_toolbar_metronome_mute_toggled)
         # Playlist navigation signals
-        self.toolbar_manager.prev_song_requested.connect(self.prev_song)
-        self.toolbar_manager.next_song_requested.connect(self.next_song)
-        self.toolbar_manager.remove_song_requested.connect(self.remove_current_song)
+        self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
+        self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
+        self.toolbar_manager.remove_song_requested.connect(self.playlist_controller.remove_current_song)
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
@@ -292,136 +296,6 @@ class MainWindow(QMainWindow):
         else:
             self.dmx_toggle_button.setText("▶")  # ▶
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
-
-    def _apply_song_config(self, song):
-        """Apply song configuration to all components."""
-        from config import SongConfig
-        if not isinstance(song, SongConfig):
-            return
-        
-        # Apply audio file
-        if song.audio:
-            self.media_controller.set_files(song.audio)
-            self.timeline.set_files(song.audio)
-            self.toolbar_manager.update_audio_file_display(song.audio)
-            
-            # Apply saved audio offset
-            if song.offset != 0.0:
-                self.media_controller.set_audio_offset(song.offset)
-                # Use QTimer to ensure waveform is drawn before setting offset
-                QTimer.singleShot(100, lambda offset=song.offset: self.timeline.set_waveform_offset(offset))
-                self.logger.info(f"Applied saved audio offset: {song.offset:.3f}s")
-            else:
-                self.media_controller.set_audio_offset(0.0)
-                QTimer.singleShot(100, lambda: self.timeline.set_waveform_offset(0.0))
-        else:
-            self.toolbar_manager.update_audio_file_display("")
-        
-        # Load MIDI file via MidiManager
-        if song.midi:
-            if self.midi_manager.load_from_file(song.midi):
-                self.timeline.refresh_from_manager(detect_bpm=True)
-                self.toolbar_manager.set_export_midi_enabled(True)
-                self.toolbar_manager.update_midi_file_display(song.midi)
-            else:
-                self.logger.error(f"Failed to load MIDI file: {song.midi}")
-                self.midi_manager.create_empty_track()
-                self.timeline.refresh_from_manager()
-                self.toolbar_manager.update_midi_file_display("")
-        else:
-            # Create empty MIDI track if no MIDI file
-            self.midi_manager.create_empty_track()
-            self.timeline.refresh_from_manager()
-            self.toolbar_manager.update_midi_file_display("")
-        
-        self.update_window_title()
-    
-    def _update_song_counter(self):
-        """Update the song counter display in toolbar."""
-        total = len(self.config.playlist.songs)
-        current = self.config.playlist.current_song_index + 1 if total > 0 else 0
-        has_prev = current > 1
-        has_next = current < total
-        self.toolbar_manager.update_song_counter(current, total)
-        self.toolbar_manager.set_navigation_enabled(has_prev, has_next)
-    
-    def next_song(self):
-        """Switch to the next song in the playlist."""
-        total = len(self.config.playlist.songs)
-        current = self.config.playlist.current_song_index
-        if current < total - 1:
-            # Stop playback before switching
-            self.stop_playback()
-            
-            self.config.set_current_song_index(current + 1)
-            song = self.config.get_current_song()
-            if song:
-                self._apply_song_config(song)
-            self._update_song_counter()
-            self.save_config()
-            self.logger.info(f"Switched to song {current + 2}/{total}")
-    
-    def prev_song(self):
-        """Switch to the previous song in the playlist."""
-        current = self.config.playlist.current_song_index
-        if current > 0:
-            # Stop playback before switching
-            self.stop_playback()
-            
-            self.config.set_current_song_index(current - 1)
-            song = self.config.get_current_song()
-            if song:
-                self._apply_song_config(song)
-            self._update_song_counter()
-            self.save_config()
-            total = len(self.config.playlist.songs)
-            self.logger.info(f"Switched to song {current}/{total}")
-    
-    def remove_current_song(self):
-        """Remove the current song from the playlist."""
-        current = self.config.playlist.current_song_index
-        total = len(self.config.playlist.songs)
-        
-        if total == 0:
-            return
-        
-        # Get current song info for confirmation message
-        current_song = self.config.get_current_song()
-        song_name = os.path.basename(current_song.audio) if current_song and current_song.audio else "this song"
-        
-        # Show confirmation dialog
-        reply = QMessageBox.question(
-            self,
-            "Remove Song",
-            f"Are you sure you want to remove '{song_name}' from the playlist?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        
-        # Stop playback before removing
-        self.stop_playback()
-        
-        self.config.remove_song(current)
-        self.save_config()
-        
-        # Load the new current song (or show empty state)
-        song = self.config.get_current_song()
-        if song:
-            self._apply_song_config(song)
-        else:
-            # No songs left - show empty state
-            self.midi_manager.create_empty_track()
-            self.timeline.refresh_from_manager()
-            self.toolbar_manager.update_midi_file_display("")
-            self.toolbar_manager.update_audio_file_display("")
-            self.timeline.set_files(None)
-        
-        self._update_song_counter()
-        self.update_window_title()
-        self.logger.info(f"Removed song from playlist. {len(self.config.playlist.songs)} songs remaining.")
 
     def on_waveform_offset_changed(self, offset_sec):
         """Handle waveform offset changes from timeline."""
@@ -726,7 +600,7 @@ class MainWindow(QMainWindow):
                         self.config.set_current_song_index(existing_index)
                         song = self.config.get_current_song()
                         if song:
-                            self._apply_song_config(song)
+                            self.playlist_controller.apply_song_config(song)
                         self.logger.info(f"Switched to existing song at index {existing_index}")
                     else:
                         # Add new song to playlist
@@ -735,10 +609,10 @@ class MainWindow(QMainWindow):
                         self.config.set_current_song_index(new_index)
                         song = self.config.get_current_song()
                         if song:
-                            self._apply_song_config(song)
+                            self.playlist_controller.apply_song_config(song)
                         self.logger.info(f"Added new song to playlist at index {new_index}")
-                    
-                    self._update_song_counter()
+
+                    self.playlist_controller.update_song_counter()
                     self.save_config()
                     
                 elif file_type == 'midi':
