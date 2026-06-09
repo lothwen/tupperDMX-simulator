@@ -30,6 +30,7 @@ class ToolbarManager(QObject):
     next_song_requested = pyqtSignal()
     remove_song_requested = pyqtSignal()
     # Application menu signals
+    settings_requested = pyqtSignal()
     about_requested = pyqtSignal()
     
     def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
@@ -391,6 +392,8 @@ class ToolbarManager(QObject):
         button.setFont(font)
 
         menu = QMenu(button)
+        settings_action = menu.addAction("Settings…")
+        settings_action.triggered.connect(self.settings_requested.emit)
         about_action = menu.addAction("About TupperDMX")
         about_action.triggered.connect(self.about_requested.emit)
         button.setMenu(menu)

@@ -7,7 +7,7 @@ import numpy as np
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QComboBox, QFileDialog, QGraphicsView, QGraphicsScene,
-                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox, QTabWidget)
+                             QTextEdit, QSplitter, QLabel, QTableWidget, QTableWidgetItem, QSpinBox, QToolBar, QSizePolicy, QStyle, QMessageBox, QTabWidget, QDialog)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QAudioSink, QAudioFormat
 from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent, QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
@@ -20,7 +20,8 @@ from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
-                ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog)
+                ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog,
+                SettingsDialog)
 
 
 def _base_dir() -> str:
@@ -133,7 +134,7 @@ class MainWindow(QMainWindow):
         self.clip_library = ClipLibraryWidget(self.config)
         self.clip_library.preview_requested.connect(self._preview_clip)
 
-        self.audio_controller = AudioController(self.config.metronome, self.config.volume.metronome)
+        self.audio_controller = AudioController(self.config.volume.metronome)
         self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
         
@@ -159,6 +160,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.next_song_requested.connect(self.next_song)
         self.toolbar_manager.remove_song_requested.connect(self.remove_current_song)
         # Application menu signals
+        self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
     
     def setup_ui(self):
@@ -629,6 +631,27 @@ class MainWindow(QMainWindow):
         self.audio_controller.set_metronome_muted(muted)
         # Update timeline 'M' button to reflect mute state
         self.timeline.metronome_mute_button.setChecked(muted)
+
+    def show_settings_dialog(self):
+        """Open the preferences editor and apply any changes live."""
+        old_artnet = (self.config.artnet.ip, self.config.artnet.port,
+                      self.config.artnet.universe)
+
+        dialog = SettingsDialog(self.config, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        # Re-target Art-Net only if it changed. switch_source() no-ops when the
+        # source name is unchanged, so force a restart via start_worker() to
+        # pick up the new ip/port/universe (worker reads config at creation).
+        new_artnet = (self.config.artnet.ip, self.config.artnet.port,
+                      self.config.artnet.universe)
+        current_source = self.dmx_manager.get_current_source()
+        if new_artnet != old_artnet and current_source:
+            self.dmx_manager.start_worker(current_source)
+
+        self.save_config()
+        self.logger.info("Settings updated")
 
     def show_about_dialog(self):
         """Show the About dialog with build provenance."""
