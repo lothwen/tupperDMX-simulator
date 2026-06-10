@@ -2,6 +2,7 @@ import asyncio
 import threading
 import socket
 import struct
+import errno
 from typing import Optional
 from PyQt6.QtCore import pyqtSignal
 
@@ -130,8 +131,14 @@ class ArtNetWorker(DMXWorkerBase):
                 await asyncio.sleep(0.1)
                 
         except OSError as e:
-            self.logger.error(f"Failed to bind Art-Net port: {e}")
-            self._emit_error(f"Failed to bind port {self.config.artnet.port}: {e}")
+            port = self.config.artnet.port
+            if e.errno == errno.EADDRINUSE:
+                msg = (f"Art-Net port {port} is already in use — another "
+                       f"TupperDMX instance or Art-Net application may be running.")
+            else:
+                msg = f"Failed to bind Art-Net port {port}: {e}"
+            self.logger.error(msg)
+            self._emit_error(msg)
         except Exception as e:
             self.logger.error(f"Art-Net error: {e}")
             self._emit_error(f"Art-Net error: {e}")
