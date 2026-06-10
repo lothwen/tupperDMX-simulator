@@ -12,7 +12,12 @@ class ArtNetSender:
         self.port = port
         self.universe = universe
         self.sequence = 0
-        
+
+        # Send-failure de-spam: log once when sends start failing and once when
+        # they recover, instead of every frame (sent at tens of Hz).
+        self._send_failing = False
+        self._dropped_packets = 0
+
         # Create UDP socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -64,9 +69,23 @@ class ArtNetSender:
             
             # Send
             self.sock.sendto(packet, (self.ip, self.port))
-            
+
+            if self._send_failing:
+                self.logger.info(
+                    f"ArtNet send to {self.ip}:{self.port} recovered "
+                    f"({self._dropped_packets} packet(s) dropped while down)"
+                )
+                self._send_failing = False
+                self._dropped_packets = 0
+
         except Exception as e:
-            self.logger.error(f"Error sending ArtNet packet: {e}")
+            self._dropped_packets += 1
+            if not self._send_failing:
+                self._send_failing = True
+                self.logger.error(
+                    f"Error sending ArtNet packet to {self.ip}:{self.port}: {e} "
+                    f"(further send errors suppressed until recovery)"
+                )
 
     def close(self):
         """Close the socket."""
