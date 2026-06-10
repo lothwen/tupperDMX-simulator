@@ -15,8 +15,7 @@ Persistence happens on mouseRelease via the *_committed signals;
 mid-drag is purely visual.
 """
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu)
@@ -24,6 +23,11 @@ from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter, QPolygo
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
 
 from .base import BaseTrack
+from .clip_geometry import (
+    ClipBounds, Occupant,
+    MODE_IDLE, MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT, MODE_GROUP_MOVE,
+    zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
+)
 from tupperlogger import get_logger
 
 
@@ -77,7 +81,8 @@ def build_render_units(events):
 RESIZE_ZONE_PX = 8
 # Snap radius — if a dragged edge ends within this many screen-pixels of a
 # neighboring clip edge, snap to it. Converted to scene-space at the current
-# zoom in _snap so the snap zone stays a constant on-screen distance.
+# zoom in the drag-preview methods so the snap zone stays a constant
+# on-screen distance.
 SNAP_PX = 6
 # Minimum visible width for a clip's hit area (so sub-pixel clips remain
 # clickable until the user zooms in).
@@ -219,28 +224,6 @@ class FadeHandle(QGraphicsObject):
         event.accept()
 
 
-@dataclass
-class ClipBounds:
-    """Pixel-space bounds and snap targets for a single clip's drag gestures.
-
-    All values are in scene pixel coordinates (i.e. `time_seconds *
-    PIXELS_PER_SECOND`). The fields encode the policy of "no overlap",
-    "BLACKOUTs absorb moves", and "preserve target width during MOVE".
-    """
-    # MOVE mode: list of (min_x, max_x) intervals where the clip's LEFT edge
-    # may land. Multiple intervals enable "jumping" over other clips when a
-    # large enough slot exists on the far side.
-    move_intervals: List[Tuple[float, float]] = field(default_factory=list)
-    # RESIZE_LEFT mode: bounds on the clip's LEFT edge (start time).
-    resize_left_min_x: float = 0.0
-    resize_left_max_x: float = 0.0
-    # RESIZE_RIGHT mode: bounds on the clip's RIGHT edge (end time).
-    resize_right_min_x: float = 0.0
-    resize_right_max_x: float = 0.0
-    # Snap targets — neighbor edges to which a dragged edge will snap.
-    snap_xs: List[float] = field(default_factory=list)
-
-
 class DraggableMidiEvent(QGraphicsObject):
     """A MIDI clip box: movable, resizable, snap-aware. No overlap."""
 
@@ -255,12 +238,13 @@ class DraggableMidiEvent(QGraphicsObject):
     add_at_position_requested = pyqtSignal(float)   # time_seconds
     group_move_committed = pyqtSignal(float)        # delta_seconds (whole selection)
 
-    # Drag-mode enum (string-based for readability).
-    MODE_IDLE = "idle"
-    MODE_MOVE = "move"
-    MODE_RESIZE_LEFT = "resize_left"
-    MODE_RESIZE_RIGHT = "resize_right"
-    MODE_GROUP_MOVE = "group_move"  # rigid move of the whole multi-selection
+    # Drag-mode enum — defined in clip_geometry; mirrored as class attributes
+    # so the many existing self.MODE_* references keep working.
+    MODE_IDLE = MODE_IDLE
+    MODE_MOVE = MODE_MOVE
+    MODE_RESIZE_LEFT = MODE_RESIZE_LEFT
+    MODE_RESIZE_RIGHT = MODE_RESIZE_RIGHT
+    MODE_GROUP_MOVE = MODE_GROUP_MOVE
 
     def __init__(self, x, y, width, height, event_id: str, event_data: dict,
                  bounds: ClipBounds, is_blackout: bool = False,
@@ -486,24 +470,14 @@ class DraggableMidiEvent(QGraphicsObject):
         return 1.0
 
     def _zone_at(self, local_x: float) -> str:
-        """Classify a local x position into a drag zone."""
-        # While part of a multi-selection the whole clip is a MOVE handle —
-        # edge-resize is disabled (no resizing of multiple clips at once).
-        if self._multi_selected:
-            return self.MODE_MOVE
-        w = self.rect.width()
-        # RESIZE_ZONE_PX is a screen-space width; convert to scene-space at the
-        # current zoom so the resize edges stay ~8px on-screen and don't
-        # swallow the whole clip (and its MOVE zone) when zoomed in.
-        resize_zone = RESIZE_ZONE_PX / self._zoom_x()
-        if w <= 2 * resize_zone:
-            # Narrow clip: no MOVE zone; split half/half between resize zones.
-            return self.MODE_RESIZE_LEFT if local_x < w / 2 else self.MODE_RESIZE_RIGHT
-        if local_x <= resize_zone:
-            return self.MODE_RESIZE_LEFT
-        if local_x >= w - resize_zone:
-            return self.MODE_RESIZE_RIGHT
-        return self.MODE_MOVE
+        """Classify a local x position into a drag zone.
+
+        RESIZE_ZONE_PX is a screen-space width; convert it to scene-space at the
+        current zoom so the resize edges stay ~8px on-screen and don't swallow
+        the whole clip (and its MOVE zone) when zoomed in.
+        """
+        return zone_at(local_x, self.rect.width(),
+                       RESIZE_ZONE_PX / self._zoom_x(), self._multi_selected)
 
     def _set_view_cursor(self, cursor_shape):
         if self.scene() and self.scene().views():
@@ -715,12 +689,11 @@ class DraggableMidiEvent(QGraphicsObject):
     # Each preview computes the proposed new position/width, clamps to bounds,
     # snaps to nearby targets, and updates the visual state. No data mutation.
 
-    def _nearest_beat_x(self, x: float) -> Optional[float]:
-        """Scene-x of the beat grid line nearest to `x`.
+    def _beat_px(self) -> Optional[float]:
+        """Scene-px width of one beat at the current bpm/zoom, or None.
 
         Beats are uniform from t=0 at 60/bpm spacing — the same grid the
-        RulerTrack draws. Computed analytically so we never enumerate every
-        beat in the song. Returns None when the timeline/bpm is unavailable.
+        RulerTrack draws. Returns None when the timeline/bpm is unavailable.
         """
         if self.timeline is None:
             return None
@@ -729,62 +702,28 @@ class DraggableMidiEvent(QGraphicsObject):
         if bpm <= 0 or pps <= 0:
             return None
         beat_px = (60.0 / bpm) * pps
-        if beat_px <= 0:
-            return None
-        return round(x / beat_px) * beat_px
-
-    def _snap(self, x: float) -> float:
-        # SNAP_PX is a screen-space radius. Convert it to scene-space by
-        # dividing by the view's horizontal zoom, so the snap zone stays a
-        # constant on-screen distance regardless of zoom level.
-        snap_scene = SNAP_PX / self._zoom_x()
-
-        # Snap targets: neighbor clip edges plus the nearest beat grid line,
-        # so a dragged edge lands on the same beats the ruler draws.
-        candidates = list(self.bounds.snap_xs)
-        beat_x = self._nearest_beat_x(x)
-        if beat_x is not None:
-            candidates.append(beat_x)
-
-        nearest = None
-        for tx in candidates:
-            d = abs(tx - x)
-            if d <= snap_scene and (nearest is None or d < abs(nearest - x)):
-                nearest = tx
-        return nearest if nearest is not None else x
+        return beat_px if beat_px > 0 else None
 
     def _apply_move_preview(self, delta_x: float):
+        # SNAP_PX is a screen-space radius; convert to scene-space at the
+        # current zoom so the snap zone stays a constant on-screen distance.
         proposed = self._press_self_pos.x() + delta_x
-        # Find the clamped position closest to `proposed` across all valid
-        # MOVE intervals. Multiple intervals enable jumping over a neighbor
-        # clip when a slot on the far side can fit this clip.
-        best_clamped = None
-        best_interval = None
-        best_distance = float('inf')
-        for lo, hi in self.bounds.move_intervals:
-            clamped = max(lo, min(proposed, hi))
-            d = abs(clamped - proposed)
-            if d < best_distance:
-                best_distance = d
-                best_clamped = clamped
-                best_interval = (lo, hi)
-        if best_clamped is None:
+        new_x = resolve_move_x(proposed, self.bounds.move_intervals,
+                               self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
+                               self._beat_px())
+        if new_x is None:
             return  # no slot fits; nothing to preview
-        # Snap, then re-clamp into the chosen interval so a snap target
-        # outside this slot's valid range can't push us into overlap.
-        snapped = self._snap(best_clamped)
-        lo, hi = best_interval
-        snapped = max(lo, min(snapped, hi))
-        self.setPos(snapped, self.pos().y())
-        self._reposition_text(snapped)
+        self.setPos(new_x, self.pos().y())
+        self._reposition_text(new_x)
 
     def _apply_resize_left_preview(self, delta_x: float):
         # The right edge is fixed; left edge moves.
         original_right = self._press_self_pos.x() + self._press_width
-        new_x = self._press_self_pos.x() + delta_x
-        new_x = max(self.bounds.resize_left_min_x,
-                    min(new_x, self.bounds.resize_left_max_x))
-        new_x = self._snap(new_x)
+        new_x = resolve_resize_x(self._press_self_pos.x() + delta_x,
+                                 self.bounds.resize_left_min_x,
+                                 self.bounds.resize_left_max_x,
+                                 self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
+                                 self._beat_px())
         new_width = max(MIN_HIT_WIDTH_PX, original_right - new_x)
         self.setPos(new_x, self.pos().y())
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
@@ -795,10 +734,11 @@ class DraggableMidiEvent(QGraphicsObject):
     def _apply_resize_right_preview(self, delta_x: float):
         # The left edge is fixed; right edge moves.
         original_left = self._press_self_pos.x()
-        new_right = original_left + self._press_width + delta_x
-        new_right = max(self.bounds.resize_right_min_x,
-                        min(new_right, self.bounds.resize_right_max_x))
-        new_right = self._snap(new_right)
+        new_right = resolve_resize_x(original_left + self._press_width + delta_x,
+                                     self.bounds.resize_right_min_x,
+                                     self.bounds.resize_right_max_x,
+                                     self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
+                                     self._beat_px())
         new_width = max(MIN_HIT_WIDTH_PX, new_right - original_left)
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
         self._refresh_text_truncation(new_width)
@@ -974,88 +914,16 @@ class MidiEventsTrack(BaseTrack):
         """Return pixel-space bounds for the unit at index `idx`.
 
         Operates on render units (single events or scene groups) so that a
-        7-event scene clip moves/resizes as a single occupant.
+        7-event scene clip moves/resizes as a single occupant. The geometry
+        itself lives in clip_geometry.compute_bounds; here we just project the
+        render units onto time-ordered Occupants and supply pps + MIN_DURATION.
         """
-        pps = self.timeline_manager.PIXELS_PER_SECOND
         from midi.manager import MIN_EVENT_DURATION
-
-        cur = units[idx]
-        cur_time = cur["time"]
-        # cur_right is the unit's visual right edge — used by RESIZE_RIGHT
-        # bounds and snap targets. cur_width_t is the *collision* width used
-        # by MOVE bounds: when this is the last unit on the track the visual
-        # extent stretches to song_end, but we treat the clip as point-sized
-        # so it can be moved freely (matches manager.move_event behavior).
-        if idx + 1 < len(units):
-            cur_right = units[idx + 1]["time"]
-            cur_width_t = max(MIN_EVENT_DURATION, cur_right - cur_time)
-        else:
-            cur_right = song_end_time
-            cur_width_t = MIN_EVENT_DURATION
-
-        # MOVE bounds: free-space slots wide enough to fit the current unit.
-        obstacles: List[Tuple[float, float]] = []
-        for j, u in enumerate(units):
-            if j == idx or self._is_blackout_unit(u):
-                continue
-            j_end = (units[j + 1]["time"]
-                     if j + 1 < len(units) else song_end_time)
-            obstacles.append((u["time"], j_end))
-        obstacles.sort()
-
-        slots: List[Tuple[float, float]] = []
-        cursor = 0.0
-        for ostart, oend in obstacles:
-            if ostart > cursor:
-                slots.append((cursor, ostart))
-            cursor = max(cursor, oend)
-        if cursor < song_end_time:
-            slots.append((cursor, song_end_time))
-
-        move_intervals: List[Tuple[float, float]] = []
-        for slot_start, slot_end in slots:
-            if slot_end - slot_start + 1e-6 < cur_width_t:
-                continue
-            move_intervals.append((slot_start * pps,
-                                   (slot_end - cur_width_t) * pps))
-
-        # RESIZE_LEFT bounds — the unit's start time can move toward the
-        # closest non-BLACKOUT predecessor.
-        resize_left_min_t = 0.0
-        for j in range(idx - 1, -1, -1):
-            if not self._is_blackout_unit(units[j]):
-                resize_left_min_t = units[j]["time"] + MIN_EVENT_DURATION
-                break
-        resize_left_max_t = cur_right - MIN_EVENT_DURATION
-
-        # RESIZE_RIGHT bounds — the unit's right edge can move toward the
-        # closest non-BLACKOUT successor.
-        resize_right_min_t = cur_time + MIN_EVENT_DURATION
-        resize_right_max_t = song_end_time
-        for j in range(idx + 1, len(units)):
-            if not self._is_blackout_unit(units[j]):
-                resize_right_max_t = units[j]["time"]
-                break
-
-        # Snap targets: every other unit's start & end edges.
-        snap_xs: List[float] = []
-        for j, u in enumerate(units):
-            if j == idx:
-                continue
-            snap_xs.append(u["time"] * pps)
-            j_right = (units[j + 1]["time"]
-                       if j + 1 < len(units) else song_end_time)
-            snap_xs.append(j_right * pps)
-        snap_xs.extend([0.0, song_end_time * pps])
-
-        return ClipBounds(
-            move_intervals=move_intervals,
-            resize_left_min_x=resize_left_min_t * pps,
-            resize_left_max_x=resize_left_max_t * pps,
-            resize_right_min_x=resize_right_min_t * pps,
-            resize_right_max_x=resize_right_max_t * pps,
-            snap_xs=snap_xs,
-        )
+        pps = self.timeline_manager.PIXELS_PER_SECOND
+        occupants = [Occupant(u["time"], self._is_blackout_unit(u))
+                     for u in units]
+        return compute_bounds(occupants, idx, song_end_time, pps,
+                              MIN_EVENT_DURATION)
 
     def _scene_clip_color(self, members: List[dict]) -> QColor:
         """Derive a clip color from a scene group's RGB channel values.
