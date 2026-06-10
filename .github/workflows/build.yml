@@ -2,16 +2,44 @@ name: Build Cross-Platform Executables
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, master, develop ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 permissions:
   contents: write
   
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Set up Python
+      run: uv python install 3.13
+
+    - name: Install headless Qt system libraries
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+    - name: Install dependencies (incl. dev group)
+      run: uv sync
+
+    - name: Run tests (headless Qt)
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: uv run pytest -q
+
   build:
+    needs: test
     strategy:
       matrix:
         # os: [ubuntu-latest, windows-latest, macos-latest]

@@ -17,6 +17,7 @@ Run with:
 import sys
 import os
 import gc
+import time
 import random
 from dataclasses import dataclass
 
@@ -308,6 +309,25 @@ class CrashReproWindow(QMainWindow):
 class SyncRefreshCrashWindow(CrashReproWindow):
     """Uses synchronous refresh_from_manager() — the original crash path."""
     SYNC_REFRESH = True
+
+
+def test_no_crash_under_random_drag_stress(qapp):
+    """Deferred-refresh path survives 500 random drag/edit ops (no SIGSEGV).
+
+    Drives the real QTimer-based stress loop via processEvents (rather than
+    app.exec) so it cooperates with pytest's process-shared QApplication. Only
+    the deferred-refresh window is exercised — the --sync window reproduces the
+    original crash and is for manual runs via main().
+    """
+    window = CrashReproWindow()
+    window.show()
+    deadline = time.monotonic() + 120
+    while window.ops_done <= window.max_ops and time.monotonic() < deadline:
+        qapp.processEvents()
+    try:
+        assert window.ops_done > window.max_ops, "stress loop did not finish in time"
+    finally:
+        window.close()
 
 
 def main():
