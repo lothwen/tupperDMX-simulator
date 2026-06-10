@@ -20,8 +20,12 @@ uv lock --upgrade        # refresh lockfile
 
 Build/distribution commands and CI details live in `BUILD.md`.
 
-Headless characterization tests in `tests/` are standalone scripts (no pytest),
-e.g. `uv run python tests/test_clip_ops.py`; each prints `ALL TESTS PASSED`.
+Headless characterization tests live in `tests/`. Run the whole suite with
+`uv run pytest` (offscreen Qt + a shared QApplication are set up in
+`tests/conftest.py`; CI runs this too). Each file is also still runnable
+standalone via its `main()` — `uv run python tests/test_clip_ops.py` prints
+`ALL TESTS PASSED` — which is handy for the Qt GUI repro (`test_crash_repro.py`
+supports a `--sync` flag that way).
 
 ### Key Dependencies
 PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed on pause/resume),

@@ -31,3 +31,14 @@ name = "TupperDMX-Simulator"
 entry-points = ["main.py"]
 console = false
 icon = "assets/icons/metronome_icon.png"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+# Put the project root on sys.path so tests `import config` / `midi...`
+# without a per-file sys.path hack.
+pythonpath = ["."]
+testpaths = ["tests"]

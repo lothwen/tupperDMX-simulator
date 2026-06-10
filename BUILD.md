@@ -136,6 +136,8 @@ icon = "path/to/icon.png"
 ## CI/CD Integration
 
 The project includes GitHub Actions workflow (`.github/workflows/build.yml`) that:
+- Runs the test suite (`uv run pytest`, headless Qt) on Ubuntu; the build
+  jobs depend on it, so a red test blocks the release
 - Builds for all platforms simultaneously
 - Creates installers automatically
 - Uploads artifacts for download
