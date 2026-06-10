@@ -9,7 +9,10 @@ from .base import DMXWorkerBase, DMXConnectionStatus
 
 class USBDMXWorker(DMXWorkerBase):
     """Worker for receiving DMX data via USB FTDI interface."""
-    
+
+    # Auto-reconnect backoff schedule in seconds; the last value is the cap.
+    _RECONNECT_DELAYS = (0.5, 1.0, 2.0, 5.0)
+
     def __init__(self, device_id: str):
         super().__init__(f"USB DMX ({device_id})")
         self.device_id = device_id
@@ -23,21 +26,42 @@ class USBDMXWorker(DMXWorkerBase):
         self.read_timeout = 0.1  # 100ms timeout for reads
 
     def run(self) -> None:
-        """Start the USB DMX worker."""
+        """Run the worker, auto-reconnecting to the device until stopped.
+
+        A mid-show unplug (or a device that isn't ready yet at startup) no
+        longer kills the worker: the handle is closed and we retry with a
+        capped backoff until the device returns or stop() is called. Reconnect
+        attempts are logged and reflected in the connection status, but
+        deliberately do NOT raise the modal error dialog — that would flood the
+        UI on every retry, which is the opposite of what you want mid-show.
+        """
         self._is_running = True
-        self._set_status(DMXConnectionStatus.CONNECTING)
-        
-        try:
-            self._connect_device()
-            self._read_loop()
-        except Exception as e:
-            self.logger.error(f"USB DMX error: {e}")
-            self._emit_error(f"USB DMX error: {e}")
-        finally:
-            self._disconnect_device()
-            self._is_running = False
-            self._set_status(DMXConnectionStatus.DISCONNECTED)
-            self.logger.info("USB DMX worker stopped")
+        attempt = 0
+        while not self.stop_event.is_set():
+            self._set_status(DMXConnectionStatus.CONNECTING)
+            try:
+                self._connect_device()
+                attempt = 0  # reset backoff once we're connected
+                self._read_loop()
+            except Exception as e:
+                self.logger.warning(f"USB DMX connection lost: {e}")
+            finally:
+                self._disconnect_device()
+
+            if self.stop_event.is_set():
+                break
+
+            delay = self._RECONNECT_DELAYS[min(attempt, len(self._RECONNECT_DELAYS) - 1)]
+            attempt += 1
+            self.logger.info(
+                f"USB DMX reconnecting to {self.device_id} in {delay:.1f}s "
+                f"(attempt {attempt})"
+            )
+            self.stop_event.wait(delay)
+
+        self._is_running = False
+        self._set_status(DMXConnectionStatus.DISCONNECTED)
+        self.logger.info("USB DMX worker stopped")
 
     def _connect_device(self) -> None:
         """Connect to the USB DMX device."""
