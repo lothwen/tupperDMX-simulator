@@ -55,6 +55,7 @@ _generate_buildinfo()
 data_files = [
     ("assets", "assets"),
     ("config.json", "."),
+    ("fixtures", "fixtures"),
     ("software_controller/dmx_config.json", "software_controller"),
 ]
 

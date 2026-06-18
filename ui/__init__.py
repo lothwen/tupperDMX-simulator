@@ -8,6 +8,7 @@ from .clip_library import ClipLibraryWidget, CLIP_MIME_TYPE
 from .about_dialog import AboutDialog
 from .settings_dialog import SettingsDialog
 from .playlist_controller import PlaylistController
+from .fixture_designer import FixtureDesignerPanel
 
 __all__ = [
     'MediaController',
@@ -22,4 +23,5 @@ __all__ = [
     'AboutDialog',
     'SettingsDialog',
     'PlaylistController',
+    'FixtureDesignerPanel',
 ]
