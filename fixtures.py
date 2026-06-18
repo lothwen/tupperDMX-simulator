@@ -2,8 +2,42 @@ import glob
 import os
 import sys
 from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem
+from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem, QGraphicsItem
 from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient
+
+from fixture_library import (
+    ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
+    ROLE_WHITE_WARM, ROLE_WHITE_COOL,
+)
+
+
+class DesignableFixture:
+    """Mixin adding scenario-designer behaviour to a fixture render object:
+    optional move/select (gated by design mode) and a position write-back on
+    drag-release. Mixed in BEFORE QGraphicsObject so super() reaches Qt.
+
+    Persistence follows the timeline's convention: position changes are visual
+    during the drag and only committed on mouseRelease (via the move callback).
+    """
+
+    def init_design(self):
+        # Called from each fixture __init__ after the Qt object is constructed.
+        self._instance = None          # config.FixtureInstance back-reference
+        self._bar_index = None         # set for the bars of a multi-bar ledbar
+        self._move_callback = None     # callable(render_obj) invoked on release
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
+    def set_design_mode(self, enabled: bool):
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, enabled)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, enabled)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if (self._move_callback is not None
+                and self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable):
+            self._move_callback(self)
 
 
 class GlowingEllipse(QGraphicsEllipseItem):
@@ -88,7 +122,7 @@ class GlowingEllipse(QGraphicsEllipseItem):
             
 
 
-class LedBar(QGraphicsObject):
+class LedBar(DesignableFixture, QGraphicsObject):
     dmx_channel_count = 7
     NUM_PIXELS = 40
     WIDTH = 15
@@ -119,6 +153,8 @@ class LedBar(QGraphicsObject):
         dse.setBlurRadius(100)
         dse.setOffset(0)
         self.setGraphicsEffect(dse)
+
+        self.init_design()
 
     def boundingRect(self):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
@@ -220,7 +256,7 @@ class LedBar(QGraphicsObject):
             avg_b = total_b / self.NUM_PIXELS
             self.graphicsEffect().setColor(QColor(int(avg_r), int(avg_g), int(avg_b), 255))
 
-class Blinder(QGraphicsObject):
+class Blinder(DesignableFixture, QGraphicsObject):
     dmx_channel_count = 8
     WIDTH = 40
     HEIGHT = 80
@@ -249,10 +285,12 @@ class Blinder(QGraphicsObject):
             bulb_x, 5, self.BULB_SIZE, self.BULB_SIZE, self
         )
         
-        # Bottom bulb (LED 2)  
+        # Bottom bulb (LED 2)
         self.bulb2 = GlowingEllipse(
             bulb_x, self.HEIGHT - self.BULB_SIZE - 5, self.BULB_SIZE, self.BULB_SIZE, self
         )
+
+        self.init_design()
 
     def boundingRect(self):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
@@ -316,4 +354,79 @@ class Blinder(QGraphicsObject):
         bulb2_color = QColor(int(r2), int(g2), int(b2))
         self.bulb2.setGlowColor(bulb2_color, brightness_factor)
 
-        
+
+class GenericFixture(DesignableFixture, QGraphicsObject):
+    """Data-driven renderer for library fixture types without a bespoke class.
+
+    Draws a single glowing cell whose colour/intensity is derived from the
+    fixture's role-tagged channels (brightness + RGB and/or warm/cool white).
+    ``role_index`` maps a ROLE_* int to that role's position within the DMX
+    slice; ``dmx_channel_count`` is an instance attribute since it varies by type.
+    """
+    WIDTH = 40
+    HEIGHT = 40
+    BULB_SIZE = 34
+
+    # Warm/cool white tints, matching the Blinder's palette.
+    _WARM = (255, 200, 100)
+    _COOL = (200, 220, 255)
+
+    def __init__(self, x, y, channel_count, role_index):
+        super().__init__()
+        self.setPos(x, y)
+        self.dmx_channel_count = channel_count
+        self._role_index = role_index
+
+        self.housing = QGraphicsRectItem(0, 0, self.WIDTH, self.HEIGHT, self)
+        self.housing.setBrush(QColor(20, 20, 20))
+
+        margin = (self.WIDTH - self.BULB_SIZE) / 2
+        self.bulb = GlowingEllipse(margin, margin, self.BULB_SIZE, self.BULB_SIZE, self)
+
+        self.init_design()
+
+    def boundingRect(self):
+        return QRectF(0, 0, self.WIDTH, self.HEIGHT)
+
+    def paint(self, painter, option, widget):
+        # Child items (housing + bulb) handle their own painting.
+        pass
+
+    def _channel(self, data, role, default=0):
+        idx = self._role_index.get(role)
+        if idx is None or idx >= len(data):
+            return default
+        return data[idx]
+
+    def update_dmx(self, data):
+        if len(data) < self.dmx_channel_count:
+            return
+
+        # Brightness defaults to full when the fixture has no brightness channel.
+        has_brightness = ROLE_BRIGHTNESS in self._role_index
+        brightness = self._channel(data, ROLE_BRIGHTNESS, 255) if has_brightness else 255
+
+        r = self._channel(data, ROLE_RED)
+        g = self._channel(data, ROLE_GREEN)
+        b = self._channel(data, ROLE_BLUE)
+
+        warm = self._channel(data, ROLE_WHITE_WARM)
+        cool = self._channel(data, ROLE_WHITE_COOL)
+        r += self._WARM[0] * warm / 255 + self._COOL[0] * cool / 255
+        g += self._WARM[1] * warm / 255 + self._COOL[1] * cool / 255
+        b += self._WARM[2] * warm / 255 + self._COOL[2] * cool / 255
+
+        # A pure dimmer (no colour channels at all) glows white.
+        has_color = any(role in self._role_index for role in
+                        (ROLE_RED, ROLE_GREEN, ROLE_BLUE, ROLE_WHITE_WARM, ROLE_WHITE_COOL))
+        if not has_color:
+            r = g = b = 255
+
+        scale = brightness / 255.0
+        color = QColor(
+            min(255, int(r * scale)),
+            min(255, int(g * scale)),
+            min(255, int(b * scale)),
+        )
+        self.bulb.setGlowColor(color, scale)
+

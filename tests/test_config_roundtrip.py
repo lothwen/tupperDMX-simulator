@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import config
-from config import Config
+from config import Config, FixtureInstance
 
 
 SHIPPED = {
@@ -181,6 +181,35 @@ def test_fixtures_parse_with_type():
                 "blinder uses 8 channels from dmx_start")
 
 
+def test_patch_persistence_roundtrip():
+    print("test_patch_persistence_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        _assert(len(cfg.fixtures) == 2, "patch seeded from shipped config.json")
+
+        # Edit the patch the way the scenario designer does: mutate + mark dirty.
+        cfg.fixtures.append(FixtureInstance(type="blinder", dmx_start=65, x=5, y=6))
+        cfg.mark_patch_dirty()
+        cfg.save()
+
+        data = json.loads(prefs.read_text())
+        _assert("fixtures" in data, "edited patch is written to userprefs.json")
+        _assert(len(data["fixtures"]) == 3, "all fixtures serialized")
+
+        cfg2 = Config.load()
+        _assert(len(cfg2.fixtures) == 3, "patch round-trips from userprefs (overrides seed)")
+        _assert(cfg2.fixtures[2].type == "blinder" and cfg2.fixtures[2].dmx_start == 65,
+                "added fixture round-tripped")
+
+        # Once prefs owns the patch, a later plain save keeps persisting it.
+        cfg2.save()
+        data2 = json.loads(prefs.read_text())
+        _assert(len(data2["fixtures"]) == 3, "userprefs keeps owning the patch")
+
+
 def test_unknown_fixture_type_skipped():
     print("test_unknown_fixture_type_skipped")
     with tempfile.TemporaryDirectory() as tmp:
@@ -220,6 +249,7 @@ def main():
     test_validation_clamps_out_of_range()
     test_corrupted_userprefs_falls_back()
     test_fixtures_parse_with_type()
+    test_patch_persistence_roundtrip()
     test_unknown_fixture_type_skipped()
     test_ledbar_channel_notes_autoregister()
     print("\nALL TESTS PASSED")

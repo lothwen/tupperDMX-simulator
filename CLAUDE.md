@@ -53,8 +53,20 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
   that share one `MidiDocument` (state + `reconcile_blackouts`). `MidiWorker`
   does timeline-synced threaded output; `"Software emulated"` routes `note_on`
   to `DMXController.handle_note_on()`.
-- **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering.
-  Updates fixture color/intensity from live DMX data.
+- **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering +
+  scenario designer. Updates fixture color/intensity from live DMX data;
+  dispatches render per type (bespoke `LedBar`/`Blinder`, else the data-driven
+  `fixtures.GenericFixture`). `set_design_mode()` makes fixtures movable/
+  selectable; `add_fixture`/`remove_selected`/drag-to-move mutate `config.fixtures`
+  and emit `fixture_added/moved/removed/selected`. The floating
+  `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
+- **`fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
+  (channels with semantic role + flags, render hint) loaded from `fixtures/*.json`
+  (shipped `fixtures/` + writable `userprefs_dir()/fixtures/`, user overrides by
+  name; memoized). `software_controller.build_fixture_types()` seeds the two
+  built-in singletons (ledbar/blinder — kept by identity for note routing) then
+  merges library defs; `config.fixture_channel_count()`/`known_fixture_types()`
+  derive counts from it (no more hardcoded `FIXTURE_CHANNEL_COUNTS`).
 - **`software_controller/`**: Pure-Python DMX controller (no hardware needed).
   `DMXController` manages a 96-channel universe (LED bar 1–7, Blinder1 8–15,
   Blinder2 16–23) and reacts to MIDI pitches (channel control 1–11, scene select
@@ -65,15 +77,21 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
 ### Configuration (`config.py`)
 
 Storage splits across two files:
-- **`config.json`** (shipped, read-only): `fixtures` + `midi_note_map`, bundled
-  via PyInstaller, resolved at runtime by `shipped_config_path()` (`_MEIPASS`).
+- **`config.json`** (shipped, read-only): `fixtures` (a *seed* patch) +
+  `midi_note_map`, bundled via PyInstaller, resolved at runtime by
+  `shipped_config_path()` (`_MEIPASS`).
 - **`userprefs.json`** (user-writable): everything else (`window`, `artnet`,
   `playlist`, `metronome`, `volume`, `logging`, `last_dmx_source`,
   `last_midi_port`), resolved by `userprefs_path()` via `platformdirs`
   (e.g. `~/.config/tupperDMX/` on Linux; macOS/Windows app-data equivalents).
 
 `Config.load()` reads both; `Config.save()` writes only `userprefs.json`
-(created eagerly with defaults on first launch).
+(created eagerly with defaults on first launch). The fixture **patch** is seeded
+read-only from `config.json`, but once the scenario designer edits it
+(`mark_patch_dirty()`) — or `userprefs.json` already carries a `fixtures` key —
+`save()` persists `fixtures` into `userprefs.json`, which then *overrides* the
+shipped seed on the next load. A default install that never edits the patch keeps
+reading the shipped seed (so shipped-config updates still reach it).
 
 ### UI Architecture
 
@@ -146,8 +164,11 @@ interpolates present↔future DMX to avoid blackout artifacts.
 ## File Organization
 
 - `ui/` — `media_controller.py`, `audio_controller.py`, `stage_controller.py`,
-  `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`, `error_dialogs.py`,
-  `about_dialog.py`.
+  `fixture_designer.py` (scenario-designer panel + add dialog), `dmx_display.py`,
+  `clip_library.py`, `toolbar_manager.py`, `error_dialogs.py`, `about_dialog.py`.
+- `fixture_library.py` (repo root) — data-driven fixture-type library
+  (`FixtureDef`, JSON loaders, role/flag maps). `fixtures/` (repo root) — shipped
+  fixture-type definitions (`*.json`).
 - `dmx/` — `manager.py` (factory + hot-swap), `artnet_worker.py` (asyncio UDP,
   auto-starts software controller on localhost), `usb_worker.py` (FTDI/serial),
   `base.py`, `factory.py`.
@@ -168,7 +189,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
 - `tests/` — headless characterization tests (standalone scripts; see above).
 - `tupperlogger/` — custom logger with file rotation.
 - `config.py` — dataclass config, two-file split (see Configuration).
-- `fixtures.py` — DMX fixture defs + channel mapping.
+- `fixtures.py` — Qt render objects: bespoke `LedBar`/`Blinder`, the data-driven
+  `GenericFixture`, and the `DesignableFixture` mixin (design-mode move/select +
+  drag-release position write-back).
 
 ## Timeline Architecture Notes
 

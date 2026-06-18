@@ -21,7 +21,7 @@ from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
                 ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog,
-                SettingsDialog, PlaylistController)
+                SettingsDialog, PlaylistController, FixtureDesignerPanel)
 
 
 def _base_dir() -> str:
@@ -143,8 +143,10 @@ class MainWindow(QMainWindow):
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
         
         self.stage_controller = StageController(self.config)
-        
-        self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager, 
+        # Lazily created when the user first enters stage design mode.
+        self.fixture_designer = None
+
+        self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager,
                                             play_icon, pause_icon, stop_icon)
         self._connect_toolbar_signals()
 
@@ -166,6 +168,7 @@ class MainWindow(QMainWindow):
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
+        self.toolbar_manager.design_stage_toggled.connect(self.on_design_stage_toggled)
     
     def setup_ui(self):
         """Setup the main UI layout."""
@@ -531,6 +534,24 @@ class MainWindow(QMainWindow):
         """Show the About dialog with build provenance."""
         dialog = AboutDialog(self)
         dialog.exec()
+
+    def on_design_stage_toggled(self, enabled):
+        """Enter/leave the stage scenario designer."""
+        self.stage_controller.set_design_mode(enabled)
+        if enabled:
+            if self.fixture_designer is None:
+                self.fixture_designer = FixtureDesignerPanel(
+                    self.stage_controller, self._on_patch_changed, self)
+            self.fixture_designer.show()
+            self.fixture_designer.raise_()
+        elif self.fixture_designer is not None:
+            self.fixture_designer.hide()
+
+    def _on_patch_changed(self):
+        """Persist a fixture-patch edit. The software DMX engine picks up a new
+        patch on the next DMX-source (re)connect; the stage render is immediate."""
+        self.config.mark_patch_dirty()
+        self.save_config()
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""
