@@ -28,7 +28,10 @@ from config import Config
 
 
 SHIPPED = {
-    "fixtures": {"led_bar_controllers": [], "blinders": []},
+    "fixtures": [
+        {"type": "ledbar", "dmx_start": 1, "bars": [{"x": 10, "y": 20}]},
+        {"type": "blinder", "dmx_start": 33, "x": 100, "y": 200, "multiply_factor": 2.0},
+    ],
     "midi_note_map": {
         "26": {"part": "Blinder Flash", "color": "#ffffff", "fixture": "blinder"},
     },
@@ -154,6 +157,46 @@ def test_corrupted_userprefs_falls_back():
         _assert(cfg.volume.audio == 0.5, "corrupted prefs -> default volume")
 
 
+def test_fixtures_parse_with_type():
+    print("test_fixtures_parse_with_type")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        cfg = Config.load()
+        _assert(len(cfg.fixtures) == 2, "two fixtures parsed from the flat list")
+        led, blinder = cfg.fixtures
+        _assert(led.type == "ledbar" and led.dmx_start == 1,
+                "ledbar instance carries type + dmx_start")
+        _assert(len(led.bars) == 1 and led.bars[0].x == 10,
+                "ledbar bar positions parsed")
+        _assert(blinder.type == "blinder" and blinder.dmx_start == 33,
+                "blinder instance carries type + dmx_start")
+        _assert(blinder.x == 100 and blinder.y == 200,
+                "blinder position parsed")
+        # Channel ranges derive from the type (ledbar=7, blinder=8).
+        used = cfg.get_used_dmx_channels()
+        _assert(used.get("Ledbar 1") == list(range(1, 8)),
+                "ledbar uses 7 channels from dmx_start")
+        _assert(used.get("Blinder 1") == list(range(33, 41)),
+                "blinder uses 8 channels from dmx_start")
+
+
+def test_unknown_fixture_type_skipped():
+    print("test_unknown_fixture_type_skipped")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps({
+            "fixtures": [
+                {"type": "bogus", "dmx_start": 5},
+                {"type": "blinder", "dmx_start": 33, "x": 1, "y": 2},
+            ],
+            "midi_note_map": {},
+        }))
+        cfg = Config.load()
+        _assert(len(cfg.fixtures) == 1, "unknown fixture type is skipped")
+        _assert(cfg.fixtures[0].type == "blinder", "valid fixture still parsed")
+
+
 def test_ledbar_channel_notes_autoregister():
     print("test_ledbar_channel_notes_autoregister")
     with tempfile.TemporaryDirectory() as tmp:
@@ -176,6 +219,8 @@ def main():
     test_save_writes_only_userprefs()
     test_validation_clamps_out_of_range()
     test_corrupted_userprefs_falls_back()
+    test_fixtures_parse_with_type()
+    test_unknown_fixture_type_skipped()
     test_ledbar_channel_notes_autoregister()
     print("\nALL TESTS PASSED")
 

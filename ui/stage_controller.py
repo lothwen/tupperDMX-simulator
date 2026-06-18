@@ -17,6 +17,15 @@ DEFAULT_SCENE_WIDTH = 1536
 DEFAULT_SCENE_HEIGHT = 1024
 
 
+# Fixture-type name -> render class. config.fixtures references a type by name;
+# the renderer resolves it here. DMX channel count comes from the render class.
+# (A real shared/importable fixture library is subtask 3.)
+FIXTURE_RENDER = {
+    "ledbar": LedBar,
+    "blinder": Blinder,
+}
+
+
 class StageView(QGraphicsView):
     """Graphics view that fits the entire scene proportionally with letterbox."""
 
@@ -146,53 +155,47 @@ class StageController(QObject):
         return self.stage_view
     
     def _setup_fixtures(self) -> None:
-        """Setup all fixtures on the stage according to configuration."""
-        self._setup_led_bars()
-        self._setup_blinders()
-        
+        """Setup all fixtures on the stage, dispatching by fixture type.
+
+        Builds per-instance render groups (so each fixture is fed its own DMX
+        slice in update_fixtures_with_dmx) while still populating the flat
+        self.led_bars / self.blinders collections the helper methods use."""
+        # (instance, render-object(s)) pairs, in patch order, for DMX routing.
+        self._render_groups: List = []
+
+        for fixture in self.config.fixtures:
+            if fixture.type not in FIXTURE_RENDER:
+                self.logger.warning(f"Unknown fixture type '{fixture.type}', skipping")
+                continue
+
+            if fixture.type == "ledbar":
+                bars = []
+                for i, bar_config in enumerate(fixture.bars):
+                    bar = LedBar(bar_config.x, bar_config.y, i)
+                    bars.append(bar)
+                    self.led_bars.append(bar)
+                    self.scene.addItem(bar)
+                self._render_groups.append((fixture, bars))
+            elif fixture.type == "blinder":
+                blinder = Blinder(fixture.x, fixture.y, fixture.multiply_factor)
+                self.blinders.append(blinder)
+                self.scene.addItem(blinder)
+                self._render_groups.append((fixture, [blinder]))
+
         total_fixtures = len(self.led_bars) + len(self.blinders)
         self.logger.info(f"Setup {total_fixtures} fixtures on stage")
-    
-    def _setup_led_bars(self) -> None:
-        """Setup LED bar fixtures."""
-        for controller in self.config.fixtures.led_bar_controllers:
-            for i, bar_config in enumerate(controller.bars):
-                bar = LedBar(bar_config.x, bar_config.y, i)
-                self.led_bars.append(bar)
-                self.scene.addItem(bar)
-        
-        self.logger.debug(f"Setup {len(self.led_bars)} LED bars")
-    
-    def _setup_blinders(self) -> None:
-        """Setup blinder fixtures."""
-        for blinder_config in self.config.fixtures.blinders:
-            blinder = Blinder(blinder_config.x, blinder_config.y, blinder_config.multiply_factor)
-            self.blinders.append(blinder)
-            self.scene.addItem(blinder)
-        
-        self.logger.debug(f"Setup {len(self.blinders)} blinders")
-    
+
     def update_fixtures_with_dmx(self, dmx_data: bytearray) -> None:
-        """Update all fixtures with new DMX data."""
-        # Update LED bar controllers
-        for controller in self.config.fixtures.led_bar_controllers:
-            dmx_start = controller.dmx_start - 1
-            dmx_end = dmx_start + controller.dmx_channel_count
-            controller_dmx_data = dmx_data[dmx_start:dmx_end]
-            
-            for bar in self.led_bars:
-                bar.update_dmx(controller_dmx_data)
-        
-        # Update blinders
-        for i, blinder_config in enumerate(self.config.fixtures.blinders):
-            if i < len(self.blinders):
-                dmx_start = blinder_config.dmx_start - 1
-                dmx_end = dmx_start + self.blinders[i].dmx_channel_count
-                self.blinders[i].update_dmx(dmx_data[dmx_start:dmx_end])
-        
+        """Update all fixtures with new DMX data, slicing per fixture instance."""
+        for fixture, render_objs in self._render_groups:
+            dmx_start = fixture.dmx_start - 1
+            for obj in render_objs:
+                dmx_end = dmx_start + obj.dmx_channel_count
+                obj.update_dmx(dmx_data[dmx_start:dmx_end])
+
         # Update the scene
         self.scene.update()
-        
+
         # Commented because is too verbose
         # self.logger.debug(f"Updated fixtures with DMX data ({len(dmx_data)} bytes)")
     
