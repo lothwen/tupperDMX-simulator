@@ -105,7 +105,7 @@ class ArtNetWorker(DMXWorkerBase):
             # Check if we should start the software controller (local simulation)
             if self.config.artnet.ip in ["127.0.0.1", "localhost"]:
                 self.logger.info("Starting local software controller for simulation")
-                self.software_controller = DMXController()
+                self.software_controller = DMXController(self.config.fixtures)
                 self.software_controller.start_background()
                 self.software_controller_changed.emit(self.software_controller)
             

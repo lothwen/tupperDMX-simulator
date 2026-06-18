@@ -186,17 +186,21 @@ BLINDER_CHANNELS = [
 FIXTURE_H807SA = FixtureType(H807SA_CHANNELS, led_banks, led_chases)
 FIXTURE_BLINDER = FixtureType(BLINDER_CHANNELS, blinder_banks, blinder_chases)
 
-# THE PATCH - which fixtures are connected and where (1-indexed DMX base).
-# Fixture handles index into patch[] / the runtime fixture state.
-LED = 0
-BLINDER1 = 1
-BLINDER2 = 2
-NUM_FIXTURES = 3
+# Fixture-type registry: config.json references a type by name; the emulator
+# resolves the name to a FixtureType here. (The UI stage renderer keeps its own
+# name->render-class map.) A real shared/importable library is subtask 3.
+FIXTURE_TYPES = {
+    "ledbar":  FIXTURE_H807SA,
+    "blinder": FIXTURE_BLINDER,
+}
 
-patch = [
-    FixturePatch(FIXTURE_H807SA,  1),   # LED      -> DMX ch 1..7   (0-based 0..6)
-    FixturePatch(FIXTURE_BLINDER, 33),  # BLINDER1 -> DMX ch 33..40 (0-based 32..39)
-    FixturePatch(FIXTURE_BLINDER, 65),  # BLINDER2 -> DMX ch 65..72 (0-based 64..71)
+# Default patch used when no config fixtures are injected (standalone / tests):
+# the LED bar at DMX 1..7, Blinder1 at 33..40, Blinder2 at 65..72. The live app
+# builds the patch from config.fixtures instead (see DMXController._build_patch).
+DEFAULT_PATCH = [
+    FixturePatch(FIXTURE_H807SA,  1),
+    FixturePatch(FIXTURE_BLINDER, 33),
+    FixturePatch(FIXTURE_BLINDER, 65),
 ]
 
 
@@ -228,9 +232,15 @@ class FixtureState:
 
 
 class DMXController:
-    def __init__(self):
+    def __init__(self, fixtures=None):
         self.logger = get_logger("software_controller.main")
         self.lock = threading.Lock()
+
+        # Build the patch from injected config fixtures (type + dmx_start), or
+        # fall back to the default 3-fixture patch for standalone use / tests.
+        self.patch = self._build_patch(fixtures)
+        self.num_fixtures = len(self.patch)
+        self._resolve_fixture_handles()
 
         self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
         self.color_palette = []
@@ -259,16 +269,44 @@ class DMXController:
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
+    def _build_patch(self, fixtures):
+        """Map config fixture instances (type name + dmx_start) onto the
+        FixtureType registry. Unknown types are skipped; an empty/absent list
+        falls back to the default patch."""
+        if not fixtures:
+            return list(DEFAULT_PATCH)
+
+        patch = []
+        for inst in fixtures:
+            ftype = FIXTURE_TYPES.get(getattr(inst, "type", None))
+            if ftype is None:
+                self.logger.warning(f"Unknown fixture type '{getattr(inst, 'type', None)}', skipping")
+                continue
+            patch.append(FixturePatch(ftype, inst.dmx_start))
+        return patch or list(DEFAULT_PATCH)
+
+    def _resolve_fixture_handles(self):
+        """Resolve the LED / blinder index handles the note router uses.
+
+        For now the emulator keeps the single-LED + up-to-two-blinder semantics
+        (handles derived from the patch instead of hardcoded 0/1/2); generalizing
+        note->fixture routing is subtask 4."""
+        self.led = next((i for i, p in enumerate(self.patch)
+                         if p.type is FIXTURE_H807SA), 0)
+        blinders = [i for i, p in enumerate(self.patch) if p.type is FIXTURE_BLINDER]
+        self.blinder1 = blinders[0] if len(blinders) > 0 else self.led
+        self.blinder2 = blinders[1] if len(blinders) > 1 else self.blinder1
+
     def init_fixtures(self):
         """Initialise per-fixture runtime state from the patch, deriving each
         fixture's universe offset and its slice of the compact blend buffer."""
         self.fixtures = []
         blend_base = 0
-        for fx in range(NUM_FIXTURES):
-            ft = patch[fx].type
+        for fx in range(self.num_fixtures):
+            ft = self.patch[fx].type
             s = FixtureState()
             s.bank = next(iter(ft.banks))  # first bank ('ANIMATIONS' / 'BLINDER_SCENES')
-            s.base = patch[fx].dmx_base - 1
+            s.base = self.patch[fx].dmx_base - 1
             s.blend_base = blend_base
             blend_base += sum(1 for ch in ft.channels if ch.flags & CH_BLEND)
             self.fixtures.append(s)
@@ -278,7 +316,7 @@ class DMXController:
     # Channel accessors (address channels by role/meaning)
     # ------------------------------------------------------------------
     def channel_index_by_role(self, fx, role):
-        for i, ch in enumerate(patch[fx].type.channels):
+        for i, ch in enumerate(self.patch[fx].type.channels):
             if ch.role == role:
                 return i
         return -1
@@ -292,7 +330,7 @@ class DMXController:
         i = self.channel_index_by_role(fx, role)
         if i < 0:
             return
-        ch = patch[fx].type.channels[i]
+        ch = self.patch[fx].type.channels[i]
         if ch.flags & CH_BLEND:
             self.target[self.fixtures[fx].base + i] = value
         else:
@@ -302,8 +340,8 @@ class DMXController:
         """Snapshot the current present[] frame as the blend start for every
         blend channel. Mirrors the old global universe_past = present copy done
         on any scene/color load."""
-        for fx in range(NUM_FIXTURES):
-            ft = patch[fx].type
+        for fx in range(self.num_fixtures):
+            ft = self.patch[fx].type
             base = self.fixtures[fx].base
             k = self.fixtures[fx].blend_base
             for i, ch in enumerate(ft.channels):
@@ -324,7 +362,7 @@ class DMXController:
             self.blackout_fixture(fx)
             return
 
-        ft = patch[fx].type
+        ft = self.patch[fx].type
         scene_obj = ft.banks[bank][scene]
 
         # Palette substitution: if the fixture has R/G/B and the scene sets all
@@ -386,7 +424,7 @@ class DMXController:
     # ------------------------------------------------------------------
     def load_chase(self, fx, chase):
         s = self.fixtures[fx]
-        ft = patch[fx].type
+        ft = self.patch[fx].type
         s.is_chasing = True
         s.chase = chase
         step = ft.chases[chase]
@@ -400,7 +438,7 @@ class DMXController:
         if now - s.last_chase_change < s.chase_change_time / 1000.0:
             return
 
-        chase = patch[fx].type.chases[s.chase]
+        chase = self.patch[fx].type.chases[s.chase]
         s.chase_index = (s.chase_index + 1) % len(chase['scenes'])
         self.load_scene(fx, chase['banks'][s.chase_index], chase['scenes'][s.chase_index])
         s.last_chase_change = now
@@ -416,7 +454,7 @@ class DMXController:
         s.blend_time_elapsed += dt
         t = s.blend_time_elapsed / s.blend_time
 
-        ft = patch[fx].type
+        ft = self.patch[fx].type
         k = s.blend_base
         for i, ch in enumerate(ft.channels):
             if ch.flags & CH_BLEND:
@@ -444,18 +482,18 @@ class DMXController:
 
     def change_led_color(self, color):
         # Solid manual color: drop the palette so the timer stops cycling.
-        self.fixtures[LED].palette_size = 0
-        self.fixtures[LED].palette_ptr = None
-        self.set_fixture_color(LED, color)
+        self.fixtures[self.led].palette_size = 0
+        self.fixtures[self.led].palette_ptr = None
+        self.set_fixture_color(self.led, color)
 
     def change_led_color_palette(self, palette, index, size, blend_time, color_change_time):
-        s = self.fixtures[LED]
+        s = self.fixtures[self.led]
         s.palette_ptr = palette
         s.palette_index = index
         s.palette_size = size
         s.blend_time = blend_time
         s.color_change_time = color_change_time
-        self.set_fixture_color(LED, palette[index])
+        self.set_fixture_color(self.led, palette[index])
         self.last_palette_change = time.time()
 
     # ------------------------------------------------------------------
@@ -464,7 +502,7 @@ class DMXController:
     def blackout_fixture(self, fx):
         self.logger.debug(f"Blackout fx:{fx}")
         s = self.fixtures[fx]
-        ft = patch[fx].type
+        ft = self.patch[fx].type
         for i, ch in enumerate(ft.channels):
             self.present[s.base + i] = 0
             if ch.flags & CH_BLEND:
@@ -485,14 +523,14 @@ class DMXController:
         # manual values, and clear blinders that the automatic song-part program
         # left on (e.g. from a BREAK) so a manual scene starts clean. Blinders
         # the user triggered by hand (notes 26-32) are left running.
-        self.fixtures[LED].is_chasing = False
-        self.fixtures[LED].is_blackout = False
-        self.fixtures[LED].palette_size = 0
-        self.fixtures[LED].palette_ptr = None
-        if self.fixtures[BLINDER1].song_part_triggered:
-            self.blackout_fixture(BLINDER1)
-        if self.fixtures[BLINDER2].song_part_triggered:
-            self.blackout_fixture(BLINDER2)
+        self.fixtures[self.led].is_chasing = False
+        self.fixtures[self.led].is_blackout = False
+        self.fixtures[self.led].palette_size = 0
+        self.fixtures[self.led].palette_ptr = None
+        if self.fixtures[self.blinder1].song_part_triggered:
+            self.blackout_fixture(self.blinder1)
+        if self.fixtures[self.blinder2].song_part_triggered:
+            self.blackout_fixture(self.blinder2)
 
     # ------------------------------------------------------------------
     # MIDI input
@@ -506,48 +544,48 @@ class DMXController:
                 case 0:  # C-1
                     pass # NoteOff, do nothing
                 case 1:   # C#-1
-                    self.set_channel_instant(LED, ROLE_BRIGHTNESS, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_BRIGHTNESS, velocity * 2)
                 case 2:   # D-1
-                    self.set_channel_instant(LED, ROLE_BLUE, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_BLUE, velocity * 2)
                 case 3:   # D#-1
-                    self.set_channel_instant(LED, ROLE_GREEN, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_GREEN, velocity * 2)
                 case 4:   # E-1
-                    self.set_channel_instant(LED, ROLE_RED, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_RED, velocity * 2)
                 case 5:   # F-1
                     # The animation note is sent once per manual scene (unlike
                     # brightness, which streams during fades), so we use it as
                     # the single trigger to take manual LED control. Assumes a
                     # manual scene always includes all 7 channel notes (1-7).
                     self.reset_led_blinder_status()
-                    self.set_channel_instant(LED, ROLE_ANIMATION, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_ANIMATION, velocity * 2)
                 case 6:   # F#-1
-                    self.set_channel_instant(LED, ROLE_SPEED, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_SPEED, velocity * 2)
                 case 7:   # G-1
-                    self.set_channel_instant(LED, ROLE_DIRECTION, velocity * 2)
+                    self.set_channel_instant(self.led, ROLE_DIRECTION, velocity * 2)
                 case 8:   # G#-1
-                    self.fixtures[LED].is_palette_random = True
+                    self.fixtures[self.led].is_palette_random = True
                 case 9:   # A-1
-                    self.fixtures[LED].is_palette_random = False
+                    self.fixtures[self.led].is_palette_random = False
                 case 10:  # A#-1
-                    self.fixtures[LED].blend_time = velocity * 100
+                    self.fixtures[self.led].blend_time = velocity * 100
                 case 11:  # B-1
-                    self.fixtures[LED].color_change_time = velocity * 1000
+                    self.fixtures[self.led].color_change_time = velocity * 1000
                 case 12:  # C0
-                    self.load_scene(LED, self.fixtures[LED].bank, 0)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 0)
                 case 13:  # C#0
-                    self.load_scene(LED, self.fixtures[LED].bank, 1)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 1)
                 case 14:  # D0
-                    self.load_scene(LED, self.fixtures[LED].bank, 2)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 2)
                 case 15:  # D#0
-                    self.load_scene(LED, self.fixtures[LED].bank, 3)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 3)
                 case 16:  # E0
-                    self.load_scene(LED, self.fixtures[LED].bank, 4)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 4)
                 case 17:  # F0
-                    self.load_scene(LED, self.fixtures[LED].bank, 5)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 5)
                 case 18:  # F#0
-                    self.load_scene(LED, self.fixtures[LED].bank, 6)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 6)
                 case 19:  # G0
-                    self.load_scene(LED, self.fixtures[LED].bank, 7)
+                    self.load_scene(self.led, self.fixtures[self.led].bank, 7)
                 case 20:  # G#0
                     self.change_led_color(COLOR32_WHITE)
                 case 21:  # A0
@@ -557,48 +595,48 @@ class DMXController:
                 case 23:  # B0
                     self.change_led_color(COLOR32_PINK)
                 case 24:  # C1
-                    self.fixtures[LED].bank = 'FILLS'
+                    self.fixtures[self.led].bank = 'FILLS'
                 case 25:  # C#1
-                    self.fixtures[LED].bank = 'TUBES'
+                    self.fixtures[self.led].bank = 'TUBES'
                 case 26:  # D1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 0, velocity * 100)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 0, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, velocity * 100)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
                 case 27:  # D#1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
                 case 28:  # E1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 2, velocity * 100)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 2, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 2, velocity * 100)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 2, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
                 case 29:  # F1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 3, velocity * 100)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 3, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 3, velocity * 100)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 3, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
                 case 30:  # F#1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 4, velocity * 100)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 4, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 4, velocity * 100)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 4, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
                 case 31:  # G1
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[BLINDER1].song_part_triggered = False
-                    self.fixtures[BLINDER1].is_chasing = False
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
+                    self.fixtures[self.blinder1].song_part_triggered = False
+                    self.fixtures[self.blinder1].is_chasing = False
                 case 32:  # G#1
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[BLINDER2].song_part_triggered = False
-                    self.fixtures[BLINDER2].is_chasing = False
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
+                    self.fixtures[self.blinder2].song_part_triggered = False
+                    self.fixtures[self.blinder2].is_chasing = False
                 case 38:  # D2 - Precount beats
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 0, 1)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 0, 1)
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, 1)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, 1)
                 case 39:  # D#2 - Precount downbeats
-                    self.load_scene(BLINDER1, 'BLINDER_SCENES', 1, 1)
-                    self.load_scene(BLINDER2, 'BLINDER_SCENES', 1, 1)
+                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, 1)
+                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, 1)
                 case 40:  # E2 - START
                     # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
                     hue_index = velocity // 6
@@ -624,17 +662,17 @@ class DMXController:
                 case 49:  # C#3
                     self.pick_scene_from_song_part(9, velocity) # END
                 case 50:  # D3
-                    self.blackout_fixture(LED)
+                    self.blackout_fixture(self.led)
                 case 51:  # D#3
-                    self.blackout_fixture(BLINDER1)
-                    self.blackout_fixture(BLINDER2)
+                    self.blackout_fixture(self.blinder1)
+                    self.blackout_fixture(self.blinder2)
                 case 52:  # E3
                     self.blackout_all()
 
     def pick_scene_from_song_part(self, song_part, velocity):
-        self.blackout_fixture(LED)
-        self.blackout_fixture(BLINDER1)
-        self.blackout_fixture(BLINDER2)
+        self.blackout_fixture(self.led)
+        self.blackout_fixture(self.blinder1)
+        self.blackout_fixture(self.blinder2)
 
         if self.color_palette:
                 self.change_led_color_palette(self.color_palette, 0,
@@ -644,48 +682,48 @@ class DMXController:
         if song_part == 1: # INTRO
             if self.color_palette:
                 self.change_led_color(self.color_palette[0])
-            self.load_scene(LED, 'FILLS2', 2)
+            self.load_scene(self.led, 'FILLS2', 2)
 
         elif song_part == 2: # VERSE
-            self.load_scene(LED, 'FILLS2', 1) # Hardcoded animation for all VERSEs
+            self.load_scene(self.led, 'FILLS2', 1) # Hardcoded animation for all VERSEs
 
         elif song_part == 3: # CHORUS
-            self.load_chase(LED, random.randint(9, 14))
+            self.load_chase(self.led, random.randint(9, 14))
 
         elif song_part == 4: # BREAK
-            self.load_scene(BLINDER1, 'BLINDER_SCENES', 1)
-            self.load_scene(BLINDER2, 'BLINDER_SCENES', 1)
+            self.load_scene(self.blinder1, 'BLINDER_SCENES', 1)
+            self.load_scene(self.blinder2, 'BLINDER_SCENES', 1)
 
         elif song_part == 5: # BRIDGE
-            self.load_scene(LED, 'ANIMATIONS', 6)
-            self.load_chase(BLINDER1, 1)
-            self.load_chase(BLINDER2, 1)
+            self.load_scene(self.led, 'ANIMATIONS', 6)
+            self.load_chase(self.blinder1, 1)
+            self.load_chase(self.blinder2, 1)
 
         elif song_part == 6: # INST
-            self.load_scene(LED, 'ANIMATIONS', random.randint(5, 7))
-            self.load_chase(BLINDER1, 1)
-            self.load_chase(BLINDER2, 1)
+            self.load_scene(self.led, 'ANIMATIONS', random.randint(5, 7))
+            self.load_chase(self.blinder1, 1)
+            self.load_chase(self.blinder2, 1)
 
         elif song_part == 7: # SOLO
-            self.load_scene(LED, 'ANIMATIONS', random.randint(5, 7))
-            self.load_chase(BLINDER1, 1)
-            self.load_chase(BLINDER2, 1)
+            self.load_scene(self.led, 'ANIMATIONS', random.randint(5, 7))
+            self.load_chase(self.blinder1, 1)
+            self.load_chase(self.blinder2, 1)
 
         elif song_part == 8: # OUTRO
-            self.load_chase(LED, random.randint(0, 2))
-            self.load_scene(BLINDER1, 'BLINDER_SCENES', 3)
-            self.load_scene(BLINDER2, 'BLINDER_SCENES', 3)
+            self.load_chase(self.led, random.randint(0, 2))
+            self.load_scene(self.blinder1, 'BLINDER_SCENES', 3)
+            self.load_scene(self.blinder2, 'BLINDER_SCENES', 3)
 
         elif song_part == 9: # END
-            self.load_chase(BLINDER1, 0)
-            self.load_chase(BLINDER2, 0)
+            self.load_chase(self.blinder1, 0)
+            self.load_chase(self.blinder2, 0)
 
         # Mark blinders as owned by the automatic program so a later manual LED
         # scene clears them (see reset_led_blinder_status). Parts that leave the
         # blinders blacked out get the flag too, but blacking out an off blinder
         # is a harmless no-op.
-        self.fixtures[BLINDER1].song_part_triggered = True
-        self.fixtures[BLINDER2].song_part_triggered = True
+        self.fixtures[self.blinder1].song_part_triggered = True
+        self.fixtures[self.blinder2].song_part_triggered = True
 
     def beat_duration(self, bpms):
         if bpms == 0:
@@ -725,7 +763,7 @@ class DMXController:
             current_time = time.time()
             with self.lock:
                 # Color palette timer (LED only)
-                led = self.fixtures[LED]
+                led = self.fixtures[self.led]
                 if led.palette_size > 1:
                     if current_time - self.last_palette_change >= led.color_change_time / 1000.0:
                         i = 1
@@ -733,11 +771,11 @@ class DMXController:
                             i = random.randint(16, 48)
 
                         led.palette_index = (led.palette_index + i) % led.palette_size
-                        self.set_fixture_color(LED, led.palette_ptr[led.palette_index])
+                        self.set_fixture_color(self.led, led.palette_ptr[led.palette_index])
                         self.last_palette_change = current_time
 
                 # Chase timers
-                for fx in range(NUM_FIXTURES):
+                for fx in range(self.num_fixtures):
                     self.update_chase(fx, current_time)
 
             # DMX Loop
@@ -751,7 +789,7 @@ class DMXController:
                         data_to_send = [0] * UNIVERSE_SIZE
                     else:
                         # Blend logic
-                        for fx in range(NUM_FIXTURES):
+                        for fx in range(self.num_fixtures):
                             self.update_blend(fx, dt)
                         data_to_send = self.present
 
