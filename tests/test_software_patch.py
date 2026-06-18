@@ -103,10 +103,26 @@ def test_empty_fixtures_falls_back_to_default():
             "fallback handles resolve to 0 / 1 / 2")
 
 
+def test_generic_fixture_inert_and_output_unchanged():
+    print("test_generic_fixture_inert_and_output_unchanged")
+    # A library-defined generic type (par_rgb, 4ch) patched alongside the
+    # built-ins must build without raising (synthetic default bank) and, since
+    # the note sequence never addresses it, leave the full present[] unchanged.
+    with_generic = SHIPPED_FIXTURES + [FixtureInstance(type="par_rgb", dmx_start=9)]
+    ctrl = DMXController(with_generic)
+    _assert(ctrl.num_fixtures == 4, "generic fixture added to the patch")
+
+    generic_present = _replay(DMXController(with_generic))
+    baseline_present = _replay(DMXController(SHIPPED_FIXTURES))
+    _assert(generic_present == baseline_present,
+            "adding an inert generic fixture leaves present[] unchanged")
+
+
 def main():
     test_patch_matches_legacy_default()
     test_dmx_output_unchanged()
     test_empty_fixtures_falls_back_to_default()
+    test_generic_fixture_inert_and_output_unchanged()
     print("\nALL TESTS PASSED")
 
 

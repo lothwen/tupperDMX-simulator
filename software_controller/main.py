@@ -5,6 +5,9 @@ import time
 import random
 import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
+
+from fixture_library import load_fixture_defs
 from tupperlogger import get_logger
 
 
@@ -186,13 +189,41 @@ BLINDER_CHANNELS = [
 FIXTURE_H807SA = FixtureType(H807SA_CHANNELS, led_banks, led_chases)
 FIXTURE_BLINDER = FixtureType(BLINDER_CHANNELS, blinder_banks, blinder_chases)
 
-# Fixture-type registry: config.json references a type by name; the emulator
-# resolves the name to a FixtureType here. (The UI stage renderer keeps its own
-# name->render-class map.) A real shared/importable library is subtask 3.
-FIXTURE_TYPES = {
-    "ledbar":  FIXTURE_H807SA,
-    "blinder": FIXTURE_BLINDER,
-}
+
+def _zero_scene(channels):
+    """A single all-zero scene whose attributes match the channel fields.
+
+    Library-defined (generic) fixture types ship no scene banks, but the engine
+    needs at least one bank so init_fixtures()/load_scene() stay valid. This
+    inert default bank fills that role; generic types get no MIDI scene-select
+    until the per-type MIDI map (subtask 4) lands."""
+    return SimpleNamespace(**{ch.field: 0 for ch in channels})
+
+
+def build_fixture_types():
+    """Fixture-type registry: the two built-in singletons plus every data-driven
+    definition from the fixture library. config.json / the patch reference a type
+    by name and resolve to a FixtureType here.
+
+    The built-ins are kept as the original singleton objects — note routing
+    (_resolve_fixture_handles) and the characterization tests rely on their
+    identity — so library defs never override them."""
+    types = {"ledbar": FIXTURE_H807SA, "blinder": FIXTURE_BLINDER}
+    for name, fdef in load_fixture_defs().items():
+        if name in types:
+            continue
+        channels = [ChannelDef(c.field, c.role, c.flags) for c in fdef.channels]
+        types[name] = FixtureType(
+            channels=channels,
+            banks={"_default": [_zero_scene(channels)]},
+            chases=[],
+        )
+    return types
+
+
+# (The UI stage renderer keeps its own name->render-class dispatch in
+# ui/stage_controller.py; generic types render via fixtures.GenericFixture.)
+FIXTURE_TYPES = build_fixture_types()
 
 # Default patch used when no config fixtures are injected (standalone / tests):
 # the LED bar at DMX 1..7, Blinder1 at 33..40, Blinder2 at 65..72. The live app

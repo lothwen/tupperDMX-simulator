@@ -32,7 +32,8 @@ class ToolbarManager(QObject):
     # Application menu signals
     settings_requested = pyqtSignal()
     about_requested = pyqtSignal()
-    
+    design_stage_toggled = pyqtSignal(bool)  # enter/leave stage design mode
+
     def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
                  play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon):
         super().__init__()
@@ -394,6 +395,9 @@ class ToolbarManager(QObject):
         menu = QMenu(button)
         settings_action = menu.addAction("Settings…")
         settings_action.triggered.connect(self.settings_requested.emit)
+        design_action = menu.addAction("Design stage")
+        design_action.setCheckable(True)
+        design_action.toggled.connect(self.design_stage_toggled.emit)
         about_action = menu.addAction("About TupperDMX")
         about_action.triggered.connect(self.about_requested.emit)
         button.setMenu(menu)

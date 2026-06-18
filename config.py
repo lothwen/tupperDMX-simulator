@@ -9,6 +9,8 @@ from pathlib import Path
 
 import platformdirs
 
+from fixture_library import load_fixture_defs
+
 
 _APP_NAME = "tupperDMX"
 
@@ -89,12 +91,26 @@ class FixturePosition:
     y: int
 
 
-# DMX channel count per fixture type. Derived from the type rather than stored
-# per-instance; mirrors the render classes' dmx_channel_count (fixtures.py).
-FIXTURE_CHANNEL_COUNTS: Dict[str, int] = {
+# DMX channel count for the two built-in fixture types (Python singletons in
+# software_controller). Every other type is data-driven from the fixture
+# library, so its channel count is derived from its definition instead.
+_BUILTIN_COUNTS: Dict[str, int] = {
     "ledbar": 7,
     "blinder": 8,
 }
+
+
+def fixture_channel_count(type_name: str) -> int:
+    """DMX channel count for a fixture type (0 if the type is unknown)."""
+    if type_name in _BUILTIN_COUNTS:
+        return _BUILTIN_COUNTS[type_name]
+    fdef = load_fixture_defs().get(type_name)
+    return fdef.channel_count if fdef else 0
+
+
+def known_fixture_types() -> set:
+    """All resolvable fixture-type names: built-ins + library definitions."""
+    return set(_BUILTIN_COUNTS) | set(load_fixture_defs())
 
 
 @dataclass
@@ -167,6 +183,20 @@ class Config:
         for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
             self.midi_note_map.setdefault(note_str, note_cfg)
 
+        # Fixture-patch persistence state (not serialized fields):
+        #   _patch_from_prefs - userprefs.json already owns the patch (override
+        #                       the shipped seed and keep persisting it).
+        #   _patch_dirty      - the patch was edited this session (the scenario
+        #                       designer calls mark_patch_dirty()).
+        # save() writes the fixtures patch to userprefs.json only when either is
+        # set, so a default install keeps reading the shipped config.json seed.
+        self._patch_from_prefs = False
+        self._patch_dirty = False
+
+    def mark_patch_dirty(self) -> None:
+        """Flag the fixture patch as edited so save() persists it to userprefs.json."""
+        self._patch_dirty = True
+
     @classmethod
     def load(cls) -> "Config":
         """Load full configuration from shipped config.json + userprefs.json.
@@ -230,6 +260,12 @@ class Config:
     @classmethod
     def _apply_userprefs(cls, config: "Config", data: Dict[str, Any]) -> None:
         """Populate user-editable sections from userprefs.json data."""
+        # A fixtures key in userprefs means the user has taken ownership of the
+        # patch: it overrides the shipped seed, and save() keeps persisting it.
+        if "fixtures" in data:
+            config.fixtures = cls._parse_fixtures(data["fixtures"])
+            config._patch_from_prefs = True
+
         if "window" in data:
             window_data = data["window"]
             config.window = WindowConfig(
@@ -296,7 +332,7 @@ class Config:
             if not isinstance(entry, dict):
                 continue
             fixture_type = str(entry.get("type", ""))
-            if fixture_type not in FIXTURE_CHANNEL_COUNTS or "dmx_start" not in entry:
+            if fixture_type not in known_fixture_types() or "dmx_start" not in entry:
                 continue
 
             bars = []
@@ -425,6 +461,12 @@ class Config:
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
 
+        # The fixture patch is normally seeded read-only from config.json. Once
+        # the user edits it (designer) or already owns it in prefs, persist it
+        # here so userprefs.json overrides the seed on the next load.
+        if self._patch_dirty or self._patch_from_prefs:
+            data["fixtures"] = [asdict(fixture) for fixture in self.fixtures]
+
         if self.last_dmx_source:
             data["last_dmx_source"] = self.last_dmx_source
         if self.last_midi_port:
@@ -502,7 +544,7 @@ class Config:
         for fixture in self.fixtures:
             type_counts[fixture.type] = type_counts.get(fixture.type, 0) + 1
             fixture_name = f"{fixture.type.capitalize()} {type_counts[fixture.type]}"
-            channel_count = FIXTURE_CHANNEL_COUNTS.get(fixture.type, 0)
+            channel_count = fixture_channel_count(fixture.type)
             channels = list(range(fixture.dmx_start, fixture.dmx_start + channel_count))
             if channels:
                 used_channels[fixture_name] = channels

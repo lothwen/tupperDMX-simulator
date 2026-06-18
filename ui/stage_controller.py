@@ -6,8 +6,9 @@ from PyQt6.QtGui import QPixmap, QPainter
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF
 
 from tupperlogger import get_logger
-from config import Config
-from fixtures import LedBar, Blinder
+from config import Config, FixtureInstance, FixturePosition
+from fixtures import LedBar, Blinder, GenericFixture
+from fixture_library import load_fixture_defs, role_index_map
 
 
 # Fallback scene size when no background pixmap is loaded; matches the native
@@ -17,13 +18,9 @@ DEFAULT_SCENE_WIDTH = 1536
 DEFAULT_SCENE_HEIGHT = 1024
 
 
-# Fixture-type name -> render class. config.fixtures references a type by name;
-# the renderer resolves it here. DMX channel count comes from the render class.
-# (A real shared/importable fixture library is subtask 3.)
-FIXTURE_RENDER = {
-    "ledbar": LedBar,
-    "blinder": Blinder,
-}
+# Render dispatch lives in StageController._make_render_objs: the two built-in
+# types keep their bespoke classes (LedBar / Blinder); every other (library)
+# type renders via the data-driven fixtures.GenericFixture.
 
 
 class StageView(QGraphicsView):
@@ -113,7 +110,12 @@ class StageController(QObject):
     # Signals
     fixture_updated = pyqtSignal(str, object)  # fixture_type, fixture_object
     stage_clicked = pyqtSignal(float, float)  # x, y coordinates
-    
+    # Scenario-designer signals (carry the config.FixtureInstance involved).
+    fixture_added = pyqtSignal(object)     # FixtureInstance
+    fixture_moved = pyqtSignal(object)     # FixtureInstance (position updated)
+    fixture_removed = pyqtSignal(object)   # FixtureInstance
+    fixture_selected = pyqtSignal(object)  # FixtureInstance or None
+
     def __init__(self, config: Config, background_image_path: str = None):
         super().__init__()
         self.config = config
@@ -130,9 +132,15 @@ class StageController(QObject):
         # Fixture collections
         self.led_bars: List[LedBar] = []
         self.blinders: List[Blinder] = []
+        self.generic_fixtures: List[GenericFixture] = []
+
+        # Scenario-designer state: fixtures are only movable/selectable while
+        # design mode is on, so live playback rendering is undisturbed.
+        self._design_mode = False
 
         # Setup stage view
         self.scene = QGraphicsScene()
+        self.scene.selectionChanged.connect(self._on_selection_changed)
         self.pixmap = QPixmap(background_image_path)
         
         if self.pixmap.isNull():
@@ -154,35 +162,58 @@ class StageController(QObject):
         """Get the stage view widget."""
         return self.stage_view
     
+    def _make_render_objs(self, fixture: FixtureInstance) -> List:
+        """Build the render object(s) for one fixture instance.
+
+        The two built-in types keep their bespoke classes; everything else
+        renders via the data-driven GenericFixture using its library definition.
+        Returns [] for an unrenderable/unknown type."""
+        if fixture.type == "ledbar":
+            objs = []
+            for i, bar_config in enumerate(fixture.bars):
+                bar = LedBar(bar_config.x, bar_config.y, i)
+                bar._bar_index = i
+                objs.append(bar)
+            return objs
+        if fixture.type == "blinder":
+            return [Blinder(fixture.x, fixture.y, fixture.multiply_factor)]
+
+        fdef = load_fixture_defs().get(fixture.type)
+        if fdef is None:
+            return []
+        return [GenericFixture(fixture.x, fixture.y, fdef.channel_count, role_index_map(fdef))]
+
     def _setup_fixtures(self) -> None:
         """Setup all fixtures on the stage, dispatching by fixture type.
 
         Builds per-instance render groups (so each fixture is fed its own DMX
-        slice in update_fixtures_with_dmx) while still populating the flat
-        self.led_bars / self.blinders collections the helper methods use."""
+        slice in update_fixtures_with_dmx) while populating the flat
+        led_bars / blinders / generic_fixtures collections. Each render object
+        gets a back-reference to its FixtureInstance and the move callback so the
+        scenario designer can persist drags."""
         # (instance, render-object(s)) pairs, in patch order, for DMX routing.
         self._render_groups: List = []
 
         for fixture in self.config.fixtures:
-            if fixture.type not in FIXTURE_RENDER:
+            render_objs = self._make_render_objs(fixture)
+            if not render_objs:
                 self.logger.warning(f"Unknown fixture type '{fixture.type}', skipping")
                 continue
 
-            if fixture.type == "ledbar":
-                bars = []
-                for i, bar_config in enumerate(fixture.bars):
-                    bar = LedBar(bar_config.x, bar_config.y, i)
-                    bars.append(bar)
-                    self.led_bars.append(bar)
-                    self.scene.addItem(bar)
-                self._render_groups.append((fixture, bars))
-            elif fixture.type == "blinder":
-                blinder = Blinder(fixture.x, fixture.y, fixture.multiply_factor)
-                self.blinders.append(blinder)
-                self.scene.addItem(blinder)
-                self._render_groups.append((fixture, [blinder]))
+            for obj in render_objs:
+                obj._instance = fixture
+                obj._move_callback = self._on_fixture_moved
+                obj.set_design_mode(self._design_mode)
+                self.scene.addItem(obj)
+                if isinstance(obj, LedBar):
+                    self.led_bars.append(obj)
+                elif isinstance(obj, Blinder):
+                    self.blinders.append(obj)
+                else:
+                    self.generic_fixtures.append(obj)
+            self._render_groups.append((fixture, render_objs))
 
-        total_fixtures = len(self.led_bars) + len(self.blinders)
+        total_fixtures = len(self.led_bars) + len(self.blinders) + len(self.generic_fixtures)
         self.logger.info(f"Setup {total_fixtures} fixtures on stage")
 
     def update_fixtures_with_dmx(self, dmx_data: bytearray) -> None:
@@ -199,31 +230,69 @@ class StageController(QObject):
         # Commented because is too verbose
         # self.logger.debug(f"Updated fixtures with DMX data ({len(dmx_data)} bytes)")
     
-    def add_led_bar(self, x: float, y: float, index: int = None) -> LedBar:
-        """Add a new LED bar to the stage."""
-        if index is None:
-            index = len(self.led_bars)
-        
-        bar = LedBar(x, y, index)
-        self.led_bars.append(bar)
-        self.scene.addItem(bar)
-        
-        self.fixture_updated.emit("led_bar", bar)
-        self.logger.info(f"Added LED bar at ({x}, {y})")
-        
-        return bar
-    
-    def add_blinder(self, x: float, y: float, multiply_factor: float = 2.0) -> Blinder:
-        """Add a new blinder to the stage."""
-        blinder = Blinder(x, y, multiply_factor)
-        self.blinders.append(blinder)
-        self.scene.addItem(blinder)
-        
-        self.fixture_updated.emit("blinder", blinder)
-        self.logger.info(f"Added blinder at ({x}, {y}) with multiply_factor {multiply_factor}")
-        
-        return blinder
-    
+    # ------------------------------------------------------------------
+    # Scenario designer
+    # ------------------------------------------------------------------
+    def set_design_mode(self, enabled: bool) -> None:
+        """Toggle fixture move/select. Off restores normal playback behaviour."""
+        self._design_mode = enabled
+        for obj in self.get_all_fixtures():
+            obj.set_design_mode(enabled)
+        if not enabled:
+            self.scene.clearSelection()
+        self.logger.info(f"Stage design mode {'enabled' if enabled else 'disabled'}")
+
+    def add_fixture(self, type_name: str, dmx_start: int, x: int, y: int) -> FixtureInstance:
+        """Append a new fixture instance to the patch and re-render the stage."""
+        instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
+                                   x=int(x), y=int(y))
+        # A ledbar renders from bars[]; seed a single bar at the drop point.
+        if type_name == "ledbar" and not instance.bars:
+            instance.bars = [FixturePosition(x=int(x), y=int(y))]
+        self.config.fixtures.append(instance)
+        self.refresh_from_config(self.config)
+        self.fixture_added.emit(instance)
+        self.logger.info(f"Added fixture '{type_name}' at DMX {dmx_start}")
+        return instance
+
+    def remove_selected(self) -> List[FixtureInstance]:
+        """Remove the instance(s) backing the current selection and re-render."""
+        instances: List[FixtureInstance] = []
+        for item in self.scene.selectedItems():
+            inst = getattr(item, "_instance", None)
+            if inst is not None and inst not in instances:
+                instances.append(inst)
+        for inst in instances:
+            if inst in self.config.fixtures:
+                self.config.fixtures.remove(inst)
+        if instances:
+            self.refresh_from_config(self.config)
+            for inst in instances:
+                self.fixture_removed.emit(inst)
+        return instances
+
+    def _on_fixture_moved(self, obj) -> None:
+        """Persist a drag-release onto the fixture's FixtureInstance (x/y, or the
+        moved bar for a multi-bar ledbar)."""
+        inst = getattr(obj, "_instance", None)
+        if inst is None:
+            return
+        pos = obj.pos()
+        bar_index = getattr(obj, "_bar_index", None)
+        if bar_index is not None and 0 <= bar_index < len(inst.bars):
+            inst.bars[bar_index].x = int(pos.x())
+            inst.bars[bar_index].y = int(pos.y())
+        else:
+            inst.x = int(pos.x())
+            inst.y = int(pos.y())
+        self.fixture_moved.emit(inst)
+
+    def _on_selection_changed(self) -> None:
+        selected = self.scene.selectedItems()
+        inst = getattr(selected[0], "_instance", None) if selected else None
+        self.fixture_selected.emit(inst)
+
+
     def remove_fixture(self, fixture) -> bool:
         """Remove a fixture from the stage."""
         removed = False
@@ -247,16 +316,13 @@ class StageController(QObject):
     
     def clear_all_fixtures(self) -> None:
         """Remove all fixtures from the stage."""
-        # Remove LED bars
-        for bar in self.led_bars[:]:
-            self.scene.removeItem(bar)
+        for obj in self.led_bars + self.blinders + self.generic_fixtures:
+            self.scene.removeItem(obj)
         self.led_bars.clear()
-        
-        # Remove blinders
-        for blinder in self.blinders[:]:
-            self.scene.removeItem(blinder)
         self.blinders.clear()
-        
+        self.generic_fixtures.clear()
+        self._render_groups = []
+
         self.logger.info("Cleared all fixtures from stage")
     
     def get_fixture_at_position(self, x: float, y: float, tolerance: float = 10.0):
@@ -279,7 +345,7 @@ class StageController(QObject):
     
     def get_all_fixtures(self) -> List:
         """Get list of all fixtures on the stage."""
-        return self.led_bars + self.blinders
+        return self.led_bars + self.blinders + self.generic_fixtures
     
     def get_led_bars(self) -> List[LedBar]:
         """Get list of LED bar fixtures."""
