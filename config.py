@@ -89,25 +89,25 @@ class FixturePosition:
     y: int
 
 
+# DMX channel count per fixture type. Derived from the type rather than stored
+# per-instance; mirrors the render classes' dmx_channel_count (fixtures.py).
+FIXTURE_CHANNEL_COUNTS: Dict[str, int] = {
+    "ledbar": 7,
+    "blinder": 8,
+}
+
+
 @dataclass
-class LedBarController:
+class FixtureInstance:
+    """One patched fixture: an explicit type + DMX address, plus per-instance
+    render params. Replaces the old type-by-array split (led_bar_controllers /
+    blinders) with a single data-driven list."""
+    type: str
     dmx_start: int
-    dmx_channel_count: int = 7
-    bars: List[FixturePosition] = field(default_factory=list)
-
-
-@dataclass
-class Blinder:
-    x: int
-    y: int
-    dmx_start: int
-    multiply_factor: float = 2.0
-
-
-@dataclass
-class FixturesConfig:
-    led_bar_controllers: List[LedBarController] = field(default_factory=list)
-    blinders: List[Blinder] = field(default_factory=list)
+    x: int = 0
+    y: int = 0
+    bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
+    multiply_factor: float = 2.0                               # blinder render
 
 
 @dataclass
@@ -154,7 +154,7 @@ class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     artnet: ArtNetConfig = field(default_factory=ArtNetConfig)
     playlist: PlaylistConfig = field(default_factory=PlaylistConfig)
-    fixtures: FixturesConfig = field(default_factory=FixturesConfig)
+    fixtures: List[FixtureInstance] = field(default_factory=list)
     midi_note_map: Dict[str, MidiNoteConfig] = field(default_factory=dict)
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -284,40 +284,37 @@ class Config:
         config.last_midi_port = data.get("last_midi_port")
 
     @staticmethod
-    def _parse_fixtures(fixtures_data: Dict[str, Any]) -> FixturesConfig:
-        """Parse fixtures configuration with validation."""
-        fixtures = FixturesConfig()
+    def _parse_fixtures(fixtures_data: Any) -> List[FixtureInstance]:
+        """Parse the flat fixtures list. Each entry carries an explicit type +
+        DMX address; unknown types and malformed entries are skipped."""
+        fixtures: List[FixtureInstance] = []
 
-        if "led_bar_controllers" in fixtures_data:
-            for controller_data in fixtures_data["led_bar_controllers"]:
-                if not isinstance(controller_data, dict):
-                    continue
+        if not isinstance(fixtures_data, list):
+            return fixtures
 
-                bars = []
-                for bar_data in controller_data.get("bars", []):
-                    if isinstance(bar_data, dict) and "x" in bar_data and "y" in bar_data:
-                        bars.append(FixturePosition(
-                            x=Config._validate_int(bar_data["x"], 0, 10000),
-                            y=Config._validate_int(bar_data["y"], 0, 10000)
-                        ))
+        for entry in fixtures_data:
+            if not isinstance(entry, dict):
+                continue
+            fixture_type = str(entry.get("type", ""))
+            if fixture_type not in FIXTURE_CHANNEL_COUNTS or "dmx_start" not in entry:
+                continue
 
-                controller = LedBarController(
-                    dmx_start=Config._validate_int(controller_data.get("dmx_start", 1), 1, 512),
-                    dmx_channel_count=Config._validate_int(controller_data.get("dmx_channel_count", 7), 1, 32),
-                    bars=bars
-                )
-                fixtures.led_bar_controllers.append(controller)
+            bars = []
+            for bar_data in entry.get("bars", []):
+                if isinstance(bar_data, dict) and "x" in bar_data and "y" in bar_data:
+                    bars.append(FixturePosition(
+                        x=Config._validate_int(bar_data["x"], 0, 10000),
+                        y=Config._validate_int(bar_data["y"], 0, 10000)
+                    ))
 
-        if "blinders" in fixtures_data:
-            for blinder_data in fixtures_data["blinders"]:
-                if isinstance(blinder_data, dict) and all(k in blinder_data for k in ["x", "y", "dmx_start"]):
-                    blinder = Blinder(
-                        x=Config._validate_int(blinder_data["x"], 0, 10000),
-                        y=Config._validate_int(blinder_data["y"], 0, 10000),
-                        dmx_start=Config._validate_int(blinder_data["dmx_start"], 1, 512),
-                        multiply_factor=Config._validate_float(blinder_data.get("multiply_factor", 2.0), 0.1, 10.0)
-                    )
-                    fixtures.blinders.append(blinder)
+            fixtures.append(FixtureInstance(
+                type=fixture_type,
+                dmx_start=Config._validate_int(entry["dmx_start"], 1, 512),
+                x=Config._validate_int(entry.get("x", 0), 0, 10000),
+                y=Config._validate_int(entry.get("y", 0), 0, 10000),
+                bars=bars,
+                multiply_factor=Config._validate_float(entry.get("multiply_factor", 2.0), 0.1, 10.0),
+            ))
 
         return fixtures
 
@@ -501,18 +498,12 @@ class Config:
         """Get mapping of fixture names to their DMX channels."""
         used_channels = {}
 
-        # LED bar controllers
-        for i, controller in enumerate(self.fixtures.led_bar_controllers):
-            fixture_name = f"Led Bar Controller {i+1}"
-            channels = list(range(controller.dmx_start, controller.dmx_start + controller.dmx_channel_count))
-            if channels:
-                used_channels[fixture_name] = channels
-
-        # Blinders
-        for i, blinder in enumerate(self.fixtures.blinders):
-            fixture_name = f"Blinder {i+1}"
-            # Assuming 8 channels for blinders (from original code)
-            channels = list(range(blinder.dmx_start, blinder.dmx_start + 8))
+        type_counts: Dict[str, int] = {}
+        for fixture in self.fixtures:
+            type_counts[fixture.type] = type_counts.get(fixture.type, 0) + 1
+            fixture_name = f"{fixture.type.capitalize()} {type_counts[fixture.type]}"
+            channel_count = FIXTURE_CHANNEL_COUNTS.get(fixture.type, 0)
+            channels = list(range(fixture.dmx_start, fixture.dmx_start + channel_count))
             if channels:
                 used_channels[fixture_name] = channels
 

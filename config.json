@@ -1,26 +1,22 @@
 {
-  "fixtures": {
-    "led_bar_controllers": [
-      {
-        "dmx_start": 1,
-        "dmx_channel_count": 7,
-        "bars": [
-          { "x": 150,  "y": 350 },
-          { "x": 325,  "y": 350 },
-          { "x": 500,  "y": 350 },
-          { "x": 675,  "y": 350 },
-          { "x": 875,  "y": 350 },
-          { "x": 1025, "y": 350 },
-          { "x": 1200, "y": 350 },
-          { "x": 1375, "y": 350 }
-        ]
-      }
-    ],
-    "blinders": [
-      { "x": 575, "y": 500, "dmx_start": 33, "multiply_factor": 2.0 },
-      { "x": 925, "y": 500, "dmx_start": 65, "multiply_factor": 2.0 }
-    ]
-  },
+  "fixtures": [
+    {
+      "type": "ledbar",
+      "dmx_start": 1,
+      "bars": [
+        { "x": 150,  "y": 350 },
+        { "x": 325,  "y": 350 },
+        { "x": 500,  "y": 350 },
+        { "x": 675,  "y": 350 },
+        { "x": 875,  "y": 350 },
+        { "x": 1025, "y": 350 },
+        { "x": 1200, "y": 350 },
+        { "x": 1375, "y": 350 }
+      ]
+    },
+    { "type": "blinder", "dmx_start": 33, "x": 575, "y": 500, "multiply_factor": 2.0 },
+    { "type": "blinder", "dmx_start": 65, "x": 925, "y": 500, "multiply_factor": 2.0 }
+  ],
   "midi_note_map": {
     "1":  { "part": "CH:BRIGHTNESS",       "color": "#555555", "fixture": "ledbar"  },
     "2":  { "part": "CH:BLUE",             "color": "#3333aa", "fixture": "ledbar"  },
