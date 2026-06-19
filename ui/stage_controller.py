@@ -183,6 +183,46 @@ class StageController(QObject):
             return []
         return [GenericFixture(fixture.x, fixture.y, fdef.channel_count, role_index_map(fdef))]
 
+    def _add_render_group(self, fixture: FixtureInstance) -> bool:
+        """Create + register the render object(s) for one fixture instance.
+
+        Incremental: existing scene items are left untouched (so adding a fixture
+        never tears down items the view may be mid-paint on — a SIGSEGV source).
+        Returns False for an unrenderable/unknown type."""
+        render_objs = self._make_render_objs(fixture)
+        if not render_objs:
+            self.logger.warning(f"Unknown fixture type '{fixture.type}', skipping")
+            return False
+
+        for obj in render_objs:
+            obj._instance = fixture
+            obj._move_callback = self._on_fixture_moved
+            obj.set_design_mode(self._design_mode)
+            self.scene.addItem(obj)
+            if isinstance(obj, LedBar):
+                self.led_bars.append(obj)
+            elif isinstance(obj, Blinder):
+                self.blinders.append(obj)
+            else:
+                self.generic_fixtures.append(obj)
+        self._render_groups.append((fixture, render_objs))
+        return True
+
+    def _remove_render_group(self, fixture: FixtureInstance) -> None:
+        """Detach + drop the render object(s) for one fixture instance.
+
+        Removes only the targeted items (no full-scene teardown). Items are
+        detached from the scene before their Python refs drop."""
+        for i, (inst, render_objs) in enumerate(self._render_groups):
+            if inst is fixture:
+                for obj in render_objs:
+                    for coll in (self.led_bars, self.blinders, self.generic_fixtures):
+                        if obj in coll:
+                            coll.remove(obj)
+                    self.scene.removeItem(obj)
+                del self._render_groups[i]
+                return
+
     def _setup_fixtures(self) -> None:
         """Setup all fixtures on the stage, dispatching by fixture type.
 
@@ -195,23 +235,7 @@ class StageController(QObject):
         self._render_groups: List = []
 
         for fixture in self.config.fixtures:
-            render_objs = self._make_render_objs(fixture)
-            if not render_objs:
-                self.logger.warning(f"Unknown fixture type '{fixture.type}', skipping")
-                continue
-
-            for obj in render_objs:
-                obj._instance = fixture
-                obj._move_callback = self._on_fixture_moved
-                obj.set_design_mode(self._design_mode)
-                self.scene.addItem(obj)
-                if isinstance(obj, LedBar):
-                    self.led_bars.append(obj)
-                elif isinstance(obj, Blinder):
-                    self.blinders.append(obj)
-                else:
-                    self.generic_fixtures.append(obj)
-            self._render_groups.append((fixture, render_objs))
+            self._add_render_group(fixture)
 
         total_fixtures = len(self.led_bars) + len(self.blinders) + len(self.generic_fixtures)
         self.logger.info(f"Setup {total_fixtures} fixtures on stage")
@@ -243,32 +267,31 @@ class StageController(QObject):
         self.logger.info(f"Stage design mode {'enabled' if enabled else 'disabled'}")
 
     def add_fixture(self, type_name: str, dmx_start: int, x: int, y: int) -> FixtureInstance:
-        """Append a new fixture instance to the patch and re-render the stage."""
+        """Append a new fixture instance to the patch and render it incrementally."""
         instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
                                    x=int(x), y=int(y))
         # A ledbar renders from bars[]; seed a single bar at the drop point.
         if type_name == "ledbar" and not instance.bars:
             instance.bars = [FixturePosition(x=int(x), y=int(y))]
         self.config.fixtures.append(instance)
-        self.refresh_from_config(self.config)
+        self._add_render_group(instance)
         self.fixture_added.emit(instance)
         self.logger.info(f"Added fixture '{type_name}' at DMX {dmx_start}")
         return instance
 
     def remove_selected(self) -> List[FixtureInstance]:
-        """Remove the instance(s) backing the current selection and re-render."""
+        """Remove the instance(s) backing the current selection (incrementally)."""
         instances: List[FixtureInstance] = []
         for item in self.scene.selectedItems():
             inst = getattr(item, "_instance", None)
             if inst is not None and inst not in instances:
                 instances.append(inst)
         for inst in instances:
+            self._remove_render_group(inst)
             if inst in self.config.fixtures:
                 self.config.fixtures.remove(inst)
-        if instances:
-            self.refresh_from_config(self.config)
-            for inst in instances:
-                self.fixture_removed.emit(inst)
+        for inst in instances:
+            self.fixture_removed.emit(inst)
         return instances
 
     def _on_fixture_moved(self, obj) -> None:
