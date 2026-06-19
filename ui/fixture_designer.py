@@ -1,11 +1,9 @@
-# ABOUTME: Stage scenario designer UI — a floating panel to add / address / delete
-# ABOUTME: fixtures on the virtual stage. Placement itself is done by dragging fixtures.
-from typing import Optional
-
+# ABOUTME: Stage scenario designer UI — a top-left toolbar (add / done) plus a
+# ABOUTME: per-selection inspector (name / type / DMX / delete). Placement is by drag.
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
-    QPushButton, QComboBox, QSpinBox, QLabel, QGroupBox, QDialogButtonBox,
+    QPushButton, QComboBox, QSpinBox, QLabel, QLineEdit, QDialogButtonBox,
 )
 
 from tupperlogger import get_logger
@@ -56,94 +54,47 @@ class AddFixtureDialog(QDialog):
         return self.type_combo.currentText(), self.dmx_spin.value()
 
 
-class FixtureDesignerPanel(QWidget):
-    """Floating designer panel: add a fixture, then drag it on the stage to place
-    it; the inspector re-addresses or deletes the current selection.
+class StageEditToolbar(QWidget):
+    """Top-left overlay toolbar shown while the stage is in edit mode.
 
-    All edits funnel through ``on_patch_changed`` so the caller marks the patch
-    dirty and persists it.
+    Hosts add-a-fixture (then drag it on the stage to place it) and Done (leave
+    edit mode). Add funnels through ``on_patch_changed`` so the caller persists
+    the patch; ``on_done`` exits. Deleting a fixture lives in the
+    FixtureInspector, not here.
     """
 
-    def __init__(self, stage_controller, on_patch_changed, parent=None):
-        super().__init__(parent, Qt.WindowType.Tool)
-        self.setWindowTitle("Stage Designer")
+    def __init__(self, stage_controller, on_patch_changed, on_done, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StageEditToolbar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._stage = stage_controller
         self._notify = on_patch_changed
-        self._current = None  # currently selected FixtureInstance
+        self._on_done = on_done
         self.logger = get_logger("ui.fixture_designer")
 
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(8)
 
-        add_button = QPushButton("Add fixture…")
+        title = QLabel('<span style="color:#4aa3df">●</span> EDIT MODE')
+        title.setObjectName("EditModeLabel")
+        layout.addWidget(title)
+
+        add_button = QPushButton("Add fixture")
+        add_button.setObjectName("EditToolbarAdd")
         add_button.clicked.connect(self._on_add)
         layout.addWidget(add_button)
 
-        # Inspector for the current selection.
-        self._inspector = QGroupBox("Selected fixture")
-        form = QFormLayout(self._inspector)
+        done_button = QPushButton("Done")
+        done_button.setObjectName("EditToolbarDone")
+        done_button.clicked.connect(lambda: self._on_done())
+        layout.addWidget(done_button)
 
-        self._type_label = QLabel("—")
-        form.addRow("Type", self._type_label)
+        # Drags only fire in design mode, so persist them straight through.
+        stage_controller.fixture_moved.connect(lambda _inst: self._notify())
 
-        self._dmx_spin = QSpinBox()
-        self._dmx_spin.setRange(1, 512)
-        self._dmx_spin.valueChanged.connect(self._on_dmx_changed)
-        form.addRow("DMX start", self._dmx_spin)
+        self.adjustSize()
 
-        self._pos_label = QLabel("—")
-        form.addRow("Position", self._pos_label)
-
-        self._delete_button = QPushButton("Delete")
-        self._delete_button.clicked.connect(self._on_delete)
-        form.addRow(self._delete_button)
-
-        layout.addWidget(self._inspector)
-        layout.addStretch(1)
-
-        hint = QLabel("Drag a fixture on the stage to move it.")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        stage_controller.fixture_selected.connect(self._on_selected)
-        stage_controller.fixture_moved.connect(self._on_moved)
-
-        self._set_current(None)
-
-    # ------------------------------------------------------------------
-    # Selection / inspector
-    # ------------------------------------------------------------------
-    def _set_current(self, instance) -> None:
-        self._current = instance
-        enabled = instance is not None
-        self._inspector.setEnabled(enabled)
-        if not enabled:
-            self._type_label.setText("—")
-            self._pos_label.setText("—")
-            return
-        self._type_label.setText(instance.type)
-        # Block the signal so populating the spin doesn't fire _on_dmx_changed.
-        self._dmx_spin.blockSignals(True)
-        self._dmx_spin.setValue(instance.dmx_start)
-        self._dmx_spin.blockSignals(False)
-        self._update_pos_label(instance)
-
-    def _update_pos_label(self, instance) -> None:
-        if instance.type == "ledbar" and instance.bars:
-            self._pos_label.setText(f"{len(instance.bars)} bars")
-        else:
-            self._pos_label.setText(f"({instance.x}, {instance.y})")
-
-    def _on_selected(self, instance) -> None:
-        self._set_current(instance)
-
-    def _on_moved(self, instance) -> None:
-        if instance is self._current:
-            self._update_pos_label(instance)
-        self._notify()
-
-    # ------------------------------------------------------------------
-    # Edits
-    # ------------------------------------------------------------------
     def _on_add(self) -> None:
         dialog = AddFixtureDialog(self._stage, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -151,22 +102,127 @@ class FixtureDesignerPanel(QWidget):
         type_name, dmx_start = dialog.values()
         # Drop new fixtures at the stage centre; the user drags from there.
         rect = self._stage.scene.sceneRect()
-        instance = self._stage.add_fixture(
+        self._stage.add_fixture(
             type_name, dmx_start, int(rect.width() / 2), int(rect.height() / 2)
         )
         self._notify()
-        self._set_current(instance)
+
+
+class FixtureInspector(QWidget):
+    """Floating inspector card for the selected fixture (edit mode only).
+
+    Shows the fixture's alias, type (read-only) and DMX start address, plus a
+    Delete action. Edits write straight onto the FixtureInstance and funnel
+    through ``on_patch_changed`` so the host persists the patch. The host
+    shows/hides + repositions it in response to ``fixture_selected``.
+    """
+
+    def __init__(self, stage_controller, on_patch_changed, parent=None):
+        super().__init__(parent)
+        self.setObjectName("FixtureInspector")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(280)
+        self._stage = stage_controller
+        self._notify = on_patch_changed
+        self._current = None  # currently selected FixtureInstance
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(6)
+
+        # Header: title + close (clears the selection, which hides the card).
+        header = QHBoxLayout()
+        title = QLabel("Inspector")
+        title.setObjectName("InspectorTitle")
+        header.addWidget(title)
+        header.addStretch(1)
+        close_button = QPushButton("✕")
+        close_button.setObjectName("InspectorClose")
+        close_button.setFixedSize(22, 22)
+        close_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_button.clicked.connect(self._on_close)
+        header.addWidget(close_button)
+        layout.addLayout(header)
+
+        # IDENTITY
+        layout.addWidget(self._section_label("IDENTITY"))
+        layout.addWidget(self._field_label("Name"))
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("Unnamed fixture")
+        self._name_edit.editingFinished.connect(self._on_name_changed)
+        layout.addWidget(self._name_edit)
+
+        # PROFILE
+        layout.addWidget(self._section_label("PROFILE"))
+        layout.addWidget(self._field_label("Fixture type"))
+        self._type_value = QLabel("—")
+        self._type_value.setObjectName("InspectorReadonly")
+        layout.addWidget(self._type_value)
+
+        # DMX PATCH
+        layout.addWidget(self._section_label("DMX PATCH"))
+        layout.addWidget(self._field_label("Start address"))
+        self._dmx_spin = QSpinBox()
+        self._dmx_spin.setRange(1, 512)
+        self._dmx_spin.valueChanged.connect(self._on_dmx_changed)
+        layout.addWidget(self._dmx_spin)
+
+        layout.addSpacing(8)
+        self._delete_button = QPushButton("Delete")
+        self._delete_button.setObjectName("InspectorDelete")
+        self._delete_button.clicked.connect(self._on_delete)
+        layout.addWidget(self._delete_button)
+
+    # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+    def _section_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("InspectorSection")
+        return lbl
+
+    def _field_label(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("InspectorFieldLabel")
+        return lbl
+
+    # ------------------------------------------------------------------
+    # Population / edits
+    # ------------------------------------------------------------------
+    def set_instance(self, instance) -> None:
+        """Populate the fields from a FixtureInstance (no-op for None — the host
+        hides the card instead)."""
+        self._current = instance
+        if instance is None:
+            return
+        self._name_edit.blockSignals(True)
+        self._name_edit.setText(instance.name)
+        self._name_edit.blockSignals(False)
+        self._type_value.setText(instance.type)
+        self._dmx_spin.blockSignals(True)
+        self._dmx_spin.setValue(instance.dmx_start)
+        self._dmx_spin.blockSignals(False)
+
+    def _on_name_changed(self) -> None:
+        if self._current is None:
+            return
+        new_name = self._name_edit.text().strip()
+        if new_name != self._current.name:
+            self._current.name = new_name
+            self._stage.refresh_labels()
+            self._notify()
 
     def _on_dmx_changed(self, value: int) -> None:
         if self._current is None:
             return
         self._current.dmx_start = int(value)
+        self._stage.refresh_labels()
         self._notify()
 
     def _on_delete(self) -> None:
-        if self._current is None:
-            return
         removed = self._stage.remove_selected()
         if removed:
             self._notify()
-            self._set_current(None)
+
+    def _on_close(self) -> None:
+        self._stage.scene.clearSelection()

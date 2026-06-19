@@ -3,7 +3,7 @@ import os
 import sys
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem, QGraphicsItem
-from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient
+from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient, QPen, QFont, QFontMetrics
 
 from fixture_library import (
     ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
@@ -11,20 +11,77 @@ from fixture_library import (
 )
 
 
+class FixtureLabel(QGraphicsItem):
+    """Constant-size name + DMX chip shown under a fixture in edit mode.
+
+    Uses ItemIgnoresTransformations so it stays a fixed on-screen size (and
+    legible) regardless of the stage's fit scale. Lives as a top-level scene
+    item rather than a child of the fixture, so the LED bar's drop-shadow glow
+    effect doesn't blur it; its position is kept in sync by the fixture's
+    itemChange hook."""
+
+    _PAD_X = 6
+    _PAD_Y = 3
+    _GAP = 6  # gap below the fixture's bottom edge, in device pixels
+
+    def __init__(self):
+        super().__init__()
+        self._text = ""
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        self.setZValue(100)
+        self._font = QFont()
+        self._font.setPixelSize(11)
+
+    def set_text(self, text: str):
+        if text != self._text:
+            self.prepareGeometryChange()
+            self._text = text
+            self.update()
+
+    def _box(self) -> QRectF:
+        fm = QFontMetrics(self._font)
+        w = fm.horizontalAdvance(self._text) + 2 * self._PAD_X
+        h = fm.height() + 2 * self._PAD_Y
+        return QRectF(-w / 2, self._GAP, w, h)  # centred under the anchor, below it
+
+    def boundingRect(self) -> QRectF:
+        return self._box()
+
+    def paint(self, painter, option, widget):
+        if not self._text:
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = self._box()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(25, 25, 25, 230))
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setFont(self._font)
+        painter.setPen(QColor(235, 235, 235))
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, self._text)
+
+
 class DesignableFixture:
     """Mixin adding scenario-designer behaviour to a fixture render object:
-    optional move/select (gated by design mode) and a position write-back on
-    drag-release. Mixed in BEFORE QGraphicsObject so super() reaches Qt.
+    optional move/select (gated by design mode), a position write-back on
+    drag-release, an edit-mode outline, and a name/DMX label. Mixed in BEFORE
+    QGraphicsObject so super() reaches Qt.
 
     Persistence follows the timeline's convention: position changes are visual
     during the drag and only committed on mouseRelease (via the move callback).
     """
+
+    # Outline colours (RGB): every fixture gets a thin edit-mode border; the
+    # selected one a thicker, lighter-blue border.
+    _EDIT_OUTLINE = (60, 130, 230)
+    _SELECT_OUTLINE = (120, 200, 255)
 
     def init_design(self):
         # Called from each fixture __init__ after the Qt object is constructed.
         self._instance = None          # config.FixtureInstance back-reference
         self._bar_index = None         # set for the bars of a multi-bar ledbar
         self._move_callback = None     # callable(render_obj) invoked on release
+        self._design_mode = False
+        self._label = None             # FixtureLabel (top-level scene item)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -32,12 +89,76 @@ class DesignableFixture:
     def set_design_mode(self, enabled: bool):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, enabled)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, enabled)
+        self._design_mode = enabled
+        if self._label is not None:
+            self.refresh_label()
+            self._label.setVisible(enabled and self._is_label_owner())
+        self.update()
+
+    # -- name/DMX label -------------------------------------------------
+    def _is_label_owner(self) -> bool:
+        """Only the first bar of a multi-bar ledbar carries a label (the others
+        share the same instance, so they'd be duplicates)."""
+        return self._bar_index in (None, 0)
+
+    def attach_label(self, scene):
+        """Create the fixture's label as a top-level scene item."""
+        self._label = FixtureLabel()
+        scene.addItem(self._label)
+        self._update_label_pos()
+        self.refresh_label()
+        self._label.setVisible(self._design_mode and self._is_label_owner())
+
+    def remove_label(self, scene):
+        if self._label is not None:
+            scene.removeItem(self._label)
+            self._label = None
+
+    def refresh_label(self):
+        """Sync the label text with the fixture's instance (name + DMX address)."""
+        if self._label is None:
+            return
+        inst = self._instance
+        if inst is None or not self._is_label_owner():
+            self._label.set_text("")
+            return
+        name = inst.name or inst.type
+        self._label.set_text(f"{name} · {inst.dmx_start}")
+
+    def _update_label_pos(self):
+        if self._label is None:
+            return
+        br = self.boundingRect()
+        self._label.setPos(self.pos().x() + br.center().x(),
+                           self.pos().y() + br.bottom())
+
+    def itemChange(self, change, value):
+        if (change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+                and self._label is not None):
+            self._update_label_pos()
+        return super().itemChange(change, value)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         if (self._move_callback is not None
                 and self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable):
             self._move_callback(self)
+
+    def paint_selection(self, painter):
+        """Outline the fixture: a thin edit-mode border on every fixture, a
+        thicker selection border on the selected one. Called from each fixture's
+        paint() (their own paint is otherwise a no-op)."""
+        if self.isSelected():
+            rgb, width = self._SELECT_OUTLINE, 8
+        elif self._design_mode:
+            rgb, width = self._EDIT_OUTLINE, 4
+        else:
+            return
+        pen = QPen(QColor(*rgb), width)
+        pen.setCosmetic(True)  # constant on-screen width regardless of fit scale
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self.boundingRect().adjusted(1, 1, -1, -1))
 
 
 class GlowingEllipse(QGraphicsEllipseItem):
@@ -162,12 +283,12 @@ class LedBar(DesignableFixture, QGraphicsObject):
     def paint(self, painter, option, widget):
         #option.state = QStyle.StateFlag.State_None
         #return super(LedBar, self).paint(painter,option)
-        pass
-        
+        self.paint_selection(painter)
+
     def update_dmx(self, data):
         if len(data) < self.dmx_channel_count:
             return
-        
+
         self.brightness = data[0]
         self.red = data[3]
         self.green = data[2]
@@ -296,14 +417,14 @@ class Blinder(DesignableFixture, QGraphicsObject):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
 
     def paint(self, painter, option, widget):
-        # Let child items handle their own painting
-        pass
+        # Child items handle the fixture itself; we only add the selection border.
+        self.paint_selection(painter)
 
     def update_dmx(self, data):
         if len(data) < self.dmx_channel_count:
             return
-            
-        # DMX mapping: 
+
+        # DMX mapping:
         # Channel 1: Master brightness
         # Channel 2: LED 1 (top) cool
         # Channel 3: LED 2 (bottom) cool  
@@ -389,8 +510,8 @@ class GenericFixture(DesignableFixture, QGraphicsObject):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
 
     def paint(self, painter, option, widget):
-        # Child items (housing + bulb) handle their own painting.
-        pass
+        # Child items (housing + bulb) handle their own painting; we add the border.
+        self.paint_selection(painter)
 
     def _channel(self, data, role, default=0):
         idx = self._role_index.get(role)

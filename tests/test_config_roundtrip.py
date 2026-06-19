@@ -210,6 +210,25 @@ def test_patch_persistence_roundtrip():
         _assert(len(data2["fixtures"]) == 3, "userprefs keeps owning the patch")
 
 
+def test_fixture_name_roundtrips():
+    print("test_fixture_name_roundtrips")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        # Shipped entries omit "name", so it defaults to "" (backward compatible).
+        _assert(all(f.name == "" for f in cfg.fixtures),
+                "fixtures without a name default to empty string")
+
+        cfg.fixtures[0].name = "Front Left"
+        cfg.mark_patch_dirty()
+        cfg.save()
+
+        cfg2 = Config.load()
+        _assert(cfg2.fixtures[0].name == "Front Left", "fixture alias round-trips")
+
+
 def test_unknown_fixture_type_skipped():
     print("test_unknown_fixture_type_skipped")
     with tempfile.TemporaryDirectory() as tmp:
@@ -250,6 +269,7 @@ def main():
     test_corrupted_userprefs_falls_back()
     test_fixtures_parse_with_type()
     test_patch_persistence_roundtrip()
+    test_fixture_name_roundtrips()
     test_unknown_fixture_type_skipped()
     test_ledbar_channel_notes_autoregister()
     print("\nALL TESTS PASSED")
