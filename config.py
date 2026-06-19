@@ -120,6 +120,7 @@ class FixtureInstance:
     blinders) with a single data-driven list."""
     type: str
     dmx_start: int
+    name: str = ""                                             # user alias (optional)
     x: int = 0
     y: int = 0
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
@@ -346,6 +347,7 @@ class Config:
             fixtures.append(FixtureInstance(
                 type=fixture_type,
                 dmx_start=Config._validate_int(entry["dmx_start"], 1, 512),
+                name=str(entry.get("name", "")),
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
                 bars=bars,

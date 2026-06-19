@@ -21,7 +21,7 @@ from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
                 ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog,
-                SettingsDialog, PlaylistController, FixtureDesignerPanel)
+                SettingsDialog, PlaylistController, StageEditToolbar, FixtureInspector)
 
 
 def _base_dir() -> str:
@@ -143,8 +143,6 @@ class MainWindow(QMainWindow):
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
         
         self.stage_controller = StageController(self.config)
-        # Lazily created when the user first enters stage design mode.
-        self.fixture_designer = None
 
         self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager,
                                             play_icon, pause_icon, stop_icon)
@@ -168,7 +166,6 @@ class MainWindow(QMainWindow):
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
-        self.toolbar_manager.design_stage_toggled.connect(self.on_design_stage_toggled)
     
     def setup_ui(self):
         """Setup the main UI layout."""
@@ -225,8 +222,32 @@ class MainWindow(QMainWindow):
         self.dmx_toggle_button.setFixedSize(28, 28)
         self.dmx_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dmx_toggle_button.clicked.connect(self._toggle_dmx_panel)
-        stage_view.set_overlay_widget(self.dmx_toggle_button)
+        stage_view.add_overlay(self.dmx_toggle_button, anchor="top-right", reference="viewport")
+        self.dmx_toggle_button.show()
         self._update_dmx_toggle_button()
+
+        # Stage scenario designer: an "Edit stage" button pinned to the stage
+        # image's top-right corner, swapped for a top-left toolbar while editing.
+        self.edit_stage_button = QPushButton("✎  Edit stage")
+        self.edit_stage_button.setObjectName("EditStageButton")
+        self.edit_stage_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_stage_button.clicked.connect(self.enter_edit_mode)
+        self.edit_stage_button.adjustSize()
+        stage_view.add_overlay(self.edit_stage_button, anchor="top-right", reference="background")
+        self.edit_stage_button.show()
+
+        self.edit_toolbar = StageEditToolbar(
+            self.stage_controller, self._on_patch_changed, self.exit_edit_mode)
+        stage_view.add_overlay(self.edit_toolbar, anchor="top-left", reference="background")
+        self.edit_toolbar.hide()
+
+        # Per-selection inspector, pinned to the stage image's top-right; shown
+        # only while a fixture is selected (which only happens in edit mode).
+        self.fixture_inspector = FixtureInspector(
+            self.stage_controller, self._on_patch_changed)
+        stage_view.add_overlay(self.fixture_inspector, anchor="top-right", reference="background")
+        self.fixture_inspector.hide()
+        self.stage_controller.fixture_selected.connect(self._on_fixture_selected)
 
         # Apply persisted collapsed state once the splitter has a real geometry
         if self.config.window.dmx_panel_collapsed:
@@ -535,17 +556,34 @@ class MainWindow(QMainWindow):
         dialog = AboutDialog(self)
         dialog.exec()
 
-    def on_design_stage_toggled(self, enabled):
-        """Enter/leave the stage scenario designer."""
-        self.stage_controller.set_design_mode(enabled)
-        if enabled:
-            if self.fixture_designer is None:
-                self.fixture_designer = FixtureDesignerPanel(
-                    self.stage_controller, self._on_patch_changed, self)
-            self.fixture_designer.show()
-            self.fixture_designer.raise_()
-        elif self.fixture_designer is not None:
-            self.fixture_designer.hide()
+    def enter_edit_mode(self):
+        """Enter the stage scenario designer: grid on, swap button for toolbar."""
+        stage_view = self.stage_controller.get_stage_view()
+        self.stage_controller.set_design_mode(True)
+        stage_view.set_grid_visible(True)
+        self.edit_stage_button.hide()
+        self.edit_toolbar.show()
+        self.edit_toolbar.adjustSize()
+        stage_view.reposition_overlays()
+
+    def exit_edit_mode(self):
+        """Leave edit mode (the toolbar's Done button). Edits already persist
+        immediately via _on_patch_changed, so this just restores playback view."""
+        stage_view = self.stage_controller.get_stage_view()
+        self.stage_controller.set_design_mode(False)
+        stage_view.set_grid_visible(False)
+        self.edit_toolbar.hide()
+        self.edit_stage_button.show()
+        stage_view.reposition_overlays()
+
+    def _on_fixture_selected(self, instance):
+        """Show + populate the inspector for the selected fixture (or hide it)."""
+        stage_view = self.stage_controller.get_stage_view()
+        self.fixture_inspector.set_instance(instance)
+        self.fixture_inspector.setVisible(instance is not None)
+        if instance is not None:
+            self.fixture_inspector.adjustSize()
+        stage_view.reposition_overlays()
 
     def _on_patch_changed(self):
         """Persist a fixture-patch edit. The software DMX engine picks up a new

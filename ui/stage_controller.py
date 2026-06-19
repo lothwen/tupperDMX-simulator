@@ -2,8 +2,8 @@ import os
 import sys
 from typing import List, Optional
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
-from PyQt6.QtGui import QPixmap, QPainter
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF, QRect, QLineF
 
 from tupperlogger import get_logger
 from config import Config, FixtureInstance, FixturePosition
@@ -17,6 +17,10 @@ from fixture_library import load_fixture_defs, role_index_map
 DEFAULT_SCENE_WIDTH = 1536
 DEFAULT_SCENE_HEIGHT = 1024
 
+# Spacing (in scene units) between grid lines drawn over the stage while the
+# scenario designer is active. Purely a visual aid — no snapping (yet).
+GRID_SPACING = 96
+
 
 # Render dispatch lives in StageController._make_render_objs: the two built-in
 # types keep their bespoke classes (LedBar / Blinder); every other (library)
@@ -29,7 +33,9 @@ class StageView(QGraphicsView):
     def __init__(self, scene, pixmap, parent=None):
         super().__init__(scene, parent)
         self.pixmap = pixmap
-        self._overlay_widget: Optional[QWidget] = None
+        # Each overlay is (widget, anchor, reference, margin); see add_overlay.
+        self._overlays: List[tuple] = []
+        self._grid_visible = False
         self._background_item: Optional[QGraphicsPixmapItem] = None
 
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -72,22 +78,61 @@ class StageView(QGraphicsView):
             scene.setSceneRect(0, 0, pixmap.width(), pixmap.height())
         self._fit_scene()
 
-    def set_overlay_widget(self, widget: QWidget) -> None:
-        """Attach a widget to float over the top-right corner of the view."""
-        self._overlay_widget = widget
+    def add_overlay(self, widget: QWidget, anchor: str = "top-right",
+                    reference: str = "viewport", margin: int = 8) -> None:
+        """Float a widget over a corner of the view.
+
+        ``anchor`` is ``"top-left"`` / ``"top-right"``; ``reference`` is
+        ``"viewport"`` (the full widget) or ``"background"`` (the letterboxed
+        stage image). The caller controls visibility — repositioning a hidden
+        widget is harmless."""
         widget.setParent(self.viewport())
         widget.raise_()
-        self._reposition_overlay()
-        widget.show()
+        self._overlays.append((widget, anchor, reference, margin))
+        self.reposition_overlays()
 
-    def _reposition_overlay(self) -> None:
-        if self._overlay_widget is None:
+    def _background_rect(self) -> QRect:
+        """The stage image's bounds in viewport coordinates (letterbox-aware)."""
+        scene_rect = self.scene().sceneRect()
+        top_left = self.mapFromScene(scene_rect.topLeft())
+        bottom_right = self.mapFromScene(scene_rect.bottomRight())
+        return QRect(top_left, bottom_right)
+
+    def reposition_overlays(self) -> None:
+        for widget, anchor, reference, margin in self._overlays:
+            rect = self._background_rect() if reference == "background" else self.viewport().rect()
+            if "right" in anchor:
+                x = rect.right() - widget.width() - margin
+            else:
+                x = rect.left() + margin
+            y = rect.top() + margin
+            widget.move(x, y)
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """Show/hide the designer grid drawn over the stage image."""
+        if self._grid_visible == visible:
             return
-        margin = 8
-        w = self._overlay_widget
-        x = max(0, self.viewport().width() - w.width() - margin)
-        y = margin
-        w.move(x, y)
+        self._grid_visible = visible
+        self.viewport().update()
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        super().drawForeground(painter, rect)
+        if not self._grid_visible:
+            return
+        area = rect.intersected(self.scene().sceneRect())
+        if area.isEmpty():
+            return
+        pen = QPen(QColor(255, 255, 255, 38))
+        pen.setCosmetic(True)  # constant on-screen width regardless of fit scale
+        painter.setPen(pen)
+        x = area.left() - (area.left() % GRID_SPACING)
+        while x <= area.right():
+            painter.drawLine(QLineF(x, area.top(), x, area.bottom()))
+            x += GRID_SPACING
+        y = area.top() - (area.top() % GRID_SPACING)
+        while y <= area.bottom():
+            painter.drawLine(QLineF(area.left(), y, area.right(), y))
+            y += GRID_SPACING
 
     def _fit_scene(self) -> None:
         scene = self.scene()
@@ -97,11 +142,12 @@ class StageView(QGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._fit_scene()
-        self._reposition_overlay()
+        self.reposition_overlays()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._fit_scene()
+        self.reposition_overlays()
 
 
 class StageController(QObject):
@@ -199,6 +245,7 @@ class StageController(QObject):
             obj._move_callback = self._on_fixture_moved
             obj.set_design_mode(self._design_mode)
             self.scene.addItem(obj)
+            obj.attach_label(self.scene)
             if isinstance(obj, LedBar):
                 self.led_bars.append(obj)
             elif isinstance(obj, Blinder):
@@ -219,6 +266,7 @@ class StageController(QObject):
                     for coll in (self.led_bars, self.blinders, self.generic_fixtures):
                         if obj in coll:
                             coll.remove(obj)
+                    obj.remove_label(self.scene)
                     self.scene.removeItem(obj)
                 del self._render_groups[i]
                 return
@@ -265,6 +313,11 @@ class StageController(QObject):
         if not enabled:
             self.scene.clearSelection()
         self.logger.info(f"Stage design mode {'enabled' if enabled else 'disabled'}")
+
+    def refresh_labels(self) -> None:
+        """Re-sync every fixture's name/DMX label (e.g. after an inspector edit)."""
+        for obj in self.get_all_fixtures():
+            obj.refresh_label()
 
     def add_fixture(self, type_name: str, dmx_start: int, x: int, y: int) -> FixtureInstance:
         """Append a new fixture instance to the patch and render it incrementally."""
@@ -340,6 +393,7 @@ class StageController(QObject):
     def clear_all_fixtures(self) -> None:
         """Remove all fixtures from the stage."""
         for obj in self.led_bars + self.blinders + self.generic_fixtures:
+            obj.remove_label(self.scene)
             self.scene.removeItem(obj)
         self.led_bars.clear()
         self.blinders.clear()

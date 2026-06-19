@@ -772,3 +772,149 @@ QWidget {
 QLabel {
     color: white;
 }
+
+/* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar */
+QPushButton#EditStageButton {
+    background-color: rgba(40, 40, 40, 200);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 80);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: bold;
+}
+
+QPushButton#EditStageButton:hover {
+    background-color: rgba(70, 70, 70, 220);
+    border-color: rgba(255, 255, 255, 140);
+}
+
+QPushButton#EditStageButton:pressed {
+    background-color: rgba(20, 20, 20, 230);
+}
+
+QWidget#StageEditToolbar {
+    background-color: rgba(28, 28, 28, 235);
+    border: 1px solid rgba(255, 255, 255, 40);
+    border-radius: 8px;
+}
+
+QLabel#EditModeLabel {
+    color: white;
+    font-weight: bold;
+    padding: 0 4px;
+}
+
+QWidget#StageEditToolbar QPushButton {
+    color: white;
+    background-color: #4a4a4a;
+    border: 1px solid rgba(255, 255, 255, 40);
+    border-radius: 5px;
+    padding: 6px 12px;
+    font-weight: bold;
+}
+
+QWidget#StageEditToolbar QPushButton:hover {
+    background-color: #5a5a5a;
+}
+
+QWidget#StageEditToolbar QPushButton:disabled {
+    color: #777;
+    background-color: #3a3a3a;
+    border-color: rgba(255, 255, 255, 20);
+}
+
+QWidget#StageEditToolbar QPushButton#EditToolbarAdd {
+    background-color: #2f6db0;
+    border-color: #3f7dc0;
+}
+
+QWidget#StageEditToolbar QPushButton#EditToolbarAdd:hover {
+    background-color: #3f7dc0;
+}
+
+QWidget#StageEditToolbar QPushButton#EditToolbarDone {
+    background-color: #3a86d6;
+    border-color: #4a96e6;
+}
+
+QWidget#StageEditToolbar QPushButton#EditToolbarDone:hover {
+    background-color: #4a96e6;
+}
+
+/* Fixture inspector — floating card for the selected fixture */
+QWidget#FixtureInspector {
+    background-color: rgba(28, 28, 28, 240);
+    border: 1px solid rgba(255, 255, 255, 45);
+    border-radius: 8px;
+}
+
+QLabel#InspectorTitle {
+    color: white;
+    font-size: 15px;
+    font-weight: bold;
+}
+
+QPushButton#InspectorClose {
+    background-color: transparent;
+    color: #aaa;
+    border: none;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#InspectorClose:hover {
+    color: white;
+}
+
+QLabel#InspectorSection {
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    margin-top: 6px;
+}
+
+QLabel#InspectorFieldLabel {
+    color: #bbb;
+    font-size: 11px;
+}
+
+QLabel#InspectorReadonly {
+    color: white;
+    background-color: #333;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 4px;
+    padding: 5px 8px;
+}
+
+QWidget#FixtureInspector QLineEdit,
+QWidget#FixtureInspector QSpinBox {
+    color: white;
+    background-color: #3a3a3a;
+    border: 1px solid rgba(255, 255, 255, 40);
+    border-radius: 4px;
+    padding: 5px 8px;
+}
+
+QWidget#FixtureInspector QLineEdit:focus,
+QWidget#FixtureInspector QSpinBox:focus {
+    border-color: #4a96e6;
+}
+
+QPushButton#InspectorDelete {
+    color: #ff8a8a;
+    background-color: rgba(120, 40, 40, 200);
+    border: 1px solid #a04040;
+    border-radius: 5px;
+    padding: 7px 12px;
+    font-weight: bold;
+}
+
+QPushButton#InspectorDelete:hover {
+    background-color: rgba(150, 50, 50, 220);
+    color: white;
+}
+
+QPushButton#InspectorDelete:pressed {
+    background-color: rgba(100, 30, 30, 230);
+}
