@@ -20,7 +20,6 @@ from .constants import (
     CHANNEL_NOTE_MAP,
     CHANNEL_CONTROL_NOTES,
     _channel_to_velocity,
-    _DEFAULT_SCENE_CONFIG_PATH,
 )
 
 
@@ -37,11 +36,10 @@ class SceneEditor:
         """Return the cached LED scene library, loading it on first access."""
         if self._led_scenes is None:
             try:
-                self._led_scenes = load_led_scenes(_DEFAULT_SCENE_CONFIG_PATH)
+                self._led_scenes = load_led_scenes()
             except Exception as exc:
                 self.logger.warning(
-                    f"Could not load LED scene library from "
-                    f"{_DEFAULT_SCENE_CONFIG_PATH}: {exc}"
+                    f"Could not load LED scene library: {exc}"
                 )
                 self._led_scenes = []
         return self._led_scenes

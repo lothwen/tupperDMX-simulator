@@ -1,6 +1,5 @@
 from .artnet_sender import ArtNetSender
 
-from .dmx import led_banks, blinder_banks, led_chases, blinder_chases
 import time
 import random
 import threading
@@ -111,9 +110,10 @@ def generate_song_colors(mode, hue_index, FromDialog=False):
 # drives every fixture in the patch from this data, so the per-type
 # update_led_scene / update_blinder_scene / blackout_* duplication is gone.
 #
-# Scene/chase data still comes from dmx_config.json (via .dmx) keyed by bank
-# name; colors stay (r, g, b) tuples. The Art-Net output layout is unchanged:
-# LED at ch 0-6, Blinder1 at 32-39, Blinder2 at 64-71.
+# Channels, scene banks and chases all come from the fixture-library JSON
+# (fixtures/*.json via fixture_library.load_fixture_defs); colors stay
+# (r, g, b) tuples. There are no hardcoded fixture types here anymore — the
+# patch is whatever config.fixtures (type name + DMX address) describes.
 # ============================================================================
 
 # Channel semantic roles. The engine uses these to address channels by meaning
@@ -147,7 +147,7 @@ class ChannelDef:
 @dataclass
 class FixtureType:
     channels: list           # list[ChannelDef]
-    banks: dict              # bank-name -> list[scene dataclass] (from .dmx)
+    banks: dict              # bank-name -> list[scene namespace] (channel fields)
     chases: list             # list[{'banks': [...], 'scenes': [...]}]
 
     @property
@@ -161,63 +161,41 @@ class FixturePatch:
     dmx_base: int            # 1-indexed DMX start address
 
 
-# H807SA LED controller (7ch): brightness | blue | green | red | animation
-#                              | speed | direction
-H807SA_CHANNELS = [
-    ChannelDef('brightness', ROLE_BRIGHTNESS, CH_BLEND | CH_KNOB_LEVEL),
-    ChannelDef('blue',       ROLE_BLUE,       CH_BLEND),
-    ChannelDef('green',      ROLE_GREEN,      CH_BLEND),
-    ChannelDef('red',        ROLE_RED,        CH_BLEND),
-    ChannelDef('animation',  ROLE_ANIMATION,  0),
-    ChannelDef('speed',      ROLE_SPEED,      CH_KNOB_SPEED),
-    ChannelDef('direction',  ROLE_DIRECTION,  0),
-]
+def _scene_from_dict(channels, scene):
+    """Build a scene namespace from a raw scene dict, keyed by channel field.
 
-# Warm/cool white blinder (8ch): brightness | cool1 | cool2 | warm1 | warm2
-#                                | strobe | mode | speed
-BLINDER_CHANNELS = [
-    ChannelDef('brightness', ROLE_BRIGHTNESS, CH_BLEND),  # not knob-capped
-    ChannelDef('cool1',      ROLE_WHITE_COOL, CH_BLEND),
-    ChannelDef('cool2',      ROLE_WHITE_COOL, CH_BLEND),
-    ChannelDef('warm1',      ROLE_WHITE_WARM, CH_BLEND),
-    ChannelDef('warm2',      ROLE_WHITE_WARM, CH_BLEND),
-    ChannelDef('strobe',     ROLE_STROBE,     0),
-    ChannelDef('mode',       ROLE_MODE,       0),
-    ChannelDef('speed',      ROLE_SPEED,      0),
-]
-
-FIXTURE_H807SA = FixtureType(H807SA_CHANNELS, led_banks, led_chases)
-FIXTURE_BLINDER = FixtureType(BLINDER_CHANNELS, blinder_banks, blinder_chases)
+    Non-channel metadata (e.g. "name") is dropped; missing channels default to
+    0. Matches the attribute access (getattr(scene_obj, ch.field)) the engine
+    uses in load_scene()."""
+    return SimpleNamespace(**{ch.field: scene.get(ch.field, 0) for ch in channels})
 
 
 def _zero_scene(channels):
     """A single all-zero scene whose attributes match the channel fields.
 
-    Library-defined (generic) fixture types ship no scene banks, but the engine
-    needs at least one bank so init_fixtures()/load_scene() stay valid. This
-    inert default bank fills that role; generic types get no MIDI scene-select
-    until the per-type MIDI map (subtask 4) lands."""
+    Fixture types that ship no scene banks still need at least one bank so
+    init_fixtures()/load_scene() stay valid. This inert default bank fills that
+    role; such types get no MIDI scene-select until the per-type MIDI map
+    (subtask 4) lands."""
     return SimpleNamespace(**{ch.field: 0 for ch in channels})
 
 
 def build_fixture_types():
-    """Fixture-type registry: the two built-in singletons plus every data-driven
-    definition from the fixture library. config.json / the patch reference a type
-    by name and resolve to a FixtureType here.
+    """Fixture-type registry built entirely from the fixture library. Every
+    fixtures/*.json definition becomes a FixtureType (channels + scene banks +
+    chases); config.json / the patch reference a type by name and resolve here.
 
-    The built-ins are kept as the original singleton objects — note routing
-    (_resolve_fixture_handles) and the characterization tests rely on their
-    identity — so library defs never override them."""
-    types = {"ledbar": FIXTURE_H807SA, "blinder": FIXTURE_BLINDER}
+    A definition with no banks gets an inert all-zero default bank so the engine
+    stays valid for it."""
+    types = {}
     for name, fdef in load_fixture_defs().items():
-        if name in types:
-            continue
         channels = [ChannelDef(c.field, c.role, c.flags) for c in fdef.channels]
-        types[name] = FixtureType(
-            channels=channels,
-            banks={"_default": [_zero_scene(channels)]},
-            chases=[],
-        )
+        banks = {bank_name: [_scene_from_dict(channels, s) for s in scenes]
+                 for bank_name, scenes in fdef.banks.items()}
+        if not banks:
+            banks = {"_default": [_zero_scene(channels)]}
+        types[name] = FixtureType(channels=channels, banks=banks,
+                                  chases=list(fdef.chases))
     return types
 
 
@@ -225,14 +203,18 @@ def build_fixture_types():
 # ui/stage_controller.py; generic types render via fixtures.GenericFixture.)
 FIXTURE_TYPES = build_fixture_types()
 
-# Default patch used when no config fixtures are injected (standalone / tests):
-# the LED bar at DMX 1..7, Blinder1 at 33..40, Blinder2 at 65..72. The live app
-# builds the patch from config.fixtures instead (see DMXController._build_patch).
-DEFAULT_PATCH = [
-    FixturePatch(FIXTURE_H807SA,  1),
-    FixturePatch(FIXTURE_BLINDER, 33),
-    FixturePatch(FIXTURE_BLINDER, 65),
-]
+
+def _default_patch():
+    """Default patch when no config fixtures are injected (standalone / tests):
+    LED bar at DMX 1..7, Blinder1 at 33..40, Blinder2 at 65..72. Resolves the
+    types by name from the library; skips any that are missing. The live app
+    builds the patch from config.fixtures instead (see DMXController._build_patch)."""
+    layout = [("ledbar", 1), ("blinder", 33), ("blinder", 65)]
+    return [FixturePatch(FIXTURE_TYPES[name], base)
+            for name, base in layout if name in FIXTURE_TYPES]
+
+
+DEFAULT_PATCH = _default_patch()
 
 
 @dataclass
@@ -256,6 +238,7 @@ class FixtureState:
     blend_time: int = DEFAULT_BLEND_TIME
     blend_time_elapsed: float = 0
     last_chase_change: float = 0
+    last_palette_change: float = 0
     song_part_triggered: bool = False
     # Derived once in init_fixtures():
     base: int = 0        # offset into present[]/target[] (= dmx_base - 1)
@@ -289,8 +272,6 @@ class DMXController:
         self.brightness_cap = 255
         self.speed_cap = 255
 
-        self.last_palette_change = 0
-
         self.fixtures = []
         self.init_fixtures()
 
@@ -319,14 +300,14 @@ class DMXController:
     def _resolve_fixture_handles(self):
         """Resolve the LED / blinder index handles the note router uses.
 
-        For now the emulator keeps the single-LED + up-to-two-blinder semantics
-        (handles derived from the patch instead of hardcoded 0/1/2); generalizing
-        note->fixture routing is subtask 4."""
-        self.led = next((i for i, p in enumerate(self.patch)
-                         if p.type is FIXTURE_H807SA), 0)
-        blinders = [i for i, p in enumerate(self.patch) if p.type is FIXTURE_BLINDER]
-        self.blinder1 = blinders[0] if len(blinders) > 0 else self.led
-        self.blinder2 = blinders[1] if len(blinders) > 1 else self.blinder1
+        For now the emulator keeps the single-LED + up-to-two-blinder semantics,
+        mapped positionally onto the patch: fixture 0 is the LED, 1 and 2 are the
+        blinders (falling back to lower indices for shorter patches). Generalizing
+        note->fixture routing is subtask 4 (the per-type MIDI map)."""
+        n = self.num_fixtures
+        self.led = 0
+        self.blinder1 = 1 if n > 1 else self.led
+        self.blinder2 = 2 if n > 2 else self.blinder1
 
     def init_fixtures(self):
         """Initialise per-fixture runtime state from the patch, deriving each
@@ -511,21 +492,21 @@ class DMXController:
         self.fixtures[fx].blend_time_elapsed = 0
         self.reseed_all_blend_starts()
 
-    def change_led_color(self, color):
+    def change_fixture_color(self, fx, color):
         # Solid manual color: drop the palette so the timer stops cycling.
-        self.fixtures[self.led].palette_size = 0
-        self.fixtures[self.led].palette_ptr = None
-        self.set_fixture_color(self.led, color)
+        self.fixtures[fx].palette_size = 0
+        self.fixtures[fx].palette_ptr = None
+        self.set_fixture_color(fx, color)
 
-    def change_led_color_palette(self, palette, index, size, blend_time, color_change_time):
-        s = self.fixtures[self.led]
+    def change_fixture_color_palette(self, fx, palette, index, size, blend_time, color_change_time):
+        s = self.fixtures[fx]
         s.palette_ptr = palette
         s.palette_index = index
         s.palette_size = size
         s.blend_time = blend_time
         s.color_change_time = color_change_time
-        self.set_fixture_color(self.led, palette[index])
-        self.last_palette_change = time.time()
+        self.set_fixture_color(fx, palette[index])
+        s.last_palette_change = time.time()
 
     # ------------------------------------------------------------------
     # Blackouts
@@ -550,18 +531,19 @@ class DMXController:
         self.logger.info(f"Blackout All state: {'enabled' if self.blackout_all_state else 'disabled'}")
 
     def reset_led_blinder_status(self):
-        # Drop out of chase/palette so the background loop stops stomping the
-        # manual values, and clear blinders that the automatic song-part program
-        # left on (e.g. from a BREAK) so a manual scene starts clean. Blinders
-        # the user triggered by hand (notes 26-32) are left running.
-        self.fixtures[self.led].is_chasing = False
-        self.fixtures[self.led].is_blackout = False
-        self.fixtures[self.led].palette_size = 0
-        self.fixtures[self.led].palette_ptr = None
-        if self.fixtures[self.blinder1].song_part_triggered:
-            self.blackout_fixture(self.blinder1)
-        if self.fixtures[self.blinder2].song_part_triggered:
-            self.blackout_fixture(self.blinder2)
+        # Drop the LED out of chase/palette so the background loop stops stomping
+        # the manual values, and clear any fixture that the automatic song-part
+        # program left on (e.g. blinders from a BREAK) so a manual scene starts
+        # clean. Fixtures the user triggered by hand (notes 26-32) are left
+        # running (they don't carry song_part_triggered).
+        led = self.fixtures[self.led]
+        led.is_chasing = False
+        led.is_blackout = False
+        led.palette_size = 0
+        led.palette_ptr = None
+        for fx in range(self.num_fixtures):
+            if fx != self.led and self.fixtures[fx].song_part_triggered:
+                self.blackout_fixture(fx)
 
     # ------------------------------------------------------------------
     # MIDI input
@@ -618,13 +600,13 @@ class DMXController:
                 case 19:  # G0
                     self.load_scene(self.led, self.fixtures[self.led].bank, 7)
                 case 20:  # G#0
-                    self.change_led_color(COLOR32_WHITE)
+                    self.change_fixture_color(self.led, COLOR32_WHITE)
                 case 21:  # A0
-                    self.change_led_color(COLOR32_ORANGE)
+                    self.change_fixture_color(self.led, COLOR32_ORANGE)
                 case 22:  # A#0
-                    self.change_led_color(COLOR32_CYAN)
+                    self.change_fixture_color(self.led, COLOR32_CYAN)
                 case 23:  # B0
-                    self.change_led_color(COLOR32_PINK)
+                    self.change_fixture_color(self.led, COLOR32_PINK)
                 case 24:  # C1
                     self.fixtures[self.led].bank = 'FILLS'
                 case 25:  # C#1
@@ -706,13 +688,13 @@ class DMXController:
         self.blackout_fixture(self.blinder2)
 
         if self.color_palette:
-                self.change_led_color_palette(self.color_palette, 0,
+                self.change_fixture_color_palette(self.led, self.color_palette, 0,
                   len(self.color_palette), self.beat_duration(self.song_tempo) * 1,
                   self.beat_duration(self.song_tempo) * 4)
 
         if song_part == 1: # INTRO
             if self.color_palette:
-                self.change_led_color(self.color_palette[0])
+                self.change_fixture_color(self.led, self.color_palette[0])
             self.load_scene(self.led, 'FILLS2', 2)
 
         elif song_part == 2: # VERSE
@@ -793,17 +775,16 @@ class DMXController:
 
             current_time = time.time()
             with self.lock:
-                # Color palette timer (LED only)
-                led = self.fixtures[self.led]
-                if led.palette_size > 1:
-                    if current_time - self.last_palette_change >= led.color_change_time / 1000.0:
-                        i = 1
-                        if led.is_palette_random:
-                            i = random.randint(16, 48)
-
-                        led.palette_index = (led.palette_index + i) % led.palette_size
-                        self.set_fixture_color(self.led, led.palette_ptr[led.palette_index])
-                        self.last_palette_change = current_time
+                # Color palette timers (per fixture: each can run its own palette
+                # at its own color_change_time).
+                for fx in range(self.num_fixtures):
+                    s = self.fixtures[fx]
+                    if s.palette_size > 1 and \
+                       current_time - s.last_palette_change >= s.color_change_time / 1000.0:
+                        i = random.randint(16, 48) if s.is_palette_random else 1
+                        s.palette_index = (s.palette_index + i) % s.palette_size
+                        self.set_fixture_color(fx, s.palette_ptr[s.palette_index])
+                        s.last_palette_change = current_time
 
                 # Chase timers
                 for fx in range(self.num_fixtures):

@@ -64,6 +64,8 @@ class FixtureDef:
     name: str            # registry key, e.g. "par_rgb"
     channels: List[ChannelSpec]
     render: str          # "par" | "bar" | "blinder" | "generic"
+    banks: Dict[str, List[dict]]  # bank-name -> list of scene dicts (raw, by field)
+    chases: List[dict]            # list of {"banks": [...], "scenes": [...]}
 
     @property
     def channel_count(self) -> int:
@@ -133,7 +135,22 @@ def parse_fixture_def(data: dict) -> Optional[FixtureDef]:
                 flags_int |= FLAG_NAMES.get(flag, 0)
         channels.append(ChannelSpec(field=ch_field, role=role_int, flags=flags_int))
 
-    return FixtureDef(name=name, channels=channels, render=render)
+    # Optional scene/bank/chase data (carried as raw dicts; the software
+    # controller turns each scene dict into per-channel values). Tolerant of
+    # missing/malformed sections so a partial def still yields valid channels.
+    banks_data = data.get("banks")
+    banks: Dict[str, List[dict]] = {}
+    if isinstance(banks_data, dict):
+        for bank_name, scenes in banks_data.items():
+            if isinstance(scenes, list):
+                banks[str(bank_name)] = [s for s in scenes if isinstance(s, dict)]
+
+    chases_data = data.get("chases")
+    chases: List[dict] = [c for c in chases_data if isinstance(c, dict)] \
+        if isinstance(chases_data, list) else []
+
+    return FixtureDef(name=name, channels=channels, render=render,
+                      banks=banks, chases=chases)
 
 
 def role_index_map(fdef: FixtureDef) -> Dict[int, int]:
