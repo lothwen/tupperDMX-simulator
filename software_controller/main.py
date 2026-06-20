@@ -3,7 +3,7 @@ from .artnet_sender import ArtNetSender
 import time
 import random
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 from fixture_library import load_fixture_defs
@@ -33,6 +33,11 @@ DEFAULT_HSL_S = 1.0
 DEFAULT_HSL_L = 0.5
 
 PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'COLOR+WHITE', 'MONOCHROMATIC', 'SINGLE']
+
+# The song-part names a fixture def's scenes/chases can be tagged with via
+# "song_parts" (listed in MIDI-note order, notes 41-49). handle_note_on passes
+# one of these names to pick_scene_from_song_part; anything else is ignored.
+SONG_PARTS = ['INTRO', 'VERSE', 'CHORUS', 'BREAK', 'BRIDGE', 'INST', 'SOLO', 'OUTRO', 'END']
 
 
 def hsl_to_rgb(h, s, l):
@@ -145,11 +150,24 @@ class ChannelDef:
     flags: int
 
 
+@dataclass(frozen=True)
+class SongPartEntry:
+    """One scene or chase a fixture type runs for a given song part. Built from
+    the "song_parts" tags on scenes/chases in the fixture def (see
+    build_fixture_types). For chases bank is "" and index is the chase index;
+    for scenes bank is the bank name and index is the scene index."""
+    is_chase: bool
+    bank: str
+    index: int
+
+
 @dataclass
 class FixtureType:
     channels: list           # list[ChannelDef]
     banks: dict              # bank-name -> list[scene namespace] (channel fields)
     chases: list             # list[{'banks': [...], 'scenes': [...]}]
+    # song-part name -> list[SongPartEntry]; what this type runs per song part.
+    song_part_program: dict = field(default_factory=dict)
 
     @property
     def channel_count(self):
@@ -190,8 +208,24 @@ def build_fixture_types():
         if not banks:
             banks = {"_default": [_zero_scene(channels)]}
         types[name] = FixtureType(channels=channels, banks=banks,
-                                  chases=list(fdef.chases))
+                                  chases=list(fdef.chases),
+                                  song_part_program=_build_song_part_program(fdef))
     return types
+
+
+def _build_song_part_program(fdef):
+    """Index the "song_parts" tags on a fixture def's scenes and chases into a
+    {part-name: [SongPartEntry]} map. Read from the raw fdef dicts because
+    _scene_from_dict drops the tag from the runtime scene namespaces."""
+    program = {}
+    for bank_name, scenes in fdef.banks.items():
+        for idx, scene in enumerate(scenes):
+            for part in scene.get("song_parts", []):
+                program.setdefault(part, []).append(SongPartEntry(False, bank_name, idx))
+    for idx, chase in enumerate(fdef.chases):
+        for part in chase.get("song_parts", []):
+            program.setdefault(part, []).append(SongPartEntry(True, "", idx))
+    return program
 
 
 # (The UI stage renderer keeps its own name->render-class dispatch in
@@ -641,23 +675,23 @@ class DMXController:
                     self.color_palette = generate_song_colors(
                     PALETTE_MODES[palette_mode], hue_index)
                 case 41:  # F2
-                    self.pick_scene_from_song_part(1, velocity) # INTRO
+                    self.pick_scene_from_song_part('INTRO', velocity)
                 case 42:  # F#2
-                    self.pick_scene_from_song_part(2, velocity) # VERSE
+                    self.pick_scene_from_song_part('VERSE', velocity)
                 case 43:  # G2
-                    self.pick_scene_from_song_part(3, velocity) # CHORUS
+                    self.pick_scene_from_song_part('CHORUS', velocity)
                 case 44:  # G#2
-                    self.pick_scene_from_song_part(4, velocity) # BREAK
+                    self.pick_scene_from_song_part('BREAK', velocity)
                 case 45:  # A2
-                    self.pick_scene_from_song_part(5, velocity) # BRIDGE
+                    self.pick_scene_from_song_part('BRIDGE', velocity)
                 case 46:  # A#2
-                    self.pick_scene_from_song_part(6, velocity) # INST
+                    self.pick_scene_from_song_part('INST', velocity)
                 case 47:  # B2
-                    self.pick_scene_from_song_part(7, velocity) # SOLO
+                    self.pick_scene_from_song_part('SOLO', velocity)
                 case 48:  # C3
-                    self.pick_scene_from_song_part(8, velocity) # OUTRO
+                    self.pick_scene_from_song_part('OUTRO', velocity)
                 case 49:  # C#3
-                    self.pick_scene_from_song_part(9, velocity) # END
+                    self.pick_scene_from_song_part('END', velocity)
                 case 50:  # D3
                     self.blackout_fixture(self.led)
                 case 51:  # D#3
@@ -666,61 +700,44 @@ class DMXController:
                 case 52:  # E3
                     self.blackout_all()
 
-    def pick_scene_from_song_part(self, song_part, velocity):
-        self.blackout_fixture(self.led)
-        self.blackout_fixture(self.blinder1)
-        self.blackout_fixture(self.blinder2)
+    def pick_scene_from_song_part(self, part, velocity):
+        """Run the song-part program: for the requested part (a SONG_PARTS name),
+        load whatever scene or chase each fixture type tagged for it (data-driven
+        from the fixture defs' "song_parts" tags). Fixtures with nothing tagged
+        for the part stay blacked out."""
+        if part not in SONG_PARTS:
+            return
+
+        # Fixtures whose type carries a song-part program are owned by the
+        # automatic show; leave anything else (e.g. a generic wash) untouched.
+        managed = [fx for fx in range(self.num_fixtures)
+                   if self.fixtures[fx].type.song_part_program]
+
+        for fx in managed:
+            self.blackout_fixture(fx)
 
         if self.color_palette:
-                self.change_fixture_color_palette(self.led, self.color_palette, 0,
-                  len(self.color_palette), self.beat_duration(self.song_tempo) * 1,
-                  self.beat_duration(self.song_tempo) * 4)
+            self.change_fixture_color_palette(self.led, self.color_palette, 0,
+              len(self.color_palette), self.beat_duration(self.song_tempo) * 1,
+              self.beat_duration(self.song_tempo) * 4)
 
-        if song_part == 1: # INTRO
-            if self.color_palette:
-                self.change_fixture_color(self.led, self.color_palette[0])
-            self.load_scene(self.led, 'FILLS2', 2)
+        for fx in managed:
+            entries = self.fixtures[fx].type.song_part_program.get(part)
+            if not entries:
+                continue
+            entry = random.choice(entries)
+            if entry.is_chase:
+                self.load_chase(fx, entry.index)
+            else:
+                self.load_scene(fx, entry.bank, entry.index)
 
-        elif song_part == 2: # VERSE
-            self.load_scene(self.led, 'FILLS2', 1) # Hardcoded animation for all VERSEs
-
-        elif song_part == 3: # CHORUS
-            self.load_chase(self.led, random.randint(9, 14))
-
-        elif song_part == 4: # BREAK
-            self.load_scene(self.blinder1, 'BLINDER_SCENES', 1)
-            self.load_scene(self.blinder2, 'BLINDER_SCENES', 1)
-
-        elif song_part == 5: # BRIDGE
-            self.load_scene(self.led, 'ANIMATIONS', 6)
-            self.load_chase(self.blinder1, 1)
-            self.load_chase(self.blinder2, 1)
-
-        elif song_part == 6: # INST
-            self.load_scene(self.led, 'ANIMATIONS', random.randint(5, 7))
-            self.load_chase(self.blinder1, 1)
-            self.load_chase(self.blinder2, 1)
-
-        elif song_part == 7: # SOLO
-            self.load_scene(self.led, 'ANIMATIONS', random.randint(5, 7))
-            self.load_chase(self.blinder1, 1)
-            self.load_chase(self.blinder2, 1)
-
-        elif song_part == 8: # OUTRO
-            self.load_chase(self.led, random.randint(0, 2))
-            self.load_scene(self.blinder1, 'BLINDER_SCENES', 3)
-            self.load_scene(self.blinder2, 'BLINDER_SCENES', 3)
-
-        elif song_part == 9: # END
-            self.load_chase(self.blinder1, 0)
-            self.load_chase(self.blinder2, 0)
-
-        # Mark blinders as owned by the automatic program so a later manual LED
-        # scene clears them (see reset_led_blinder_status). Parts that leave the
-        # blinders blacked out get the flag too, but blacking out an off blinder
-        # is a harmless no-op.
-        self.fixtures[self.blinder1].song_part_triggered = True
-        self.fixtures[self.blinder2].song_part_triggered = True
+        # Mark non-LED fixtures as owned by the automatic program so a later
+        # manual LED scene clears them (see reset_led_blinder_status). Fixtures
+        # left blacked out for this part get the flag too, but blacking out an
+        # off fixture is a harmless no-op.
+        for fx in managed:
+            if fx != self.led:
+                self.fixtures[fx].song_part_triggered = True
 
     def beat_duration(self, bpms):
         if bpms == 0:

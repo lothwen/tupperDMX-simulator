@@ -17,9 +17,9 @@
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 255, "direction": 0, "name": "Fade In/Out fast"},
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 12, "speed": 255, "direction": 0, "name": "Loading bar Arriba"},
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 16, "speed": 255, "direction": 0, "name": "Loading bar abajo"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 20, "speed": 255, "direction": 0, "name": "Ping Pong"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 24, "speed": 255, "direction": 0, "name": "Lluvia"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 28, "speed": 255, "direction": 0, "name": "Estrellas"}
+      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 20, "speed": 255, "direction": 0, "name": "Ping Pong", "song_parts": ["INST", "SOLO"]},
+      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 24, "speed": 255, "direction": 0, "name": "Lluvia", "song_parts": ["BRIDGE", "INST", "SOLO"]},
+      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 28, "speed": 255, "direction": 0, "name": "Estrellas", "song_parts": ["INST", "SOLO"]}
     ],
     "FILLS": [
       {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 68, "speed": 255, "direction": 0, "name": "Fuego"},
@@ -33,8 +33,8 @@
     ],
     "FILLS2": [
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 0, "speed": 255, "direction": 0, "name": " ON"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 96, "speed": 150, "direction": 0, "name": "Relleno"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow"},
+      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 96, "speed": 150, "direction": 0, "name": "Relleno", "song_parts": ["VERSE"]},
+      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow", "song_parts": ["INTRO"]},
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 68, "speed": 255, "direction": 0, "name": "Fuego"},
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 76, "speed": 255, "direction": 0, "name": "Psicodelia"},
       {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow"},
@@ -83,20 +83,20 @@
     ]
   },
   "chases": [
-    {"banks": ["STROBES", "FILLS2"], "scenes": [1, 0]},
-    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 5]},
-    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 6]},
+    {"banks": ["STROBES", "FILLS2"], "scenes": [1, 0], "song_parts": ["OUTRO"]},
+    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 5], "song_parts": ["OUTRO"]},
+    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 6], "song_parts": ["OUTRO"]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [0, 0]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [1, 1]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [2, 2]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [3, 3]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [4, 4]},
     {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [5, 5]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 0]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 3]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 4]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 5]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 6]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 7]}
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 0], "song_parts": ["CHORUS"]},
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 3], "song_parts": ["CHORUS"]},
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 4], "song_parts": ["CHORUS"]},
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 5], "song_parts": ["CHORUS"]},
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 6], "song_parts": ["CHORUS"]},
+    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 7], "song_parts": ["CHORUS"]}
   ]
 }
