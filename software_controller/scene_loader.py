@@ -1,15 +1,15 @@
-# ABOUTME: Loads LED scene definitions (banks of 7-channel scenes) from
-# ABOUTME: dmx_config.json into immutable LedScene records for the clip library.
+# ABOUTME: Loads LED scene definitions (banks of 7-channel scenes) from the
+# ABOUTME: fixture-library def (fixtures/ledbar.json) into immutable LedScene records.
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Union
+from typing import List
+
+from fixture_library import load_fixture_defs
 
 
 @dataclass(frozen=True)
 class LedScene:
-    """A single 7-channel LED scene as stored in dmx_config.json's led_banks.
+    """A single 7-channel LED scene as stored in the ledbar fixture def's banks.
 
     Channel values are kept as raw 0..255 ints — the clip library converts to
     MIDI velocity at drop time (channel_value // 2, capped at 127).
@@ -31,24 +31,20 @@ _CHANNEL_KEYS = ("brightness", "blue", "green", "red",
                  "animation", "speed", "direction")
 
 
-def load_led_scenes(config_path: Union[str, Path]) -> List[LedScene]:
-    """Read led_banks from a dmx_config.json file and return a flat list.
+def load_led_scenes(fixture_type: str = "ledbar") -> List[LedScene]:
+    """Read the scene banks of a fixture-library type and return a flat list.
 
     Scenes preserve their bank, position (0-based index), and channel values.
     Entries lacking a 'name' key get a default label of "{BANK} #{1-based-index}".
     Malformed entries (non-dict) are silently skipped so a single bad row
-    doesn't block the whole library.
+    doesn't block the whole library. Returns [] if the type is unknown.
     """
-    path = Path(config_path)
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    led_banks = data.get("led_banks", {})
-    if not isinstance(led_banks, dict):
+    fdef = load_fixture_defs().get(fixture_type)
+    if fdef is None:
         return []
 
     scenes: List[LedScene] = []
-    for bank_name, scene_list in led_banks.items():
+    for bank_name, scene_list in fdef.banks.items():
         if not isinstance(scene_list, list):
             continue
         for index, scene_dict in enumerate(scene_list):

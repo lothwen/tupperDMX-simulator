@@ -1,0 +1,30 @@
+{
+  "name": "blinder",
+  "render": "blinder",
+  "channels": [
+    {"field": "brightness", "role": "brightness", "flags": ["blend"]},
+    {"field": "cool1",      "role": "white_cool", "flags": ["blend"]},
+    {"field": "cool2",      "role": "white_cool", "flags": ["blend"]},
+    {"field": "warm1",      "role": "white_warm", "flags": ["blend"]},
+    {"field": "warm2",      "role": "white_warm", "flags": ["blend"]},
+    {"field": "strobe",     "role": "strobe",     "flags": []},
+    {"field": "mode",       "role": "mode",       "flags": []},
+    {"field": "speed",      "role": "speed",      "flags": []}
+  ],
+  "banks": {
+    "BLINDER_SCENES": [
+      {"brightness": 25, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+      {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+      {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+      {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 200, "mode": 0, "speed": 0},
+      {"brightness": 255, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 250, "speed": 0},
+      {"brightness": 1, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+      {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
+      {"brightness": 0, "cool1": 0, "cool2": 0, "warm1": 0, "warm2": 0, "strobe": 0, "mode": 0, "speed": 0}
+    ]
+  },
+  "chases": [
+    {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [0, 5]},
+    {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [1, 5]}
+  ]
+}

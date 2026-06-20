@@ -3,7 +3,6 @@
 
 import json
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolBox, QListWidget,
@@ -39,10 +38,6 @@ SCENE_MIME_TYPE = "application/x-tupperdmx-led-scene"
 # Fixtures listed first in the toolbox; anything else falls in alphabetical
 # order after these.
 FIXTURE_PAGE_PRIORITY = {"ledbar": 0, "blinder": 1}
-
-# Default location of the LED scene definitions, relative to the project root.
-DEFAULT_SCENE_CONFIG_PATH = (Path(__file__).resolve().parent.parent
-                             / "software_controller" / "dmx_config.json")
 
 
 class ClipListWidget(QListWidget):
@@ -177,7 +172,7 @@ class ClipLibraryWidget(QWidget):
         if self.toolbox.count() == 0:
             placeholder = QLabel(
                 "No clips configured.\n"
-                "Edit config.json or dmx_config.json to add clips."
+                "Edit config.json or the fixture definitions to add clips."
             )
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setWordWrap(True)
@@ -190,15 +185,8 @@ class ClipLibraryWidget(QWidget):
         )
 
     def _populate_scene_pages(self) -> None:
-        """Add one toolbox section per LED scene bank from dmx_config.json."""
-        try:
-            scenes = load_led_scenes(DEFAULT_SCENE_CONFIG_PATH)
-        except FileNotFoundError:
-            self.logger.warning(
-                f"Scene config not found at {DEFAULT_SCENE_CONFIG_PATH}; "
-                "scene pages skipped"
-            )
-            return
+        """Add one toolbox section per LED scene bank from the ledbar fixture def."""
+        scenes = load_led_scenes()
 
         by_bank: Dict[str, List[LedScene]] = defaultdict(list)
         for s in scenes:

@@ -6,14 +6,7 @@ These are imported (and re-exported) by ``midi/manager.py`` so existing
 editor collaborators.
 """
 
-from pathlib import Path
 from typing import Tuple
-
-# Default location of the LED scene definitions used to resolve scene names
-# when reconstructing scene groups from a freshly-loaded MIDI file.
-_DEFAULT_SCENE_CONFIG_PATH = (Path(__file__).resolve().parent.parent
-                              / "software_controller" / "dmx_config.json")
-
 
 # Identification of BLACKOUT events is by part-name PREFIX (case-insensitive),
 # not by note number — keeps it config-driven and lets each fixture have its

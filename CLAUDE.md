@@ -61,18 +61,21 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
   and emit `fixture_added/moved/removed/selected`. The floating
   `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
 - **`fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
-  (channels with semantic role + flags, render hint) loaded from `fixtures/*.json`
-  (shipped `fixtures/` + writable `userprefs_dir()/fixtures/`, user overrides by
-  name; memoized). `software_controller.build_fixture_types()` seeds the two
-  built-in singletons (ledbar/blinder — kept by identity for note routing) then
-  merges library defs; `config.fixture_channel_count()`/`known_fixture_types()`
-  derive counts from it (no more hardcoded `FIXTURE_CHANNEL_COUNTS`).
+  (channels with semantic role + flags, render hint, plus scene `banks`/`chases`)
+  loaded from `fixtures/*.json` (shipped `fixtures/` + writable
+  `userprefs_dir()/fixtures/`, user overrides by name; memoized). Every type —
+  including the built-in `ledbar`/`blinder` — is a library def;
+  `software_controller.build_fixture_types()` builds the whole `FIXTURE_TYPES`
+  registry from it (no Python singletons), and
+  `config.fixture_channel_count()`/`known_fixture_types()` derive from it.
 - **`software_controller/`**: Pure-Python DMX controller (no hardware needed).
-  `DMXController` manages a 96-channel universe (LED bar 1–7, Blinder1 8–15,
-  Blinder2 16–23) and reacts to MIDI pitches (channel control 1–11, scene select
-  12–19, colors 20–23, bank select 24–25, blinders 26–32, song-part markers
-  38–52). `ArtNetSender` emits Art-Net UDP; scenes/banks/chases load from
-  `software_controller/dmx_config.json`.
+  `DMXController` manages a 96-channel universe, patched data-driven from
+  `config.fixtures` (type name + DMX address; default `ledbar`@1, two
+  `blinder`s@33/65), and reacts to MIDI pitches (channel control 1–11, scene
+  select 12–19, colors 20–23, bank select 24–25, blinders 26–32, song-part
+  markers 38–52). The note router maps to fixtures positionally (LED=0,
+  blinders=1/2) pending the per-type MIDI-map rework. `ArtNetSender` emits
+  Art-Net UDP; each type's scene banks/chases live in its `fixtures/*.json` def.
 
 ### Configuration (`config.py`)
 
@@ -103,7 +106,8 @@ reading the shipped seed (so shipped-config updates still reach it).
   (`ledbar`, `blinder`).
 - `ClipLibraryWidget` (`ui/clip_library.py`): right sidebar tabs ("Library",
   "DMX Channels"). `QToolBox` with one section per fixture (from
-  `config.midi_note_map`) plus one per LED scene bank (from `dmx_config.json`).
+  `config.midi_note_map`) plus one per LED scene bank (from the `ledbar` def's
+  banks via `scene_loader.load_led_scenes()`).
   Click previews; drag drops onto the timeline; per-fixture pages hide notes 1–7.
 - `DMXDisplayWidget` (`ui/dmx_display.py`): live channel monitor.
 - `ErrorDialogManager` (`ui/error_dialogs.py`): centralized retry/reset dialogs.
@@ -179,8 +183,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
   (scene-group ops), `selection_editor.py` (multi-select), `constants.py`,
   `worker.py` (threaded output, `"Software emulated"` port).
 - `software_controller/` — `main.py` (`DMXController`), `artnet_sender.py`,
-  `dmx.py` (`LedScene`/`BlinderScene`), `scene_loader.py` (`load_led_scenes()`
-  → immutable `LedScene` records), `dmx_config.json` (scene banks + chases).
+  `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
+  from the `ledbar` fixture def's banks). Scene banks/chases live in the
+  `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
 - `timeline/` — `manager.py` (coordinator, one `MidiEventsTrack` per fixture
   filter), `tracks/` (`base.py`, `ruler.py`, `waveform.py`, `midi_events.py`),
   `widgets/` (`tooltip.py`, `content_view.py`, `midi_event_edit.py`,
