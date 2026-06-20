@@ -26,8 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import FixtureInstance, FixturePosition
 from software_controller.main import (
     DMXController,
-    FIXTURE_H807SA,
-    FIXTURE_BLINDER,
+    FIXTURE_TYPES,
 )
 
 
@@ -76,7 +75,8 @@ def test_patch_matches_legacy_default():
     default = DMXController()  # hardcoded fallback patch
 
     _assert(cfg_driven.num_fixtures == 3, "three fixtures patched from config")
-    _assert([p.type for p in cfg_driven.patch] == [FIXTURE_H807SA, FIXTURE_BLINDER, FIXTURE_BLINDER],
+    _assert([p.type for p in cfg_driven.patch] ==
+            [FIXTURE_TYPES["ledbar"], FIXTURE_TYPES["blinder"], FIXTURE_TYPES["blinder"]],
             "patch types are [ledbar, blinder, blinder]")
     _assert([p.dmx_base for p in cfg_driven.patch] == [1, 33, 65],
             "patch DMX bases match the shipped addresses")

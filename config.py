@@ -91,26 +91,18 @@ class FixturePosition:
     y: int
 
 
-# DMX channel count for the two built-in fixture types (Python singletons in
-# software_controller). Every other type is data-driven from the fixture
-# library, so its channel count is derived from its definition instead.
-_BUILTIN_COUNTS: Dict[str, int] = {
-    "ledbar": 7,
-    "blinder": 8,
-}
-
-
 def fixture_channel_count(type_name: str) -> int:
-    """DMX channel count for a fixture type (0 if the type is unknown)."""
-    if type_name in _BUILTIN_COUNTS:
-        return _BUILTIN_COUNTS[type_name]
+    """DMX channel count for a fixture type (0 if the type is unknown).
+
+    Every type — including the built-in ledbar/blinder — is now data-driven
+    from the fixture library, so the count comes from its definition."""
     fdef = load_fixture_defs().get(type_name)
     return fdef.channel_count if fdef else 0
 
 
 def known_fixture_types() -> set:
-    """All resolvable fixture-type names: built-ins + library definitions."""
-    return set(_BUILTIN_COUNTS) | set(load_fixture_defs())
+    """All resolvable fixture-type names, from the fixture library."""
+    return set(load_fixture_defs())
 
 
 @dataclass

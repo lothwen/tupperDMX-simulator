@@ -2,9 +2,10 @@
 Characterization test: the data-driven fixture-type library.
 
 Covers parsing fixture definitions (role/flag name -> int), rejecting malformed
-defs, the user dir overriding the shipped dir by name, the built-in singletons
-surviving in software_controller's FIXTURE_TYPES (identity preserved — note
-routing depends on it), and config's channel-count / known-type helpers.
+defs, the user dir overriding the shipped dir by name, the ledbar/blinder types
+being built data-driven from the library (channels + scene banks + chases) in
+software_controller's FIXTURE_TYPES, and config's channel-count / known-type
+helpers.
 
 Paths are redirected to a temp dir and restored afterwards (the loader memoizes,
 so the cache is cleared on the way in and out).
@@ -109,12 +110,18 @@ def test_role_index_map():
             "role -> slice index mapping is correct")
 
 
-def test_builtins_preserve_identity():
-    print("test_builtins_preserve_identity")
+def test_builtin_types_data_driven():
+    print("test_builtin_types_data_driven")
     import software_controller.main as sc
     types = sc.build_fixture_types()
-    _assert(types["ledbar"] is sc.FIXTURE_H807SA, "ledbar stays the H807SA singleton")
-    _assert(types["blinder"] is sc.FIXTURE_BLINDER, "blinder stays the blinder singleton")
+    _assert("ledbar" in types and "blinder" in types,
+            "ledbar + blinder built from the fixture library")
+    _assert(types["ledbar"].channel_count == 7, "ledbar has 7 channels")
+    _assert(types["blinder"].channel_count == 8, "blinder has 8 channels")
+    _assert("ANIMATIONS" in types["ledbar"].banks and bool(types["ledbar"].chases),
+            "ledbar scene banks + chases loaded from its def")
+    _assert("BLINDER_SCENES" in types["blinder"].banks,
+            "blinder scene bank loaded from its def")
 
 
 def test_config_channel_helpers():
@@ -132,7 +139,7 @@ def main():
     test_parse_rejects_malformed()
     test_load_and_user_override()
     test_role_index_map()
-    test_builtins_preserve_identity()
+    test_builtin_types_data_driven()
     test_config_channel_helpers()
     print("\nALL TESTS PASSED")
 
