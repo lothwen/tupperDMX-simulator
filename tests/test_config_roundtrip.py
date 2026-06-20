@@ -21,10 +21,25 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import config
 from config import Config, FixtureInstance
+
+
+@pytest.fixture(autouse=True)
+def _restore_config_paths():
+    """Restore the module-level path helpers after each test.
+
+    _patch_paths() rebinds config.shipped_config_path / userprefs_path to point
+    at a per-test TemporaryDirectory; without this, the rebinding leaks into
+    later test files that read the real shipped config (e.g. via
+    config.shipped_fixtures())."""
+    orig_shipped, orig_prefs = config.shipped_config_path, config.userprefs_path
+    yield
+    config.shipped_config_path, config.userprefs_path = orig_shipped, orig_prefs
 
 
 SHIPPED = {

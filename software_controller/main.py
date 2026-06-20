@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from fixture_library import load_fixture_defs
+from config import shipped_fixtures
 from tupperlogger import get_logger
 
 
@@ -155,12 +156,6 @@ class FixtureType:
         return len(self.channels)
 
 
-@dataclass
-class FixturePatch:
-    type: FixtureType
-    dmx_base: int            # 1-indexed DMX start address
-
-
 def _scene_from_dict(channels, scene):
     """Build a scene namespace from a raw scene dict, keyed by channel field.
 
@@ -204,24 +199,15 @@ def build_fixture_types():
 FIXTURE_TYPES = build_fixture_types()
 
 
-def _default_patch():
-    """Default patch when no config fixtures are injected (standalone / tests):
-    LED bar at DMX 1..7, Blinder1 at 33..40, Blinder2 at 65..72. Resolves the
-    types by name from the library; skips any that are missing. The live app
-    builds the patch from config.fixtures instead (see DMXController._build_patch)."""
-    layout = [("ledbar", 1), ("blinder", 33), ("blinder", 65)]
-    return [FixturePatch(FIXTURE_TYPES[name], base)
-            for name, base in layout if name in FIXTURE_TYPES]
-
-
-DEFAULT_PATCH = _default_patch()
-
-
 @dataclass
-class FixtureState:
-    """Runtime state for one active fixture (replaces the old per-type status
-    dicts). Palette fields are only meaningful for fixtures with R/G/B channels
-    but are kept on every fixture for uniformity."""
+class Fixture:
+    """One fixture in the patch: its type definition (channels / scene banks /
+    chases) and DMX address, together with all its live runtime state. Merges
+    the old static FixturePatch with the mutable per-fixture FixtureState.
+    Palette fields are only meaningful for fixtures with R/G/B channels but are
+    kept on every fixture for uniformity."""
+    type: object = None      # FixtureType: channels, scene banks, chases
+    dmx_base: int = 0        # 1-indexed DMX start address
     bank: object = 0
     scene: int = 0
     is_blackout: bool = True
@@ -250,15 +236,6 @@ class DMXController:
         self.logger = get_logger("software_controller.main")
         self.lock = threading.Lock()
 
-        # Build the patch from injected config fixtures (type + dmx_start), or
-        # fall back to the default 3-fixture patch for standalone use / tests.
-        self.patch = self._build_patch(fixtures)
-        self.num_fixtures = len(self.patch)
-        self._resolve_fixture_handles()
-
-        self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
-        self.color_palette = []
-
         # DMX buffers (lean strategy from the branch):
         #   present     - full DMX output buffer (what we send over Art-Net)
         #   target      - per-channel blend target (snap channels write present)
@@ -267,13 +244,19 @@ class DMXController:
         self.target = [0] * UNIVERSE_SIZE
         self.blend_start = []  # sized in init_fixtures()
 
+        # Build the fixture list from injected config fixtures (type + dmx_start),
+        # or fall back to the default 3-fixture patch for standalone use / tests.
+        self.init_fixtures(fixtures)
+        self.num_fixtures = len(self.fixtures)
+        self._resolve_fixture_handles()
+
+        self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
+        self.color_palette = []
+
         self.blackout_all_state = False
         self.current_velocity = 127
         self.brightness_cap = 255
         self.speed_cap = 255
-
-        self.fixtures = []
-        self.init_fixtures()
 
         self._running = False
         self._thread = None
@@ -281,12 +264,13 @@ class DMXController:
     # ------------------------------------------------------------------
     # Setup
     # ------------------------------------------------------------------
-    def _build_patch(self, fixtures):
-        """Map config fixture instances (type name + dmx_start) onto the
-        FixtureType registry. Unknown types are skipped; an empty/absent list
-        falls back to the default patch."""
+    def _resolve_patch(self, fixtures):
+        """Map config fixture instances (type name + dmx_start) onto
+        (FixtureType, dmx_base) pairs. Unknown types are skipped. When no
+        fixtures are injected (standalone / tests), the shipped config.json patch
+        is used, so the default matches the live app instead of duplicating it."""
         if not fixtures:
-            return list(DEFAULT_PATCH)
+            fixtures = shipped_fixtures()
 
         patch = []
         for inst in fixtures:
@@ -294,8 +278,8 @@ class DMXController:
             if ftype is None:
                 self.logger.warning(f"Unknown fixture type '{getattr(inst, 'type', None)}', skipping")
                 continue
-            patch.append(FixturePatch(ftype, inst.dmx_start))
-        return patch or list(DEFAULT_PATCH)
+            patch.append((ftype, inst.dmx_start))
+        return patch
 
     def _resolve_fixture_handles(self):
         """Resolve the LED / blinder index handles the note router uses.
@@ -309,16 +293,16 @@ class DMXController:
         self.blinder1 = 1 if n > 1 else self.led
         self.blinder2 = 2 if n > 2 else self.blinder1
 
-    def init_fixtures(self):
-        """Initialise per-fixture runtime state from the patch, deriving each
-        fixture's universe offset and its slice of the compact blend buffer."""
+    def init_fixtures(self, fixtures):
+        """Build the fixture list from the resolved patch (injected config
+        fixtures or the default fallback), deriving each fixture's universe
+        offset and its slice of the compact blend buffer."""
         self.fixtures = []
         blend_base = 0
-        for fx in range(self.num_fixtures):
-            ft = self.patch[fx].type
-            s = FixtureState()
+        for ft, dmx_base in self._resolve_patch(fixtures):
+            s = Fixture(type=ft, dmx_base=dmx_base)
             s.bank = next(iter(ft.banks))  # first bank ('ANIMATIONS' / 'BLINDER_SCENES')
-            s.base = self.patch[fx].dmx_base - 1
+            s.base = dmx_base - 1
             s.blend_base = blend_base
             blend_base += sum(1 for ch in ft.channels if ch.flags & CH_BLEND)
             self.fixtures.append(s)
@@ -328,7 +312,7 @@ class DMXController:
     # Channel accessors (address channels by role/meaning)
     # ------------------------------------------------------------------
     def channel_index_by_role(self, fx, role):
-        for i, ch in enumerate(self.patch[fx].type.channels):
+        for i, ch in enumerate(self.fixtures[fx].type.channels):
             if ch.role == role:
                 return i
         return -1
@@ -342,7 +326,7 @@ class DMXController:
         i = self.channel_index_by_role(fx, role)
         if i < 0:
             return
-        ch = self.patch[fx].type.channels[i]
+        ch = self.fixtures[fx].type.channels[i]
         if ch.flags & CH_BLEND:
             self.target[self.fixtures[fx].base + i] = value
         else:
@@ -353,10 +337,10 @@ class DMXController:
         blend channel. Mirrors the old global universe_past = present copy done
         on any scene/color load."""
         for fx in range(self.num_fixtures):
-            ft = self.patch[fx].type
-            base = self.fixtures[fx].base
-            k = self.fixtures[fx].blend_base
-            for i, ch in enumerate(ft.channels):
+            s = self.fixtures[fx]
+            base = s.base
+            k = s.blend_base
+            for i, ch in enumerate(s.type.channels):
                 if ch.flags & CH_BLEND:
                     self.blend_start[k] = self.present[base + i]
                     k += 1
@@ -374,7 +358,7 @@ class DMXController:
             self.blackout_fixture(fx)
             return
 
-        ft = self.patch[fx].type
+        ft = s.type
         scene_obj = ft.banks[bank][scene]
 
         # Palette substitution: if the fixture has R/G/B and the scene sets all
@@ -436,7 +420,7 @@ class DMXController:
     # ------------------------------------------------------------------
     def load_chase(self, fx, chase):
         s = self.fixtures[fx]
-        ft = self.patch[fx].type
+        ft = s.type
         s.is_chasing = True
         s.chase = chase
         step = ft.chases[chase]
@@ -450,7 +434,7 @@ class DMXController:
         if now - s.last_chase_change < s.chase_change_time / 1000.0:
             return
 
-        chase = self.patch[fx].type.chases[s.chase]
+        chase = s.type.chases[s.chase]
         s.chase_index = (s.chase_index + 1) % len(chase['scenes'])
         self.load_scene(fx, chase['banks'][s.chase_index], chase['scenes'][s.chase_index])
         s.last_chase_change = now
@@ -466,7 +450,7 @@ class DMXController:
         s.blend_time_elapsed += dt
         t = s.blend_time_elapsed / s.blend_time
 
-        ft = self.patch[fx].type
+        ft = s.type
         k = s.blend_base
         for i, ch in enumerate(ft.channels):
             if ch.flags & CH_BLEND:
@@ -514,7 +498,7 @@ class DMXController:
     def blackout_fixture(self, fx):
         self.logger.debug(f"Blackout fx:{fx}")
         s = self.fixtures[fx]
-        ft = self.patch[fx].type
+        ft = s.type
         for i, ch in enumerate(ft.channels):
             self.present[s.base + i] = 0
             if ch.flags & CH_BLEND:

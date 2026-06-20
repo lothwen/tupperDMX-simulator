@@ -72,18 +72,18 @@ def _replay(controller):
 def test_patch_matches_legacy_default():
     print("test_patch_matches_legacy_default")
     cfg_driven = DMXController(SHIPPED_FIXTURES)
-    default = DMXController()  # hardcoded fallback patch
+    default = DMXController()  # no patch -> shipped config.json default
 
     _assert(cfg_driven.num_fixtures == 3, "three fixtures patched from config")
-    _assert([p.type for p in cfg_driven.patch] ==
+    _assert([f.type for f in cfg_driven.fixtures] ==
             [FIXTURE_TYPES["ledbar"], FIXTURE_TYPES["blinder"], FIXTURE_TYPES["blinder"]],
             "patch types are [ledbar, blinder, blinder]")
-    _assert([p.dmx_base for p in cfg_driven.patch] == [1, 33, 65],
+    _assert([f.dmx_base for f in cfg_driven.fixtures] == [1, 33, 65],
             "patch DMX bases match the shipped addresses")
     _assert((cfg_driven.led, cfg_driven.blinder1, cfg_driven.blinder2) == (0, 1, 2),
             "LED / blinder handles resolve to 0 / 1 / 2")
 
-    _assert([p.dmx_base for p in cfg_driven.patch] == [p.dmx_base for p in default.patch],
+    _assert([f.dmx_base for f in cfg_driven.fixtures] == [f.dmx_base for f in default.fixtures],
             "config-driven patch addresses equal the legacy default")
 
 
