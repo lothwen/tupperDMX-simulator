@@ -544,3 +544,17 @@ class Config:
                 used_channels[fixture_name] = channels
 
         return used_channels
+
+
+def shipped_fixtures() -> List[FixtureInstance]:
+    """The default fixture patch, parsed from the shipped, read-only config.json
+    (the seed, before any userprefs override). Single source of truth for the
+    default patch: the software controller uses it when built without an explicit
+    patch (standalone / tests), so its default matches the live app instead of
+    duplicating it. Returns [] if the shipped config is missing or unparseable."""
+    try:
+        with open(shipped_config_path(), "r") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+    return Config._parse_fixtures(data.get("fixtures", []))
