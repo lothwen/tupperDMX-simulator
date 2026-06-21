@@ -7,7 +7,7 @@ on/off gate so stopping the cycle never loses the palette. This guards that:
 
   - START stores the palette but does NOT start cycling (waits for a song part),
   - a song part arms cycling on the managed fixture,
-  - a manual takeover (note 5) stops cycling but KEEPS the palette, and
+  - a manual takeover (note 48) stops cycling but KEEPS the palette, and
   - the next song part re-arms cycling with the retained palette.
 
 No Art-Net / threads are started; the program is driven by handle_note_on.
@@ -23,9 +23,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from software_controller.main import DMXController
 
-START = 40        # E2 - velocity encodes the palette
-CHORUS = 43       # G2 - a song part the ledbar is managed for (runs a chase)
-MANUAL_ANIM = 5   # F-1 - the animation note: takes manual LED control
+START = 60        # C4 - velocity encodes the palette
+CHORUS = 63       # D#4 - a song part the ledbar is managed for (runs a chase)
+MANUAL_TAKE = 48  # C3 - takes manual control of the fixture on the channel
 
 
 def _assert(cond, msg):
@@ -38,7 +38,7 @@ def test_palette_persists_across_manual_takeover():
     print("test_palette_persists_across_manual_takeover")
 
     ctrl = DMXController()
-    led = ctrl.fixtures[ctrl.led]
+    led = ctrl.fixtures[0]
 
     # START stores a multi-color palette but leaves cycling off.
     ctrl.handle_note_on(0, START, 64)
@@ -53,7 +53,7 @@ def test_palette_persists_across_manual_takeover():
     saved = led.palette_ptr
 
     # Manual takeover stops cycling but keeps the palette.
-    ctrl.handle_note_on(0, MANUAL_ANIM, 64)
+    ctrl.handle_note_on(0, MANUAL_TAKE, 64)
     _assert(not led.is_color_cycling, "manual takeover stops cycling")
     _assert(led.palette_ptr is saved, "manual takeover keeps the palette")
 

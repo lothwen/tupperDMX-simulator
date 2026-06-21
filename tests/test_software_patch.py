@@ -5,11 +5,13 @@ Subtask 2 makes the emulator build its patch from config.fixtures (type +
 dmx_start) instead of a hardcoded module global. This guards the refactor:
 
   1. A controller built from the migrated shipped config produces a patch
-     identical to the legacy default (same types, same DMX bases, same LED /
-     blinder1 / blinder2 handles).
+     identical to the legacy default (same types, same DMX bases).
   2. Replaying a fixed MIDI sequence on the config-driven controller and on the
      default-fallback controller yields byte-identical present[] buffers — i.e.
      the observable DMX output did not change.
+
+The sequence uses the generalized note map: the note is a verb and the MIDI
+channel selects the fixture (0 = ledbar, 1 / 2 = blinders).
 
 No Art-Net / threads are started; DMXController.__init__ only builds buffers.
 
@@ -46,19 +48,21 @@ SHIPPED_FIXTURES = [
 
 # A deterministic note sequence touching the LED bar + both blinders. Velocities
 # and song parts are chosen to avoid the random.* code paths so the comparison
-# is stable. (channel, pitch, velocity)
+# is stable. (channel, pitch, velocity) — channel selects the fixture.
 NOTE_SEQUENCE = [
-    (0, 5, 64),    # animation -> takes manual LED control
-    (0, 1, 100),   # LED brightness
-    (0, 4, 90),    # LED red
-    (0, 20, 0),    # manual solid color (white)
-    (0, 40, 6),    # START: hue_index=1, mode=COMPLEMENTARY (no random)
-    (0, 41, 64),   # INTRO song part
-    (0, 42, 64),   # VERSE song part
-    (0, 44, 64),   # BREAK song part (both blinders)
-    (0, 26, 80),   # manual blinder scene (both blinders)
-    (0, 50, 0),    # blackout LED
-    (0, 51, 0),    # blackout blinders
+    (0, 48, 64),   # ch0 ledbar: take manual control
+    (0, 1, 100),   # ch0 ledbar: channel offset 1 (brightness)
+    (0, 4, 90),    # ch0 ledbar: channel offset 4 (red)
+    (0, 72, 0),    # ch0 ledbar: color macro white
+    (0, 60, 6),    # ch0 ledbar: START hue_index=1, mode=COMPLEMENTARY (no random)
+    (0, 61, 64),   # INTRO song part (global)
+    (0, 62, 64),   # VERSE song part (global)
+    (0, 64, 64),   # BREAK song part (global -> blinders)
+    (1, 24, 80),   # ch1 blinder: manual scene 0
+    (2, 24, 80),   # ch2 blinder: manual scene 0
+    (0, 50, 0),    # ch0 ledbar: blackout
+    (1, 50, 0),    # ch1 blinder: blackout
+    (2, 50, 0),    # ch2 blinder: blackout
 ]
 
 
@@ -80,8 +84,6 @@ def test_patch_matches_legacy_default():
             "patch types are [ledbar, blinder, blinder]")
     _assert([f.dmx_base for f in cfg_driven.fixtures] == [1, 33, 65],
             "patch DMX bases match the shipped addresses")
-    _assert((cfg_driven.led, cfg_driven.blinder1, cfg_driven.blinder2) == (0, 1, 2),
-            "LED / blinder handles resolve to 0 / 1 / 2")
 
     _assert([f.dmx_base for f in cfg_driven.fixtures] == [f.dmx_base for f in default.fixtures],
             "config-driven patch addresses equal the legacy default")
@@ -99,8 +101,8 @@ def test_empty_fixtures_falls_back_to_default():
     print("test_empty_fixtures_falls_back_to_default")
     fallback = DMXController([])
     _assert(fallback.num_fixtures == 3, "empty fixture list falls back to default patch")
-    _assert((fallback.led, fallback.blinder1, fallback.blinder2) == (0, 1, 2),
-            "fallback handles resolve to 0 / 1 / 2")
+    _assert([f.dmx_base for f in fallback.fixtures] == [1, 33, 65],
+            "fallback patch matches the shipped addresses")
 
 
 def test_generic_fixture_inert_and_output_unchanged():

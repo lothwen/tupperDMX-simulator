@@ -71,11 +71,16 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
 - **`software_controller/`**: Pure-Python DMX controller (no hardware needed).
   `DMXController` manages a 96-channel universe, patched data-driven from
   `config.fixtures` (type name + DMX address; default `ledbar`@1, two
-  `blinder`s@33/65), and reacts to MIDI pitches (channel control 1–11, scene
-  select 12–19, colors 20–23, bank select 24–25, blinders 26–32, song-part
-  markers 38–52). The note router maps to fixtures positionally (LED=0,
-  blinders=1/2) pending the per-type MIDI-map rework. `ArtNetSender` emits
-  Art-Net UDP; each type's scene banks/chases live in its `fixtures/*.json` def.
+  `blinder`s@33/65). `handle_note_on(channel, pitch, velocity)` uses a
+  **generalized note map**: the pitch is a universal *verb* and the MIDI
+  **channel selects the fixture** (its index in the patch); per-fixture verbs
+  resolve against that fixture's own def. Layout: 1–23 channel-offset sets
+  (velocity×2), 24–35 scene loaders, 36–47 bank select, 48 take-manual /
+  49 manual / 50 blackout-fixture, 51 blackout-all (global), 52–59 timing /
+  palette / scene step, 60 START, 61–69 song parts (global), 72–75 color macros.
+  `ArtNetSender` emits Art-Net UDP; each type's scene banks/chases live in its
+  `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
+  upgraded by `scripts/migrate_midi_v2.py`.)
 
 ### Configuration (`config.py`)
 
