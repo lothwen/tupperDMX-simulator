@@ -35,7 +35,7 @@ DEFAULT_HSL_L = 0.5
 PALETTE_MODES = ['COMPLEMENTARY', 'ANALOGOUS', 'TRIADIC', 'COLOR+WHITE', 'MONOCHROMATIC', 'SINGLE']
 
 # The song-part names a fixture def's scenes/chases can be tagged with via
-# "song_parts" (listed in MIDI-note order, notes 41-49). handle_note_on passes
+# "song_parts" (listed in MIDI-note order, notes 61-69). handle_note_on passes
 # one of these names to pick_scene_from_song_part; anything else is ignored.
 SONG_PARTS = ['INTRO', 'VERSE', 'CHORUS', 'BREAK', 'BRIDGE', 'INST', 'SOLO', 'OUTRO', 'END']
 
@@ -282,12 +282,15 @@ class DMXController:
         # or fall back to the default 3-fixture patch for standalone use / tests.
         self.init_fixtures(fixtures)
         self.num_fixtures = len(self.fixtures)
-        self._resolve_fixture_handles()
+        # Conventional "lead" fixture (index 0): the automatic song-part program
+        # leaves it un-flagged so a manual scene can grab it (see
+        # pick_scene_from_song_part). Note ROUTING no longer uses fixed handles —
+        # the MIDI channel selects the fixture in handle_note_on.
+        self.led = 0
 
         self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
 
         self.blackout_all_state = False
-        self.current_velocity = 127
         self.brightness_cap = 255
         self.speed_cap = 255
 
@@ -314,18 +317,6 @@ class DMXController:
             patch.append((ftype, inst.dmx_start))
         return patch
 
-    def _resolve_fixture_handles(self):
-        """Resolve the LED / blinder index handles the note router uses.
-
-        For now the emulator keeps the single-LED + up-to-two-blinder semantics,
-        mapped positionally onto the patch: fixture 0 is the LED, 1 and 2 are the
-        blinders (falling back to lower indices for shorter patches). Generalizing
-        note->fixture routing is subtask 4 (the per-type MIDI map)."""
-        n = self.num_fixtures
-        self.led = 0
-        self.blinder1 = 1 if n > 1 else self.led
-        self.blinder2 = 2 if n > 2 else self.blinder1
-
     def init_fixtures(self, fixtures):
         """Build the fixture list from the resolved patch (injected config
         fixtures or the default fallback), deriving each fixture's universe
@@ -349,11 +340,6 @@ class DMXController:
             if ch.role == role:
                 return i
         return -1
-
-    def set_channel_instant(self, fx, role, value):
-        i = self.channel_index_by_role(fx, role)
-        if i >= 0:
-            self.present[self.fixtures[fx].base + i] = value
 
     def set_channel_target(self, fx, role, value):
         i = self.channel_index_by_role(fx, role)
@@ -420,13 +406,9 @@ class DMXController:
                 if raw > self.brightness_cap:
                     value = self.brightness_cap
             elif ch.flags & CH_KNOB_SPEED:
-                # 0 -> MIDI velocity / 1-254 -> knob speed / 255 -> scene value
-                if self.speed_cap == 0:
-                    value = self.current_velocity * 2
-                elif self.speed_cap == 255:
-                    value = raw
-                else:
-                    value = self.speed_cap
+                # Speed capped by the speed knob.
+                if raw > self.speed_cap:
+                    value = self.speed_cap              
 
             if ch.flags & CH_BLEND:
                 self.target[s.base + i] = value
@@ -557,14 +539,12 @@ class DMXController:
         s.song_part_triggered = False
 
     def take_manual_control(self, fx):
-        # A fixture takes manual control: it drops out of the automatic program and
-        # holds its frame for the incoming manual scene, while every other fixture
-        # the song-part program left on (e.g. blinders from a BREAK) blacks out so
-        # the manual scene starts clean. Fixtures the user triggered by hand (notes
-        # 26-32) are left running (they don't carry song_part_triggered).
-        #
-        # Note 5 wires here for now; subtask 4 (per-type MIDI map) will route a
-        # dedicated control note whose channel selects fx.
+        # A fixture takes manual control (note 48 on its channel): it drops out of
+        # the automatic program and holds its frame for the incoming manual scene,
+        # while every other fixture the song-part program left on (e.g. blinders
+        # from a BREAK) blacks out so the manual scene starts clean. Fixtures the
+        # user triggered by hand are left running (they don't carry
+        # song_part_triggered).
         self.set_fixture_manual(fx)
         self.fixtures[fx].is_blackout = False
         for other in range(self.num_fixtures):
@@ -572,145 +552,137 @@ class DMXController:
                 self.blackout_fixture(other)
 
     # ------------------------------------------------------------------
+    # Note-map helpers (a note is a universal verb; the channel picks the
+    # fixture; each verb is resolved against that fixture's own def)
+    # ------------------------------------------------------------------
+    def set_channel_offset(self, fx, offset, value):
+        """Set the offset-th DMX channel (1-based) of a fixture directly.
+        Offsets past the fixture's channel count are ignored so a note can't
+        bleed into the next fixture's address space."""
+        s = self.fixtures[fx]
+        if 1 <= offset <= s.type.channel_count:
+            self.present[s.base + offset - 1] = value
+
+    def bank_names(self, fx):
+        """Ordered bank names for a fixture (its def's JSON / insertion order)."""
+        return list(self.fixtures[fx].type.banks.keys())
+
+    def select_bank(self, fx, bank_idx):
+        """Make bank_idx the fixture's current bank (ignored if out of range)."""
+        names = self.bank_names(fx)
+        if 0 <= bank_idx < len(names):
+            self.fixtures[fx].bank = names[bank_idx]
+
+    def _note_load_scene(self, fx, bank, scene, velocity):
+        """Load a scene in response to a note: blend time comes from velocity
+        (x100 ms, min 1 so blend channels still reach their target), and the
+        fixture drops out of the automatic program so the scene sticks over any
+        running chase/cycle."""
+        self.load_scene(fx, bank, scene, max(1, velocity * 100))
+        self.set_fixture_manual(fx)
+
+    def load_scene_in_current_bank(self, fx, scene_idx, velocity):
+        s = self.fixtures[fx]
+        scenes = s.type.banks.get(s.bank)
+        if scenes and 0 <= scene_idx < len(scenes):
+            self._note_load_scene(fx, s.bank, scene_idx, velocity)
+
+    def load_scene_relative(self, fx, delta, velocity):
+        """Step to the previous/next scene of the current bank (clamped)."""
+        s = self.fixtures[fx]
+        scenes = s.type.banks.get(s.bank)
+        if not scenes:
+            return
+        scene_idx = s.scene + delta
+        if 0 <= scene_idx < len(scenes):
+            self._note_load_scene(fx, s.bank, scene_idx, velocity)
+
+    def load_scene_packed(self, fx, velocity):
+        """Load a bank+scene packed into one velocity (bank=vel//8, scene=vel%8).
+        Velocity is consumed by the encoding, so the fixture's current blend_time
+        is used (not a velocity-derived one)."""
+        names = self.bank_names(fx)
+        bank_idx, scene_idx = velocity // 8, velocity % 8
+        if 0 <= bank_idx < len(names):
+            scenes = self.fixtures[fx].type.banks[names[bank_idx]]
+            if 0 <= scene_idx < len(scenes):
+                self.load_scene(fx, names[bank_idx], scene_idx)
+                self.set_fixture_manual(fx)
+
+    # ------------------------------------------------------------------
     # MIDI input
     # ------------------------------------------------------------------
     def handle_note_on(self, channel, pitch, velocity):
+        """Route one MIDI note to the patch. The note number is a universal
+        *verb*, the MIDI channel selects *which* fixture (its index in the
+        patch), and velocity carries the verb's parameter. Per-fixture verbs are
+        resolved against that fixture's own data-driven def (channels / banks /
+        chases), so the one layout works for any fixture type. See the layout
+        table in the plan / ROADMAP subtask 4."""
         with self.lock:
             self.logger.debug(f"Note On: channel={channel}, pitch={pitch}, velocity={velocity}")
-            self.current_velocity = velocity
+
+            # ---- Global verbs (channel-agnostic) ----
+            if pitch == 51:                      # blackout all (toggle)
+                self.blackout_all()
+                return
+            if 61 <= pitch <= 69:                # song-part markers INTRO..END
+                self.pick_scene_from_song_part(SONG_PARTS[pitch - 61], velocity)
+                return
+
+            # ---- Per-fixture verbs: the channel selects the fixture ----
+            if channel >= self.num_fixtures:
+                return
+            fx = channel
+            s = self.fixtures[fx]
 
             match pitch:
-                case 0:  # C-1
-                    pass # NoteOff, do nothing
-                case 1:   # C#-1
-                    self.set_channel_instant(self.led, ROLE_BRIGHTNESS, velocity * 2)
-                case 2:   # D-1
-                    self.set_channel_instant(self.led, ROLE_BLUE, velocity * 2)
-                case 3:   # D#-1
-                    self.set_channel_instant(self.led, ROLE_GREEN, velocity * 2)
-                case 4:   # E-1
-                    self.set_channel_instant(self.led, ROLE_RED, velocity * 2)
-                case 5:   # F-1
-                    # The animation note is sent once per manual scene (unlike
-                    # brightness, which streams during fades), so we use it as
-                    # the single trigger to take manual LED control. Assumes a
-                    # manual scene always includes all 7 channel notes (1-7).
-                    self.take_manual_control(self.led)
-                    self.set_channel_instant(self.led, ROLE_ANIMATION, velocity * 2)
-                case 6:   # F#-1
-                    self.set_channel_instant(self.led, ROLE_SPEED, velocity * 2)
-                case 7:   # G-1
-                    self.set_channel_instant(self.led, ROLE_DIRECTION, velocity * 2)
-                case 8:   # G#-1
-                    self.fixtures[self.led].is_palette_random = True
-                case 9:   # A-1
-                    self.fixtures[self.led].is_palette_random = False
-                case 10:  # A#-1
-                    self.fixtures[self.led].blend_time = velocity * 100
-                case 11:  # B-1
-                    self.fixtures[self.led].color_change_time = velocity * 1000
-                case 12:  # C0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 0)
-                case 13:  # C#0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 1)
-                case 14:  # D0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 2)
-                case 15:  # D#0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 3)
-                case 16:  # E0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 4)
-                case 17:  # F0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 5)
-                case 18:  # F#0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 6)
-                case 19:  # G0
-                    self.load_scene(self.led, self.fixtures[self.led].bank, 7)
-                case 20:  # G#0
-                    self.change_fixture_color(self.led, COLOR32_WHITE)
-                case 21:  # A0
-                    self.change_fixture_color(self.led, COLOR32_ORANGE)
-                case 22:  # A#0
-                    self.change_fixture_color(self.led, COLOR32_CYAN)
-                case 23:  # B0
-                    self.change_fixture_color(self.led, COLOR32_PINK)
-                case 24:  # C1
-                    self.fixtures[self.led].bank = 'FILLS'
-                case 25:  # C#1
-                    self.fixtures[self.led].bank = 'TUBES'
-                case 26:  # D1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, velocity * 100)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                    self.set_fixture_manual(self.blinder2)
-                case 27:  # D#1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                    self.set_fixture_manual(self.blinder2)
-                case 28:  # E1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 2, velocity * 100)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 2, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                    self.set_fixture_manual(self.blinder2)
-                case 29:  # F1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 3, velocity * 100)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 3, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                    self.set_fixture_manual(self.blinder2)
-                case 30:  # F#1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 4, velocity * 100)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 4, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                    self.set_fixture_manual(self.blinder2)
-                case 31:  # G1
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.set_fixture_manual(self.blinder1)
-                case 32:  # G#1
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.set_fixture_manual(self.blinder2)
-                case 38:  # D2 - Precount beats
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, 1)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, 1)
-                case 39:  # D#2 - Precount downbeats
-                    self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, 1)
-                    self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, 1)
-                case 40:  # E2 - START
-                    # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode.
-                    # The MIDI channel selects which fixture gets the palette (subtask 4);
-                    # for now everything arrives on channel 0 (the LED). Store the palette
-                    # but leave cycling off until a song-part arms it.
+                case n if 1 <= n <= 23:          # set channel offset n = velocity*2
+                    self.set_channel_offset(fx, n, velocity * 2)
+                case n if 24 <= n <= 35:         # load scene (n-24) in current bank
+                    self.load_scene_in_current_bank(fx, n - 24, velocity)
+                case n if 36 <= n <= 47:         # select bank (n-36)
+                    self.select_bank(fx, n - 36)
+                case 48:                         # take manual control of the fixture
+                    self.take_manual_control(fx)
+                case 49:                         # drop to manual (keep current frame)
+                    self.set_fixture_manual(fx)
+                case 50:                         # blackout this fixture
+                    self.blackout_fixture(fx)
+                case 52:                         # blend time (ms)
+                    s.blend_time = velocity * 100
+                case 53:                         # color-change time (ms)
+                    s.color_change_time = velocity * 100
+                case 54:                         # chase-change time (ms)
+                    s.chase_change_time = velocity * 100
+                case 55:                         # palette random on
+                    s.is_palette_random = True
+                case 56:                         # palette random off
+                    s.is_palette_random = False
+                case 57:                         # previous scene in current bank
+                    self.load_scene_relative(fx, -1, velocity)
+                case 58:                         # next scene in current bank
+                    self.load_scene_relative(fx, 1, velocity)
+                case 59:                         # bank+scene packed in velocity
+                    self.load_scene_packed(fx, velocity)
+                case 60:                         # START: velocity encodes the palette
+                    # hue_index (0-11: hue, 12+: random) and palette mode. Store
+                    # the palette but leave cycling off until a song-part arms it.
                     hue_index = velocity // 6
                     palette_mode = velocity % 6
-                    if channel < self.num_fixtures:
-                        s = self.fixtures[channel]
-                        s.palette_ptr = generate_song_colors(
-                            PALETTE_MODES[palette_mode], hue_index)
-                        s.palette_index = 0
-                case 41:  # F2
-                    self.pick_scene_from_song_part('INTRO', velocity)
-                case 42:  # F#2
-                    self.pick_scene_from_song_part('VERSE', velocity)
-                case 43:  # G2
-                    self.pick_scene_from_song_part('CHORUS', velocity)
-                case 44:  # G#2
-                    self.pick_scene_from_song_part('BREAK', velocity)
-                case 45:  # A2
-                    self.pick_scene_from_song_part('BRIDGE', velocity)
-                case 46:  # A#2
-                    self.pick_scene_from_song_part('INST', velocity)
-                case 47:  # B2
-                    self.pick_scene_from_song_part('SOLO', velocity)
-                case 48:  # C3
-                    self.pick_scene_from_song_part('OUTRO', velocity)
-                case 49:  # C#3
-                    self.pick_scene_from_song_part('END', velocity)
-                case 50:  # D3
-                    self.blackout_fixture(self.led)
-                case 51:  # D#3
-                    self.blackout_fixture(self.blinder1)
-                    self.blackout_fixture(self.blinder2)
-                case 52:  # E3
-                    self.blackout_all()
+                    s.palette_ptr = generate_song_colors(
+                        PALETTE_MODES[palette_mode], hue_index)
+                    s.palette_index = 0
+                case 72:                         # color macros
+                    self.change_fixture_color(fx, COLOR32_WHITE)
+                case 73:
+                    self.change_fixture_color(fx, COLOR32_ORANGE)
+                case 74:
+                    self.change_fixture_color(fx, COLOR32_CYAN)
+                case 75:
+                    self.change_fixture_color(fx, COLOR32_PINK)
+                case _:
+                    pass  # 0, 70-71, 76-127: NOP / reserved
 
     def pick_scene_from_song_part(self, part, velocity):
         """Run the song-part program: for the requested part (a SONG_PARTS name),

@@ -27,13 +27,20 @@ from .constants import (
 class MidiDocument:
     """Mutable MIDI editing state + integrity primitives."""
 
-    def __init__(self, midi_note_map: Optional[Dict] = None):
+    def __init__(self, midi_note_map: Optional[Dict] = None,
+                 fixture_channels: Optional[Dict[str, int]] = None):
         # MIDI Data Storage - Single Source of Truth
         self.midi_data: Optional[mido.MidiFile] = None
         self.midi_events: List[Dict[str, Any]] = []  # Events for UI display with unique IDs
         # note_on/note_off pairs (with duration) used to rebuild the MIDI file on save
         self.midi_notes: List[Dict[str, Any]] = []
         self.midi_note_map = midi_note_map or {}
+
+        # fixture-type name -> the MIDI channel (= fixture instance index in the
+        # patch) new events of that type route to. Set from config.fixtures in
+        # the real app; left None for synthetic/test maps, where events carry no
+        # channel and fixture identity falls back to the note map's type hint.
+        self.fixture_channels = fixture_channels or {}
 
         # Externally-provided song duration (e.g. the audio file's length).
         # Used as a floor when computing the song-end clamp so clip-edit
@@ -79,25 +86,62 @@ class MidiDocument:
         part = getattr(info, 'part', '') or ''
         return part.upper().startswith(BLACKOUT_PART_NAME)
 
-    def _event_fixture(self, event: Dict[str, Any]) -> Optional[str]:
-        """Return the fixture this event belongs to ('ledbar', 'blinder', ...)."""
+    def _event_fixture(self, event: Dict[str, Any]):
+        """Scoping key for the fixture an event belongs to.
+
+        Real-app events carry a MIDI channel (= the fixture instance's index in
+        the patch), which scopes each fixture independently. Synthetic / legacy
+        events without a channel fall back to the note map's fixture-type hint
+        ('ledbar', 'blinder', ...). Either way the value is only ever compared
+        against other _event_fixture() results, so the int/str mix is internal.
+        """
+        if event:
+            ch = event.get('channel')
+            if ch is not None:
+                return ch
         info = event.get('info') if event else None
         return getattr(info, 'fixture', None) if info else None
 
-    def _blackout_note_number(self, fixture: Optional[str] = None) -> Optional[int]:
+    def _channel_for_note(self, note: int) -> Optional[int]:
+        """Channel a new event of `note` routes to: the patch channel for the
+        note's fixture type. None when no patch is configured (tests) or the
+        type isn't patched, leaving the event channel-less (type-scoped)."""
+        if not self.fixture_channels:
+            return None
+        info = self.midi_note_map.get(str(note))
+        ftype = getattr(info, 'fixture', None) if info else None
+        return self.fixture_channels.get(ftype)
+
+    def _blackout_note_number(self, fixture=None) -> Optional[int]:
         """Return the MIDI note number mapped to BLACKOUT* for `fixture`.
 
-        If `fixture` is None, returns the first match found (legacy behavior).
+        The generalized map has a single BLACKOUT verb (the channel selects the
+        fixture), so when `fixture` is a channel index (int) — or absent — the
+        sole blackout note is returned. Legacy / synthetic maps with one
+        blackout note per fixture *type* still match by the type string.
         """
-        for note_str, info in self.midi_note_map.items():
-            if not getattr(info, 'part', '').upper().startswith(BLACKOUT_PART_NAME):
-                continue
-            if fixture is not None and getattr(info, 'fixture', None) != fixture:
-                continue
+        matches = [
+            note_str for note_str, info in self.midi_note_map.items()
+            if getattr(info, 'part', '').upper().startswith(BLACKOUT_PART_NAME)
+        ]
+        if not matches:
+            return None
+
+        # Channel-scoped (real app) or unscoped: the channel disambiguates, so
+        # the single blackout verb applies to every fixture.
+        if not isinstance(fixture, str):
             try:
-                return int(note_str)
+                return int(matches[0])
             except (TypeError, ValueError):
-                continue
+                return None
+
+        # Type-scoped (legacy/synthetic): pick the blackout note for that type.
+        for note_str in matches:
+            if getattr(self.midi_note_map[note_str], 'fixture', None) == fixture:
+                try:
+                    return int(note_str)
+                except (TypeError, ValueError):
+                    continue
         return None
 
     def _index_of(self, event_id: str) -> int:
@@ -243,7 +287,7 @@ class MidiDocument:
     # --- atomic mutators (no rebuild / no signal emit) -----------------------
 
     def _insert_blackout_internal(self, time: float,
-                                  fixture: Optional[str] = None) -> Optional[str]:
+                                  fixture=None) -> Optional[str]:
         """Insert a BLACKOUT event+note at `time`. No rebuild/emit. Returns new id, or None."""
         bo_note = self._blackout_note_number(fixture)
         if bo_note is None:
@@ -253,6 +297,11 @@ class MidiDocument:
             )
             return None
 
+        # `fixture` is the scoping token from _event_fixture: a channel index
+        # (real app) or a type string (synthetic). Only the int form is a real
+        # MIDI channel to stamp on the gap marker.
+        channel = fixture if isinstance(fixture, int) else None
+
         event_id = str(uuid.uuid4())
         info = self.midi_note_map[str(bo_note)]
         self.midi_events.append({
@@ -260,6 +309,7 @@ class MidiDocument:
             "note": bo_note,
             "time": time,
             "velocity": 100,
+            "channel": channel,
             "info": info,
             "group_id": None,
             "scene_name": None,
@@ -273,6 +323,7 @@ class MidiDocument:
             "time": time,
             "velocity": 100,
             "duration": 0.1,
+            "channel": channel,
         })
         self.midi_notes.sort(key=lambda x: x['time'])
         return event_id
@@ -291,7 +342,9 @@ class MidiDocument:
         for i, note in enumerate(self.midi_notes):
             if note.get('is_fade'):
                 continue
-            if note['note'] == event['note'] and abs(note['time'] - event['time']) < NOTE_MATCH_TOLERANCE:
+            if (note['note'] == event['note']
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - event['time']) < NOTE_MATCH_TOLERANCE):
                 self.midi_notes.pop(i)
                 break
         return True
@@ -308,6 +361,7 @@ class MidiDocument:
                     if note.get('is_fade'):
                         continue
                     if (note['note'] == e['note']
+                            and note.get('channel') == e.get('channel')
                             and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
                         note['time'] = new_time
                         break
@@ -322,12 +376,16 @@ class MidiDocument:
         """Insert one event+note without rebuild/commit. Returns event_id."""
         if str(note) not in self.midi_note_map:
             return None
+        # Route a new event to its fixture type's patch channel (None when no
+        # patch is configured, i.e. type-scoped synthetic data).
+        channel = self._channel_for_note(note)
         event_id = str(uuid.uuid4())
         self.midi_events.append({
             "id": event_id,
             "note": note,
             "time": time,
             "velocity": velocity,
+            "channel": channel,
             "info": self.midi_note_map[str(note)],
             "group_id": group_id,
             "scene_name": scene_name,
@@ -342,6 +400,7 @@ class MidiDocument:
             "time": time,
             "velocity": velocity,
             "duration": 0.1,
+            "channel": channel,
         })
         self.midi_notes.sort(key=lambda x: x["time"])
         return event_id
@@ -371,6 +430,7 @@ class MidiDocument:
             if note.get('is_fade'):
                 continue
             if (note['note'] == old_note
+                    and note.get('channel') == event.get('channel')
                     and abs(note['time'] - old_time) < NOTE_MATCH_TOLERANCE):
                 note['note'] = bo_note
                 break
