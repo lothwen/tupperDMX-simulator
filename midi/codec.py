@@ -15,7 +15,7 @@ import uuid
 import mido
 
 from tupperlogger import get_logger
-from .constants import CHANNEL_CONTROL_NOTES
+from .constants import VALUE_BEARING_NOTES
 
 
 class MidiCodec:
@@ -46,11 +46,11 @@ class MidiCodec:
             current_time += msg.time
             if msg.type != 'note_on':
                 continue
-            # Channel-control notes (1-7) are scene channels and a velocity of
-            # 0 carries a real "channel = 0" value, so they're admitted. Other
+            # Value-bearing notes (channel sets / scene loaders) carry their
+            # value in velocity, so velocity 0 is real and admitted. Other
             # notes follow the standard "note_on velocity 0 == note_off"
             # convention and are skipped here.
-            if msg.velocity == 0 and msg.note not in CHANNEL_CONTROL_NOTES:
+            if msg.velocity == 0 and msg.note not in VALUE_BEARING_NOTES:
                 continue
             note_info = doc.midi_note_map.get(str(msg.note))
             if note_info:
@@ -59,6 +59,10 @@ class MidiCodec:
                     "note": msg.note,
                     "time": current_time,
                     "velocity": msg.velocity,
+                    # MIDI channel = fixture instance index in the patch (the
+                    # generalized note map routes by channel). Carried so the
+                    # document scopes per fixture and rebuild round-trips it.
+                    "channel": msg.channel,
                     "info": note_info,
                     "group_id": None,
                     "scene_name": None,
@@ -75,19 +79,22 @@ class MidiCodec:
         for msg in doc.midi_data:
             current_time += msg.time
             if msg.type == 'note_on' and msg.velocity > 0:
-                active_notes[msg.note] = {"time": current_time, "velocity": msg.velocity}
+                active_notes[(msg.channel, msg.note)] = {
+                    "time": current_time, "velocity": msg.velocity}
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                if msg.note in active_notes:
+                key = (msg.channel, msg.note)
+                if key in active_notes:
                     note_id = str(uuid.uuid4())
-                    start_time = active_notes[msg.note]["time"]
+                    start_time = active_notes[key]["time"]
                     doc.midi_notes.append({
                         "id": note_id,
                         "note": msg.note,
                         "time": start_time,
                         "duration": current_time - start_time,
-                        "velocity": active_notes[msg.note]["velocity"]
+                        "velocity": active_notes[key]["velocity"],
+                        "channel": msg.channel,
                     })
-                    del active_notes[msg.note]
+                    del active_notes[key]
 
     def rebuild(self, doc) -> None:
         """Rebuild doc.midi_data from doc.midi_events and doc.midi_notes."""
@@ -117,13 +124,17 @@ class MidiCodec:
                 # start during a fade-in (the original group's brightness
                 # note also lives at that exact time).
                 is_fade = bool(note_data.get('is_fade', False))
+                # MIDI channel = fixture instance index (the note map routes by
+                # channel). Default 0 for notes without one (synthetic data /
+                # fade ramps, which target the lead ledbar at channel 0).
+                channel = note_data.get('channel') or 0
                 # Note on
                 all_events.append({
                     'time': note_data['time'],
                     'type': 'note_on',
                     'note': note_data['note'],
                     'velocity': note_data['velocity'],
-                    'channel': 0,
+                    'channel': channel,
                     'is_fade': is_fade,
                 })
                 # Note off
@@ -132,7 +143,7 @@ class MidiCodec:
                     'type': 'note_off',
                     'note': note_data['note'],
                     'velocity': 0,
-                    'channel': 0,
+                    'channel': channel,
                     'is_fade': is_fade,
                 })
 

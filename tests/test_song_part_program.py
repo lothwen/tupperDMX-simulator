@@ -25,8 +25,8 @@ from software_controller.main import (
     SongPartEntry,
 )
 
-# MIDI notes 41-49 -> song parts 1-9 (see handle_note_on).
-INTRO, VERSE, CHORUS, BREAK, BRIDGE, INST, SOLO, OUTRO, END = range(41, 50)
+# MIDI notes 61-69 -> song parts 1-9 (see handle_note_on); channel-agnostic.
+INTRO, VERSE, CHORUS, BREAK, BRIDGE, INST, SOLO, OUTRO, END = range(61, 70)
 
 
 def _assert(cond, msg):
@@ -72,9 +72,8 @@ def test_program_index_matches_legacy_targets():
 
 
 def _fx(ctrl):
-    return (ctrl.fixtures[ctrl.led],
-            ctrl.fixtures[ctrl.blinder1],
-            ctrl.fixtures[ctrl.blinder2])
+    # Patch order from the shipped config: 0 = ledbar, 1 / 2 = blinders.
+    return (ctrl.fixtures[0], ctrl.fixtures[1], ctrl.fixtures[2])
 
 
 def test_deterministic_parts_load_expected_scenes():
@@ -112,14 +111,14 @@ def test_random_parts_stay_in_range():
     for _ in range(50):
         ctrl = DMXController()
         ctrl.handle_note_on(0, CHORUS, 64)
-        led = ctrl.fixtures[ctrl.led]
+        led = ctrl.fixtures[0]
         _assert(led.is_chasing and 9 <= led.chase <= 14,
                 "CHORUS runs a ledbar chase in 9..14")
 
         ctrl = DMXController()
         ctrl.handle_note_on(0, OUTRO, 64)
-        led = ctrl.fixtures[ctrl.led]
-        b1 = ctrl.fixtures[ctrl.blinder1]
+        led = ctrl.fixtures[0]
+        b1 = ctrl.fixtures[1]
         _assert(led.is_chasing and 0 <= led.chase <= 2,
                 "OUTRO runs a ledbar chase in 0..2")
         _assert((b1.bank, b1.scene, b1.is_blackout) == ("BLINDER_SCENES", 3, False),

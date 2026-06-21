@@ -53,7 +53,8 @@ class MainWindow(QMainWindow):
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
         self.dmx_manager.software_controller_changed.connect(self.on_software_controller_changed)
         
-        self.midi_manager = MidiManager(self.config.midi_note_map)
+        self.midi_manager = MidiManager(self.config.midi_note_map,
+                                        fixtures=self.config.fixtures)
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
         self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)

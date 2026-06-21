@@ -56,6 +56,14 @@ CHANNEL_NOTE_MAP: Tuple[Tuple[str, int], ...] = (
 )
 CHANNEL_CONTROL_NOTES = frozenset(n for _, n in CHANNEL_NOTE_MAP)
 
+# Notes whose velocity carries a value rather than gating a note on/off:
+# the generalized note map's channel sets (1-23) and scene loaders (24-35).
+# A velocity of 0 on these is a real value ("set channel to 0" / "instant
+# blend"), so the codec must admit them instead of treating velocity 0 as a
+# note_off. (Superset of CHANNEL_CONTROL_NOTES, which stays scoped to the 7
+# LED scene channels used by the scene-clustering heuristic.)
+VALUE_BEARING_NOTES = frozenset(range(1, 36))
+
 
 def _channel_to_velocity(value: int) -> int:
     """Map a 0..255 DMX channel value to a 0..127 MIDI velocity (floor).

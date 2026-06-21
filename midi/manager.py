@@ -24,6 +24,19 @@ from .constants import (
 )
 
 
+def _fixture_channels(fixtures) -> Dict[str, int]:
+    """Map each fixture-type name to the MIDI channel new events of that type
+    route to: the index of the type's first instance in the patch. With the
+    shipped patch [ledbar, blinder, blinder] -> {'ledbar': 0, 'blinder': 1}.
+    Returns {} when no patch is given (synthetic/test maps stay type-scoped)."""
+    mapping: Dict[str, int] = {}
+    for idx, inst in enumerate(fixtures or []):
+        ftype = getattr(inst, "type", None)
+        if ftype is not None:
+            mapping.setdefault(ftype, idx)
+    return mapping
+
+
 class MidiManager(QObject):
     """
     Manages MIDI worker lifecycle and provides a high-level interface.
@@ -39,7 +52,7 @@ class MidiManager(QObject):
     worker_finished = pyqtSignal()
     data_changed = pyqtSignal()  # Emitted when MIDI data is modified
 
-    def __init__(self, midi_note_map: Optional[Dict] = None):
+    def __init__(self, midi_note_map: Optional[Dict] = None, fixtures=None):
         super().__init__()
         self.current_worker: Optional[MidiWorker] = None
         self.current_filename: Optional[str] = None
@@ -49,7 +62,9 @@ class MidiManager(QObject):
         # midi_events, midi_notes, midi_note_map) plus the low-level queries,
         # atomic mutators, and BLACKOUT reconciliation every editor builds on.
         # Manager code reaches the data through the proxy properties below.
-        self._doc = MidiDocument(midi_note_map)
+        # The patch (config.fixtures) gives the doc a fixture-type -> channel
+        # map so new events route to the right fixture instance.
+        self._doc = MidiDocument(midi_note_map, _fixture_channels(fixtures))
 
         # Serialization collaborator: mido.MidiFile <-> document lists.
         self._codec = MidiCodec()
@@ -140,7 +155,7 @@ class MidiManager(QObject):
     def is_blackout(self, event: Dict[str, Any]) -> bool:
         return self._doc.is_blackout(event)
 
-    def _event_fixture(self, event: Dict[str, Any]) -> Optional[str]:
+    def _event_fixture(self, event: Dict[str, Any]):
         return self._doc._event_fixture(event)
 
     # MIDI Data Management Methods  
