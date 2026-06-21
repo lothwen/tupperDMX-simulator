@@ -252,7 +252,7 @@ class Fixture:
     color: tuple = COLOR32_WHITE
     palette_ptr: object = None
     palette_index: int = 0
-    palette_size: int = 0
+    is_color_cycling: bool = False
     is_palette_random: bool = False
     color_change_time: int = DEFAULT_COLOR_CHANGE_TIME
     blend_time: int = DEFAULT_BLEND_TIME
@@ -285,7 +285,6 @@ class DMXController:
         self._resolve_fixture_handles()
 
         self.song_tempo = 145 # TODO: hardcoded value, find a way to pass this with a midi note
-        self.color_palette = []
 
         self.blackout_all_state = False
         self.current_velocity = 127
@@ -434,10 +433,10 @@ class DMXController:
             else:
                 self.present[s.base + i] = value
 
-        # Literal RGB scene -> drop the palette so the timer stops overriding color.
+        # Literal RGB scene -> stop cycling so the timer stops overriding color
+        # (the palette is kept so a later song-part can re-arm it).
         if has_rgb and not palette_mode:
-            s.palette_size = 0
-            s.palette_ptr = None
+            s.is_color_cycling = False
 
         s.bank = bank
         s.scene = scene
@@ -511,19 +510,20 @@ class DMXController:
         self.reseed_all_blend_starts()
 
     def change_fixture_color(self, fx, color):
-        # Solid manual color: drop the palette so the timer stops cycling.
-        self.fixtures[fx].palette_size = 0
-        self.fixtures[fx].palette_ptr = None
+        # Solid manual color: stop cycling but keep the palette so a later
+        # song-part can re-arm it.
+        self.fixtures[fx].is_color_cycling = False
         self.set_fixture_color(fx, color)
 
-    def change_fixture_color_palette(self, fx, palette, index, size, blend_time, color_change_time):
+    def change_fixture_color_palette(self, fx, palette, blend_time, 
+            color_change_time, start_index=0):
         s = self.fixtures[fx]
         s.palette_ptr = palette
-        s.palette_index = index
-        s.palette_size = size
+        s.palette_index = start_index
         s.blend_time = blend_time
         s.color_change_time = color_change_time
-        self.set_fixture_color(fx, palette[index])
+        s.is_color_cycling = True
+        self.set_fixture_color(fx, palette[start_index])
         s.last_palette_change = time.time()
 
     # ------------------------------------------------------------------
@@ -540,28 +540,36 @@ class DMXController:
         s.is_blackout = True
         s.is_chasing = False
         s.song_part_triggered = False
-        # Drop the palette (no-op for fixtures without one).
-        s.palette_size = 0
-        s.palette_ptr = None
+        # Stop cycling but keep the palette so a later song-part can re-arm it.
+        s.is_color_cycling = False
 
     def blackout_all(self):
         self.blackout_all_state = not self.blackout_all_state
         self.logger.info(f"Blackout All state: {'enabled' if self.blackout_all_state else 'disabled'}")
 
-    def reset_led_blinder_status(self):
-        # Drop the LED out of chase/palette so the background loop stops stomping
-        # the manual values, and clear any fixture that the automatic song-part
-        # program left on (e.g. blinders from a BREAK) so a manual scene starts
-        # clean. Fixtures the user triggered by hand (notes 26-32) are left
-        # running (they don't carry song_part_triggered).
-        led = self.fixtures[self.led]
-        led.is_chasing = False
-        led.is_blackout = False
-        led.palette_size = 0
-        led.palette_ptr = None
-        for fx in range(self.num_fixtures):
-            if fx != self.led and self.fixtures[fx].song_part_triggered:
-                self.blackout_fixture(fx)
+    def set_fixture_manual(self, fx):
+        # Drop one fixture out of the automatic program (chase + palette cycling)
+        # so the background loop stops stomping manually-set values. The palette is
+        # kept (is_color_cycling just goes off) so a later song-part can re-arm it.
+        s = self.fixtures[fx]
+        s.is_chasing = False
+        s.is_color_cycling = False
+        s.song_part_triggered = False
+
+    def take_manual_control(self, fx):
+        # A fixture takes manual control: it drops out of the automatic program and
+        # holds its frame for the incoming manual scene, while every other fixture
+        # the song-part program left on (e.g. blinders from a BREAK) blacks out so
+        # the manual scene starts clean. Fixtures the user triggered by hand (notes
+        # 26-32) are left running (they don't carry song_part_triggered).
+        #
+        # Note 5 wires here for now; subtask 4 (per-type MIDI map) will route a
+        # dedicated control note whose channel selects fx.
+        self.set_fixture_manual(fx)
+        self.fixtures[fx].is_blackout = False
+        for other in range(self.num_fixtures):
+            if other != fx and self.fixtures[other].song_part_triggered:
+                self.blackout_fixture(other)
 
     # ------------------------------------------------------------------
     # MIDI input
@@ -587,7 +595,7 @@ class DMXController:
                     # brightness, which streams during fades), so we use it as
                     # the single trigger to take manual LED control. Assumes a
                     # manual scene always includes all 7 channel notes (1-7).
-                    self.reset_led_blinder_status()
+                    self.take_manual_control(self.led)
                     self.set_channel_instant(self.led, ROLE_ANIMATION, velocity * 2)
                 case 6:   # F#-1
                     self.set_channel_instant(self.led, ROLE_SPEED, velocity * 2)
@@ -632,36 +640,34 @@ class DMXController:
                 case 26:  # D1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, velocity * 100)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
+                    self.set_fixture_manual(self.blinder2)
                 case 27:  # D#1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
+                    self.set_fixture_manual(self.blinder2)
                 case 28:  # E1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 2, velocity * 100)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 2, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
+                    self.set_fixture_manual(self.blinder2)
                 case 29:  # F1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 3, velocity * 100)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 3, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
+                    self.set_fixture_manual(self.blinder2)
                 case 30:  # F#1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 4, velocity * 100)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 4, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
+                    self.set_fixture_manual(self.blinder2)
                 case 31:  # G1
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[self.blinder1].song_part_triggered = False
-                    self.fixtures[self.blinder1].is_chasing = False
+                    self.set_fixture_manual(self.blinder1)
                 case 32:  # G#1
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, velocity * 100)
-                    self.fixtures[self.blinder2].song_part_triggered = False
-                    self.fixtures[self.blinder2].is_chasing = False
+                    self.set_fixture_manual(self.blinder2)
                 case 38:  # D2 - Precount beats
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 0, 1)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 0, 1)
@@ -669,11 +675,17 @@ class DMXController:
                     self.load_scene(self.blinder1, 'BLINDER_SCENES', 1, 1)
                     self.load_scene(self.blinder2, 'BLINDER_SCENES', 1, 1)
                 case 40:  # E2 - START
-                    # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode
+                    # velocity encodes 2 values: hue_index (0-11: hue index, 12: random hue) and palette mode.
+                    # The MIDI channel selects which fixture gets the palette (subtask 4);
+                    # for now everything arrives on channel 0 (the LED). Store the palette
+                    # but leave cycling off until a song-part arms it.
                     hue_index = velocity // 6
                     palette_mode = velocity % 6
-                    self.color_palette = generate_song_colors(
-                    PALETTE_MODES[palette_mode], hue_index)
+                    if channel < self.num_fixtures:
+                        s = self.fixtures[channel]
+                        s.palette_ptr = generate_song_colors(
+                            PALETTE_MODES[palette_mode], hue_index)
+                        s.palette_index = 0
                 case 41:  # F2
                     self.pick_scene_from_song_part('INTRO', velocity)
                 case 42:  # F#2
@@ -716,11 +728,6 @@ class DMXController:
         for fx in managed:
             self.blackout_fixture(fx)
 
-        if self.color_palette:
-            self.change_fixture_color_palette(self.led, self.color_palette, 0,
-              len(self.color_palette), self.beat_duration(self.song_tempo) * 1,
-              self.beat_duration(self.song_tempo) * 4)
-
         for fx in managed:
             entries = self.fixtures[fx].type.song_part_program.get(part)
             if not entries:
@@ -731,8 +738,13 @@ class DMXController:
             else:
                 self.load_scene(fx, entry.bank, entry.index)
 
+            if self.fixtures[fx].palette_ptr:
+                self.change_fixture_color_palette(fx, self.fixtures[fx].palette_ptr,
+                  self.beat_duration(self.song_tempo) * 1,
+                  self.beat_duration(self.song_tempo) * 4)
+
         # Mark non-LED fixtures as owned by the automatic program so a later
-        # manual LED scene clears them (see reset_led_blinder_status). Fixtures
+        # manual LED scene clears them (see take_manual_control). Fixtures
         # left blacked out for this part get the flag too, but blacking out an
         # off fixture is a harmless no-op.
         for fx in managed:
@@ -780,10 +792,10 @@ class DMXController:
                 # at its own color_change_time).
                 for fx in range(self.num_fixtures):
                     s = self.fixtures[fx]
-                    if s.palette_size > 1 and \
+                    if s.is_color_cycling and len(s.palette_ptr) > 1 and \
                        current_time - s.last_palette_change >= s.color_change_time / 1000.0:
                         i = random.randint(16, 48) if s.is_palette_random else 1
-                        s.palette_index = (s.palette_index + i) % s.palette_size
+                        s.palette_index = (s.palette_index + i) % len(s.palette_ptr)
                         self.set_fixture_color(fx, s.palette_ptr[s.palette_index])
                         s.last_palette_change = current_time
 
