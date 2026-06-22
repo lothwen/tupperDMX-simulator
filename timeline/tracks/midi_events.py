@@ -857,17 +857,45 @@ class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
 
     def __init__(self, timeline_manager, content_scene, header_scene,
-                 fixture_filter: Optional[str] = None):
+                 fixture_index: int = 0, label: str = "MIDI Events"):
         super().__init__(timeline_manager, content_scene, header_scene)
-        self.fixture_filter = fixture_filter
+        # This track owns one patched fixture, identified by its index in the
+        # patch (== the MIDI channel that routes to it). label is the header
+        # text shown for the fixture.
+        self.fixture_index = fixture_index
+        self.label = label
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
         self.logger = get_logger("timeline.tracks.midi_events")
 
     def matches_filter(self, event) -> bool:
-        if not self.fixture_filter:
+        """True if `event` belongs on this fixture's lane.
+
+        Song-part markers (61-69) are global verbs that reset every fixture,
+        so they appear on every lane. Everything else is scoped to the fixture
+        whose patch index (= MIDI channel) matches this track.
+        """
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        if mm is not None and mm.is_song_part(event):
             return True
+        if mm is not None:
+            return mm._event_fixture(event) == self.fixture_index
         info = event.get('info') if event else None
-        return getattr(info, 'fixture', None) == self.fixture_filter
+        return getattr(info, 'fixture', None) == self.fixture_index
+
+    def _is_home_song_part(self, event) -> bool:
+        """True when a global song-part event is editable on THIS lane.
+
+        A song part routes to one home channel; on that lane it is a normal
+        editable clip, on every other lane it is a read-only segment marker.
+        """
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        if mm is None or not mm.is_song_part(event):
+            return False
+        home = mm._event_fixture(event)
+        # No channel (synthetic / no patch) -> the first lane is home.
+        if not isinstance(home, int):
+            return self.fixture_index == 0
+        return home == self.fixture_index
 
     def get_track_height(self) -> int:
         return self.timeline_manager.midi_events_track_height
@@ -888,10 +916,7 @@ class MidiEventsTrack(BaseTrack):
         self.header_scene.addItem(header_rect)
         self.header_items.append(header_rect)
 
-        title = "MIDI Events"
-        if self.fixture_filter:
-            title = f"{self.fixture_filter.capitalize()}"
-        header_text = QGraphicsTextItem(title)
+        header_text = QGraphicsTextItem(self.label)
         header_text.setDefaultTextColor(QColor(200, 200, 200))
         header_text.setPos(5, y_offset + 5)
         self.header_scene.addItem(header_text)
@@ -947,6 +972,52 @@ class MidiEventsTrack(BaseTrack):
         # near-black scenes don't disappear against the dark track background.
         scale = max(brightness / 255.0, 0.18)
         return QColor(int(red * scale), int(green * scale), int(blue * scale))
+
+    def _add_song_part_marker(self, rep, x_pos, y_offset, width, track_height):
+        """Render a non-interactive segment marker for a global song part.
+
+        Used on lanes that are not the song part's home lane: the marker is
+        visible (a semi-transparent band in the part's color, with its label)
+        but accepts no mouse gestures, so all editing flows through the single
+        clip on the home lane.
+        """
+        info = rep['info']
+        base = QColor(info.color)
+        fill = QColor(base)
+        fill.setAlpha(70)  # ghosted, to read as "not editable here"
+
+        marker = QGraphicsRectItem(x_pos, y_offset, width, track_height)
+        marker.setBrush(QBrush(fill))
+        marker.setPen(QPen(QColor(20, 20, 20)))
+        marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        marker.setAcceptHoverEvents(False)
+        marker.setZValue(1)
+        self.content_scene.addItem(marker)
+        self.items.append(marker)
+
+        label_text = info.part
+        brightness = (base.red() * 0.299 + base.green() * 0.587
+                      + base.blue() * 0.114)
+        text_color = QColor(200, 200, 200) if brightness < 128 else QColor(0, 0, 0)
+        zoom_factor = self.timeline_manager.content_view.transform().m11()
+        available_width = (width - 10) * zoom_factor
+        fm = self.timeline_manager.content_view.fontMetrics()
+        text_to_display = self.timeline_manager.get_truncated_text(
+            label_text, available_width, fm)
+
+        text_item = QGraphicsTextItem(text_to_display)
+        text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        text_item.setDefaultTextColor(text_color)
+        text_item.setPos(x_pos + 5, y_offset + 5)
+        text_item.setZValue(2)
+        text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+        text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        text_item.setAcceptHoverEvents(False)
+        text_item.setData(0, label_text)
+        text_item.setData(1, rep['id'])
+        self.content_scene.addItem(text_item)
+        self.items.append(text_item)
 
     def redraw_events(self, cached_events, y_offset: int):
         # Hide the shared clip tooltip before destroying the clips. If the
@@ -1033,6 +1104,19 @@ class MidiEventsTrack(BaseTrack):
 
                 x_pos = start_time * pps
                 width = max(duration * pps, MIN_HIT_WIDTH_PX)
+
+                # A global song part on a lane that is not its home is shown as
+                # a read-only segment marker: visible (it still segments the
+                # lane, since a song part resets every fixture) but with no
+                # drag/select/edit gestures — the single editable instance
+                # lives on its home lane.
+                mm = self.timeline_manager.midi_manager
+                if (mm is not None and mm.is_song_part(rep)
+                        and not self._is_home_song_part(rep)):
+                    self._add_song_part_marker(rep, x_pos, y_offset, width,
+                                               track_height)
+                    continue
+
                 bounds = self._compute_bounds(units, i, song_end_time)
 
                 is_group = unit["kind"] == "group"
@@ -1053,7 +1137,9 @@ class MidiEventsTrack(BaseTrack):
                 event_rect.fade_out_committed.connect(self.timeline_manager.on_midi_event_fade_out)
                 event_rect.edit_requested.connect(self.timeline_manager.on_midi_event_edit_by_id)
                 event_rect.delete_requested.connect(self.timeline_manager.on_midi_event_delete_by_id)
-                event_rect.add_at_position_requested.connect(self.timeline_manager.on_add_event_requested)
+                event_rect.add_at_position_requested.connect(
+                    lambda t, idx=self.fixture_index:
+                    self.timeline_manager.on_add_event_requested(t, idx))
                 event_rect.group_move_committed.connect(self.timeline_manager.on_selection_moved)
 
                 # Pick the clip color: scene groups derive from their RGB

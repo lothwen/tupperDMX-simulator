@@ -20,6 +20,7 @@ from .constants import (
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     FADE_BRIGHTNESS_NOTE,
+    SONG_PART_NOTES,
     _channel_to_velocity,
 )
 
@@ -155,6 +156,15 @@ class MidiManager(QObject):
     def is_blackout(self, event: Dict[str, Any]) -> bool:
         return self._doc.is_blackout(event)
 
+    def is_song_part(self, event: Dict[str, Any]) -> bool:
+        """True if `event` is a global song-part marker (notes 61-69).
+
+        Song parts reset every fixture, so the timeline shows them on every
+        fixture track instead of scoping them to a single channel.
+        """
+        note = event.get('note') if event else None
+        return note in SONG_PART_NOTES
+
     def _event_fixture(self, event: Dict[str, Any]):
         return self._doc._event_fixture(event)
 
@@ -244,8 +254,9 @@ class MidiManager(QObject):
     # Editing API — delegated to the clip / scene / selection editors
     # ------------------------------------------------------------------
 
-    def add_event(self, note: int, time: float, velocity: int) -> str:
-        return self._clips.add_event(note, time, velocity)
+    def add_event(self, note: int, time: float, velocity: int,
+                  channel: Optional[int] = None) -> str:
+        return self._clips.add_event(note, time, velocity, channel)
 
     def update_event_timing(self, event_id: str, new_time: float) -> bool:
         return self._clips.update_event_timing(event_id, new_time)
@@ -269,8 +280,8 @@ class MidiManager(QObject):
         return self._clips.replace_with_blackout(event_id)
 
     def add_scene(self, time: float, channels: Dict[str, int],
-                  name: str) -> Optional[str]:
-        return self._scenes.add_scene(time, channels, name)
+                  name: str, channel: Optional[int] = None) -> Optional[str]:
+        return self._scenes.add_scene(time, channels, name, channel)
 
     def move_scene(self, group_id: str, new_time: float) -> bool:
         return self._scenes.move_scene(group_id, new_time)

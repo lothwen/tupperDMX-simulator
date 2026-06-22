@@ -64,6 +64,12 @@ CHANNEL_CONTROL_NOTES = frozenset(n for _, n in CHANNEL_NOTE_MAP)
 # LED scene channels used by the scene-clustering heuristic.)
 VALUE_BEARING_NOTES = frozenset(range(1, 36))
 
+# Song-part marker notes (INTRO..END). These are GLOBAL verbs: the software
+# controller dispatches them channel-agnostically (they reset every fixture —
+# see software_controller/main.py handle_note_on, `61 <= pitch <= 69`), so the
+# timeline shows them on every fixture track rather than scoping by channel.
+SONG_PART_NOTES = frozenset(range(61, 70))
+
 
 def _channel_to_velocity(value: int) -> int:
     """Map a 0..255 DMX channel value to a 0..127 MIDI velocity (floor).

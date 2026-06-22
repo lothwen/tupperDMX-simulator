@@ -26,11 +26,23 @@ class ClipEditor:
         self._commit = commit
         self.logger = get_logger("midi.clip_editor")
 
-    def add_event(self, note: int, time: float, velocity: int) -> str:
-        """Add a new MIDI event and return its ID."""
+    def add_event(self, note: int, time: float, velocity: int,
+                  channel: Optional[int] = None) -> str:
+        """Add a new MIDI event and return its ID.
+
+        `channel` selects the target fixture (its index in the patch). When
+        None it defaults to the patch channel for the note's fixture type, so
+        a plain add still routes to that type's first instance. Drops onto a
+        specific fixture track pass the track's index explicitly. The channel
+        is stamped on both the event (display/scoping) and the mirrored note
+        (the codec rebuilds the MIDI file from midi_notes).
+        """
         if str(note) not in self._doc.midi_note_map:
             self.logger.warning(f"Note {note} not in MIDI note map")
             return ""
+
+        if channel is None:
+            channel = self._doc._channel_for_note(note)
 
         event_id = str(uuid.uuid4())
         new_event = {
@@ -38,6 +50,7 @@ class ClipEditor:
             "note": note,
             "time": time,
             "velocity": velocity,
+            "channel": channel,
             "info": self._doc.midi_note_map[str(note)],
             "group_id": None,
             "scene_name": None,
@@ -60,6 +73,7 @@ class ClipEditor:
             "note": note,
             "time": time,
             "velocity": velocity,
+            "channel": channel,
             "duration": 0.1  # Default duration
         }
         
