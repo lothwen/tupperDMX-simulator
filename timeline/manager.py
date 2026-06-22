@@ -58,10 +58,14 @@ class Timeline(QWidget):
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
                  initial_audio_volume=0.5,
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
-                 parent=None):
+                 fixtures=None, parent=None):
         super().__init__(parent)
         self.audio_file = audio_file
         self.midi_manager = midi_manager
+
+        # The patch: one MIDI events track is built per fixture, in patch order
+        # (a fixture's index == the MIDI channel that routes to it).
+        self.fixtures = list(fixtures or [])
 
         self.bpm = 120
 
@@ -221,38 +225,69 @@ class Timeline(QWidget):
         """Y offset of the waveform track."""
         return self.RULER_TRACK_HEIGHT + self.TRACK_SPACING
 
-    def _midi_events_y(self) -> int:
-        """Y offset of the LedBar MIDI events track."""
+    def _midi_tracks_top(self) -> int:
+        """Y offset of the first (top) MIDI events track."""
         return self._waveform_y() + self.waveform_track_height + self.TRACK_SPACING
 
-    def _midi_events_blinder_y(self) -> int:
-        """Y offset of the Blinder MIDI events track (shares the same height)."""
-        return self._midi_events_y() + self.midi_events_track_height + self.TRACK_SPACING
+    def _midi_track_y(self, index: int) -> int:
+        """Y offset of the MIDI events track at `index` (all share one height)."""
+        return self._midi_tracks_top() + index * (self.midi_events_track_height
+                                                   + self.TRACK_SPACING)
+
+    def _midi_tracks_bottom(self) -> int:
+        """Y just past the last MIDI events track (== top when the patch is empty)."""
+        n = len(self.fixtures)
+        if n == 0:
+            return self._midi_tracks_top()
+        return self._midi_track_y(n - 1) + self.midi_events_track_height
 
     def _recompute_scene_height(self):
         """Compute total scene height from the current track layout."""
-        self.scene_height = (self._midi_events_blinder_y()
-                             + self.midi_events_track_height
-                             + self.TRACK_SPACING)
+        self.scene_height = self._midi_tracks_bottom() + self.TRACK_SPACING
+
+    def _fixture_labels(self) -> List[str]:
+        """Header label per patched fixture: its name, or the capitalized type
+        (plus a 1-based ordinal when that type appears more than once in the
+        patch) -> e.g. ['Ledbar', 'Blinder 1', 'Blinder 2']."""
+        type_counts: Dict[str, int] = {}
+        for inst in self.fixtures:
+            type_counts[inst.type] = type_counts.get(inst.type, 0) + 1
+        seen: Dict[str, int] = {}
+        labels: List[str] = []
+        for inst in self.fixtures:
+            name = (getattr(inst, "name", "") or "").strip()
+            if name:
+                labels.append(name)
+                continue
+            cap = inst.type.capitalize()
+            if type_counts.get(inst.type, 0) > 1:
+                seen[inst.type] = seen.get(inst.type, 0) + 1
+                labels.append(f"{cap} {seen[inst.type]}")
+            else:
+                labels.append(cap)
+        return labels
 
     def _init_tracks(self):
-        """Initialize all timeline tracks."""
+        """Initialize all timeline tracks (one MIDI track per patched fixture)."""
         self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
         self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
-        self.midi_events_track = MidiEventsTrack(self, self.content_scene, self.header_scene,
-                                                 fixture_filter="ledbar")
-        self.midi_events_blinder_track = MidiEventsTrack(self, self.content_scene, self.header_scene,
-                                                         fixture_filter="blinder")
+
+        labels = self._fixture_labels()
+        self.midi_events_tracks = [
+            MidiEventsTrack(self, self.content_scene, self.header_scene,
+                            fixture_index=i, label=labels[i])
+            for i in range(len(self.fixtures))
+        ]
 
         # Draw initial track layout
         self.ruler_track.draw_header()
         self.ruler_track.draw_ruler()
 
         self.waveform_track.draw_header(self._waveform_y())
-        self.midi_events_track.draw_header(self._midi_events_y())
-        self.midi_events_blinder_track.draw_header(self._midi_events_blinder_y())
+        for i, track in enumerate(self.midi_events_tracks):
+            track.draw_header(self._midi_track_y(i))
 
-        # Resize handles for the two resizable tracks
+        # Resize handles for the resizable tracks
         self._create_resize_handles()
 
         # Draw initial waveform if audio file provided
@@ -270,14 +305,16 @@ class Timeline(QWidget):
         self.waveform_resize_handle.height_committed.connect(self._on_waveform_height_committed)
         self.header_scene.addItem(self.waveform_resize_handle)
 
-        # MIDI events handle
-        self.midi_events_resize_handle = TrackResizeHandle(
-            self.HEADER_WIDTH, self.MIN_TRACK_HEIGHT,
-            lambda: self.midi_events_track_height
-        )
-        self.midi_events_resize_handle.height_preview.connect(self._on_midi_events_height_preview)
-        self.midi_events_resize_handle.height_committed.connect(self._on_midi_events_height_committed)
-        self.header_scene.addItem(self.midi_events_resize_handle)
+        # Single MIDI events handle (all fixture tracks share one height). Sits
+        # at the bottom of the last track; dragging resizes every MIDI track.
+        if self.midi_events_tracks:
+            self.midi_events_resize_handle = TrackResizeHandle(
+                self.HEADER_WIDTH, self.MIN_TRACK_HEIGHT,
+                lambda: self.midi_events_track_height
+            )
+            self.midi_events_resize_handle.height_preview.connect(self._on_midi_events_height_preview)
+            self.midi_events_resize_handle.height_committed.connect(self._on_midi_events_height_committed)
+            self.header_scene.addItem(self.midi_events_resize_handle)
 
         self._reposition_resize_handles()
 
@@ -290,7 +327,7 @@ class Timeline(QWidget):
             )
         if self.midi_events_resize_handle is not None:
             self.midi_events_resize_handle.setPos(
-                0, self._midi_events_y() + self.midi_events_track_height - thickness
+                0, self._midi_tracks_bottom() - thickness
             )
 
     def _on_waveform_height_preview(self, new_height: int):
@@ -330,15 +367,15 @@ class Timeline(QWidget):
 
         # Headers
         self.waveform_track.draw_header(self._waveform_y())
-        self.midi_events_track.draw_header(self._midi_events_y())
-        self.midi_events_blinder_track.draw_header(self._midi_events_blinder_y())
+        for i, track in enumerate(self.midi_events_tracks):
+            track.draw_header(self._midi_track_y(i))
 
         # MIDI events content (cheap to redraw — keeps box heights in sync)
         if self._cached_events:
             self._applying_selection = True
             try:
-                self.midi_events_track.redraw_events(self._cached_events, self._midi_events_y())
-                self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+                for i, track in enumerate(self.midi_events_tracks):
+                    track.redraw_events(self._cached_events, self._midi_track_y(i))
             finally:
                 self._applying_selection = False
             self._reapply_selection()
@@ -427,11 +464,10 @@ class Timeline(QWidget):
         # (possibly selected) items are torn down — removing a selected item
         # fires selectionChanged, which would otherwise wipe the persisted id
         # set before we can restore it below.
-        midi_events_y = self._midi_events_y()
         self._applying_selection = True
         try:
-            self.midi_events_track.redraw_events(self._cached_events, midi_events_y)
-            self.midi_events_blinder_track.redraw_events(self._cached_events, self._midi_events_blinder_y())
+            for i, track in enumerate(self.midi_events_tracks):
+                track.redraw_events(self._cached_events, self._midi_track_y(i))
         finally:
             self._applying_selection = False
 
@@ -484,12 +520,12 @@ class Timeline(QWidget):
 
     def _on_selection_changed(self):
         """Keep the persisted id set + multi-select affordances in sync."""
-        if self._applying_selection or not hasattr(self, 'midi_events_track'):
+        if self._applying_selection or not hasattr(self, 'midi_events_tracks'):
             return
         clips = self.selected_clip_items()
         self._selected_event_ids = {c.event_id for c in clips}
         multi = len(clips) >= 2
-        for track in (self.midi_events_track, self.midi_events_blinder_track):
+        for track in self.midi_events_tracks:
             for item in track.items:
                 if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
                     item.set_multi_selected(multi and item.isSelected())
@@ -501,7 +537,7 @@ class Timeline(QWidget):
         self._applying_selection = True
         try:
             restored = []
-            for track in (self.midi_events_track, self.midi_events_blinder_track):
+            for track in self.midi_events_tracks:
                 for item in track.items:
                     if (isinstance(item, DraggableMidiEvent)
                             and not item.is_blackout_clip
@@ -623,7 +659,7 @@ class Timeline(QWidget):
         # collapse 7-event scene groups into a single visual clip) so a
         # group's text gets the full clip width, not the ~0 gap between two
         # group members at the same time.
-        for track in (self.midi_events_track, self.midi_events_blinder_track):
+        for track in self.midi_events_tracks:
             if not track.items:
                 continue
             track_events = [e for e in sorted_events if track.matches_filter(e)]
@@ -884,20 +920,28 @@ class Timeline(QWidget):
             self._schedule_refresh()
 
     def fixture_at_y(self, scene_y: float):
-        """Return the fixture filter owning the given scene Y, or None.
+        """Return the fixture index (patch position) owning `scene_y`, or None.
 
-        Used by clip-library drops to validate that a dropped note targets
-        the matching fixture's track. Returns the same string stored in
-        each MidiEventsTrack.fixture_filter (e.g. "ledbar", "blinder").
+        Used by clip-library drops to validate that a dropped note targets a
+        matching fixture's track and to stamp the new event's MIDI channel
+        (the channel == the fixture's index in the patch).
         """
         height = self.midi_events_track_height
-        ledbar_y = self._midi_events_y()
-        blinder_y = self._midi_events_blinder_y()
-        if ledbar_y <= scene_y < ledbar_y + height:
-            return self.midi_events_track.fixture_filter
-        if blinder_y <= scene_y < blinder_y + height:
-            return self.midi_events_blinder_track.fixture_filter
+        for track in self.midi_events_tracks:
+            top = self._midi_track_y(track.fixture_index)
+            if top <= scene_y < top + height:
+                return track.fixture_index
         return None
+
+    def _fixture_type(self, index):
+        """Type name of the patched fixture at `index`, or None."""
+        if index is not None and 0 <= index < len(self.fixtures):
+            return self.fixtures[index].type
+        return None
+
+    def _note_is_song_part(self, note: int) -> bool:
+        return bool(self.midi_manager
+                    and self.midi_manager.is_song_part({"note": int(note)}))
 
     def can_accept_clip_drop(self, note: int, scene_y: float) -> bool:
         """Return True if a clip carrying `note` may land at `scene_y`."""
@@ -906,10 +950,13 @@ class Timeline(QWidget):
         note_info = self.midi_manager.midi_note_map.get(str(note))
         if note_info is None:
             return False
-        target_fixture = self.fixture_at_y(scene_y)
-        if target_fixture is None:
+        target_idx = self.fixture_at_y(scene_y)
+        if target_idx is None:
             return False
-        return target_fixture == note_info.fixture
+        # Song parts are global verbs — droppable on any fixture lane.
+        if self._note_is_song_part(note):
+            return True
+        return self._fixture_type(target_idx) == note_info.fixture
 
     def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
         """Validate and insert a dropped clip. Returns True on success."""
@@ -917,21 +964,26 @@ class Timeline(QWidget):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
         clamped_velocity = max(1, min(127, int(velocity)))
-        event_id = self.midi_manager.add_event(note, time_seconds, clamped_velocity)
+        target_idx = self.fixture_at_y(scene_y)
+        # Song parts stay global (route to their home channel); fixture notes
+        # land on the exact fixture instance they were dropped on.
+        channel = None if self._note_is_song_part(note) else target_idx
+        event_id = self.midi_manager.add_event(note, time_seconds,
+                                               clamped_velocity, channel)
         if not event_id:
             return False
         self._schedule_refresh()
         self.logger.info(
             f"Clip dropped: note={note} at {time_seconds:.3f}s "
-            f"on {self.fixture_at_y(scene_y)} track"
+            f"on fixture #{target_idx}"
         )
         return True
 
     def can_accept_scene_drop(self, scene_y: float) -> bool:
-        """LED scenes only target the ledbar track."""
+        """LED scenes only target ledbar-type tracks."""
         if not self.midi_manager:
             return False
-        return self.fixture_at_y(scene_y) == "ledbar"
+        return self._fixture_type(self.fixture_at_y(scene_y)) == "ledbar"
 
     def handle_scene_drop(self, name: str, channels: dict,
                           scene_x: float, scene_y: float) -> bool:
@@ -939,41 +991,50 @@ class Timeline(QWidget):
         if not self.can_accept_scene_drop(scene_y):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
-        group_id = self.midi_manager.add_scene(time_seconds, channels, name)
+        target_idx = self.fixture_at_y(scene_y)
+        group_id = self.midi_manager.add_scene(time_seconds, channels, name,
+                                               target_idx)
         if not group_id:
             return False
         self._schedule_refresh()
         self.logger.info(
-            f"Scene dropped: '{name}' at {time_seconds:.3f}s "
-            f"(group_id={group_id})"
+            f"Scene dropped: '{name}' at {time_seconds:.3f}s on fixture "
+            f"#{target_idx} (group_id={group_id})"
         )
         return True
 
-    def on_add_event_requested(self, time_seconds):
-        """Handle request to add a new MIDI event at the specified time."""
+    def on_add_event_requested(self, time_seconds, fixture_index=None):
+        """Handle request to add a new MIDI event at the specified time.
+
+        `fixture_index` (the lane the request came from) targets that exact
+        fixture; song parts ignore it and stay global.
+        """
         if not self.midi_manager:
             return
-            
+
         # Create event data with default values
         new_event_data = {
             'time': time_seconds,
             'velocity': 127,
             'note': None  # Will be set by dialog
         }
-        
+
         dialog = MidiEventEditDialog(new_event_data, self.midi_manager.midi_note_map, is_new_event=True)
-        
+
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Get the new values from dialog
             new_values = dialog.get_values()
-            
-            # Add via MidiManager
+
+            # Route to the lane's fixture unless it's a global song part.
+            channel = (None if self._note_is_song_part(new_values['note'])
+                       else fixture_index)
             event_id = self.midi_manager.add_event(
                 new_values['note'],
-                new_values['time'], 
-                new_values['velocity']
+                new_values['time'],
+                new_values['velocity'],
+                channel,
             )
-            
+
             if event_id:
                 # Refresh the timeline display
                 self._schedule_refresh()
@@ -1048,7 +1109,5 @@ class Timeline(QWidget):
             self.ruler_track.cleanup()
         if hasattr(self, 'waveform_track'):
             self.waveform_track.clear_items()
-        if hasattr(self, 'midi_events_track'):
-            self.midi_events_track.clear_items()
-        if hasattr(self, 'midi_events_blinder_track'):
-            self.midi_events_blinder_track.clear_items()
+        for track in getattr(self, 'midi_events_tracks', []):
+            track.clear_items()

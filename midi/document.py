@@ -372,13 +372,16 @@ class MidiDocument:
 
     def _add_event_internal(self, note: int, time: float, velocity: int,
                             *, group_id: Optional[str] = None,
-                            scene_name: Optional[str] = None) -> Optional[str]:
+                            scene_name: Optional[str] = None,
+                            channel: Optional[int] = None) -> Optional[str]:
         """Insert one event+note without rebuild/commit. Returns event_id."""
         if str(note) not in self.midi_note_map:
             return None
         # Route a new event to its fixture type's patch channel (None when no
-        # patch is configured, i.e. type-scoped synthetic data).
-        channel = self._channel_for_note(note)
+        # patch is configured, i.e. type-scoped synthetic data) unless the
+        # caller targets a specific fixture instance (its patch index).
+        if channel is None:
+            channel = self._channel_for_note(note)
         event_id = str(uuid.uuid4())
         self.midi_events.append({
             "id": event_id,

@@ -198,7 +198,8 @@ class MainWindow(QMainWindow):
             initial_metronome_volume=self.config.volume.metronome,
             initial_audio_volume=self.config.volume.audio,
             initial_waveform_track_height=self.config.window.waveform_track_height,
-            initial_midi_events_track_height=self.config.window.midi_events_track_height
+            initial_midi_events_track_height=self.config.window.midi_events_track_height,
+            fixtures=self.config.fixtures,
         )
         self.timeline.setFixedHeight(Timeline.DEFAULT_HEIGHT)
         self.timeline.seek_requested.connect(self.seek_playback)
