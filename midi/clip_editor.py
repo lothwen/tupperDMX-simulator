@@ -37,12 +37,13 @@ class ClipEditor:
         is stamped on both the event (display/scoping) and the mirrored note
         (the codec rebuilds the MIDI file from midi_notes).
         """
-        if str(note) not in self._doc.midi_note_map:
-            self.logger.warning(f"Note {note} not in MIDI note map")
-            return ""
-
         if channel is None:
             channel = self._doc._channel_for_note(note)
+
+        info = self._doc._note_info(note, channel, velocity)
+        if info is None:
+            self.logger.warning(f"Note {note} has no defined meaning")
+            return ""
 
         event_id = str(uuid.uuid4())
         new_event = {
@@ -51,7 +52,7 @@ class ClipEditor:
             "time": time,
             "velocity": velocity,
             "channel": channel,
-            "info": self._doc.midi_note_map[str(note)],
+            "info": info,
             "group_id": None,
             "scene_name": None,
         }
@@ -138,9 +139,13 @@ class ClipEditor:
         old_time = event['time']
         
         # Update event properties
-        if 'note' in kwargs and str(kwargs['note']) in self._doc.midi_note_map:
-            event['note'] = kwargs['note']
-            event['info'] = self._doc.midi_note_map[str(kwargs['note'])]
+        if 'note' in kwargs:
+            new_info = self._doc._note_info(
+                kwargs['note'], event.get('channel'),
+                kwargs.get('velocity', event.get('velocity')))
+            if new_info is not None:
+                event['note'] = kwargs['note']
+                event['info'] = new_info
         if 'time' in kwargs:
             event['time'] = kwargs['time']
         if 'velocity' in kwargs:

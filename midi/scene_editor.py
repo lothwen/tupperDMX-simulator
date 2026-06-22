@@ -1,9 +1,12 @@
 """SceneEditor — scene-group ops, group reattach, and scene-name lookup.
 
-A scene is 7 simultaneous note_on events on the LED-bar fixture (notes 1..7).
-They share a `group_id` while in memory; on file save the group_id is dropped
-and only the 7 same-time note_ons remain — reattach_groups() rebuilds the group
-from that same-time clustering on the next load (group_ids are ephemeral).
+A scene is N simultaneous channel-control note_on events on ONE fixture (notes
+1..channel_count, the fixture's channels in order). They share a `group_id`
+while in memory; on file save the group_id is dropped and only the same-time
+note_ons remain — reattach_groups() rebuilds the group from that same-time,
+same-channel clustering on the next load (group_ids are ephemeral). The exact
+channel<->note mapping and the fixture's scene library are resolved per fixture
+via the document (the MIDI channel selects the fixture).
 
 Operates on a shared MidiDocument and a FadeEngine (groups regenerate their
 fade ramps on move/resize/update); commit is injected."""
@@ -12,13 +15,11 @@ from typing import Optional, List, Dict, Any, Tuple
 import uuid
 
 from tupperlogger import get_logger
-from software_controller.scene_loader import LedScene, load_led_scenes
+from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     NOTE_MATCH_TOLERANCE,
-    CHANNEL_NOTE_MAP,
-    CHANNEL_CONTROL_NOTES,
     _channel_to_velocity,
 )
 
@@ -28,50 +29,51 @@ class SceneEditor:
         self._doc = doc
         self._fades = fades
         self._commit = commit
-        # Lazy-loaded LED scene library for human-readable names.
-        self._led_scenes: Optional[List[LedScene]] = None
+        # Lazily-loaded scene library, cached per fixture type.
+        self._scene_cache: Dict[str, List[Scene]] = {}
         self.logger = get_logger("midi.scene_editor")
 
-    def _get_led_scenes(self) -> List[LedScene]:
-        """Return the cached LED scene library, loading it on first access."""
-        if self._led_scenes is None:
+    def _fixture_type_for(self, channel) -> str:
+        """Fixture-type name patched at `channel`; defaults to ledbar when no
+        patch resolves (synthetic data / tests)."""
+        fdef = self._doc._fdef_for_channel(channel)
+        return fdef.name if fdef else "ledbar"
+
+    def _get_scenes(self, fixture_type: str) -> List[Scene]:
+        """Return the cached scene library for a fixture type."""
+        if fixture_type not in self._scene_cache:
             try:
-                self._led_scenes = load_led_scenes()
+                self._scene_cache[fixture_type] = load_scenes(fixture_type)
             except Exception as exc:
                 self.logger.warning(
-                    f"Could not load LED scene library: {exc}"
+                    f"Could not load scene library for '{fixture_type}': {exc}"
                 )
-                self._led_scenes = []
-        return self._led_scenes
+                self._scene_cache[fixture_type] = []
+        return self._scene_cache[fixture_type]
 
     def _lookup_scene_name(self, cluster: List[Dict[str, Any]]) -> Optional[str]:
-        """Match a freshly-clustered scene against the LED scene library.
+        """Match a freshly-clustered scene against the fixture's scene library.
 
         Comparison happens in MIDI-velocity space (the same lossy domain the
         scene values live in once embedded in a MIDI file), so 254/255 raw
         channel values both collapse to velocity 127 and still match.
         Returns the matching scene's name, or None if no exact match exists.
         """
-        note_to_channel = {note: ch for ch, note in CHANNEL_NOTE_MAP}
+        channel = cluster[0].get("channel")
+        field_note = self._doc.channel_note_map(channel)
+        note_to_field = {note: field for field, note in field_note}
         cluster_vels: Dict[str, int] = {}
         for ev in cluster:
-            ch = note_to_channel.get(ev["note"])
-            if ch is None:
+            field = note_to_field.get(ev["note"])
+            if field is None:
                 continue
-            cluster_vels[ch] = int(ev["velocity"])
-        # Need all 7 channels present for an unambiguous match.
-        if len(cluster_vels) != len(CHANNEL_NOTE_MAP):
+            cluster_vels[field] = int(ev["velocity"])
+        # Need every channel present for an unambiguous match.
+        if len(cluster_vels) != len(field_note):
             return None
-        for scene in self._get_led_scenes():
-            scene_vels = {
-                "brightness": _channel_to_velocity(scene.brightness),
-                "blue": _channel_to_velocity(scene.blue),
-                "green": _channel_to_velocity(scene.green),
-                "red": _channel_to_velocity(scene.red),
-                "animation": _channel_to_velocity(scene.animation),
-                "speed": _channel_to_velocity(scene.speed),
-                "direction": _channel_to_velocity(scene.direction),
-            }
+        for scene in self._get_scenes(self._fixture_type_for(channel)):
+            scene_vels = {f: _channel_to_velocity(v)
+                          for f, v in scene.values.items()}
             if scene_vels == cluster_vels:
                 return scene.name
         return None
@@ -79,15 +81,17 @@ class SceneEditor:
     def reattach_groups(self) -> None:
         """Cluster channel-control events at the same time into scene groups.
 
-        Heuristic: any 2+ events whose times match within BLACKOUT_EPSILON and
-        whose note number is in CHANNEL_CONTROL_NOTES form one scene clip.
-        Existing group_id assignments are preserved (idempotent re-entry).
+        Heuristic: any 2+ events at the same time (within BLACKOUT_EPSILON) on
+        the same MIDI channel whose note drives one of that fixture's channels
+        form one scene clip. Existing group_id assignments are preserved
+        (idempotent re-entry).
         """
         self._doc.midi_events.sort(key=lambda x: x["time"])
         i = 0
         while i < len(self._doc.midi_events):
             e = self._doc.midi_events[i]
-            if (e["note"] not in CHANNEL_CONTROL_NOTES
+            channel = e.get("channel")
+            if (not self._doc.is_channel_control_note(e["note"], channel)
                     or e.get("group_id")):
                 i += 1
                 continue
@@ -97,7 +101,8 @@ class SceneEditor:
                 f = self._doc.midi_events[j]
                 if abs(f["time"] - e["time"]) > BLACKOUT_EPSILON:
                     break
-                if (f["note"] in CHANNEL_CONTROL_NOTES
+                if (f.get("channel") == channel
+                        and self._doc.is_channel_control_note(f["note"], channel)
                         and not f.get("group_id")):
                     cluster.append(f)
                 j += 1
@@ -122,7 +127,7 @@ class SceneEditor:
         """
         group_id = str(uuid.uuid4())
         added = 0
-        for ch_name, note in CHANNEL_NOTE_MAP:
+        for ch_name, note in self._doc.channel_note_map(channel):
             if ch_name not in channels:
                 continue
             velocity = _channel_to_velocity(channels[ch_name])
@@ -282,7 +287,7 @@ class SceneEditor:
             return False
         members_by_note = {m["note"]: m for m in members}
 
-        for ch_name, note in CHANNEL_NOTE_MAP:
+        for ch_name, note in self._doc.channel_note_map(members[0].get("channel")):
             if ch_name not in channels:
                 continue
             evt = members_by_note.get(note)

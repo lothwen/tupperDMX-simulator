@@ -52,7 +52,11 @@ class MidiCodec:
             # convention and are skipped here.
             if msg.velocity == 0 and msg.note not in VALUE_BEARING_NOTES:
                 continue
-            note_info = doc.midi_note_map.get(str(msg.note))
+            # Resolve the label/colour against the note's fixture (its MIDI
+            # channel selects the fixture); per-fixture verbs like a fixture's
+            # 8th channel aren't in the fixture-agnostic map but describe_note
+            # resolves them. Notes with no defined meaning are skipped.
+            note_info = doc._note_info(msg.note, msg.channel, msg.velocity)
             if note_info:
                 doc.midi_events.append({
                     "id": str(uuid.uuid4()),

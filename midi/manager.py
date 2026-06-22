@@ -25,19 +25,6 @@ from .constants import (
 )
 
 
-def _fixture_channels(fixtures) -> Dict[str, int]:
-    """Map each fixture-type name to the MIDI channel new events of that type
-    route to: the index of the type's first instance in the patch. With the
-    shipped patch [ledbar, blinder, blinder] -> {'ledbar': 0, 'blinder': 1}.
-    Returns {} when no patch is given (synthetic/test maps stay type-scoped)."""
-    mapping: Dict[str, int] = {}
-    for idx, inst in enumerate(fixtures or []):
-        ftype = getattr(inst, "type", None)
-        if ftype is not None:
-            mapping.setdefault(ftype, idx)
-    return mapping
-
-
 class MidiManager(QObject):
     """
     Manages MIDI worker lifecycle and provides a high-level interface.
@@ -63,9 +50,9 @@ class MidiManager(QObject):
         # midi_events, midi_notes, midi_note_map) plus the low-level queries,
         # atomic mutators, and BLACKOUT reconciliation every editor builds on.
         # Manager code reaches the data through the proxy properties below.
-        # The patch (config.fixtures) gives the doc a fixture-type -> channel
-        # map so new events route to the right fixture instance.
-        self._doc = MidiDocument(midi_note_map, _fixture_channels(fixtures))
+        # The patch (config.fixtures) lets the doc route new events to the right
+        # fixture instance and resolve per-fixture verbs against its def.
+        self._doc = MidiDocument(midi_note_map, fixtures)
 
         # Serialization collaborator: mido.MidiFile <-> document lists.
         self._codec = MidiCodec()
@@ -440,7 +427,6 @@ class MidiManager(QObject):
         starts.extend(e['time'] for e in singles)
         sel_start = min(starts)
 
-        note_to_ch = {note: ch for ch, note in CHANNEL_NOTE_MAP}
         units: List[Dict[str, Any]] = []
 
         for gid in group_ids:
@@ -448,6 +434,9 @@ class MidiManager(QObject):
             if not members:
                 continue
             fixture = self._doc._event_fixture(members[0])
+            channel = members[0].get('channel')
+            note_to_ch = {note: ch
+                          for ch, note in self._doc.channel_note_map(channel)}
             start = members[0]['time']
             right = self._doc._group_right_edge(gid, fixture)
             width = None if right == float('inf') else max(0.0, right - start)
@@ -465,6 +454,7 @@ class MidiManager(QObject):
                 'fade_out': float(members[0].get('fade_out', 0.0)),
                 'channels': channels,
                 'name': members[0].get('scene_name') or 'Scene',
+                'channel': channel,
             })
 
         for e in singles:
@@ -481,6 +471,7 @@ class MidiManager(QObject):
                 'fade_out': float(e.get('fade_out', 0.0)),
                 'note': e['note'],
                 'velocity': int(e['velocity']),
+                'channel': e.get('channel'),
             })
 
         self._clipboard = units
@@ -503,7 +494,8 @@ class MidiManager(QObject):
             for unit in sorted(self._clipboard, key=lambda u: u['rel_time']):
                 target = at_time + unit['rel_time']
                 if unit['kind'] == 'scene':
-                    gid = self.add_scene(target, unit['channels'], unit['name'])
+                    gid = self.add_scene(target, unit['channels'], unit['name'],
+                                         unit.get('channel'))
                     if not gid:
                         continue
                     if unit['width'] is not None:
@@ -514,7 +506,8 @@ class MidiManager(QObject):
                         self.set_scene_fade_out(gid, unit['fade_out'])
                     pasted += 1
                 else:
-                    eid = self.add_event(unit['note'], target, unit['velocity'])
+                    eid = self.add_event(unit['note'], target, unit['velocity'],
+                                         unit.get('channel'))
                     if not eid:
                         continue
                     if unit['width'] is not None:

@@ -47,9 +47,6 @@ SHIPPED = {
         {"type": "ledbar", "dmx_start": 1, "bars": [{"x": 10, "y": 20}]},
         {"type": "blinder", "dmx_start": 33, "x": 100, "y": 200, "multiply_factor": 2.0},
     ],
-    "midi_note_map": {
-        "26": {"part": "Blinder Flash", "color": "#ffffff", "fixture": "blinder"},
-    },
 }
 
 
@@ -78,7 +75,7 @@ def test_first_launch_creates_userprefs():
         _assert(prefs.exists(), "first launch creates userprefs.json")
         _assert(cfg.artnet.ip == "127.0.0.1", "default Art-Net ip")
         _assert(cfg.volume.audio == 0.5, "default audio volume")
-        _assert("26" in cfg.midi_note_map, "shipped midi_note_map was applied")
+        _assert(cfg.fixtures[1].type == "blinder", "shipped fixture patch was applied")
 
 
 def test_userprefs_roundtrip():
@@ -260,22 +257,6 @@ def test_unknown_fixture_type_skipped():
         _assert(cfg.fixtures[0].type == "blinder", "valid fixture still parsed")
 
 
-def test_ledbar_channel_notes_autoregister():
-    print("test_ledbar_channel_notes_autoregister")
-    with tempfile.TemporaryDirectory() as tmp:
-        shipped, prefs = _patch_paths(tmp)
-        # Shipped map deliberately omits the channel-control notes 1-7.
-        shipped.write_text(json.dumps({
-            "midi_note_map": {
-                "26": {"part": "Blinder Flash", "color": "#ffffff", "fixture": "blinder"},
-            }
-        }))
-        cfg = Config.load()
-        for n in "1234567":
-            _assert(n in cfg.midi_note_map, f"LED channel note {n} auto-registered")
-        _assert(cfg.midi_note_map["1"].fixture == "ledbar", "channel note maps to ledbar")
-
-
 def main():
     test_first_launch_creates_userprefs()
     test_userprefs_roundtrip()
@@ -286,7 +267,6 @@ def main():
     test_patch_persistence_roundtrip()
     test_fixture_name_roundtrips()
     test_unknown_fixture_type_skipped()
-    test_ledbar_channel_notes_autoregister()
     print("\nALL TESTS PASSED")
 
 

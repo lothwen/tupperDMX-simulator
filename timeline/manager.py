@@ -19,6 +19,8 @@ from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
                       TrackResizeHandle, CustomTooltip)
 from .widgets.scene_edit import SceneEditDialog
 from midi.manager import CHANNEL_NOTE_MAP
+import note_layout
+from fixture_library import load_fixture_defs
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
@@ -849,8 +851,10 @@ class Timeline(QWidget):
         # convention: channel value = velocity * 2). Default to 0 for any
         # missing channels (partial groups).
         velocity_by_note = {m['note']: m['velocity'] for m in members}
+        fdef = self._fdef(members[0].get('channel'))
+        field_note = note_layout.field_note_map(fdef) if fdef else CHANNEL_NOTE_MAP
         channels = {ch_name: min(255, velocity_by_note.get(note, 0) * 2)
-                    for ch_name, note in CHANNEL_NOTE_MAP}
+                    for ch_name, note in field_note}
         current_name = (members[0].get('scene_name')
                         or f"Scene @ {members[0]['time']:.2f}s")
 
@@ -939,24 +943,26 @@ class Timeline(QWidget):
             return self.fixtures[index].type
         return None
 
+    def _fdef(self, index):
+        """FixtureDef of the patched fixture at `index`, or None."""
+        return load_fixture_defs().get(self._fixture_type(index))
+
     def _note_is_song_part(self, note: int) -> bool:
         return bool(self.midi_manager
                     and self.midi_manager.is_song_part({"note": int(note)}))
 
     def can_accept_clip_drop(self, note: int, scene_y: float) -> bool:
-        """Return True if a clip carrying `note` may land at `scene_y`."""
+        """Return True if a clip carrying `note` may land at `scene_y`.
+
+        A note is droppable on a fixture lane when it is a meaningful verb for
+        that fixture (channel offsets within range, scene/bank/chase verbs when
+        the fixture defines them, global/utility verbs anywhere)."""
         if not self.midi_manager:
-            return False
-        note_info = self.midi_manager.midi_note_map.get(str(note))
-        if note_info is None:
             return False
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
             return False
-        # Song parts are global verbs — droppable on any fixture lane.
-        if self._note_is_song_part(note):
-            return True
-        return self._fixture_type(target_idx) == note_info.fixture
+        return note_layout.note_applies_to(note, self._fdef(target_idx))
 
     def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
         """Validate and insert a dropped clip. Returns True on success."""
@@ -979,16 +985,23 @@ class Timeline(QWidget):
         )
         return True
 
-    def can_accept_scene_drop(self, scene_y: float) -> bool:
-        """LED scenes only target ledbar-type tracks."""
+    def can_accept_scene_drop(self, scene_y: float,
+                              fixture_type: Optional[str] = None) -> bool:
+        """A scene targets a track whose fixture defines scene banks, and whose
+        type matches the scene's owning fixture (when the payload names one)."""
         if not self.midi_manager:
             return False
-        return self._fixture_type(self.fixture_at_y(scene_y)) == "ledbar"
+        target_type = self._fixture_type(self.fixture_at_y(scene_y))
+        fdef = load_fixture_defs().get(target_type)
+        if not (fdef and fdef.banks):
+            return False
+        return fixture_type is None or fixture_type == target_type
 
     def handle_scene_drop(self, name: str, channels: dict,
-                          scene_x: float, scene_y: float) -> bool:
+                          scene_x: float, scene_y: float,
+                          fixture_type: Optional[str] = None) -> bool:
         """Validate and insert a dropped scene. Returns True on success."""
-        if not self.can_accept_scene_drop(scene_y):
+        if not self.can_accept_scene_drop(scene_y, fixture_type):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
         target_idx = self.fixture_at_y(scene_y)

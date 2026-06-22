@@ -16,19 +16,36 @@ import uuid
 import mido
 
 from tupperlogger import get_logger
+from fixture_library import load_fixture_defs
+import note_layout
 from .constants import (
     BLACKOUT_PART_NAME,
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     NOTE_MATCH_TOLERANCE,
+    CHANNEL_NOTE_MAP,
+    CHANNEL_CONTROL_NOTES,
 )
+
+
+def _fixture_channels(fixtures) -> Dict[str, int]:
+    """Map each fixture-type name to the MIDI channel new events of that type
+    route to: the index of the type's first instance in the patch. With the
+    shipped patch [ledbar, blinder, blinder] -> {'ledbar': 0, 'blinder': 1}.
+    Returns {} when no patch is given (synthetic/test maps stay type-scoped)."""
+    mapping: Dict[str, int] = {}
+    for idx, inst in enumerate(fixtures or []):
+        ftype = getattr(inst, "type", None)
+        if ftype is not None:
+            mapping.setdefault(ftype, idx)
+    return mapping
 
 
 class MidiDocument:
     """Mutable MIDI editing state + integrity primitives."""
 
     def __init__(self, midi_note_map: Optional[Dict] = None,
-                 fixture_channels: Optional[Dict[str, int]] = None):
+                 fixtures=None):
         # MIDI Data Storage - Single Source of Truth
         self.midi_data: Optional[mido.MidiFile] = None
         self.midi_events: List[Dict[str, Any]] = []  # Events for UI display with unique IDs
@@ -36,11 +53,15 @@ class MidiDocument:
         self.midi_notes: List[Dict[str, Any]] = []
         self.midi_note_map = midi_note_map or {}
 
-        # fixture-type name -> the MIDI channel (= fixture instance index in the
-        # patch) new events of that type route to. Set from config.fixtures in
-        # the real app; left None for synthetic/test maps, where events carry no
-        # channel and fixture identity falls back to the note map's type hint.
-        self.fixture_channels = fixture_channels or {}
+        # The patch (config.fixtures): index == the MIDI channel that routes to
+        # that fixture instance. Lets per-fixture verbs (channel names, scene
+        # expansion) resolve against each instance's own def. Empty for
+        # synthetic/test maps, where events carry no channel and fixture
+        # identity falls back to the note map's type hint.
+        self._fixtures = list(fixtures or [])
+
+        # fixture-type name -> the MIDI channel new events of that type route to.
+        self.fixture_channels = _fixture_channels(self._fixtures)
 
         # Externally-provided song duration (e.g. the audio file's length).
         # Used as a floor when computing the song-end clamp so clip-edit
@@ -111,6 +132,51 @@ class MidiDocument:
         info = self.midi_note_map.get(str(note))
         ftype = getattr(info, 'fixture', None) if info else None
         return self.fixture_channels.get(ftype)
+
+    # --- patch-aware verb resolution (channel selects the fixture) -----------
+
+    def _fdef_for_channel(self, channel):
+        """The FixtureDef patched at `channel` (its index), or None.
+
+        None for synthetic/test data (no patch) or an out-of-range channel, in
+        which case per-fixture verbs fall back to generic / LED-bar behaviour."""
+        if channel is None:
+            return None
+        try:
+            ch = int(channel)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= ch < len(self._fixtures):
+            ftype = getattr(self._fixtures[ch], "type", None)
+            if ftype:
+                return load_fixture_defs().get(ftype)
+        return None
+
+    def _note_info(self, note: int, channel=None, velocity=None):
+        """UI metadata for a (note, channel) — the synthetic/test note map
+        takes precedence (it carries the .fixture scoping hint); otherwise the
+        data-driven reverse lookup resolves the verb against the channel's
+        fixture def. Returns None for notes with no defined meaning."""
+        info = self.midi_note_map.get(str(note))
+        if info is not None:
+            return info
+        return note_layout.describe_note(note, self._fdef_for_channel(channel),
+                                         velocity)
+
+    def channel_note_map(self, channel) -> Tuple[Tuple[str, int], ...]:
+        """``((channel_field, note), ...)`` used to expand a scene into channel-
+        control events for the fixture at `channel`. Falls back to the LED-bar
+        7-channel map when no patch resolves (synthetic data / tests)."""
+        fdef = self._fdef_for_channel(channel)
+        return note_layout.field_note_map(fdef) if fdef else CHANNEL_NOTE_MAP
+
+    def is_channel_control_note(self, note: int, channel=None) -> bool:
+        """True if `note` drives one of the fixture-at-`channel`'s DMX channels
+        (notes 1..channel_count). Falls back to the LED-bar set 1..7."""
+        fdef = self._fdef_for_channel(channel)
+        if fdef:
+            return 1 <= int(note) <= fdef.channel_count
+        return int(note) in CHANNEL_CONTROL_NOTES
 
     def _blackout_note_number(self, fixture=None) -> Optional[int]:
         """Return the MIDI note number mapped to BLACKOUT* for `fixture`.
@@ -303,7 +369,7 @@ class MidiDocument:
         channel = fixture if isinstance(fixture, int) else None
 
         event_id = str(uuid.uuid4())
-        info = self.midi_note_map[str(bo_note)]
+        info = self._note_info(bo_note, channel)
         self.midi_events.append({
             "id": event_id,
             "note": bo_note,
@@ -375,13 +441,14 @@ class MidiDocument:
                             scene_name: Optional[str] = None,
                             channel: Optional[int] = None) -> Optional[str]:
         """Insert one event+note without rebuild/commit. Returns event_id."""
-        if str(note) not in self.midi_note_map:
-            return None
         # Route a new event to its fixture type's patch channel (None when no
         # patch is configured, i.e. type-scoped synthetic data) unless the
         # caller targets a specific fixture instance (its patch index).
         if channel is None:
             channel = self._channel_for_note(note)
+        info = self._note_info(note, channel, velocity)
+        if info is None:
+            return None
         event_id = str(uuid.uuid4())
         self.midi_events.append({
             "id": event_id,
@@ -389,7 +456,7 @@ class MidiDocument:
             "time": time,
             "velocity": velocity,
             "channel": channel,
-            "info": self.midi_note_map[str(note)],
+            "info": info,
             "group_id": group_id,
             "scene_name": scene_name,
             "fade_in": 0.0,
