@@ -1,5 +1,5 @@
 # ABOUTME: Configuration management for TupperDMX. Splits storage across two files:
-# ABOUTME: shipped config.json (read-only fixtures + midi_note_map) and userprefs.json (writable user prefs).
+# ABOUTME: shipped config.json (read-only fixture patch) and userprefs.json (writable user prefs).
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 import json
@@ -29,7 +29,7 @@ def _bundle_dir() -> str:
 def shipped_config_path() -> str:
     """Path to the shipped, read-only config.json.
 
-    Contains fixtures and midi_note_map. Bundled with the app via
+    Contains the fixture patch (seed). Bundled with the app via
     PyInstaller (see build.spec datas) and never written at runtime.
     """
     return os.path.join(_bundle_dir(), "config.json")
@@ -120,13 +120,6 @@ class FixtureInstance:
 
 
 @dataclass
-class MidiNoteConfig:
-    part: str
-    color: str
-    fixture: str = "ledbar"
-
-
-@dataclass
 class VolumeConfig:
     metronome: float = 0.5
     audio: float = 0.5
@@ -142,40 +135,18 @@ class LoggingConfig:
     backup_count: int = 5
 
 
-# LED-bar channel-control MIDI notes. These mirror cases 1-7 in
-# software_controller/main.py:handle_note_on — each note carries one DMX
-# channel value (velocity * 2) for the LED bar. They're auto-registered in
-# midi_note_map so the clip library can drop scenes (which expand into 7
-# simultaneous note-on messages) through the existing add_event pipeline.
-LEDBAR_CHANNEL_NOTES: Dict[str, MidiNoteConfig] = {
-    "1": MidiNoteConfig(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": MidiNoteConfig(part="CH:BLUE",       color="#3333aa", fixture="ledbar"),
-    "3": MidiNoteConfig(part="CH:GREEN",      color="#33aa33", fixture="ledbar"),
-    "4": MidiNoteConfig(part="CH:RED",        color="#aa3333", fixture="ledbar"),
-    "5": MidiNoteConfig(part="CH:ANIM",       color="#555555", fixture="ledbar"),
-    "6": MidiNoteConfig(part="CH:SPEED",      color="#555555", fixture="ledbar"),
-    "7": MidiNoteConfig(part="CH:DIRECTION",  color="#555555", fixture="ledbar"),
-}
-
-
 @dataclass
 class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     artnet: ArtNetConfig = field(default_factory=ArtNetConfig)
     playlist: PlaylistConfig = field(default_factory=PlaylistConfig)
     fixtures: List[FixtureInstance] = field(default_factory=list)
-    midi_note_map: Dict[str, MidiNoteConfig] = field(default_factory=dict)
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     last_dmx_source: Optional[str] = None
     last_midi_port: Optional[str] = None
 
     def __post_init__(self):
-        # Ensure channel-control notes are registered even when constructed
-        # via Config() directly (defaults path), not just via load().
-        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
-            self.midi_note_map.setdefault(note_str, note_cfg)
-
         # Fixture-patch persistence state (not serialized fields):
         #   _patch_from_prefs - userprefs.json already owns the patch (override
         #                       the shipped seed and keep persisting it).
@@ -199,7 +170,7 @@ class Config:
         """
         config = cls()
 
-        # Shipped, read-only data — fixtures + midi_note_map.
+        # Shipped, read-only data — the fixture patch seed.
         shipped = shipped_config_path()
         if os.path.exists(shipped):
             try:
@@ -229,26 +200,11 @@ class Config:
 
     @classmethod
     def _apply_shipped(cls, config: "Config", data: Dict[str, Any]) -> None:
-        """Populate fixtures and midi_note_map from shipped config data."""
+        """Populate the fixture patch from shipped config data. The note layout
+        is no longer config-driven — it's derived from the fixture defs via
+        note_layout (see build_note_map / describe_note)."""
         if "fixtures" in data:
             config.fixtures = cls._parse_fixtures(data["fixtures"])
-
-        if "midi_note_map" in data:
-            note_map = {}
-            for note, note_data in data["midi_note_map"].items():
-                if isinstance(note_data, dict) and "part" in note_data and "color" in note_data:
-                    note_map[note] = MidiNoteConfig(
-                        part=str(note_data["part"]),
-                        color=cls._validate_color(note_data["color"]),
-                        fixture=str(note_data.get("fixture", "ledbar")),
-                    )
-            config.midi_note_map = note_map
-
-        # Auto-register LED-bar channel-control notes (1-7). The shipped
-        # file should already include these; this is a safety net so that
-        # scene drops always have a target in the note map.
-        for note_str, note_cfg in LEDBAR_CHANNEL_NOTES.items():
-            config.midi_note_map.setdefault(note_str, note_cfg)
 
     @classmethod
     def _apply_userprefs(cls, config: "Config", data: Dict[str, Any]) -> None:
@@ -386,21 +342,6 @@ class Config:
             return "127.0.0.1"
 
     @staticmethod
-    def _validate_color(value: Any) -> str:
-        """Validate hex color format."""
-        if not isinstance(value, str):
-            return "#ffffff"
-
-        if value.startswith("#") and len(value) == 7:
-            try:
-                int(value[1:], 16)
-                return value
-            except ValueError:
-                pass
-
-        return "#ffffff"
-
-    @staticmethod
     def _validate_file_path(value: Any) -> Optional[str]:
         """Validate file path exists."""
         if not isinstance(value, str):
@@ -428,8 +369,8 @@ class Config:
     def save(self) -> bool:
         """Save user-editable preferences to userprefs.json.
 
-        The shipped config.json is never modified — fixtures and
-        midi_note_map are read-only at runtime.
+        The shipped config.json is never modified — its fixture patch seed is
+        read-only at runtime.
         """
         try:
             data = self._userprefs_to_dict()

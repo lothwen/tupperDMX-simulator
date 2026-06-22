@@ -28,6 +28,7 @@ from .clip_geometry import (
     MODE_IDLE, MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT, MODE_GROUP_MOVE,
     zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
 )
+import note_layout
 from tupperlogger import get_logger
 
 
@@ -951,11 +952,18 @@ class MidiEventsTrack(BaseTrack):
                               MIN_EVENT_DURATION)
 
     def _scene_clip_color(self, members: List[dict]) -> QColor:
-        """Derive a clip color from a scene group's RGB channel values.
+        """Derive a clip color from a scene group's channel values, using each
+        channel's semantic role (so non-RGB fixtures like blinders still read
+        as a sensible warm/cool colour). Falls back to the LED-bar note layout
+        (1=brightness, 2=blue, 3=green, 4=red) when no fixture def resolves."""
+        velocity_by_note = {m["note"]: m["velocity"] for m in members}
+        channel = members[0].get("channel") if members else None
+        fdef = (self.timeline_manager._fdef(channel)
+                if self.timeline_manager else None)
+        if fdef:
+            r, g, b = note_layout.scene_rgb_from_notes(fdef, velocity_by_note)
+            return QColor(r, g, b)
 
-        Notes 2/3/4 carry blue/green/red. Velocity * 2 = channel value.
-        Brightness (note 1) scales the resulting color so dim scenes read dim.
-        """
         red = green = blue = 0
         brightness = 255
         for m in members:

@@ -673,6 +673,12 @@ class DMXController:
                     s.palette_ptr = generate_song_colors(
                         PALETTE_MODES[palette_mode], hue_index)
                     s.palette_index = 0
+                case 70:                         # load chase (velocity = index)
+                    # Runs via update_chase until a later verb/song-part
+                    # reprograms the fixture. No set_fixture_manual here: it
+                    # clears is_chasing and would stop the chase immediately.
+                    if 0 <= velocity < len(s.type.chases):
+                        self.load_chase(fx, velocity)
                 case 72:                         # color macros
                     self.change_fixture_color(fx, COLOR32_WHITE)
                 case 73:
