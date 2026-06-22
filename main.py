@@ -13,6 +13,7 @@ from PyQt6.QtGui import QPixmap, QBrush, QFont, QColor, QAction, QKeyEvent, QSho
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent,
                           QVariantAnimation, QAbstractAnimation, QEasingCurve)
 
+import note_layout
 from config import Config, userprefs_path
 from fixtures import LedBar, Blinder
 from timeline import Timeline
@@ -53,7 +54,10 @@ class MainWindow(QMainWindow):
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
         self.dmx_manager.software_controller_changed.connect(self.on_software_controller_changed)
         
-        self.midi_manager = MidiManager(self.config.midi_note_map,
+        # The note layout is data-driven (note_layout mirrors the controller's
+        # handle_note_on); build_note_map() materialises the standalone-clip
+        # notes for the renderer/codec, per-fixture verbs resolve on demand.
+        self.midi_manager = MidiManager(note_layout.build_note_map(),
                                         fixtures=self.config.fixtures)
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)

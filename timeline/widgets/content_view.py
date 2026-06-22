@@ -238,7 +238,7 @@ class ContentView(QGraphicsView):
             return None
 
     def _decode_scene_payload(self, mime):
-        """Return (name, channels) from a scene-library MIME, or None."""
+        """Return (name, channels, fixture_type) from a scene-library MIME, or None."""
         if not mime.hasFormat(SCENE_MIME_TYPE):
             return None
         try:
@@ -248,7 +248,8 @@ class ContentView(QGraphicsView):
             channels = payload["channels"]
             if not isinstance(channels, dict):
                 return None
-            return name, channels
+            fixture_type = payload.get("fixture_type")
+            return name, channels, fixture_type
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
@@ -266,7 +267,8 @@ class ContentView(QGraphicsView):
 
         scene_decoded = self._decode_scene_payload(mime)
         if scene_decoded is not None:
-            if self.timeline.can_accept_scene_drop(scene_pos.y()):
+            _, _, fixture_type = scene_decoded
+            if self.timeline.can_accept_scene_drop(scene_pos.y(), fixture_type):
                 event.acceptProposedAction()
             else:
                 event.ignore()
@@ -288,9 +290,10 @@ class ContentView(QGraphicsView):
 
         scene_decoded = self._decode_scene_payload(mime)
         if scene_decoded is not None:
-            name, channels = scene_decoded
+            name, channels, fixture_type = scene_decoded
             if self.timeline.handle_scene_drop(name, channels,
-                                               scene_pos.x(), scene_pos.y()):
+                                               scene_pos.x(), scene_pos.y(),
+                                               fixture_type):
                 event.acceptProposedAction()
             else:
                 event.ignore()
