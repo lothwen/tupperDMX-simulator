@@ -49,35 +49,34 @@ class ContentView(QGraphicsView):
         """Show context menu for adding events on empty timeline areas."""
         # Convert position to scene coordinates
         scene_pos = self.mapToScene(position)
-        
-        # Check if we're in the MIDI Events track area
-        midi_events_y_start = (self.timeline.RULER_TRACK_HEIGHT +
-                              self.timeline.waveform_track_height +
-                              2 * self.timeline.TRACK_SPACING)
-        midi_events_y_end = midi_events_y_start + self.timeline.midi_events_track_height
-        
-        if midi_events_y_start <= scene_pos.y() <= midi_events_y_end:
+
+        # Which fixture lane (if any) is under the cursor? None = ruler/waveform.
+        fixture_index = self.timeline.fixture_at_y(scene_pos.y())
+
+        if fixture_index is not None:
             # Check if we clicked on an empty area (no MIDI event at this position)
             item_at_pos = self.scene().itemAt(scene_pos, self.transform())
-            
+
             # Import here to avoid circular imports
             from ..tracks.midi_events import DraggableMidiEvent
-            
+
             # If there's no item or it's not a DraggableMidiEvent, show add menu
             if not isinstance(item_at_pos, DraggableMidiEvent):
                 # Create context menu with main window as parent for proper styling
                 main_window = self.timeline.parent()
                 while main_window and not hasattr(main_window, 'centralWidget'):
                     main_window = main_window.parent()
-                
+
                 menu = QMenu(main_window if main_window else self)
-                
+
                 add_action = menu.addAction("Add event at this position")
-                
-                # Calculate the time from the click position
+
+                # Calculate the time from the click position; the event lands on
+                # the lane that was right-clicked.
                 time_seconds = max(0.0, scene_pos.x() / self.timeline.PIXELS_PER_SECOND)
-                add_action.triggered.connect(lambda: self.timeline.on_add_event_requested(time_seconds))
-                
+                add_action.triggered.connect(
+                    lambda: self.timeline.on_add_event_requested(time_seconds, fixture_index))
+
                 # Show menu at the clicked position
                 menu.exec(self.mapToGlobal(position))
 

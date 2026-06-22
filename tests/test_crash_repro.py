@@ -41,6 +41,17 @@ class FakeNoteInfo:
     fixture: str = "ledbar"
 
 
+@dataclass
+class FakeFixture:
+    """Minimal stand-in for a patched fixture (type + optional name)."""
+    type: str
+    name: str = ""
+
+
+# Patch: one ledbar (channel 0) + one blinder (channel 1).
+FAKE_FIXTURES = [FakeFixture("ledbar"), FakeFixture("blinder")]
+
+
 # Minimal note map with a few ledbar and blinder notes
 FAKE_NOTE_MAP = {
     "12": FakeNoteInfo(part="Scene Select 1", color="#ff0000", fixture="ledbar"),
@@ -64,11 +75,13 @@ class CrashReproWindow(QMainWindow):
         self.setWindowTitle("Timeline Crash Repro")
         self.resize(1200, 400)
 
-        self.midi_manager = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+        self.midi_manager = MidiManager(midi_note_map=FAKE_NOTE_MAP,
+                                        fixtures=FAKE_FIXTURES)
         self.midi_manager.create_empty_track()
 
         self.timeline = Timeline(
             midi_manager=self.midi_manager,
+            fixtures=FAKE_FIXTURES,
             parent=self,
         )
         self.setCentralWidget(self.timeline)

@@ -114,8 +114,12 @@ class SceneEditor:
             i += 1
 
     def add_scene(self, time: float, channels: Dict[str, int],
-                  name: str) -> Optional[str]:
-        """Create a 7-event LED scene group at `time`. Returns group_id or None."""
+                  name: str, channel: Optional[int] = None) -> Optional[str]:
+        """Create a 7-event LED scene group at `time`. Returns group_id or None.
+
+        `channel` targets a specific fixture instance (its patch index); when
+        None each event routes to its type's patch channel as usual.
+        """
         group_id = str(uuid.uuid4())
         added = 0
         for ch_name, note in CHANNEL_NOTE_MAP:
@@ -124,7 +128,8 @@ class SceneEditor:
             velocity = _channel_to_velocity(channels[ch_name])
             if self._doc._add_event_internal(note, time, velocity,
                                         group_id=group_id,
-                                        scene_name=name) is not None:
+                                        scene_name=name,
+                                        channel=channel) is not None:
                 added += 1
         if added == 0:
             self.logger.warning(
