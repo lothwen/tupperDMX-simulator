@@ -17,38 +17,40 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager
 
 
 @dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
+class FakeFixture:
+    """Minimal patched-fixture stand-in: its index in the patch == the MIDI
+    channel that selects it (the generalized note map routes by channel)."""
+    type: str
 
 
-FAKE_NOTE_MAP = {
-    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
-    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
-    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
-    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
-    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
-    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
-    "26": FakeNoteInfo(part="Blinder Flash", color="#ffffff", fixture="blinder"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-    "39": FakeNoteInfo(part="BLACKOUT_BLINDERS", color="#000000", fixture="blinder"),
-}
+# Patch: ledbar @ channel 0, blinder @ channel 1 (the shipped patch's first two
+# fixtures). Mirrors production: MidiManager gets the data-driven note map plus
+# the patch, and every clip is stamped with the channel of its target fixture.
+PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER_CH = 0, 1
+# A standalone single-note blinder clip: note 26 is a scene-load verb (resolved
+# against the blinder's own def via describe_note), not a channel-control note.
+BLINDER_CLIP = 26
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
-    m = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     return m
+
+
+def _add_blinder(m, time, velocity=100):
+    """Add a standalone blinder clip, stamped with the blinder's channel."""
+    return m.add_event(BLINDER_CLIP, time, velocity, channel=BLINDER_CH)
 
 
 def _assert(cond, msg):
@@ -78,7 +80,7 @@ def test_add_undo_redo_roundtrip():
     print("test_add_undo_redo_roundtrip")
     m = _make_manager()
     base = _sig(m)
-    m.add_event(26, 5.0, 100)
+    _add_blinder(m, 5.0)
     after = _sig(m)
     _assert(after != base, "add changed the state")
     _assert(m.can_undo() is True, "can undo after an edit")
@@ -92,8 +94,8 @@ def test_add_undo_redo_roundtrip():
 def test_resize_undo_fidelity():
     print("test_resize_undo_fidelity")
     m = _make_manager()
-    a = m.add_event(26, 5.0, 100)
-    m.add_event(26, 20.0, 100)          # gives A a finite right edge at 20
+    a = _add_blinder(m, 5.0)
+    _add_blinder(m, 20.0)          # gives A a finite right edge at 20
     before = _sig(m)
     # Shrink A's right edge to 10 — inserts a derived BLACKOUT at 10.
     _assert(m.set_event_right_edge(a, 10.0) is True, "resize applied")
@@ -110,7 +112,7 @@ def test_multi_step_walk_back():
     m = _make_manager()
     sigs = [_sig(m)]
     for t in (3.0, 8.0, 15.0):
-        m.add_event(26, t, 100)
+        _add_blinder(m, t)
         sigs.append(_sig(m))
     m.undo(); _assert(_sig(m) == sigs[2], "undo 1 -> state after 2 edits")
     m.undo(); _assert(_sig(m) == sigs[1], "undo 2 -> state after 1 edit")
@@ -122,11 +124,11 @@ def test_multi_step_walk_back():
 def test_new_edit_truncates_redo():
     print("test_new_edit_truncates_redo")
     m = _make_manager()
-    m.add_event(26, 3.0, 100)
-    m.add_event(26, 8.0, 100)
+    _add_blinder(m, 3.0)
+    _add_blinder(m, 8.0)
     m.undo()
     _assert(m.can_redo() is True, "redo available after an undo")
-    m.add_event(26, 12.0, 100)          # diverge from the redo branch
+    _add_blinder(m, 12.0)          # diverge from the redo branch
     _assert(m.can_redo() is False, "a new edit dropped the redo tail")
 
 
@@ -134,7 +136,7 @@ def test_history_capped():
     print("test_history_capped")
     m = _make_manager()
     for i in range(MidiManager.MAX_HISTORY + 25):
-        m.add_event(26, float(i) + 0.5, 100)
+        _add_blinder(m, float(i) + 0.5)
     _assert(len(m._history) == MidiManager.MAX_HISTORY,
             f"history capped at MAX_HISTORY ({MidiManager.MAX_HISTORY})")
     _assert(m.can_undo() is True, "capped history is still undoable")
@@ -143,7 +145,7 @@ def test_history_capped():
 def test_create_track_resets_history():
     print("test_create_track_resets_history")
     m = _make_manager()
-    m.add_event(26, 3.0, 100)
+    _add_blinder(m, 3.0)
     _assert(m.can_undo() is True, "can undo after an edit")
     m.create_empty_track()
     _assert(m.can_undo() is False, "create_empty_track reseeds the baseline")
@@ -155,9 +157,9 @@ def test_history_batch_single_step():
     m = _make_manager()
     base = _sig(m)
     with m.history_batch():
-        m.add_event(26, 3.0, 100)
-        m.add_event(26, 8.0, 100)
-        m.add_event(26, 15.0, 100)
+        _add_blinder(m, 3.0)
+        _add_blinder(m, 8.0)
+        _add_blinder(m, 15.0)
     batched = _sig(m)
     _assert(batched != base, "batch mutated the state")
     m.undo()
@@ -169,7 +171,7 @@ def test_history_batch_single_step():
 def test_empty_batch_no_step():
     print("test_empty_batch_no_step")
     m = _make_manager()
-    m.add_event(26, 3.0, 100)
+    _add_blinder(m, 3.0)
     idx = m._history_index
     with m.history_batch():
         pass                             # no mutations inside
@@ -180,7 +182,7 @@ def test_scene_group_undo():
     print("test_scene_group_undo")
     m = _make_manager()
     base = len(m.midi_events)
-    g = m.add_scene(5.0, SCENE_CH, "S")
+    g = m.add_scene(5.0, SCENE_CH, "S", channel=LEDBAR_CH)
     _assert(g is not None, "scene added")
     full = len(m.midi_events)
     _assert(full > base, "scene added channel events")
