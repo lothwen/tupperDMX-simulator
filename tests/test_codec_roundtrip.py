@@ -22,35 +22,33 @@ from dataclasses import dataclass
 # Ensure the project root is on sys.path when run from tests/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager
 
 
 @dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
+class FakeFixture:
+    """Minimal patched-fixture stand-in: its index in the patch == the MIDI
+    channel that selects it (the generalized note map routes by channel)."""
+    type: str
 
 
-FAKE_NOTE_MAP = {
-    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
-    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
-    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
-    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
-    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
-    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
-    "26": FakeNoteInfo(part="Blinder Flash", color="#ffffff", fixture="blinder"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-    "39": FakeNoteInfo(part="BLACKOUT_BLINDERS", color="#000000", fixture="blinder"),
-}
+# Patch: ledbar @ channel 0, blinder @ channel 1 (the shipped patch's first two
+# fixtures). Mirrors production: MidiManager gets the data-driven note map plus
+# the patch, and every clip is stamped with the channel of its target fixture.
+PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER_CH = 0, 1
+# A standalone single-note blinder clip: note 26 is a scene-load verb (resolved
+# against the blinder's own def via describe_note), not a channel-control note,
+# so the codec's scene-clustering never absorbs it.
+BLINDER_CLIP = 26
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
-    m = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     return m
@@ -93,7 +91,7 @@ def _roundtrip(m):
     os.close(fd)
     try:
         _assert(m.export_to_file(path), "export_to_file succeeded")
-        m2 = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+        m2 = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
         m2.set_song_duration(240.0)
         _assert(m2.load_from_file(path), "load_from_file succeeded")
         return m2
@@ -104,11 +102,11 @@ def _roundtrip(m):
 def test_single_clips_and_blackouts_roundtrip():
     print("test_single_clips_and_blackouts_roundtrip")
     m = _make_manager()
-    m.add_event(26, 1.0, 100)         # blinder clip
-    m.add_event(26, 5.0, 64)          # blinder clip, different velocity
-    # Carve a gap on the blinder lane (inserts a BLACKOUT_BLINDERS marker).
+    m.add_event(BLINDER_CLIP, 1.0, 100, channel=BLINDER_CH)  # blinder clip
+    m.add_event(BLINDER_CLIP, 5.0, 64, channel=BLINDER_CH)   # diff velocity
+    # Carve a gap on the blinder lane (inserts a BLACKOUT marker on channel 1).
     bid = next(e["id"] for e in m.midi_events
-               if e["note"] == 26 and abs(e["time"] - 1.0) < 0.01)
+               if e["note"] == BLINDER_CLIP and abs(e["time"] - 1.0) < 0.01)
     m.set_event_right_edge(bid, 3.0)
 
     before = _non_fade_event_keys(m)
@@ -121,8 +119,8 @@ def test_single_clips_and_blackouts_roundtrip():
 def test_scene_group_roundtrip():
     print("test_scene_group_roundtrip")
     m = _make_manager()
-    m.add_scene(4.0, SCENE_CH, "A")
-    m.add_scene(12.0, SCENE_CH, "B")
+    m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
+    m.add_scene(12.0, SCENE_CH, "B", channel=LEDBAR_CH)
 
     before = _scene_groups(m)
     _assert(len(before) == 2, f"two scene groups before (got {len(before)})")
@@ -140,7 +138,7 @@ def test_scene_group_roundtrip():
 def test_scene_fade_roundtrip():
     print("test_scene_fade_roundtrip")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.set_scene_right_edge(g, 10.0)     # visible span [4, 10)
     m.set_scene_fade_in(g, 1.0)
     m.set_scene_fade_out(g, 1.5)

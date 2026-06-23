@@ -28,19 +28,6 @@ from .constants import (
 )
 
 
-def _fixture_channels(fixtures) -> Dict[str, int]:
-    """Map each fixture-type name to the MIDI channel new events of that type
-    route to: the index of the type's first instance in the patch. With the
-    shipped patch [ledbar, blinder, blinder] -> {'ledbar': 0, 'blinder': 1}.
-    Returns {} when no patch is given (synthetic/test maps stay type-scoped)."""
-    mapping: Dict[str, int] = {}
-    for idx, inst in enumerate(fixtures or []):
-        ftype = getattr(inst, "type", None)
-        if ftype is not None:
-            mapping.setdefault(ftype, idx)
-    return mapping
-
-
 class MidiDocument:
     """Mutable MIDI editing state + integrity primitives."""
 
@@ -59,9 +46,6 @@ class MidiDocument:
         # synthetic/test maps, where events carry no channel and fixture
         # identity falls back to the note map's type hint.
         self._fixtures = list(fixtures or [])
-
-        # fixture-type name -> the MIDI channel new events of that type route to.
-        self.fixture_channels = _fixture_channels(self._fixtures)
 
         # Externally-provided song duration (e.g. the audio file's length).
         # Used as a floor when computing the song-end clamp so clip-edit
@@ -122,16 +106,6 @@ class MidiDocument:
                 return ch
         info = event.get('info') if event else None
         return getattr(info, 'fixture', None) if info else None
-
-    def _channel_for_note(self, note: int) -> Optional[int]:
-        """Channel a new event of `note` routes to: the patch channel for the
-        note's fixture type. None when no patch is configured (tests) or the
-        type isn't patched, leaving the event channel-less (type-scoped)."""
-        if not self.fixture_channels:
-            return None
-        info = self.midi_note_map.get(str(note))
-        ftype = getattr(info, 'fixture', None) if info else None
-        return self.fixture_channels.get(ftype)
 
     # --- patch-aware verb resolution (channel selects the fixture) -----------
 
@@ -440,12 +414,11 @@ class MidiDocument:
                             *, group_id: Optional[str] = None,
                             scene_name: Optional[str] = None,
                             channel: Optional[int] = None) -> Optional[str]:
-        """Insert one event+note without rebuild/commit. Returns event_id."""
-        # Route a new event to its fixture type's patch channel (None when no
-        # patch is configured, i.e. type-scoped synthetic data) unless the
-        # caller targets a specific fixture instance (its patch index).
-        if channel is None:
-            channel = self._channel_for_note(note)
+        """Insert one event+note without rebuild/commit. Returns event_id.
+
+        `channel` is the MIDI channel that selects the target fixture (its patch
+        index); None leaves the event channel-less (a global verb, or synthetic
+        data with no patch)."""
         info = self._note_info(note, channel, velocity)
         if info is None:
             return None

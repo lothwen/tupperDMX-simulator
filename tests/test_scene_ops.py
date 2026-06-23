@@ -17,34 +17,33 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager, _channel_to_velocity
 
 
 @dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
+class FakeFixture:
+    """Minimal patched-fixture stand-in: its index in the patch == the MIDI
+    channel that selects it (the generalized note map routes by channel)."""
+    type: str
 
 
-FAKE_NOTE_MAP = {
-    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
-    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
-    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
-    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
-    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
-    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
-    "12": FakeNoteInfo(part="Scene Select 1", color="#ff0000", fixture="ledbar"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-}
+# Patch: ledbar @ channel 0, blinder @ channel 1 (the shipped patch's first two
+# fixtures). Mirrors production: MidiManager gets the data-driven note map plus
+# the patch, and every clip is stamped with the channel of its target fixture.
+PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER_CH = 0, 1
+# A standalone single-note ledbar clip: note 24 is a scene-load verb (resolved
+# against the ledbar's own def via describe_note), not a channel-control note,
+# so it never gets clustered into a scene group.
+LEDBAR_CLIP = 24
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
-    m = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     return m
@@ -62,13 +61,13 @@ def _members(m, gid):
 
 def _ledbar_blackouts(m):
     return sorted(e["time"] for e in m.midi_events
-                  if m._event_fixture(e) == "ledbar" and m.is_blackout(e))
+                  if m._event_fixture(e) == LEDBAR_CH and m.is_blackout(e))
 
 
 def test_add_scene_atomic():
     print("test_add_scene_atomic")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(g is not None, "add_scene returned a group_id")
     members = _members(m, g)
     _assert(len(members) == 7, f"group has 7 members (got {len(members)})")
@@ -81,7 +80,7 @@ def test_add_scene_atomic():
 def test_move_scene():
     print("test_move_scene")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(m.move_scene(g, 9.0), "move_scene returned True")
     members = _members(m, g)
     _assert(len(members) == 7, "still 7 members after move")
@@ -91,7 +90,7 @@ def test_move_scene():
 def test_update_scene():
     print("test_update_scene")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(m.update_scene(g, {"red": 200}, name="A2"), "update_scene returned True")
     red = next(mm for mm in _members(m, g) if mm["note"] == 4)
     _assert(red["velocity"] == _channel_to_velocity(200), "red velocity updated to 200//2")
@@ -101,7 +100,7 @@ def test_update_scene():
 def test_set_scene_right_edge_caps_with_blackout():
     print("test_set_scene_right_edge_caps_with_blackout")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(m.set_scene_right_edge(g, 9.0), "set_scene_right_edge returned True")
     _assert(any(abs(t - 9.0) < 1e-6 for t in _ledbar_blackouts(m)),
             f"BLACKOUT cap at 9.0 (got {_ledbar_blackouts(m)})")
@@ -112,9 +111,9 @@ def test_set_scene_right_edge_caps_with_blackout():
 def test_set_scene_left_edge_moves_start():
     print("test_set_scene_left_edge_moves_start")
     m = _make_manager()
-    m.add_event(12, 1.0, 100)            # predecessor ledbar clip
-    g = m.add_scene(5.0, SCENE_CH, "A")
-    m.add_scene(20.0, SCENE_CH, "B")     # gives A a finite right edge
+    m.add_event(LEDBAR_CLIP, 1.0, 100, channel=LEDBAR_CH)  # predecessor clip
+    g = m.add_scene(5.0, SCENE_CH, "A", channel=LEDBAR_CH)
+    m.add_scene(20.0, SCENE_CH, "B", channel=LEDBAR_CH)    # finite right edge
     _assert(m.set_scene_left_edge(g, 9.0), "set_scene_left_edge returned True")
     _assert(all(abs(mm["time"] - 9.0) < 1e-6 for mm in _members(m, g)),
             "group A start moved to 9.0s")
@@ -127,7 +126,7 @@ def test_set_scene_left_edge_moves_start():
 def test_delete_scene_replaces_with_blackout():
     print("test_delete_scene_replaces_with_blackout")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(m.delete_scene(g), "delete_scene returned True")
     _assert(not _members(m, g), "no group members remain")
     _assert(any(abs(t - 4.0) < 1e-6 for t in _ledbar_blackouts(m)),

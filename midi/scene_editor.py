@@ -123,7 +123,7 @@ class SceneEditor:
         """Create a 7-event LED scene group at `time`. Returns group_id or None.
 
         `channel` targets a specific fixture instance (its patch index); when
-        None each event routes to its type's patch channel as usual.
+        None the events are channel-less (synthetic data with no patch).
         """
         group_id = str(uuid.uuid4())
         added = 0
