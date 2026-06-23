@@ -460,7 +460,8 @@ class MainWindow(QMainWindow):
     def _preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) to the current
         MIDI output without modifying the timeline. `messages` is a list of
-        (note, velocity) tuples — length 1 for clips, 7 for LED scenes."""
+        (channel, note, velocity) tuples — length 1 for clips, 7 for LED
+        scenes. The channel selects the target fixture (its patch index)."""
         if not messages:
             return
         port_name = self.media_controller.port_name
@@ -476,9 +477,10 @@ class MainWindow(QMainWindow):
                     "(set Art-Net target to 127.0.0.1)"
                 )
                 return
-            for note, velocity in messages:
+            for channel, note, velocity in messages:
                 try:
-                    controller.handle_note_on(0, int(note), int(velocity))
+                    controller.handle_note_on(
+                        int(channel), int(note), int(velocity))
                 except Exception as e:
                     self.logger.warning(
                         f"Preview to software controller failed: {e}"
@@ -491,10 +493,11 @@ class MainWindow(QMainWindow):
         worker = self.midi_manager.current_worker
         if (worker and worker.isRunning() and worker.port
                 and worker.port_name == port_name):
-            for note, velocity in messages:
+            for channel, note, velocity in messages:
                 try:
                     worker.port.send(mido.Message(
-                        'note_on', note=int(note), velocity=int(velocity)))
+                        'note_on', channel=int(channel),
+                        note=int(note), velocity=int(velocity)))
                 except Exception as e:
                     self.logger.warning(
                         f"Preview via worker port failed: {e}")
@@ -502,9 +505,10 @@ class MainWindow(QMainWindow):
 
         try:
             with mido.open_output(port_name) as port:
-                for note, velocity in messages:
+                for channel, note, velocity in messages:
                     port.send(mido.Message(
-                        'note_on', note=int(note), velocity=int(velocity)))
+                        'note_on', channel=int(channel),
+                        note=int(note), velocity=int(velocity)))
         except Exception as e:
             self.logger.warning(
                 f"Preview open/send on '{port_name}' failed: {e}")
