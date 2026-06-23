@@ -30,16 +30,12 @@ class ClipEditor:
                   channel: Optional[int] = None) -> str:
         """Add a new MIDI event and return its ID.
 
-        `channel` selects the target fixture (its index in the patch). When
-        None it defaults to the patch channel for the note's fixture type, so
-        a plain add still routes to that type's first instance. Drops onto a
-        specific fixture track pass the track's index explicitly. The channel
-        is stamped on both the event (display/scoping) and the mirrored note
-        (the codec rebuilds the MIDI file from midi_notes).
+        `channel` selects the target fixture (its index in the patch); drops
+        onto a specific fixture track pass the track's index explicitly, while
+        global verbs (song parts) pass None. The channel is stamped on both the
+        event (display/scoping) and the mirrored note (the codec rebuilds the
+        MIDI file from midi_notes).
         """
-        if channel is None:
-            channel = self._doc._channel_for_note(note)
-
         info = self._doc._note_info(note, channel, velocity)
         if info is None:
             self.logger.warning(f"Note {note} has no defined meaning")

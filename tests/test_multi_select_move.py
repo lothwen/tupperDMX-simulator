@@ -20,56 +20,53 @@ from dataclasses import dataclass
 # Ensure the project root is on sys.path when run from tests/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager, BLACKOUT_EPSILON
 
 
 @dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
+class FakeFixture:
+    """Minimal patched-fixture stand-in: its index in the patch == the MIDI
+    channel that selects it (the generalized note map routes by channel)."""
+    type: str
 
 
-FAKE_NOTE_MAP = {
-    # LED-bar channel-control notes (1-7) so add_scene() can build groups.
-    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
-    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
-    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
-    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
-    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
-    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
-    "12": FakeNoteInfo(part="Scene Select 1", color="#ff0000", fixture="ledbar"),
-    "13": FakeNoteInfo(part="Scene Select 2", color="#00ff00", fixture="ledbar"),
-    "14": FakeNoteInfo(part="Scene Select 3", color="#0000ff", fixture="ledbar"),
-    "26": FakeNoteInfo(part="Blinder Flash", color="#ffffff", fixture="blinder"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-    "39": FakeNoteInfo(part="BLACKOUT_BLINDERS", color="#000000", fixture="blinder"),
-}
+# Patch: ledbar @ channel 0, blinder @ channel 1 (the shipped patch's first two
+# fixtures). Mirrors production: MidiManager gets the data-driven note map plus
+# the patch, and every clip is stamped with the channel of its target fixture.
+PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER_CH = 0, 1
+# Standalone single-note clips: scene-load verbs (24/25/26), resolved against a
+# fixture's own def via describe_note — not channel-control notes, so they're
+# never clustered into scene groups. A/B/C ride the ledbar (channel 0); the
+# blinder clip is the same kind of verb on channel 1 (verb is shared, the
+# channel selects the fixture).
+LED_CLIP_A, LED_CLIP_B, LED_CLIP_C = 24, 25, 26
+BLINDER_CLIP = 26
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
-    m = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     return m
 
 
-def _id_at(m, fixture, time, tol=0.01):
+def _id_at(m, channel, time, tol=0.01):
     """Return the event id of the (non-BLACKOUT) clip nearest `time`."""
     for e in m.midi_events:
-        if (m._event_fixture(e) == fixture and not m.is_blackout(e)
+        if (m._event_fixture(e) == channel and not m.is_blackout(e)
                 and abs(e["time"] - time) < tol):
             return e["id"]
-    raise AssertionError(f"no {fixture} event near {time}s")
+    raise AssertionError(f"no channel-{channel} event near {time}s")
 
 
 def _ledbar_blackout_times(m):
     return sorted(e["time"] for e in m.midi_events
-                  if m._event_fixture(e) == "ledbar" and m.is_blackout(e))
+                  if m._event_fixture(e) == LEDBAR_CH and m.is_blackout(e))
 
 
 def _assert(cond, msg):
@@ -82,11 +79,11 @@ def test_selection_move_bounds():
     print("test_selection_move_bounds")
     m = _make_manager()
     # ledbar: A@2, B@4 (selected, adjacent), C@8 (non-selected obstacle).
-    m.add_event(12, 2.0, 100)
-    m.add_event(13, 4.0, 100)
-    m.add_event(14, 8.0, 100)
-    a = _id_at(m, "ledbar", 2.0)
-    b = _id_at(m, "ledbar", 4.0)
+    m.add_event(LED_CLIP_A, 2.0, 100, channel=LEDBAR_CH)
+    m.add_event(LED_CLIP_B, 4.0, 100, channel=LEDBAR_CH)
+    m.add_event(LED_CLIP_C, 8.0, 100, channel=LEDBAR_CH)
+    a = _id_at(m, LEDBAR_CH, 2.0)
+    b = _id_at(m, LEDBAR_CH, 4.0)
 
     lo, hi = m.selection_move_bounds([a, b])
     # B sits gaplessly against C → cannot move right; A can slide left to t=0.
@@ -97,11 +94,11 @@ def test_selection_move_bounds():
 def test_move_selection_preserves_timing_and_rebuilds_blackouts():
     print("test_move_selection_preserves_timing_and_rebuilds_blackouts")
     m = _make_manager()
-    m.add_event(12, 2.0, 100)   # A
-    m.add_event(13, 4.0, 100)   # B  (B's visible width = 4 → C@8)
-    m.add_event(14, 8.0, 100)   # C (non-selected)
-    a = _id_at(m, "ledbar", 2.0)
-    b = _id_at(m, "ledbar", 4.0)
+    m.add_event(LED_CLIP_A, 2.0, 100, channel=LEDBAR_CH)   # A
+    m.add_event(LED_CLIP_B, 4.0, 100, channel=LEDBAR_CH)   # B (visible width 4 → C@8)
+    m.add_event(LED_CLIP_C, 8.0, 100, channel=LEDBAR_CH)   # C (non-selected)
+    a = _id_at(m, LEDBAR_CH, 2.0)
+    b = _id_at(m, LEDBAR_CH, 4.0)
 
     ok = m.move_selection([a, b], -1.0)
     _assert(ok, "move_selection returned True")
@@ -122,13 +119,13 @@ def test_move_selection_preserves_timing_and_rebuilds_blackouts():
 def test_delete_selection_mixed():
     print("test_delete_selection_mixed")
     m = _make_manager()
-    m.add_event(12, 2.0, 100)   # ledbar A
-    m.add_event(13, 5.0, 100)   # ledbar B
-    m.add_event(26, 3.0, 100)   # blinder X
-    a = _id_at(m, "ledbar", 2.0)
-    x = _id_at(m, "blinder", 3.0)
+    m.add_event(LED_CLIP_A, 2.0, 100, channel=LEDBAR_CH)   # ledbar A
+    m.add_event(LED_CLIP_B, 5.0, 100, channel=LEDBAR_CH)   # ledbar B
+    m.add_event(BLINDER_CLIP, 3.0, 100, channel=BLINDER_CH)  # blinder X
+    a = _id_at(m, LEDBAR_CH, 2.0)
+    x = _id_at(m, BLINDER_CH, 3.0)
 
-    before_blinder = _id_at(m, "blinder", 3.0)  # sanity it exists pre-delete
+    before_blinder = _id_at(m, BLINDER_CH, 3.0)  # sanity it exists pre-delete
     ok = m.delete_selection([a, x])
     _assert(ok, "delete_selection returned True")
 
@@ -136,10 +133,10 @@ def test_delete_selection_mixed():
     a_gone = all(e["id"] != a or m.is_blackout(e) for e in m.midi_events)
     _assert(a_gone, "deleted ledbar clip is now a BLACKOUT (or removed)")
     blinder_clips = [e for e in m.midi_events
-                     if m._event_fixture(e) == "blinder" and not m.is_blackout(e)]
+                     if m._event_fixture(e) == BLINDER_CH and not m.is_blackout(e)]
     _assert(not blinder_clips, "blinder clip replaced by a BLACKOUT")
     # Untouched ledbar B still present.
-    _id_at(m, "ledbar", 5.0)
+    _id_at(m, LEDBAR_CH, 5.0)
     _assert_invariants(m)
 
 
@@ -149,8 +146,8 @@ def test_move_selection_scene_groups_no_spurious_blackout():
     # each group's start time (LED bar never turned on), because the rebuild
     # treated the 7 same-time members as zero-width clips.
     m = _make_manager()
-    g1 = m.add_scene(4.0, SCENE_CH, "A")
-    g2 = m.add_scene(10.0, SCENE_CH, "B")
+    g1 = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
+    g2 = m.add_scene(10.0, SCENE_CH, "B", channel=LEDBAR_CH)
     ids = [e["id"] for e in m.midi_events if e.get("group_id") in (g1, g2)]
 
     m.move_selection(ids, 2.0)
@@ -173,8 +170,8 @@ def test_move_selection_scene_group_keeps_trailing_gap():
     # A group with a real trailing gap keeps that gap (its BLACKOUT cap is
     # rebuilt at the shifted position), not at the group start.
     m = _make_manager()
-    g1 = m.add_scene(4.0, SCENE_CH, "A")
-    g2 = m.add_scene(20.0, SCENE_CH, "B")
+    g1 = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
+    g2 = m.add_scene(20.0, SCENE_CH, "B", channel=LEDBAR_CH)
     m.set_scene_right_edge(g1, 8.0)   # carve A's visible end → gap [8, 20)
     ids = [e["id"] for e in m.midi_events if e.get("group_id") in (g1, g2)]
 
@@ -192,18 +189,18 @@ def test_move_selection_scene_group_keeps_trailing_gap():
 
 def _assert_invariants(m):
     """reconcile_blackouts invariants: no zero-dur / no adjacent BLACKOUTs."""
-    for fixture in ("ledbar", "blinder"):
-        ev = [e for e in m.midi_events if m._event_fixture(e) == fixture]
+    for name, channel in (("ledbar", LEDBAR_CH), ("blinder", BLINDER_CH)):
+        ev = [e for e in m.midi_events if m._event_fixture(e) == channel]
         ev.sort(key=lambda e: e["time"])
         for i, e in enumerate(ev):
             if not m.is_blackout(e):
                 continue
             nxt = ev[i + 1]["time"] if i + 1 < len(ev) else float("inf")
             _assert(nxt - e["time"] > BLACKOUT_EPSILON,
-                    f"{fixture} BLACKOUT at {e['time']:.3f} has positive duration")
+                    f"{name} BLACKOUT at {e['time']:.3f} has positive duration")
             if i + 1 < len(ev):
                 _assert(not m.is_blackout(ev[i + 1]),
-                        f"{fixture} has no adjacent BLACKOUTs at {e['time']:.3f}")
+                        f"{name} has no adjacent BLACKOUTs at {e['time']:.3f}")
 
 
 def main():

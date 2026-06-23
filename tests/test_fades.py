@@ -19,33 +19,29 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager, FADE_BRIGHTNESS_NOTE
 
 
 @dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
+class FakeFixture:
+    """Minimal patched-fixture stand-in: its index in the patch == the MIDI
+    channel that selects it (the generalized note map routes by channel)."""
+    type: str
 
 
-FAKE_NOTE_MAP = {
-    "1": FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "2": FakeNoteInfo(part="CH:BLUE", color="#3333aa", fixture="ledbar"),
-    "3": FakeNoteInfo(part="CH:GREEN", color="#33aa33", fixture="ledbar"),
-    "4": FakeNoteInfo(part="CH:RED", color="#aa3333", fixture="ledbar"),
-    "5": FakeNoteInfo(part="CH:ANIM", color="#555555", fixture="ledbar"),
-    "6": FakeNoteInfo(part="CH:SPEED", color="#555555", fixture="ledbar"),
-    "7": FakeNoteInfo(part="CH:DIRECTION", color="#555555", fixture="ledbar"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-}
+# Patch: ledbar @ channel 0, blinder @ channel 1 (the shipped patch's first two
+# fixtures). Mirrors production: MidiManager gets the data-driven note map plus
+# the patch, and every scene is stamped with its target fixture's channel.
+PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER_CH = 0, 1
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
 
 
 def _make_manager():
-    m = MidiManager(midi_note_map=FAKE_NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     return m
@@ -65,7 +61,7 @@ def _fade_notes(m, gid):
 def test_set_fades_generate_fade_notes():
     print("test_set_fades_generate_fade_notes")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.set_scene_right_edge(g, 10.0)          # visible [4, 10)
     _assert(m.set_scene_fade_in(g, 1.0), "set_scene_fade_in returned True")
     _assert(m.set_scene_fade_out(g, 1.0), "set_scene_fade_out returned True")
@@ -88,7 +84,7 @@ def test_set_fades_generate_fade_notes():
 def test_fade_clamps_to_visible_duration():
     print("test_fade_clamps_to_visible_duration")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.set_scene_right_edge(g, 7.0)           # visible span = 3.0s
     m.set_scene_fade_in(g, 5.0)              # request more than fits
     bright = next(e for e in m.midi_events
@@ -100,7 +96,7 @@ def test_fade_clamps_to_visible_duration():
 def test_fade_in_plus_out_bounded_by_visible():
     print("test_fade_in_plus_out_bounded_by_visible")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.set_scene_right_edge(g, 8.0)           # visible span = 4.0s
     m.set_scene_fade_in(g, 3.0)
     m.set_scene_fade_out(g, 3.0)             # in+out would be 6 > 4 → clamped
@@ -114,7 +110,7 @@ def test_fade_in_plus_out_bounded_by_visible():
 def test_fades_regenerate_on_resize():
     print("test_fades_regenerate_on_resize")
     m = _make_manager()
-    g = m.add_scene(4.0, SCENE_CH, "A")
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.set_scene_right_edge(g, 20.0)
     m.set_scene_fade_out(g, 2.0)
     before = sorted(round(n["time"], 3) for n in _fade_notes(m, g))

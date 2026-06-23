@@ -22,15 +22,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import note_layout
 from midi.manager import MidiManager
 from timeline.manager import Timeline
-
-
-@dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
 
 
 @dataclass
@@ -40,16 +34,16 @@ class FakeFixture:
     name: str = ""
 
 
-NOTE_MAP = {
-    "1":  FakeNoteInfo(part="CH:BRIGHTNESS", color="#555555", fixture="ledbar"),
-    "26": FakeNoteInfo(part="Blinder Flash", color="#ffffff", fixture="blinder"),
-    "50": FakeNoteInfo(part="BLACKOUT",      color="#000000", fixture="ledbar"),
-    "63": FakeNoteInfo(part="CHORUS",        color="#37c737", fixture="ledbar"),
-}
-
 # [ledbar@0, blinder@1, blinder@2] — two blinders so the per-instance (not
-# per-type) split is exercised.
+# per-type) split is exercised. The patch index is the MIDI channel that selects
+# each fixture; clips are stamped with that channel (as the clip library does).
 PATCH = [FakeFixture("ledbar"), FakeFixture("blinder"), FakeFixture("blinder")]
+LEDBAR_CH, BLINDER1_CH, BLINDER2_CH = 0, 1, 2
+# Standalone single-note clips. Note 1 drives the ledbar's first DMX channel;
+# note 26 is a scene-load verb on a blinder (resolved per-fixture via
+# describe_note). The channel selects which fixture in the patch the clip hits.
+LEDBAR_CLIP, BLINDER_CLIP = 1, 26
+CHORUS = 63  # a global song-part verb (61-69), channel-agnostic
 
 
 def _assert(cond, msg):
@@ -71,7 +65,7 @@ def _ensure_app():
 
 def _make():
     _ensure_app()
-    m = MidiManager(midi_note_map=NOTE_MAP, fixtures=PATCH)
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     m.create_empty_track()
     m.set_song_duration(240.0)
     tl = Timeline(midi_manager=m, fixtures=PATCH)
@@ -99,14 +93,14 @@ def test_one_track_per_fixture():
 def test_membership_by_channel():
     print("test_membership_by_channel")
     m, tl = _make()
-    led = m.add_event(1, 1.0, 100)          # ledbar -> channel 0
-    bl1 = m.add_event(26, 2.0, 100)         # blinder type -> first instance, ch 1
-    bl2 = m.add_event(26, 3.0, 100, channel=2)  # explicit 2nd blinder, ch 2
+    led = m.add_event(LEDBAR_CLIP, 1.0, 100, channel=LEDBAR_CH)    # ledbar, ch 0
+    bl1 = m.add_event(BLINDER_CLIP, 2.0, 100, channel=BLINDER1_CH)  # 1st blinder
+    bl2 = m.add_event(BLINDER_CLIP, 3.0, 100, channel=BLINDER2_CH)  # 2nd blinder
     _assert(led and bl1 and bl2, "events created")
 
-    e_led = _event(m, 1)
-    e_bl1 = _event(m, 26, channel=1)
-    e_bl2 = _event(m, 26, channel=2)
+    e_led = _event(m, LEDBAR_CLIP)
+    e_bl1 = _event(m, BLINDER_CLIP, channel=1)
+    e_bl2 = _event(m, BLINDER_CLIP, channel=2)
     t0, t1, t2 = tl.midi_events_tracks
 
     _assert(t0.matches_filter(e_led) and not t1.matches_filter(e_led)
@@ -120,19 +114,19 @@ def test_membership_by_channel():
 def test_add_event_stamps_channel():
     print("test_add_event_stamps_channel")
     m, _ = _make()
-    m.add_event(26, 3.0, 100, channel=2)
-    e = _event(m, 26, channel=2)
+    m.add_event(BLINDER_CLIP, 3.0, 100, channel=2)
+    e = _event(m, BLINDER_CLIP, channel=2)
     _assert(e.get("channel") == 2, "event stamped with target channel")
     # The mirrored note (what the codec rebuilds the MIDI file from) too.
-    note = next(n for n in m.midi_notes if n["note"] == 26)
+    note = next(n for n in m.midi_notes if n["note"] == BLINDER_CLIP)
     _assert(note.get("channel") == 2, "mirrored note stamped with target channel")
 
 
 def test_song_part_on_every_track():
     print("test_song_part_on_every_track")
     m, tl = _make()
-    m.add_event(63, 5.0, 100)  # CHORUS -> global, home channel 0 (ledbar)
-    chorus = _event(m, 63)
+    m.add_event(CHORUS, 5.0, 100)  # global song part -> no channel; home lane 0
+    chorus = _event(m, CHORUS)
     _assert(m.is_song_part(chorus), "CHORUS is a song part")
     t0, t1, t2 = tl.midi_events_tracks
     _assert(t0.matches_filter(chorus) and t1.matches_filter(chorus)
@@ -146,7 +140,7 @@ def test_song_part_on_every_track():
 def test_blackout_scoped_to_its_fixture():
     print("test_blackout_scoped_to_its_fixture")
     m, tl = _make()
-    eid = m.add_event(26, 3.0, 100, channel=2)   # 2nd blinder clip
+    eid = m.add_event(BLINDER_CLIP, 3.0, 100, channel=2)   # 2nd blinder clip
     _assert(m.replace_with_blackout(eid), "clip replaced with a BLACKOUT")
     bo = next(e for e in m.midi_events
               if m.is_blackout(e) and e.get("channel") == 2)
@@ -159,7 +153,7 @@ def test_blackout_scoped_to_its_fixture():
 def test_empty_patch_no_tracks():
     print("test_empty_patch_no_tracks")
     _ensure_app()
-    m = MidiManager(midi_note_map=NOTE_MAP)
+    m = MidiManager(note_layout.build_note_map())
     m.create_empty_track()
     tl = Timeline(midi_manager=m, fixtures=[])
     _assert(tl.midi_events_tracks == [], "no fixtures -> no MIDI tracks (no crash)")

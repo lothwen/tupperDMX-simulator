@@ -29,16 +29,10 @@ from PyQt6.QtCore import QTimer, Qt, QPointF, QPoint
 from PyQt6.QtGui import QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
 
+import note_layout
 from midi.manager import MidiManager
 from timeline.manager import Timeline
 from timeline.tracks.midi_events import DraggableMidiEvent
-
-
-@dataclass
-class FakeNoteInfo:
-    part: str
-    color: str
-    fixture: str = "ledbar"
 
 
 @dataclass
@@ -49,20 +43,18 @@ class FakeFixture:
 
 
 # Patch: one ledbar (channel 0) + one blinder (channel 1).
+LEDBAR_CH, BLINDER_CH = 0, 1
 FAKE_FIXTURES = [FakeFixture("ledbar"), FakeFixture("blinder")]
 
 
-# Minimal note map with a few ledbar and blinder notes
-FAKE_NOTE_MAP = {
-    "12": FakeNoteInfo(part="Scene Select 1", color="#ff0000", fixture="ledbar"),
-    "13": FakeNoteInfo(part="Scene Select 2", color="#00ff00", fixture="ledbar"),
-    "14": FakeNoteInfo(part="Scene Select 3", color="#0000ff", fixture="ledbar"),
-    "15": FakeNoteInfo(part="Scene Select 4", color="#ffff00", fixture="ledbar"),
-    "26": FakeNoteInfo(part="Blinder Flash", color="#ffffff", fixture="blinder"),
-    "27": FakeNoteInfo(part="Blinder Pulse", color="#ff8800", fixture="blinder"),
-    "38": FakeNoteInfo(part="BLACKOUT", color="#000000", fixture="ledbar"),
-    "39": FakeNoteInfo(part="BLACKOUT_BLINDERS", color="#000000", fixture="blinder"),
-}
+# (note, channel) clip specs. Notes 24-27 are scene-load verbs resolved against
+# each fixture's own def via describe_note; the channel selects which fixture in
+# the patch a clip targets (the same verb on channel 0 vs 1 = ledbar vs blinder),
+# mirroring how the clip library stamps a track's patch index onto each drop.
+CLIP_SPECS = [
+    (24, LEDBAR_CH), (25, LEDBAR_CH), (26, LEDBAR_CH), (27, LEDBAR_CH),
+    (26, BLINDER_CH), (27, BLINDER_CH),
+]
 
 
 class CrashReproWindow(QMainWindow):
@@ -75,7 +67,7 @@ class CrashReproWindow(QMainWindow):
         self.setWindowTitle("Timeline Crash Repro")
         self.resize(1200, 400)
 
-        self.midi_manager = MidiManager(midi_note_map=FAKE_NOTE_MAP,
+        self.midi_manager = MidiManager(note_layout.build_note_map(),
                                         fixtures=FAKE_FIXTURES)
         self.midi_manager.create_empty_track()
 
@@ -104,12 +96,11 @@ class CrashReproWindow(QMainWindow):
             self.timeline._schedule_refresh()
 
     def _seed_events(self):
-        notes = [12, 13, 14, 15, 26, 27]
         for i in range(20):
-            note = random.choice(notes)
+            note, channel = random.choice(CLIP_SPECS)
             time = i * 2.0 + random.uniform(0.1, 0.9)
             velocity = random.randint(40, 127)
-            self.midi_manager.add_event(note, time, velocity)
+            self.midi_manager.add_event(note, time, velocity, channel=channel)
         self.timeline.refresh_from_manager()
 
     # ------------------------------------------------------------------
@@ -223,11 +214,12 @@ class CrashReproWindow(QMainWindow):
         self.timeline.content_view.viewport().repaint()
 
     def _simulate_insert_and_repaint(self):
-        notes = [12, 13, 14, 15, 26, 27]
+        note, channel = random.choice(CLIP_SPECS)
         self.midi_manager.add_event(
-            random.choice(notes),
+            note,
             random.uniform(0, 50.0),
             random.randint(40, 127),
+            channel=channel,
         )
         if self.SYNC_REFRESH:
             self.timeline.refresh_from_manager()
