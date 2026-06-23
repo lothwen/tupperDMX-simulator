@@ -47,11 +47,13 @@ class ClipListWidget(QListWidget):
         self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.setUniformItemSizes(True)
 
-    def add_clip(self, label: str, icon: QIcon, note: int, velocity: int) -> None:
+    def add_clip(self, label: str, icon: QIcon, note: int, velocity: int,
+                 channel: int = 0) -> None:
         item = QListWidgetItem(label)
         item.setIcon(icon)
         item.setData(Qt.ItemDataRole.UserRole, {"note": int(note),
-                                                "velocity": int(velocity)})
+                                                "velocity": int(velocity),
+                                                "channel": int(channel)})
         self.addItem(item)
 
     def mimeData(self, items):
@@ -101,9 +103,10 @@ class SceneListWidget(QListWidget):
 class ClipLibraryWidget(QWidget):
     """Panel listing draggable clips, grouped from the patched fixtures' defs."""
 
-    # Emitted when an item is clicked. Payload is a list of (note, velocity)
-    # tuples — length 1 for a single clip, length N for a scene expanded into
-    # its fixture's channel-control notes.
+    # Emitted when an item is clicked. Payload is a list of
+    # (channel, note, velocity) tuples — length 1 for a single clip, length N
+    # for a scene expanded into its fixture's channel-control notes. The MIDI
+    # channel selects the fixture (its patch index), mirroring handle_note_on.
     preview_requested = pyqtSignal(list)
 
     def __init__(self, config: Config, parent=None):
@@ -138,6 +141,15 @@ class ClipLibraryWidget(QWidget):
             if t and t not in seen:
                 seen.append(t)
         return seen
+
+    def _fixture_index_for_type(self, ftype: str) -> int:
+        """Patch index (MIDI channel) of the first patched fixture of
+        ``ftype``. The channel selects which fixture handle_note_on targets;
+        defaults to 0 if the type isn't patched."""
+        for idx, inst in enumerate(self.config.fixtures):
+            if getattr(inst, "type", None) == ftype:
+                return idx
+        return 0
 
     def _populate(self) -> None:
         """Rebuild the toolbox: per-fixture verb/scene/chase groups (from each
@@ -185,13 +197,14 @@ class ClipLibraryWidget(QWidget):
                             note_layout.COLOR_MACRO_BASE
                             + len(note_layout.COLOR_MACROS)))
 
+        channel = self._fixture_index_for_type(ftype)
         page = ClipListWidget()
         for note in notes:
             info = note_layout.describe_note(note, fdef)
             if info is None:
                 continue
             page.add_clip(info.part, self._color_swatch(info.color),
-                          note, DEFAULT_DROP_VELOCITY)
+                          note, DEFAULT_DROP_VELOCITY, channel)
         page.itemClicked.connect(self._on_clip_item_clicked)
         self.toolbox.addItem(page, ftype.capitalize())
 
@@ -218,11 +231,12 @@ class ClipLibraryWidget(QWidget):
         = chase index)."""
         if not fdef.chases:
             return
+        channel = self._fixture_index_for_type(ftype)
         page = ClipListWidget()
         for idx in range(len(fdef.chases)):
             info = note_layout.describe_note(note_layout.CHASE_LOAD, fdef, idx)
             page.add_clip(info.part, self._color_swatch(info.color),
-                          note_layout.CHASE_LOAD, idx)
+                          note_layout.CHASE_LOAD, idx, channel)
         page.itemClicked.connect(self._on_clip_item_clicked)
         self.toolbox.addItem(page, f"{ftype.capitalize()} chases")
 
@@ -302,30 +316,37 @@ class ClipLibraryWidget(QWidget):
         self.logger.info("Clip library refreshed with new configuration")
 
     def _on_clip_item_clicked(self, item: QListWidgetItem) -> None:
-        """Auditioning a single clip emits its (note, velocity)."""
+        """Auditioning a single clip emits its (channel, note, velocity). The
+        channel is the clip's home fixture (its patch index) for per-fixture
+        pages, and 0 for the channel-agnostic global show verbs."""
         payload = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(payload, dict):
             return
-        self.preview_requested.emit([(int(payload["note"]),
+        self.preview_requested.emit([(int(payload.get("channel", 0)),
+                                      int(payload["note"]),
                                       int(payload["velocity"]))])
 
     def _on_scene_item_clicked(self, item: QListWidgetItem) -> None:
-        """Auditioning a scene emits one (note, velocity) per channel of the
-        owning fixture — mirroring how a scene drop is encoded on the timeline.
+        """Auditioning a scene emits one (channel, note, velocity) per channel
+        of the owning fixture — mirroring how a scene drop is encoded on the
+        timeline. The MIDI channel selects the fixture (its patch index), so the
+        scene previews on the right fixture instead of the default channel 0.
         """
         payload = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(payload, dict):
             return
         channels = payload.get("channels") or {}
-        fdef = load_fixture_defs().get(payload.get("fixture_type"))
+        fixture_type = payload.get("fixture_type")
+        fdef = load_fixture_defs().get(fixture_type)
         if not isinstance(channels, dict) or fdef is None:
             return
-        messages: List[Tuple[int, int]] = []
+        channel = self._fixture_index_for_type(fixture_type)
+        messages: List[Tuple[int, int, int]] = []
         for ch_name, note in note_layout.field_note_map(fdef):
             if ch_name not in channels:
                 continue
             # Same lossy 0..255 → 0..127 mapping the controller doubles back.
             velocity = max(0, min(127, int(channels[ch_name]) // 2))
-            messages.append((note, velocity))
+            messages.append((channel, note, velocity))
         if messages:
             self.preview_requested.emit(messages)
