@@ -284,6 +284,18 @@ class ContentView(QGraphicsView):
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event):
+        # Consume the leave ourselves instead of delegating to
+        # QGraphicsView.dragLeaveEvent. Our dragEnterEvent accepts the drag at
+        # the view level without invoking the base class (which would forward
+        # the drag into the scene/items), so the base view never records its
+        # own drag-enter state. The base dragLeaveEvent then asserts/warns
+        # "drag leave received before drag enter" — which aborts the process on
+        # Wayland, where a spurious leave is delivered when the drag passes over
+        # a rejected lane or ends. Accepting here keeps the view's drag handling
+        # self-consistent and skips that broken path.
+        event.accept()
+
     def dropEvent(self, event):
         mime = event.mimeData()
         scene_pos = self.mapToScene(event.position().toPoint())
