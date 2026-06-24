@@ -16,7 +16,6 @@ from .constants import (
     # Re-exported for backward-compatible `from midi.manager import ...`
     # used by the UI modules and the test-suite; the manager body itself
     # no longer references these (they live in midi/constants.py).
-    CHANNEL_NOTE_MAP,
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     FADE_BRIGHTNESS_NOTE,
@@ -154,6 +153,11 @@ class MidiManager(QObject):
 
     def _event_fixture(self, event: Dict[str, Any]):
         return self._doc._event_fixture(event)
+
+    def channel_note_map(self, channel) -> Tuple[Tuple[str, int], ...]:
+        """``((channel_field, note), ...)`` for the fixture at `channel`,
+        falling back to the default fixture's def when unpatched."""
+        return self._doc.channel_note_map(channel)
 
     # MIDI Data Management Methods  
     def load_from_file(self, file_path: str) -> bool:

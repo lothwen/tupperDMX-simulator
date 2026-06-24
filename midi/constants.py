@@ -1,12 +1,9 @@
 """Shared constants and helpers for the MIDI manager subsystem.
 
 These are imported (and re-exported) by ``midi/manager.py`` so existing
-``from midi.manager import CHANNEL_NOTE_MAP`` / ``MIN_EVENT_DURATION`` /
-``BLACKOUT_EPSILON`` imports keep resolving, and shared by the MidiDocument /
-editor collaborators.
+``from midi.manager import MIN_EVENT_DURATION`` / ``BLACKOUT_EPSILON`` imports
+keep resolving, and shared by the MidiDocument / editor collaborators.
 """
-
-from typing import Tuple
 
 # Identification of BLACKOUT events is by part-name PREFIX (case-insensitive),
 # not by note number — keeps it config-driven and lets each fixture have its
@@ -42,26 +39,18 @@ FADE_BRIGHTNESS_NOTE = 1
 # fade-run member; absorbs the /2 quantization round-trip in MIDI export.
 FADE_VELOCITY_MATCH_TOLERANCE = 2
 
-# LED-bar channel-control mapping used by scene clips. Each tuple is
-# (json_channel_name, midi_note_number) and matches the cases in
-# software_controller/main.py:handle_note_on (notes 1-7).
-CHANNEL_NOTE_MAP: Tuple[Tuple[str, int], ...] = (
-    ("brightness", 1),
-    ("blue", 2),
-    ("green", 3),
-    ("red", 4),
-    ("animation", 5),
-    ("speed", 6),
-    ("direction", 7),
-)
-CHANNEL_CONTROL_NOTES = frozenset(n for _, n in CHANNEL_NOTE_MAP)
+# Fixture type whose def supplies the channel<->note mapping when a clip can't
+# be resolved to a patched fixture (channel-less legacy/synthetic events, an
+# out-of-range channel, or tests run without a patch). Its layout is read from
+# the data-driven library def — there is no hardcoded channel list.
+DEFAULT_FIXTURE_TYPE = "ledbar"
 
 # Notes whose velocity carries a value rather than gating a note on/off:
 # the generalized note map's channel sets (1-23) and scene loaders (24-35).
 # A velocity of 0 on these is a real value ("set channel to 0" / "instant
 # blend"), so the codec must admit them instead of treating velocity 0 as a
-# note_off. (Superset of CHANNEL_CONTROL_NOTES, which stays scoped to the 7
-# LED scene channels used by the scene-clustering heuristic.)
+# note_off. (Superset of the per-fixture channel-control notes — 1..channel_count
+# — used by the scene-clustering heuristic.)
 VALUE_BEARING_NOTES = frozenset(range(1, 36))
 
 # Song-part marker notes (INTRO..END). These are GLOBAL verbs: the software

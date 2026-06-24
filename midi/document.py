@@ -23,8 +23,7 @@ from .constants import (
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     NOTE_MATCH_TOLERANCE,
-    CHANNEL_NOTE_MAP,
-    CHANNEL_CONTROL_NOTES,
+    DEFAULT_FIXTURE_TYPE,
 )
 
 
@@ -126,6 +125,14 @@ class MidiDocument:
                 return load_fixture_defs().get(ftype)
         return None
 
+    def _fdef_or_default(self, channel):
+        """The FixtureDef at `channel`, or the default fixture's def when no
+        patch resolves (synthetic/test data, channel-less legacy events, an
+        out-of-range channel). The default's channel layout is data-driven —
+        read from its library def, not hardcoded."""
+        return (self._fdef_for_channel(channel)
+                or load_fixture_defs().get(DEFAULT_FIXTURE_TYPE))
+
     def _note_info(self, note: int, channel=None, velocity=None):
         """UI metadata for a (note, channel) — the synthetic/test note map
         takes precedence (it carries the .fixture scoping hint); otherwise the
@@ -139,18 +146,15 @@ class MidiDocument:
 
     def channel_note_map(self, channel) -> Tuple[Tuple[str, int], ...]:
         """``((channel_field, note), ...)`` used to expand a scene into channel-
-        control events for the fixture at `channel`. Falls back to the LED-bar
-        7-channel map when no patch resolves (synthetic data / tests)."""
-        fdef = self._fdef_for_channel(channel)
-        return note_layout.field_note_map(fdef) if fdef else CHANNEL_NOTE_MAP
+        control events for the fixture at `channel`. Falls back to the default
+        fixture's def when no patch resolves (synthetic data / tests)."""
+        return note_layout.field_note_map(self._fdef_or_default(channel))
 
     def is_channel_control_note(self, note: int, channel=None) -> bool:
         """True if `note` drives one of the fixture-at-`channel`'s DMX channels
-        (notes 1..channel_count). Falls back to the LED-bar set 1..7."""
-        fdef = self._fdef_for_channel(channel)
-        if fdef:
-            return 1 <= int(note) <= fdef.channel_count
-        return int(note) in CHANNEL_CONTROL_NOTES
+        (notes 1..channel_count). Falls back to the default fixture's def."""
+        fdef = self._fdef_or_default(channel)
+        return bool(fdef) and 1 <= int(note) <= fdef.channel_count
 
     def _blackout_note_number(self, fixture=None) -> Optional[int]:
         """Return the MIDI note number mapped to BLACKOUT* for `fixture`.
