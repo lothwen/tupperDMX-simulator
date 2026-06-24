@@ -280,6 +280,21 @@ class LedBar(DesignableFixture, QGraphicsObject):
     def boundingRect(self):
         return QRectF(0, 0, self.WIDTH, self.HEIGHT)
 
+    def cleanup(self):
+        """Stop the animation movie before this bar is removed from the scene.
+
+        Disconnecting frameChanged also breaks the movie<->bar reference cycle,
+        so the bar is freed promptly (by refcount) instead of lingering to a
+        cyclic GC, and its animation stops ticking the moment it's deleted."""
+        if self.current_movie:
+            try:
+                self.current_movie.frameChanged.disconnect(self.update_animation_frame)
+            except TypeError:
+                pass  # Signal was not connected
+            self.current_movie.stop()
+        self.current_movie = None
+        self.animations.clear()
+
     def paint(self, painter, option, widget):
         #option.state = QStyle.StateFlag.State_None
         #return super(LedBar, self).paint(painter,option)
