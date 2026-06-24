@@ -18,7 +18,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
                       TrackResizeHandle, CustomTooltip)
 from .widgets.scene_edit import SceneEditDialog
-from midi.manager import CHANNEL_NOTE_MAP
 import note_layout
 from fixture_library import load_fixture_defs
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
@@ -851,8 +850,7 @@ class Timeline(QWidget):
         # convention: channel value = velocity * 2). Default to 0 for any
         # missing channels (partial groups).
         velocity_by_note = {m['note']: m['velocity'] for m in members}
-        fdef = self._fdef(members[0].get('channel'))
-        field_note = note_layout.field_note_map(fdef) if fdef else CHANNEL_NOTE_MAP
+        field_note = self.midi_manager.channel_note_map(members[0].get('channel'))
         channels = {ch_name: min(255, velocity_by_note.get(note, 0) * 2)
                     for ch_name, note in field_note}
         current_name = (members[0].get('scene_name')

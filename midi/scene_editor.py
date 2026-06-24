@@ -20,6 +20,7 @@ from .constants import (
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
     NOTE_MATCH_TOLERANCE,
+    DEFAULT_FIXTURE_TYPE,
     _channel_to_velocity,
 )
 
@@ -37,7 +38,7 @@ class SceneEditor:
         """Fixture-type name patched at `channel`; defaults to ledbar when no
         patch resolves (synthetic data / tests)."""
         fdef = self._doc._fdef_for_channel(channel)
-        return fdef.name if fdef else "ledbar"
+        return fdef.name if fdef else DEFAULT_FIXTURE_TYPE
 
     def _get_scenes(self, fixture_type: str) -> List[Scene]:
         """Return the cached scene library for a fixture type."""
