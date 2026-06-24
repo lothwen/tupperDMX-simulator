@@ -21,6 +21,12 @@ def _suggest_free_dmx_start(stage_controller) -> int:
     return min(512, highest + 1) if highest else 1
 
 
+def _other_channels(config, exclude=None) -> set:
+    """MIDI channels in use by patched fixtures, excluding `exclude`."""
+    return {f.channel for f in config.fixtures
+            if f is not exclude and f.channel >= 0}
+
+
 class AddFixtureDialog(QDialog):
     """Pick a fixture type from the library + a DMX start address."""
 
@@ -41,6 +47,11 @@ class AddFixtureDialog(QDialog):
         self.dmx_spin.setValue(_suggest_free_dmx_start(stage_controller))
         form.addRow("DMX start", self.dmx_spin)
 
+        self.channel_spin = QSpinBox()
+        self.channel_spin.setRange(0, 15)
+        self.channel_spin.setValue(stage_controller.config.next_free_channel())
+        form.addRow("MIDI channel", self.channel_spin)
+
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
@@ -51,8 +62,9 @@ class AddFixtureDialog(QDialog):
         layout.addWidget(buttons)
 
     def values(self):
-        """Return (type_name, dmx_start) for the chosen fixture."""
-        return self.type_combo.currentText(), self.dmx_spin.value()
+        """Return (type_name, dmx_start, channel) for the chosen fixture."""
+        return (self.type_combo.currentText(), self.dmx_spin.value(),
+                self.channel_spin.value())
 
 
 class StageEditToolbar(QWidget):
@@ -100,11 +112,18 @@ class StageEditToolbar(QWidget):
         dialog = AddFixtureDialog(self._stage, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        type_name, dmx_start = dialog.values()
+        type_name, dmx_start, channel = dialog.values()
+        if channel in _other_channels(self._stage.config):
+            QMessageBox.warning(
+                self, "Channel in use",
+                f"MIDI channel {channel} is already used by another fixture. "
+                "Pick a free channel.")
+            return
         # Drop new fixtures at the stage centre; the user drags from there.
         rect = self._stage.scene.sceneRect()
         self._stage.add_fixture(
-            type_name, dmx_start, int(rect.width() / 2), int(rect.height() / 2)
+            type_name, dmx_start, int(rect.width() / 2), int(rect.height() / 2),
+            channel,
         )
         self._notify()
 
@@ -168,6 +187,16 @@ class FixtureInspector(QWidget):
         self._dmx_spin.valueChanged.connect(self._on_dmx_changed)
         layout.addWidget(self._dmx_spin)
 
+        # ROUTING
+        layout.addWidget(self._section_label("ROUTING"))
+        layout.addWidget(self._field_label("MIDI channel"))
+        self._channel_spin = QSpinBox()
+        self._channel_spin.setRange(0, 15)
+        # Commit on editing-finished (not every step) so the duplicate check and
+        # revert don't fight the user mid-type.
+        self._channel_spin.editingFinished.connect(self._on_channel_changed)
+        layout.addWidget(self._channel_spin)
+
         layout.addSpacing(8)
         self._delete_button = QPushButton("Delete")
         self._delete_button.setObjectName("InspectorDelete")
@@ -203,6 +232,9 @@ class FixtureInspector(QWidget):
         self._dmx_spin.blockSignals(True)
         self._dmx_spin.setValue(instance.dmx_start)
         self._dmx_spin.blockSignals(False)
+        self._channel_spin.blockSignals(True)
+        self._channel_spin.setValue(max(0, instance.channel))
+        self._channel_spin.blockSignals(False)
 
     def _on_name_changed(self) -> None:
         if self._current is None:
@@ -217,6 +249,25 @@ class FixtureInspector(QWidget):
         if self._current is None:
             return
         self._current.dmx_start = int(value)
+        self._stage.refresh_labels()
+        self._notify()
+
+    def _on_channel_changed(self) -> None:
+        if self._current is None:
+            return
+        value = self._channel_spin.value()
+        if value == self._current.channel:
+            return
+        # Channel is the clip-binding identity, so it must stay unique.
+        if value in _other_channels(self._stage.config, exclude=self._current):
+            QMessageBox.warning(
+                self, "Channel in use",
+                f"MIDI channel {value} is already used by another fixture.")
+            self._channel_spin.blockSignals(True)
+            self._channel_spin.setValue(max(0, self._current.channel))
+            self._channel_spin.blockSignals(False)
+            return
+        self._current.channel = int(value)
         self._stage.refresh_labels()
         self._notify()
 

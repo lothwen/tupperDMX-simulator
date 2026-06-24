@@ -314,21 +314,29 @@ class DMXController:
             if ftype is None:
                 self.logger.warning(f"Unknown fixture type '{getattr(inst, 'type', None)}', skipping")
                 continue
-            patch.append((ftype, inst.dmx_start))
+            patch.append((ftype, inst.dmx_start, getattr(inst, "channel", -1)))
         return patch
 
     def init_fixtures(self, fixtures):
         """Build the fixture list from the resolved patch (injected config
         fixtures or the default fallback), deriving each fixture's universe
-        offset and its slice of the compact blend buffer."""
+        offset and its slice of the compact blend buffer. ``_fx_by_channel``
+        maps each fixture's stable MIDI channel to its list index, so note
+        routing is independent of list/patch order."""
         self.fixtures = []
+        self._fx_by_channel = {}
         blend_base = 0
-        for ft, dmx_base in self._resolve_patch(fixtures):
+        for ft, dmx_base, channel in self._resolve_patch(fixtures):
             s = Fixture(type=ft, dmx_base=dmx_base)
             s.bank = next(iter(ft.banks))  # first bank ('ANIMATIONS' / 'BLINDER_SCENES')
             s.base = dmx_base - 1
             s.blend_base = blend_base
             blend_base += sum(1 for ch in ft.channels if ch.flags & CH_BLEND)
+            # Fall back to the list index for patches built without explicit
+            # channels (e.g. hand-constructed test fixtures) — matches the old
+            # channel-equals-position behaviour.
+            ch = channel if channel >= 0 else len(self.fixtures)
+            self._fx_by_channel[ch] = len(self.fixtures)
             self.fixtures.append(s)
         self.blend_start = [0] * blend_base
 
@@ -614,8 +622,9 @@ class DMXController:
     # ------------------------------------------------------------------
     def handle_note_on(self, channel, pitch, velocity):
         """Route one MIDI note to the patch. The note number is a universal
-        *verb*, the MIDI channel selects *which* fixture (its index in the
-        patch), and velocity carries the verb's parameter. Per-fixture verbs are
+        *verb*, the MIDI channel selects *which* fixture (its stable channel id,
+        looked up in the patch), and velocity carries the verb's parameter.
+        Per-fixture verbs are
         resolved against that fixture's own data-driven def (channels / banks /
         chases), so the one layout works for any fixture type. See the layout
         table in the plan / ROADMAP subtask 4."""
@@ -631,9 +640,11 @@ class DMXController:
                 return
 
             # ---- Per-fixture verbs: the channel selects the fixture ----
-            if channel >= self.num_fixtures:
+            # The MIDI channel is the fixture's stable id, not its list index,
+            # so resolve it through the patch map.
+            fx = self._fx_by_channel.get(channel)
+            if fx is None:
                 return
-            fx = channel
             s = self.fixtures[fx]
 
             match pitch:

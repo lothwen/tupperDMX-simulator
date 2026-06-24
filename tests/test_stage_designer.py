@@ -138,6 +138,42 @@ def test_remove_ledbar_purges_bars(qapp):
         _assert(b.current_movie is None, "each removed bar's animation movie was stopped")
 
 
+def test_remove_then_readd_keeps_other_channels_stable(qapp):
+    """The core regression: removing a fixture and adding one back must not
+    re-number the surviving fixtures' MIDI channels (their timeline clips bind
+    by channel, so a shift would silently rebind them)."""
+    print("test_remove_then_readd_keeps_other_channels_stable")
+    cfg = Config()
+    cfg.fixtures = [
+        FixtureInstance(type="ledbar", dmx_start=1, channel=0,
+                        bars=[FixturePosition(150, 350)]),
+        FixtureInstance(type="blinder", dmx_start=33, channel=1, x=400, y=300),
+        FixtureInstance(type="blinder", dmx_start=65, channel=2, x=575, y=500),
+    ]
+    from ui.stage_controller import StageController
+    sc = StageController(cfg)
+
+    # Remove the middle fixture (channel 1) via the real designer path.
+    sc.set_design_mode(True)
+    sc.blinders[0].setSelected(True)   # the @33 blinder
+    removed = sc.remove_selected()
+    _assert([r.channel for r in removed] == [1], "the channel-1 fixture was removed")
+    _assert(sorted(f.channel for f in cfg.fixtures) == [0, 2],
+            "survivors keep channels 0 and 2 (no renumber)")
+
+    # Re-add a blinder: it reclaims the lowest free channel (1), survivors intact.
+    inst = sc.add_fixture("blinder", 33, 400, 300)
+    _assert(inst.channel == 1, "re-added fixture reclaims the freed channel 1")
+    _assert(sorted(f.channel for f in cfg.fixtures) == [0, 1, 2],
+            "survivors' channels still untouched after re-add")
+
+    # Gap-insert (DMX 17, between ledbar@1 and blinder@33): fresh channel, no shift.
+    gap = sc.add_fixture("par_rgb", 17, 500, 300)
+    _assert(gap.channel == 3, "gap-inserted fixture gets a fresh channel (3)")
+    _assert(sorted(f.channel for f in cfg.fixtures) == [0, 1, 2, 3],
+            "no existing channel shifted by a gap insert")
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -147,6 +183,7 @@ def main():
     test_remove_drops_only_target(app)
     test_scene_uses_no_index(app)
     test_remove_ledbar_purges_bars(app)
+    test_remove_then_readd_keeps_other_channels_stable(app)
     print("\nALL TESTS PASSED")
 
 
