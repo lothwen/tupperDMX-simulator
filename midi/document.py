@@ -106,6 +106,11 @@ class MidiDocument:
         info = event.get('info') if event else None
         return getattr(info, 'fixture', None) if info else None
 
+    def update_fixtures(self, fixtures) -> None:
+        """Swap the patch at runtime (designer add/remove/edit). Per-fixture verb
+        resolution reads self._fixtures live, so a plain reassignment suffices."""
+        self._fixtures = list(fixtures or [])
+
     # --- patch-aware verb resolution (channel selects the fixture) -----------
 
     def _fixture_by_channel(self, ch):

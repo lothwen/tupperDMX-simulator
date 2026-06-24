@@ -133,6 +133,11 @@ class MidiManager(QObject):
     def midi_note_map(self, value):
         self._doc.midi_note_map = value
 
+    def update_fixtures(self, fixtures) -> None:
+        """Swap the patch at runtime so per-fixture verb resolution tracks
+        designer edits (add/remove/channel/dmx)."""
+        self._doc.update_fixtures(fixtures)
+
     def set_song_duration(self, duration: float) -> None:
         self._doc.set_song_duration(duration)
 

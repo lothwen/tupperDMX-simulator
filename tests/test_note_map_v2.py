@@ -18,6 +18,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from software_controller.main import DMXController, COLOR32_WHITE
+from config import FixtureInstance
 
 
 def _assert(cond, msg):
@@ -112,12 +113,47 @@ def test_blackout_verbs_and_global_song_parts():
     _assert(ctrl.blackout_all_state is True, "note 51 toggles blackout-all globally")
 
 
+def test_repatch_hot_swaps_routing():
+    print("test_repatch_hot_swaps_routing")
+    ctrl = DMXController()
+    ctrl.handle_note_on(0, 1, 100)
+    _assert(ctrl.present[LEDBAR_BASE] == 200, "pre-repatch: ch0 lights the ledbar")
+
+    # Swap to a patch where channel 0 is a blinder at DMX 33, and add a new
+    # fixture on channel 5. repatch clears the universe and rebuilds routing.
+    ctrl.repatch([
+        FixtureInstance(type="blinder", dmx_start=33, channel=0),
+        FixtureInstance(type="ledbar", dmx_start=1, channel=5),
+    ])
+    _assert(ctrl.present[LEDBAR_BASE] == 0, "repatch cleared the old universe values")
+    _assert(ctrl.num_fixtures == 2, "fixture count reflects the new patch")
+
+    ctrl.handle_note_on(0, 1, 50)   # ch0 is now the blinder @33 (base 32)
+    _assert(ctrl.present[32] == 100, "ch0 now routes to the blinder at DMX 33")
+    ctrl.handle_note_on(5, 1, 60)   # the added fixture on channel 5
+    _assert(ctrl.present[0] == 120, "ch5 routes to the ledbar at DMX 1")
+    ctrl.handle_note_on(1, 1, 70)   # channel 1 is no longer patched
+    _assert(ctrl.present[32] == 100, "note on a now-unpatched channel is a no-op")
+
+
+def test_repatch_to_empty_is_safe():
+    print("test_repatch_to_empty_is_safe")
+    ctrl = DMXController()
+    ctrl.repatch([])
+    _assert(ctrl.num_fixtures == 0, "empty patch -> no fixtures")
+    before = list(ctrl.present)
+    ctrl.handle_note_on(0, 1, 127)
+    _assert(ctrl.present == before, "any note is a no-op on an empty patch (no crash)")
+
+
 def main():
     test_channel_selects_fixture()
     test_offset_and_channel_bounds_are_safe()
     test_note5_sets_channel_not_manual_control()
     test_bank_and_scene_verbs()
     test_blackout_verbs_and_global_song_parts()
+    test_repatch_hot_swaps_routing()
+    test_repatch_to_empty_is_safe()
     print("\nALL TESTS PASSED")
 
 
