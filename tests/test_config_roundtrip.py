@@ -257,6 +257,64 @@ def test_unknown_fixture_type_skipped():
         _assert(cfg.fixtures[0].type == "blinder", "valid fixture still parsed")
 
 
+def test_channel_auto_assigned_in_list_order():
+    print("test_channel_auto_assigned_in_list_order")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        # SHIPPED entries omit "channel" (legacy patch).
+        shipped.write_text(json.dumps(SHIPPED))
+        cfg = Config.load()
+        _assert([f.channel for f in cfg.fixtures] == [0, 1],
+                "missing channels are assigned 0,1,... in list order (back-compat)")
+
+
+def test_explicit_and_missing_channels_dont_collide():
+    print("test_explicit_and_missing_channels_dont_collide")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        # First fixture pins channel 0 explicitly; the others must skip it.
+        shipped.write_text(json.dumps({"fixtures": [
+            {"type": "blinder", "dmx_start": 33, "channel": 0},
+            {"type": "ledbar", "dmx_start": 1},
+            {"type": "blinder", "dmx_start": 65},
+        ]}))
+        cfg = Config.load()
+        chans = [f.channel for f in cfg.fixtures]
+        _assert(chans == [0, 1, 2], f"missing channels fill free slots (got {chans})")
+        _assert(len(set(chans)) == 3, "no duplicate channels assigned")
+
+
+def test_channel_roundtrips():
+    print("test_channel_roundtrips")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        cfg = Config.load()
+        cfg.fixtures[0].channel = 5
+        cfg.fixtures[1].channel = 2
+        cfg.mark_patch_dirty()
+        cfg.save()
+
+        data = json.loads(prefs.read_text())
+        _assert([f["channel"] for f in data["fixtures"]] == [5, 2],
+                "explicit channels are serialized")
+        cfg2 = Config.load()
+        _assert([f.channel for f in cfg2.fixtures] == [5, 2],
+                "explicit channels round-trip from userprefs")
+
+
+def test_next_free_channel():
+    print("test_next_free_channel")
+    cfg = Config()
+    cfg.fixtures = [
+        FixtureInstance(type="ledbar", dmx_start=1, channel=0),
+        FixtureInstance(type="blinder", dmx_start=33, channel=2),
+    ]
+    _assert(cfg.next_free_channel() == 1, "returns the lowest free channel (the gap)")
+    cfg.fixtures.append(FixtureInstance(type="blinder", dmx_start=65, channel=1))
+    _assert(cfg.next_free_channel() == 3, "skips all used channels")
+
+
 def main():
     test_first_launch_creates_userprefs()
     test_userprefs_roundtrip()
@@ -267,6 +325,10 @@ def main():
     test_patch_persistence_roundtrip()
     test_fixture_name_roundtrips()
     test_unknown_fixture_type_skipped()
+    test_channel_auto_assigned_in_list_order()
+    test_explicit_and_missing_channels_dont_collide()
+    test_channel_roundtrips()
+    test_next_free_channel()
     print("\nALL TESTS PASSED")
 
 

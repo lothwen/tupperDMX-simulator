@@ -113,6 +113,7 @@ class FixtureInstance:
     type: str
     dmx_start: int
     name: str = ""                                             # user alias (optional)
+    channel: int = -1                                          # stable MIDI channel (0-15); -1 = unassigned
     x: int = 0
     y: int = 0
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
@@ -160,6 +161,15 @@ class Config:
     def mark_patch_dirty(self) -> None:
         """Flag the fixture patch as edited so save() persists it to userprefs.json."""
         self._patch_dirty = True
+
+    def next_free_channel(self) -> int:
+        """Lowest non-negative MIDI channel not used by any patched fixture.
+        The designer's auto-default when adding a fixture."""
+        used = {f.channel for f in self.fixtures if f.channel >= 0}
+        ch = 0
+        while ch in used:
+            ch += 1
+        return ch
 
     @classmethod
     def load(cls) -> "Config":
@@ -296,11 +306,24 @@ class Config:
                 type=fixture_type,
                 dmx_start=Config._validate_int(entry["dmx_start"], 1, 512),
                 name=str(entry.get("name", "")),
+                channel=Config._validate_int(entry.get("channel", -1), -1, 15),
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
                 bars=bars,
                 multiply_factor=Config._validate_float(entry.get("multiply_factor", 2.0), 0.1, 10.0),
             ))
+
+        # Assign a stable MIDI channel to any fixture that lacks one. Scanning in
+        # list order means a legacy patch (no channel key) reproduces today's
+        # 0,1,2,... by position, so existing .mid clips stay correctly bound.
+        used = {f.channel for f in fixtures if f.channel >= 0}
+        nxt = 0
+        for f in fixtures:
+            if f.channel < 0:
+                while nxt in used:
+                    nxt += 1
+                f.channel = nxt
+                used.add(nxt)
 
         return fixtures
 

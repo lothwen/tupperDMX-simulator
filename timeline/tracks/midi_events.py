@@ -860,9 +860,10 @@ class MidiEventsTrack(BaseTrack):
     def __init__(self, timeline_manager, content_scene, header_scene,
                  fixture_index: int = 0, label: str = "MIDI Events"):
         super().__init__(timeline_manager, content_scene, header_scene)
-        # This track owns one patched fixture, identified by its index in the
-        # patch (== the MIDI channel that routes to it). label is the header
-        # text shown for the fixture.
+        # This track owns one patched fixture, identified by its stable MIDI
+        # channel (the binding key — independent of the track's display row,
+        # which is ordered by DMX address). label is the header text shown for
+        # the fixture.
         self.fixture_index = fixture_index
         self.label = label
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
@@ -893,9 +894,11 @@ class MidiEventsTrack(BaseTrack):
         if mm is None or not mm.is_song_part(event):
             return False
         home = mm._event_fixture(event)
-        # No channel (synthetic / no patch) -> the first lane is home.
+        # No channel (synthetic / no patch) -> the top display lane is home.
         if not isinstance(home, int):
-            return self.fixture_index == 0
+            tracks = (self.timeline_manager.midi_events_tracks
+                      if self.timeline_manager else None)
+            return bool(tracks) and tracks[0] is self
         return home == self.fixture_index
 
     def get_track_height(self) -> int:

@@ -29,15 +29,21 @@ from timeline.manager import Timeline
 
 @dataclass
 class FakeFixture:
-    """Minimal stand-in for a patched fixture (type + optional name)."""
+    """Minimal stand-in for a patched fixture (type + DMX address + stable
+    MIDI channel + optional name)."""
     type: str
+    dmx_start: int
+    channel: int
     name: str = ""
 
 
-# [ledbar@0, blinder@1, blinder@2] — two blinders so the per-instance (not
-# per-type) split is exercised. The patch index is the MIDI channel that selects
-# each fixture; clips are stamped with that channel (as the clip library does).
-PATCH = [FakeFixture("ledbar"), FakeFixture("blinder"), FakeFixture("blinder")]
+# ledbar@1 ch0, blinder@33 ch1, blinder@65 ch2 — two blinders so the per-instance
+# (not per-type) split is exercised. The stable channel selects each fixture;
+# clips are stamped with that channel (as the clip library does). Tracks display
+# by DMX address; here DMX order happens to match channel order.
+PATCH = [FakeFixture("ledbar", 1, 0),
+         FakeFixture("blinder", 33, 1),
+         FakeFixture("blinder", 65, 2)]
 LEDBAR_CH, BLINDER1_CH, BLINDER2_CH = 0, 1, 2
 # Standalone single-note clips. Note 1 drives the ledbar's first DMX channel;
 # note 26 is a scene-load verb on a blinder (resolved per-fixture via
@@ -87,7 +93,7 @@ def test_one_track_per_fixture():
     _assert(labels == ["Ledbar", "Blinder 1", "Blinder 2"],
             f"labels disambiguate repeated types (got {labels})")
     idxs = [t.fixture_index for t in tl.midi_events_tracks]
-    _assert(idxs == [0, 1, 2], "tracks carry their patch index in order")
+    _assert(idxs == [0, 1, 2], "tracks carry their stable channel in DMX order")
 
 
 def test_membership_by_channel():
@@ -150,6 +156,36 @@ def test_blackout_scoped_to_its_fixture():
             "channel-2 BLACKOUT end-marker belongs only to Blinder 2")
 
 
+def test_display_order_by_dmx_binding_by_channel():
+    """Tracks lay out top-to-bottom by DMX address, but each binds to its
+    fixture's stable channel — the two are decoupled. Here a fixture with the
+    HIGHEST channel has the LOWEST DMX address, so it must render on top while
+    still matching only its own channel's clips."""
+    print("test_display_order_by_dmx_binding_by_channel")
+    _ensure_app()
+    # channel order [2, 0, 1] vs DMX order [1, 33, 65] -> display must reorder.
+    patch = [FakeFixture("ledbar", 1, 2),
+             FakeFixture("blinder", 33, 0),
+             FakeFixture("blinder", 65, 1)]
+    m = MidiManager(note_layout.build_note_map(), fixtures=patch)
+    m.create_empty_track()
+    m.set_song_duration(240.0)
+    tl = Timeline(midi_manager=m, fixtures=patch)
+
+    # Display order follows DMX address (ledbar@1 on top), but fixture_index
+    # carries each fixture's stable channel.
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [2, 0, 1],
+            "tracks ordered by DMX address, fixture_index = stable channel")
+
+    # A clip on channel 2 (the ledbar) matches only the top track.
+    m.add_event(LEDBAR_CLIP, 1.0, 100, channel=2)
+    e = _event(m, LEDBAR_CLIP, channel=2)
+    top, mid, bot = tl.midi_events_tracks
+    _assert(top.matches_filter(e) and not mid.matches_filter(e)
+            and not bot.matches_filter(e),
+            "channel-2 clip binds to the top (ledbar) lane regardless of order")
+
+
 def test_empty_patch_no_tracks():
     print("test_empty_patch_no_tracks")
     _ensure_app()
@@ -168,6 +204,7 @@ def main():
     test_add_event_stamps_channel()
     test_song_part_on_every_track()
     test_blackout_scoped_to_its_fixture()
+    test_display_order_by_dmx_binding_by_channel()
     test_empty_patch_no_tracks()
     print("\nALL TESTS PASSED")
 

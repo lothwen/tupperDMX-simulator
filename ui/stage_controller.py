@@ -337,10 +337,16 @@ class StageController(QObject):
         for obj in self.get_all_fixtures():
             obj.refresh_label()
 
-    def add_fixture(self, type_name: str, dmx_start: int, x: int, y: int) -> FixtureInstance:
-        """Append a new fixture instance to the patch and render it incrementally."""
+    def add_fixture(self, type_name: str, dmx_start: int, x: int, y: int,
+                    channel: int = -1) -> FixtureInstance:
+        """Append a new fixture instance to the patch and render it incrementally.
+
+        `channel` is the fixture's stable MIDI channel (what clips bind to);
+        defaults to the lowest free channel when not supplied."""
+        if channel < 0:
+            channel = self.config.next_free_channel()
         instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
-                                   x=int(x), y=int(y))
+                                   channel=int(channel), x=int(x), y=int(y))
         # A ledbar renders from bars[]; seed all its bars (count from the type
         # def) as a horizontal row centred on the drop point.
         if type_name == "ledbar" and not instance.bars:
@@ -354,7 +360,8 @@ class StageController(QObject):
         self.config.fixtures.append(instance)
         self._add_render_group(instance)
         self.fixture_added.emit(instance)
-        self.logger.info(f"Added fixture '{type_name}' at DMX {dmx_start}")
+        self.logger.info(
+            f"Added fixture '{type_name}' at DMX {dmx_start} (channel {channel})")
         return instance
 
     def remove_selected(self) -> List[FixtureInstance]:
