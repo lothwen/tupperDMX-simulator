@@ -186,6 +186,61 @@ def test_display_order_by_dmx_binding_by_channel():
             "channel-2 clip binds to the top (ledbar) lane regardless of order")
 
 
+def test_rebuild_for_patch_adds_and_removes_tracks():
+    print("test_rebuild_for_patch_adds_and_removes_tracks")
+    _, tl = _make()
+    _assert(len(tl.midi_events_tracks) == 3, "starts with 3 tracks")
+
+    # Add a 4th fixture (par_rgb @17 ch3): tracks re-sort by DMX address,
+    # ledbar@1, par_rgb@17, blinder@33, blinder@65 -> channels 0, 3, 1, 2.
+    added = list(PATCH) + [FakeFixture("par_rgb", 17, 3)]
+    tl.rebuild_for_patch(added)
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [0, 3, 1, 2],
+            "rebuild added a lane, re-sorted by DMX, bound by stable channel")
+    _assert(tl.midi_events_resize_handle is not None, "midi resize handle rebuilt")
+
+    # Remove the ledbar: its lane drops, survivors keep their channels.
+    tl.rebuild_for_patch([f for f in added if f.type != "ledbar"])
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [3, 1, 2],
+            "removing a fixture drops only its lane")
+
+
+def test_rebuild_for_patch_keeps_clip_binding():
+    print("test_rebuild_for_patch_keeps_clip_binding")
+    m, tl = _make()
+    m.add_event(BLINDER_CLIP, 2.0, 100, channel=2)  # 2nd blinder clip
+    tl.refresh_from_manager()
+    tl.rebuild_for_patch(list(PATCH) + [FakeFixture("par_rgb", 17, 3)])
+
+    e = _event(m, BLINDER_CLIP, channel=2)
+    track2 = next(t for t in tl.midi_events_tracks if t.fixture_index == 2)
+    track3 = next(t for t in tl.midi_events_tracks if t.fixture_index == 3)
+    _assert(track2.matches_filter(e), "clip still binds to its channel after rebuild")
+    _assert(not track3.matches_filter(e), "clip is not on the newly added lane")
+
+
+def test_rebuild_to_empty_patch():
+    print("test_rebuild_to_empty_patch")
+    _, tl = _make()
+    tl.rebuild_for_patch([])
+    _assert(tl.midi_events_tracks == [], "rebuild to empty patch drops all lanes")
+    _assert(tl.midi_events_resize_handle is None, "no midi resize handle when empty")
+    tl.refresh_from_manager()  # must not raise with zero tracks
+    _assert(True, "refresh after emptying the patch is a no-op")
+
+
+def test_manager_update_fixtures_reflects_new_patch():
+    print("test_manager_update_fixtures_reflects_new_patch")
+    _ensure_app()
+    from fixture_library import load_fixture_defs
+    m = MidiManager(note_layout.build_note_map(), fixtures=[FakeFixture("ledbar", 1, 0)])
+    m.update_fixtures([FakeFixture("ledbar", 1, 0), FakeFixture("blinder", 33, 1)])
+    _assert(m.channel_note_map(1) != m.channel_note_map(0),
+            "channel 1 now resolves to the blinder (differs from the ledbar at ch0)")
+    _assert(len(m.channel_note_map(1)) == load_fixture_defs()["blinder"].channel_count,
+            "channel 1's note map matches the blinder's channel count")
+
+
 def test_empty_patch_no_tracks():
     print("test_empty_patch_no_tracks")
     _ensure_app()
@@ -205,6 +260,10 @@ def main():
     test_song_part_on_every_track()
     test_blackout_scoped_to_its_fixture()
     test_display_order_by_dmx_binding_by_channel()
+    test_rebuild_for_patch_adds_and_removes_tracks()
+    test_rebuild_for_patch_keeps_clip_binding()
+    test_rebuild_to_empty_patch()
+    test_manager_update_fixtures_reflects_new_patch()
     test_empty_patch_no_tracks()
     print("\nALL TESTS PASSED")
 

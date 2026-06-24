@@ -80,7 +80,14 @@ class MainWindow(QMainWindow):
         
         # Create UI
         self.setup_ui()
-        
+
+        # Live-patch baselines: the running software controller (None until a
+        # localhost Art-Net worker spawns one) and the last-applied patch
+        # signatures, so _on_patch_changed only propagates real changes.
+        self.software_controller = None
+        self._last_ui_sig = self._patch_ui_signature()
+        self._last_dmx_sig = self._patch_dmx_signature()
+
         # Load current song from playlist
         current_song = self.config.get_current_song()
         if current_song:
@@ -595,11 +602,39 @@ class MainWindow(QMainWindow):
             self.fixture_inspector.adjustSize()
         stage_view.reposition_overlays()
 
+    def _patch_ui_signature(self):
+        """What the timeline / clip library / DMX monitor depend on (per fixture).
+        Excludes x/y so a stage drag-move doesn't churn the UI."""
+        return tuple((f.type, f.dmx_start, f.channel, f.name)
+                     for f in self.config.fixtures)
+
+    def _patch_dmx_signature(self):
+        """What the software DMX engine depends on (per fixture). Excludes the
+        name so a rename never re-patches (and never blacks out) the rig."""
+        return tuple((f.type, f.dmx_start, f.channel)
+                     for f in self.config.fixtures)
+
     def _on_patch_changed(self):
-        """Persist a fixture-patch edit. The software DMX engine picks up a new
-        patch on the next DMX-source (re)connect; the stage render is immediate."""
+        """Persist a fixture-patch edit and propagate it live: rebuild the
+        timeline tracks, refresh the clip library + DMX monitor, and hot-swap the
+        running software DMX engine — each gated by a cheap signature so stage
+        drag-moves (and, for the engine, renames) don't cause needless churn."""
         self.config.mark_patch_dirty()
         self.save_config()
+
+        ui_sig = self._patch_ui_signature()
+        if ui_sig != self._last_ui_sig:
+            self._last_ui_sig = ui_sig
+            self.midi_manager.update_fixtures(self.config.fixtures)
+            self.timeline.rebuild_for_patch(self.config.fixtures)
+            self.clip_library.refresh_configuration(self.config)
+            self.dmx_display.refresh_configuration(self.config)
+
+        dmx_sig = self._patch_dmx_signature()
+        controller = getattr(self, "software_controller", None)
+        if controller is not None and dmx_sig != self._last_dmx_sig:
+            self._last_dmx_sig = dmx_sig
+            controller.repatch(self.config.fixtures)
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""

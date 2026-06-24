@@ -268,15 +268,11 @@ class Timeline(QWidget):
                 labels.append(cap)
         return labels
 
-    def _init_tracks(self):
-        """Initialize all timeline tracks (one MIDI track per patched fixture).
-
-        Tracks are laid out top-to-bottom by DMX address (presentation), but
-        each track binds to its fixture's stable MIDI channel (identity), so
-        reordering/insert/remove never re-binds existing clips."""
-        self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
-        self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
-
+    def _build_midi_event_tracks(self):
+        """(Re)build the MidiEventsTrack list from the current patch — objects
+        only, no drawing. Tracks are laid out top-to-bottom by DMX address
+        (presentation), but each binds to its fixture's stable MIDI channel
+        (identity), so reordering/insert/remove never re-binds existing clips."""
         display = sorted(self.fixtures, key=lambda f: getattr(f, "dmx_start", 0))
         labels = self._fixture_labels(display)
 
@@ -291,6 +287,17 @@ class Timeline(QWidget):
                             fixture_index=_channel(inst, i), label=labels[i])
             for i, inst in enumerate(display)
         ]
+
+    def _init_tracks(self):
+        """Initialize all timeline tracks (one MIDI track per patched fixture).
+
+        Tracks are laid out top-to-bottom by DMX address (presentation), but
+        each track binds to its fixture's stable MIDI channel (identity), so
+        reordering/insert/remove never re-binds existing clips."""
+        self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
+        self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
+
+        self._build_midi_event_tracks()
 
         # Draw initial track layout
         self.ruler_track.draw_header()
@@ -318,8 +325,13 @@ class Timeline(QWidget):
         self.waveform_resize_handle.height_committed.connect(self._on_waveform_height_committed)
         self.header_scene.addItem(self.waveform_resize_handle)
 
-        # Single MIDI events handle (all fixture tracks share one height). Sits
-        # at the bottom of the last track; dragging resizes every MIDI track.
+        self._create_midi_resize_handle()
+        self._reposition_resize_handles()
+
+    def _create_midi_resize_handle(self):
+        """Create the single shared MIDI-events resize handle (all fixture tracks
+        share one height). No-op when the patch is empty. Sits at the bottom of
+        the last track; dragging resizes every MIDI track."""
         if self.midi_events_tracks:
             self.midi_events_resize_handle = TrackResizeHandle(
                 self.HEADER_WIDTH, self.MIN_TRACK_HEIGHT,
@@ -329,7 +341,26 @@ class Timeline(QWidget):
             self.midi_events_resize_handle.height_committed.connect(self._on_midi_events_height_committed)
             self.header_scene.addItem(self.midi_events_resize_handle)
 
-        self._reposition_resize_handles()
+    def rebuild_for_patch(self, fixtures):
+        """Rebuild the MIDI tracks in place for a changed fixture patch (designer
+        add/remove/dmx/channel/name edit), preserving the ruler/waveform tracks
+        and their controls. Safe to call synchronously — the trigger is a
+        designer button, not a timeline-scene event."""
+        for track in self.midi_events_tracks:
+            track.clear_items()
+        self.midi_events_tracks = []
+        # The shared MIDI resize handle is rebuilt to match the new track count.
+        if self.midi_events_resize_handle is not None:
+            if self.midi_events_resize_handle.scene():
+                self.header_scene.removeItem(self.midi_events_resize_handle)
+            self.midi_events_resize_handle = None
+
+        self.fixtures = list(fixtures or [])
+        self._build_midi_event_tracks()
+        self._create_midi_resize_handle()
+        # Reposition headers/content, redraw clips onto the new lanes (by
+        # channel), refresh grid/playhead, and place the handles.
+        self._reflow_layout(redraw_waveform=False)
 
     def _reposition_resize_handles(self):
         """Place each resize handle at the bottom border of its track header."""

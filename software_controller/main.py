@@ -302,10 +302,11 @@ class DMXController:
     # ------------------------------------------------------------------
     def _resolve_patch(self, fixtures):
         """Map config fixture instances (type name + dmx_start) onto
-        (FixtureType, dmx_base) pairs. Unknown types are skipped. When no
-        fixtures are injected (standalone / tests), the shipped config.json patch
-        is used, so the default matches the live app instead of duplicating it."""
-        if not fixtures:
+        (FixtureType, dmx_base) pairs. Unknown types are skipped. When no patch
+        is injected (``None`` — standalone / tests), the shipped config.json patch
+        is used, so the default matches the live app instead of duplicating it.
+        An explicit empty list is honoured as an empty patch (repatch to none)."""
+        if fixtures is None:
             fixtures = shipped_fixtures()
 
         patch = []
@@ -339,6 +340,20 @@ class DMXController:
             self._fx_by_channel[ch] = len(self.fixtures)
             self.fixtures.append(s)
         self.blend_start = [0] * blend_base
+
+    def repatch(self, fixtures):
+        """Hot-swap the patch on the running controller. Held under self.lock so
+        the MIDI handler and DMX loop (both lock-guarded) never observe a
+        half-updated patch. present/target are fixed-size and cleared, so stale
+        values from the old layout don't bleed onto the re-addressed fixtures."""
+        with self.lock:
+            for i in range(UNIVERSE_SIZE):
+                self.present[i] = 0
+                self.target[i] = 0
+            self.init_fixtures(fixtures)
+            self.num_fixtures = len(self.fixtures)
+            self.blackout_all_state = False
+        self.logger.info(f"Repatched: {self.num_fixtures} fixtures")
 
     # ------------------------------------------------------------------
     # Channel accessors (address channels by role/meaning)

@@ -97,12 +97,17 @@ def test_dmx_output_unchanged():
             "config-driven and default controllers emit identical present[]")
 
 
-def test_empty_fixtures_falls_back_to_default():
-    print("test_empty_fixtures_falls_back_to_default")
-    fallback = DMXController([])
-    _assert(fallback.num_fixtures == 3, "empty fixture list falls back to default patch")
-    _assert([f.dmx_base for f in fallback.fixtures] == [1, 33, 65],
+def test_none_defaults_but_explicit_empty_is_empty():
+    print("test_none_defaults_but_explicit_empty_is_empty")
+    # No patch injected (None) falls back to the shipped default...
+    default = DMXController()
+    _assert(default.num_fixtures == 3, "no patch (None) falls back to the default")
+    _assert([f.dmx_base for f in default.fixtures] == [1, 33, 65],
             "fallback patch matches the shipped addresses")
+    # ...but an explicit empty list is honoured (e.g. the user removed every
+    # fixture, or repatch([])), so the controller routes nothing.
+    empty = DMXController([])
+    _assert(empty.num_fixtures == 0, "explicit empty patch yields no fixtures")
 
 
 def test_generic_fixture_inert_and_output_unchanged():
@@ -123,7 +128,7 @@ def test_generic_fixture_inert_and_output_unchanged():
 def main():
     test_patch_matches_legacy_default()
     test_dmx_output_unchanged()
-    test_empty_fixtures_falls_back_to_default()
+    test_none_defaults_but_explicit_empty_is_empty()
     test_generic_fixture_inert_and_output_unchanged()
     print("\nALL TESTS PASSED")
 
