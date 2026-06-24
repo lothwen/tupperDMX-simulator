@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
     QPushButton, QComboBox, QSpinBox, QLabel, QLineEdit, QDialogButtonBox,
+    QMessageBox,
 )
 
 from tupperlogger import get_logger
@@ -220,6 +221,21 @@ class FixtureInspector(QWidget):
         self._notify()
 
     def _on_delete(self) -> None:
+        if self._current is None:
+            return
+        name = self._current.name or self._current.type
+        detail = ""
+        bar_count = len(self._current.bars)
+        if bar_count > 1:
+            detail = f" All {bar_count} bars will be removed."
+        reply = QMessageBox.question(
+            self, "Delete fixture",
+            f"Delete '{name}'?{detail}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         removed = self._stage.remove_selected()
         if removed:
             self._notify()

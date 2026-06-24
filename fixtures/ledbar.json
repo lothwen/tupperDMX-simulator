@@ -1,6 +1,7 @@
 {
   "name": "ledbar",
   "render": "bar",
+  "bar_count": 8,
   "channels": [
     {"field": "brightness", "role": "brightness", "flags": ["blend", "knob_level"]},
     {"field": "blue",       "role": "blue",       "flags": ["blend"]},
