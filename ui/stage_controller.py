@@ -21,6 +21,9 @@ DEFAULT_SCENE_HEIGHT = 1024
 # scenario designer is active. Purely a visual aid — no snapping (yet).
 GRID_SPACING = 96
 
+# Horizontal spacing (scene units) between the bars of a freshly added ledbar.
+LEDBAR_BAR_SPACING = 175
+
 
 # Render dispatch lives in StageController._make_render_objs: the two built-in
 # types keep their bespoke classes (LedBar / Blinder); every other (library)
@@ -186,6 +189,15 @@ class StageController(QObject):
 
         # Setup stage view
         self.scene = QGraphicsScene()
+        # Linear item lookup instead of the BSP tree: this scene mutates heavily
+        # (fixtures added/removed at runtime; ~20Hz DMX redraws). The BSP index
+        # doesn't purge implicitly-removed child items (a LedBar's pixels), so it
+        # kept dangling pointers — the view painted ghosts of deleted fixtures,
+        # hit-testing found removed items (ungrabMouse-without-scene), and a
+        # freed item left the index dangling -> SIGSEGV. NoIndex iterates the
+        # live item list; trivial for a few hundred items, hit-tested only on
+        # mouse events.
+        self.scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.scene.selectionChanged.connect(self._on_selection_changed)
         self.pixmap = QPixmap(background_image_path)
         
@@ -258,11 +270,17 @@ class StageController(QObject):
     def _remove_render_group(self, fixture: FixtureInstance) -> None:
         """Detach + drop the render object(s) for one fixture instance.
 
-        Removes only the targeted items (no full-scene teardown). Items are
-        detached from the scene before their Python refs drop."""
+        Removes only the targeted items (no full-scene teardown). Stops each
+        object's resources (LedBar movie) so a removed bar's animation doesn't
+        keep ticking, then detaches it from the scene before its Python refs
+        drop. Safe freeing relies on the scene's NoIndex item method (see
+        __init__)."""
         for i, (inst, render_objs) in enumerate(self._render_groups):
             if inst is fixture:
                 for obj in render_objs:
+                    cleanup = getattr(obj, "cleanup", None)
+                    if callable(cleanup):
+                        cleanup()
                     for coll in (self.led_bars, self.blinders, self.generic_fixtures):
                         if obj in coll:
                             coll.remove(obj)
@@ -323,9 +341,16 @@ class StageController(QObject):
         """Append a new fixture instance to the patch and render it incrementally."""
         instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
                                    x=int(x), y=int(y))
-        # A ledbar renders from bars[]; seed a single bar at the drop point.
+        # A ledbar renders from bars[]; seed all its bars (count from the type
+        # def) as a horizontal row centred on the drop point.
         if type_name == "ledbar" and not instance.bars:
-            instance.bars = [FixturePosition(x=int(x), y=int(y))]
+            fdef = load_fixture_defs().get(type_name)
+            count = fdef.bar_count if fdef else 1
+            start_x = x - LEDBAR_BAR_SPACING * (count - 1) / 2
+            instance.bars = [
+                FixturePosition(x=int(start_x + i * LEDBAR_BAR_SPACING), y=int(y))
+                for i in range(count)
+            ]
         self.config.fixtures.append(instance)
         self._add_render_group(instance)
         self.fixture_added.emit(instance)

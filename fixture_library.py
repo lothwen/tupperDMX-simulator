@@ -66,6 +66,7 @@ class FixtureDef:
     render: str          # "par" | "bar" | "blinder" | "generic"
     banks: Dict[str, List[dict]]  # bank-name -> list of scene dicts (raw, by field)
     chases: List[dict]            # list of {"banks": [...], "scenes": [...]}
+    bar_count: int = 1   # physical bars to seed for a "bar" fixture (else 1)
 
     @property
     def channel_count(self) -> int:
@@ -149,8 +150,12 @@ def parse_fixture_def(data: dict) -> Optional[FixtureDef]:
     chases: List[dict] = [c for c in chases_data if isinstance(c, dict)] \
         if isinstance(chases_data, list) else []
 
+    bar_count = data.get("bar_count", 1)
+    if not isinstance(bar_count, int) or isinstance(bar_count, bool) or bar_count < 1:
+        bar_count = 1
+
     return FixtureDef(name=name, channels=channels, render=render,
-                      banks=banks, chases=chases)
+                      banks=banks, chases=chases, bar_count=bar_count)
 
 
 def role_index_map(fdef: FixtureDef) -> Dict[int, int]:

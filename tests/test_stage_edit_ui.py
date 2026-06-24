@@ -95,9 +95,21 @@ def test_inspector_populates_and_edits(qapp):
     _assert(calls["patch"] == 2, "a DMX edit notifies the host to persist")
 
 
+def _click_delete_with_confirmation(insp, answer):
+    """Click the inspector's Delete with QMessageBox.question stubbed to ``answer``."""
+    from PyQt6.QtWidgets import QMessageBox
+    orig = QMessageBox.question
+    QMessageBox.question = lambda *a, **k: answer
+    try:
+        insp.findChild(QPushButton, "InspectorDelete").click()
+    finally:
+        QMessageBox.question = orig
+
+
 def test_inspector_delete_removes_and_persists(qapp):
     print("test_inspector_delete_removes_and_persists")
     from ui.fixture_designer import FixtureInspector
+    from PyQt6.QtWidgets import QMessageBox
     sc, cfg = _stage()
     calls = {"patch": 0}
     insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
@@ -107,9 +119,27 @@ def test_inspector_delete_removes_and_persists(qapp):
     sc.generic_fixtures[0].setSelected(True)
     insp.set_instance(inst)
 
-    insp.findChild(QPushButton, "InspectorDelete").click()
-    _assert(inst not in cfg.fixtures, "delete removes the selected instance from the patch")
+    _click_delete_with_confirmation(insp, QMessageBox.StandardButton.Yes)
+    _assert(inst not in cfg.fixtures, "confirmed delete removes the instance from the patch")
     _assert(calls["patch"] == 1, "delete notifies the host to persist")
+
+
+def test_inspector_delete_cancel_keeps_fixture(qapp):
+    print("test_inspector_delete_cancel_keeps_fixture")
+    from ui.fixture_designer import FixtureInspector
+    from PyQt6.QtWidgets import QMessageBox
+    sc, cfg = _stage()
+    calls = {"patch": 0}
+    insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
+
+    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    sc.set_design_mode(True)
+    sc.generic_fixtures[0].setSelected(True)
+    insp.set_instance(inst)
+
+    _click_delete_with_confirmation(insp, QMessageBox.StandardButton.No)
+    _assert(inst in cfg.fixtures, "cancelling the confirmation keeps the fixture")
+    _assert(calls["patch"] == 0, "a cancelled delete does not persist")
 
 
 def test_inspector_close_clears_selection(qapp):
@@ -195,6 +225,7 @@ def main():
     test_toolbar_move_persists(app)
     test_inspector_populates_and_edits(app)
     test_inspector_delete_removes_and_persists(app)
+    test_inspector_delete_cancel_keeps_fixture(app)
     test_inspector_close_clears_selection(app)
     test_fixture_labels(app)
     test_label_follows_fixture(app)
