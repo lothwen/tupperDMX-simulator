@@ -246,16 +246,16 @@ class Timeline(QWidget):
         """Compute total scene height from the current track layout."""
         self.scene_height = self._midi_tracks_bottom() + self.TRACK_SPACING
 
-    def _fixture_labels(self) -> List[str]:
-        """Header label per patched fixture: its name, or the capitalized type
-        (plus a 1-based ordinal when that type appears more than once in the
-        patch) -> e.g. ['Ledbar', 'Blinder 1', 'Blinder 2']."""
+    def _fixture_labels(self, ordered) -> List[str]:
+        """Header label per patched fixture (in display order): its name, or the
+        capitalized type (plus a 1-based ordinal when that type appears more than
+        once in the patch) -> e.g. ['Ledbar', 'Blinder 1', 'Blinder 2']."""
         type_counts: Dict[str, int] = {}
-        for inst in self.fixtures:
+        for inst in ordered:
             type_counts[inst.type] = type_counts.get(inst.type, 0) + 1
         seen: Dict[str, int] = {}
         labels: List[str] = []
-        for inst in self.fixtures:
+        for inst in ordered:
             name = (getattr(inst, "name", "") or "").strip()
             if name:
                 labels.append(name)
@@ -269,15 +269,27 @@ class Timeline(QWidget):
         return labels
 
     def _init_tracks(self):
-        """Initialize all timeline tracks (one MIDI track per patched fixture)."""
+        """Initialize all timeline tracks (one MIDI track per patched fixture).
+
+        Tracks are laid out top-to-bottom by DMX address (presentation), but
+        each track binds to its fixture's stable MIDI channel (identity), so
+        reordering/insert/remove never re-binds existing clips."""
         self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
         self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
 
-        labels = self._fixture_labels()
+        display = sorted(self.fixtures, key=lambda f: getattr(f, "dmx_start", 0))
+        labels = self._fixture_labels(display)
+
+        def _channel(inst, row):
+            # Stable channel for real fixtures; fall back to the display row for
+            # synthetic/test fixtures built without one.
+            ch = getattr(inst, "channel", -1)
+            return ch if ch >= 0 else row
+
         self.midi_events_tracks = [
             MidiEventsTrack(self, self.content_scene, self.header_scene,
-                            fixture_index=i, label=labels[i])
-            for i in range(len(self.fixtures))
+                            fixture_index=_channel(inst, i), label=labels[i])
+            for i, inst in enumerate(display)
         ]
 
         # Draw initial track layout
@@ -922,28 +934,45 @@ class Timeline(QWidget):
             self._schedule_refresh()
 
     def fixture_at_y(self, scene_y: float):
-        """Return the fixture index (patch position) owning `scene_y`, or None.
+        """Return the MIDI channel of the fixture whose lane owns `scene_y`, or
+        None.
 
         Used by clip-library drops to validate that a dropped note targets a
-        matching fixture's track and to stamp the new event's MIDI channel
-        (the channel == the fixture's index in the patch).
+        matching fixture's track and to stamp the new event's MIDI channel.
+        Lanes are laid out by display row (DMX order); the returned value is the
+        fixture's stable channel, not its row.
         """
         height = self.midi_events_track_height
-        for track in self.midi_events_tracks:
-            top = self._midi_track_y(track.fixture_index)
+        for row, track in enumerate(self.midi_events_tracks):
+            top = self._midi_track_y(row)
             if top <= scene_y < top + height:
                 return track.fixture_index
         return None
 
-    def _fixture_type(self, index):
-        """Type name of the patched fixture at `index`, or None."""
-        if index is not None and 0 <= index < len(self.fixtures):
-            return self.fixtures[index].type
+    def _fixture_for_channel(self, channel):
+        """The patched fixture instance with stable `channel`, or None.
+
+        Falls back to positional lookup for synthetic fixtures built without a
+        stable channel (the display row doubles as the channel there)."""
+        if channel is None:
+            return None
+        for inst in self.fixtures:
+            if getattr(inst, "channel", -1) == channel:
+                return inst
+        if 0 <= channel < len(self.fixtures):
+            inst = self.fixtures[channel]
+            if getattr(inst, "channel", -1) < 0:
+                return inst
         return None
 
-    def _fdef(self, index):
-        """FixtureDef of the patched fixture at `index`, or None."""
-        return load_fixture_defs().get(self._fixture_type(index))
+    def _fixture_type(self, channel):
+        """Type name of the patched fixture with stable `channel`, or None."""
+        inst = self._fixture_for_channel(channel)
+        return inst.type if inst else None
+
+    def _fdef(self, channel):
+        """FixtureDef of the patched fixture with stable `channel`, or None."""
+        return load_fixture_defs().get(self._fixture_type(channel))
 
     def _note_is_song_part(self, note: int) -> bool:
         return bool(self.midi_manager

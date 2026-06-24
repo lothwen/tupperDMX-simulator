@@ -108,10 +108,25 @@ class MidiDocument:
 
     # --- patch-aware verb resolution (channel selects the fixture) -----------
 
-    def _fdef_for_channel(self, channel):
-        """The FixtureDef patched at `channel` (its index), or None.
+    def _fixture_by_channel(self, ch):
+        """The patched FixtureInstance whose stable channel is `ch`, or None.
 
-        None for synthetic/test data (no patch) or an out-of-range channel, in
+        Falls back to positional lookup for patches built without explicit
+        channels (synthetic/test data) so legacy channel-equals-index data
+        still resolves."""
+        for f in self._fixtures:
+            if getattr(f, "channel", -1) == ch:
+                return f
+        if 0 <= ch < len(self._fixtures):
+            f = self._fixtures[ch]
+            if getattr(f, "channel", -1) < 0:
+                return f
+        return None
+
+    def _fdef_for_channel(self, channel):
+        """The FixtureDef patched at `channel` (its stable id), or None.
+
+        None for synthetic/test data (no patch) or an unknown channel, in
         which case per-fixture verbs fall back to generic / LED-bar behaviour."""
         if channel is None:
             return None
@@ -119,11 +134,9 @@ class MidiDocument:
             ch = int(channel)
         except (TypeError, ValueError):
             return None
-        if 0 <= ch < len(self._fixtures):
-            ftype = getattr(self._fixtures[ch], "type", None)
-            if ftype:
-                return load_fixture_defs().get(ftype)
-        return None
+        inst = self._fixture_by_channel(ch)
+        ftype = getattr(inst, "type", None) if inst else None
+        return load_fixture_defs().get(ftype) if ftype else None
 
     def _fdef_or_default(self, channel):
         """The FixtureDef at `channel`, or the default fixture's def when no

@@ -134,21 +134,22 @@ class ClipLibraryWidget(QWidget):
     # Population
     # ------------------------------------------------------------------
     def _patched_types(self) -> List[str]:
-        """Unique fixture-type names in patch order (deduped)."""
+        """Unique fixture-type names, deduped, ordered by DMX address (matching
+        the DMX-sorted timeline)."""
         seen: List[str] = []
-        for inst in self.config.fixtures:
+        for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
             t = getattr(inst, "type", None)
             if t and t not in seen:
                 seen.append(t)
         return seen
 
     def _fixture_index_for_type(self, ftype: str) -> int:
-        """Patch index (MIDI channel) of the first patched fixture of
-        ``ftype``. The channel selects which fixture handle_note_on targets;
-        defaults to 0 if the type isn't patched."""
-        for idx, inst in enumerate(self.config.fixtures):
+        """Stable MIDI channel of the first patched fixture of ``ftype`` (by DMX
+        address, matching the displayed section). The channel selects which
+        fixture handle_note_on targets; defaults to 0 if the type isn't patched."""
+        for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
             if getattr(inst, "type", None) == ftype:
-                return idx
+                return getattr(inst, "channel", 0)
         return 0
 
     def _populate(self) -> None:
