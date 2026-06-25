@@ -56,7 +56,6 @@ data_files = [
     ("assets", "assets"),
     ("config.json", "."),
     ("fixtures", "fixtures"),
-    ("software_controller/dmx_config.json", "software_controller"),
 ]
 
 # Hidden imports for PyQt6 and other dependencies
