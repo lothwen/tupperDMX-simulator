@@ -102,7 +102,10 @@ def test_blackout_verbs_and_global_song_parts():
             "note 50 ch0 blacks out the ledbar")
 
     # Song parts (61-69) are global: they run even on an unpatched channel.
+    # (Auto-mode fixtures follow the program; opt them all in for this check.)
     ctrl = DMXController()
+    for fx in ctrl.fixtures:
+        fx.auto = True
     ctrl.handle_note_on(5, 64, 64)  # BREAK on a bogus channel
     b1 = ctrl.fixtures[1]
     _assert((b1.bank, b1.scene, b1.is_blackout) == ("BLINDER_SCENES", 1, False),

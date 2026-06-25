@@ -8,12 +8,13 @@ import io
 import librosa
 import matplotlib.pyplot as plt
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsProxyWidget
+from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsProxyWidget, QGraphicsTextItem
 from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap
-from PyQt6.QtCore import pyqtSignal, QPointF, QRectF
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF
 from PyQt6.QtWidgets import QGraphicsObject, QGraphicsItem
 
 from .base import BaseTrack
+from .song_sections import SongSectionItem
 from tupperlogger import get_logger
 
 
@@ -56,6 +57,10 @@ class WaveformTrack(BaseTrack):
         super().__init__(timeline_manager, content_scene, header_scene)
         self.waveform_item = None
         self._audio_controls_proxy = None  # Persistent proxy — survives header redraws
+        # Song-structure overlay items (kept separate from self.items, which
+        # holds the waveform pixmap, so a section redraw never disposes it).
+        self._section_items = []
+        self._stale_sections = []  # prevents premature C++ destruction
         self.logger = get_logger("timeline.tracks.waveform")
         
     def get_track_height(self) -> int:
@@ -98,6 +103,15 @@ class WaveformTrack(BaseTrack):
             if item.scene():
                 item.scene().removeItem(item)
         self.header_items.clear()
+
+    def clear_items(self):
+        """Also dispose the song-section overlay items (kept outside self.items)."""
+        super().clear_items()
+        for item in self._section_items:
+            if item.scene():
+                item.scene().removeItem(item)
+        self._section_items.clear()
+        self._stale_sections = []
         
     def draw_waveform(self, audio_file: str, y_offset: int):
         """Draw waveform from audio file."""
@@ -166,6 +180,72 @@ class WaveformTrack(BaseTrack):
         """Handle waveform position changes."""
         offset_sec = pos.x() / self.timeline_manager.PIXELS_PER_SECOND
         self.timeline_manager.waveform_offset_changed.emit(offset_sec)
+
+    def draw_song_sections(self, events, y_offset: int):
+        """Draw the song-part arrangement as translucent contiguous boxes over
+        the waveform. `events` are the cached song-part events (already filtered
+        by the manager); each box spans from its marker to the next, the last to
+        the song end. Items live in `_section_items`, disposed defensively (see
+        MidiEventsTrack.redraw_events) so the scene's BSP index never references
+        freed memory."""
+        stale = list(self._section_items)
+        for item in stale:
+            item.setVisible(False)
+            item.setEnabled(False)
+            item.prepareGeometryChange()
+            if item.scene():
+                item.scene().removeItem(item)
+            if hasattr(item, 'deleteLater'):
+                item.deleteLater()
+        self._section_items.clear()
+        self._stale_sections = stale
+
+        if not events:
+            return
+
+        tm = self.timeline_manager
+        pps = tm.PIXELS_PER_SECOND
+        height = self.get_track_height()
+
+        mm = getattr(tm, "midi_manager", None)
+        song_end = (mm.song_end_time() if mm and hasattr(mm, "song_end_time")
+                    else (tm.content_width / pps if pps else 0.0))
+
+        ordered = sorted(events, key=lambda e: e['time'])
+        for i, ev in enumerate(ordered):
+            start_time = ev['time']
+            end_time = ordered[i + 1]['time'] if i + 1 < len(ordered) else song_end
+            duration = max(0.0, end_time - start_time)
+
+            info = ev.get('info')
+            part = getattr(info, 'part', f"Note {ev.get('note')}")
+            color = getattr(info, 'color', '#888888')
+
+            x_pos = start_time * pps
+            width = max(duration * pps, 2)
+
+            box = SongSectionItem(x_pos, y_offset, width, height,
+                                  event_id=ev['id'], part=part, color=color)
+            box.set_timeline(tm)
+            box.setZValue(1)  # above the waveform pixmap (z=0.5)
+            box.move_committed.connect(tm.on_song_section_moved)
+            box.edit_requested.connect(tm.on_midi_event_edit_by_id)
+            box.delete_requested.connect(tm.on_song_section_delete)
+            self.content_scene.addItem(box)
+            self._section_items.append(box)
+
+            # Unscaled label, repositioned by the box during a drag.
+            available = (width - 10) * tm.content_view.transform().m11()
+            fm = tm.content_view.fontMetrics()
+            label = QGraphicsTextItem(tm.get_truncated_text(part, available, fm))
+            label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+            label.setDefaultTextColor(QColor(230, 230, 230))
+            label.setPos(x_pos + 5, y_offset + 3)
+            label.setZValue(2)
+            label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self.content_scene.addItem(label)
+            self._section_items.append(label)
+            box.text_item = label
 
     def redraw(self):
         """Redraw the waveform track."""

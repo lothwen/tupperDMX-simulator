@@ -5,8 +5,8 @@ Locks the Phase-1 subtask-5 behavior:
   * one MIDI events track per fixture in the patch, in patch order;
   * each track shows only its fixture's clips, matched by MIDI channel index
     (= the fixture's patch position), incl. its own BLACKOUT end-marker;
-  * global song-part notes (61-69) appear on every track — editable on their
-    home lane, read-only markers elsewhere;
+  * global song-part notes (61-69) are excluded from every fixture lane and
+    render as an arrangement overlay on the waveform track instead;
   * new clips can be routed to an exact fixture instance by channel.
 
 Run with:
@@ -49,6 +49,7 @@ LEDBAR_CH, BLINDER1_CH, BLINDER2_CH = 0, 1, 2
 # note 26 is a scene-load verb on a blinder (resolved per-fixture via
 # describe_note). The channel selects which fixture in the patch the clip hits.
 LEDBAR_CLIP, BLINDER_CLIP = 1, 26
+INTRO = 61   # a global song-part verb (61-69), channel-agnostic
 CHORUS = 63  # a global song-part verb (61-69), channel-agnostic
 
 
@@ -128,19 +129,27 @@ def test_add_event_stamps_channel():
     _assert(note.get("channel") == 2, "mirrored note stamped with target channel")
 
 
-def test_song_part_on_every_track():
-    print("test_song_part_on_every_track")
+def test_song_parts_render_on_waveform_overlay():
+    print("test_song_parts_render_on_waveform_overlay")
+    from timeline.tracks.song_sections import SongSectionItem
     m, tl = _make()
-    m.add_event(CHORUS, 5.0, 100)  # global song part -> no channel; home lane 0
+    m.add_event(CHORUS, 5.0, 100)  # global song parts -> no channel
+    m.add_event(INTRO, 1.0, 100)
     chorus = _event(m, CHORUS)
     _assert(m.is_song_part(chorus), "CHORUS is a song part")
-    t0, t1, t2 = tl.midi_events_tracks
-    _assert(t0.matches_filter(chorus) and t1.matches_filter(chorus)
-            and t2.matches_filter(chorus), "song part appears on every track")
-    _assert(t0._is_home_song_part(chorus), "track 0 (channel 0) is the home lane")
-    _assert(not t1._is_home_song_part(chorus)
-            and not t2._is_home_song_part(chorus),
-            "blinder lanes render it as a read-only marker")
+
+    # Song parts no longer live on ANY fixture lane.
+    for t in tl.midi_events_tracks:
+        _assert(not t.matches_filter(chorus),
+                "song part is excluded from every fixture lane")
+
+    # They render as contiguous boxes on the waveform arrangement overlay.
+    tl.refresh_from_manager()
+    boxes = [it for it in tl.waveform_track._section_items
+             if isinstance(it, SongSectionItem)]
+    _assert(len(boxes) == 2, "two markers -> two section boxes")
+    xs = sorted(b.pos().x() for b in boxes)
+    _assert(xs[0] < xs[1], "boxes laid out left-to-right by time")
 
 
 def test_blackout_scoped_to_its_fixture():
@@ -257,7 +266,7 @@ def main():
     test_one_track_per_fixture()
     test_membership_by_channel()
     test_add_event_stamps_channel()
-    test_song_part_on_every_track()
+    test_song_parts_render_on_waveform_overlay()
     test_blackout_scoped_to_its_fixture()
     test_display_order_by_dmx_binding_by_channel()
     test_rebuild_for_patch_adds_and_removes_tracks()

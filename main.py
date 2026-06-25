@@ -463,6 +463,9 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Software controller changed: {controller}")
         self.software_controller = controller
         self.midi_manager.set_software_controller(controller)
+        # A fresh controller starts with auto off on every fixture (no
+        # persistence), so re-sync the per-track 'A' buttons.
+        self.timeline.refresh_auto_buttons()
 
     def _preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) to the current

@@ -39,6 +39,7 @@ def test_palette_persists_across_manual_takeover():
 
     ctrl = DMXController()
     led = ctrl.fixtures[0]
+    led.auto = True  # opt the LED into the song-part program
 
     # START stores a multi-color palette but leaves cycling off.
     ctrl.handle_note_on(0, START, 64)
