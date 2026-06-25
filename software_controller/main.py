@@ -260,6 +260,7 @@ class Fixture:
     last_chase_change: float = 0
     last_palette_change: float = 0
     song_part_triggered: bool = False
+    auto: bool = False       # follows the song-part program (toggled per fixture)
     # Derived once in init_fixtures():
     base: int = 0        # offset into present[]/target[] (= dmx_base - 1)
     blend_base: int = 0  # offset into blend_start[] for this fixture
@@ -574,6 +575,20 @@ class DMXController:
             if other != fx and self.fixtures[other].song_part_triggered:
                 self.blackout_fixture(other)
 
+    def set_fixture_auto(self, channel, enabled):
+        """Opt a fixture (by its stable MIDI channel) into/out of the song-part
+        program. In-memory only — not persisted across patch swaps/restarts."""
+        with self.lock:
+            fx = self._fx_by_channel.get(channel)
+            if fx is not None:
+                self.fixtures[fx].auto = bool(enabled)
+
+    def is_fixture_auto(self, channel):
+        """True if the fixture on `channel` is following the song-part program."""
+        with self.lock:
+            fx = self._fx_by_channel.get(channel)
+            return bool(fx is not None and self.fixtures[fx].auto)
+
     # ------------------------------------------------------------------
     # Note-map helpers (a note is a universal verb; the channel picks the
     # fixture; each verb is resolved against that fixture's own def)
@@ -724,10 +739,12 @@ class DMXController:
         if part not in SONG_PARTS:
             return
 
-        # Fixtures whose type carries a song-part program are owned by the
-        # automatic show; leave anything else (e.g. a generic wash) untouched.
+        # Only fixtures opted into auto mode follow the song-part program; a
+        # fixture also needs a program to do anything. Everything else (manual
+        # fixtures, a generic wash) is left untouched.
         managed = [fx for fx in range(self.num_fixtures)
-                   if self.fixtures[fx].type.song_part_program]
+                   if self.fixtures[fx].auto
+                   and self.fixtures[fx].type.song_part_program]
 
         for fx in managed:
             self.blackout_fixture(fx)
