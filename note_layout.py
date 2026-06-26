@@ -285,6 +285,57 @@ def scene_rgb_from_notes(fdef: FixtureDef, velocity_by_note: Dict[int, int]
 
 
 # ---------------------------------------------------------------------------
+# Song-part program (the auto-mode arrangement, data-driven from "song_parts").
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SongPartRef:
+    """One scene or chase a fixture runs for a song part, indexed from the
+    ``"song_parts"`` tags on its def. For chases ``bank`` is "" and ``index`` is
+    the chase index; for scenes ``bank``/``index`` locate the scene in a bank.
+    Single source for both the runtime program builder
+    (software_controller._build_song_part_program) and the timeline auto-mode
+    visualization (MidiEventsTrack)."""
+    is_chase: bool
+    bank: str
+    index: int
+
+
+def song_part_refs(fdef: FixtureDef) -> Dict[str, List[SongPartRef]]:
+    """``{part-name: [SongPartRef, ...]}`` indexed from the ``"song_parts"`` tags
+    on `fdef`'s scenes and chases — i.e. what auto mode may run per song part."""
+    program: Dict[str, List[SongPartRef]] = {}
+    for bank_name, scenes in fdef.banks.items():
+        for idx, scene in enumerate(scenes):
+            for part in scene.get("song_parts", []):
+                program.setdefault(part, []).append(SongPartRef(False, bank_name, idx))
+    for idx, chase in enumerate(fdef.chases):
+        for part in chase.get("song_parts", []):
+            program.setdefault(part, []).append(SongPartRef(True, "", idx))
+    return program
+
+
+def song_part_clip_info(fdef: Optional[FixtureDef], part: str) -> Optional[NoteInfo]:
+    """Label/colour for the auto-mode visualization clip of `part` on `fdef`.
+
+    None when the fixture has nothing tagged for `part` (the lane shows no clip
+    there). Otherwise the name of the FIRST tagged scene/chase (with a ``" +N"``
+    suffix when several are tagged, since the runtime pick is random), coloured
+    by the song part's own palette colour — the same per-part colour the
+    waveform arrangement overlay uses, so every CHORUS/VERSE/etc. reads alike."""
+    if fdef is None:
+        return None
+    refs = song_part_refs(fdef).get(part) or []
+    if not refs:
+        return None
+    ref = refs[0]
+    name = (_chase_name(fdef, ref.index) if ref.is_chase
+            else _scene_name(fdef, ref.index, ref.bank)) or part
+    if len(refs) > 1:
+        name = f'{name} +{len(refs) - 1}'
+    return NoteInfo(name, _SONG_PART_COLORS.get(part, _NEUTRAL))
+
+
+# ---------------------------------------------------------------------------
 # Fixture-agnostic note map (for the renderer / codec / edit dialog).
 # ---------------------------------------------------------------------------
 def build_note_map() -> Dict[str, NoteInfo]:

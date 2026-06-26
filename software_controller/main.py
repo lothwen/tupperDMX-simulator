@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from fixture_library import load_fixture_defs
 from config import shipped_fixtures
 from tupperlogger import get_logger
+import note_layout
 
 
 # Constants from the Arduino code
@@ -215,17 +216,11 @@ def build_fixture_types():
 
 def _build_song_part_program(fdef):
     """Index the "song_parts" tags on a fixture def's scenes and chases into a
-    {part-name: [SongPartEntry]} map. Read from the raw fdef dicts because
-    _scene_from_dict drops the tag from the runtime scene namespaces."""
-    program = {}
-    for bank_name, scenes in fdef.banks.items():
-        for idx, scene in enumerate(scenes):
-            for part in scene.get("song_parts", []):
-                program.setdefault(part, []).append(SongPartEntry(False, bank_name, idx))
-    for idx, chase in enumerate(fdef.chases):
-        for part in chase.get("song_parts", []):
-            program.setdefault(part, []).append(SongPartEntry(True, "", idx))
-    return program
+    {part-name: [SongPartEntry]} map. Delegates the tag walk to
+    note_layout.song_part_refs (the single source shared with the timeline
+    auto-mode visualization) and maps each ref onto an engine SongPartEntry."""
+    return {part: [SongPartEntry(r.is_chase, r.bank, r.index) for r in refs]
+            for part, refs in note_layout.song_part_refs(fdef).items()}
 
 
 # (The UI stage renderer keeps its own name->render-class dispatch in
