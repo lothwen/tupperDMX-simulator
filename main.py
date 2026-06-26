@@ -466,6 +466,9 @@ class MainWindow(QMainWindow):
         # A fresh controller starts with auto off on every fixture (no
         # persistence), so re-sync the per-track 'A' buttons.
         self.timeline.refresh_auto_buttons()
+        # Redraw so the auto-mode song-part visualization appears when a
+        # software controller attaches and clears when it detaches.
+        self.timeline._schedule_refresh()
 
     def _preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) to the current
