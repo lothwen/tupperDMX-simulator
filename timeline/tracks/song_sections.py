@@ -108,8 +108,12 @@ class SongSectionItem(QGraphicsObject):
         return x
 
     def _reposition_text(self, new_x: float):
+        """Keep the label horizontally centered in the box as it drags (the
+        label ignores view transforms, so its width is in device px)."""
         if self.text_item is not None:
-            self.text_item.setPos(new_x + 5, self.text_item.pos().y())
+            tw = self.text_item.boundingRect().width()
+            centered_x = new_x + self.rect.width() / 2 - (tw / self._zoom_x()) / 2
+            self.text_item.setPos(centered_x, self.text_item.pos().y())
 
     # --- Mouse ------------------------------------------------------------
 

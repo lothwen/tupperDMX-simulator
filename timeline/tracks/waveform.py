@@ -8,7 +8,8 @@ import io
 import librosa
 import matplotlib.pyplot as plt
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsProxyWidget, QGraphicsTextItem
+from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsProxyWidget,
+                             QGraphicsTextItem, QGraphicsDropShadowEffect)
 from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF
 from PyQt6.QtWidgets import QGraphicsObject, QGraphicsItem
@@ -239,8 +240,18 @@ class WaveformTrack(BaseTrack):
             fm = tm.content_view.fontMetrics()
             label = QGraphicsTextItem(tm.get_truncated_text(part, available, fm))
             label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-            label.setDefaultTextColor(QColor(230, 230, 230))
-            label.setPos(x_pos + 5, y_offset + 3)
+            label.setDefaultTextColor(QColor(25, 25, 25))
+            label_font = label.font()
+            label_font.setBold(True)
+            label.setFont(label_font)
+            # Center the label within the box. The label ignores view
+            # transforms, so its bounding rect is in device px; convert its
+            # width back to scene px via the horizontal zoom (vertical is 1:1).
+            zoom = tm.content_view.transform().m11() or 1.0
+            tw = label.boundingRect().width()
+            th = label.boundingRect().height()
+            label.setPos(x_pos + width / 2 - (tw / zoom) / 2,
+                         y_offset + (height - th) / 2)
             label.setZValue(2)
             label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             self.content_scene.addItem(label)
