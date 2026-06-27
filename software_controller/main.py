@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from fixture_library import load_fixture_defs
 from config import shipped_fixtures
 from tupperlogger import get_logger
+import note_layout
 
 
 # Constants from the Arduino code
@@ -215,17 +216,11 @@ def build_fixture_types():
 
 def _build_song_part_program(fdef):
     """Index the "song_parts" tags on a fixture def's scenes and chases into a
-    {part-name: [SongPartEntry]} map. Read from the raw fdef dicts because
-    _scene_from_dict drops the tag from the runtime scene namespaces."""
-    program = {}
-    for bank_name, scenes in fdef.banks.items():
-        for idx, scene in enumerate(scenes):
-            for part in scene.get("song_parts", []):
-                program.setdefault(part, []).append(SongPartEntry(False, bank_name, idx))
-    for idx, chase in enumerate(fdef.chases):
-        for part in chase.get("song_parts", []):
-            program.setdefault(part, []).append(SongPartEntry(True, "", idx))
-    return program
+    {part-name: [SongPartEntry]} map. Delegates the tag walk to
+    note_layout.song_part_refs (the single source shared with the timeline
+    auto-mode visualization) and maps each ref onto an engine SongPartEntry."""
+    return {part: [SongPartEntry(r.is_chase, r.bank, r.index) for r in refs]
+            for part, refs in note_layout.song_part_refs(fdef).items()}
 
 
 # (The UI stage renderer keeps its own name->render-class dispatch in
@@ -260,6 +255,7 @@ class Fixture:
     last_chase_change: float = 0
     last_palette_change: float = 0
     song_part_triggered: bool = False
+    auto: bool = False       # follows the song-part program (toggled per fixture)
     # Derived once in init_fixtures():
     base: int = 0        # offset into present[]/target[] (= dmx_base - 1)
     blend_base: int = 0  # offset into blend_start[] for this fixture
@@ -574,6 +570,30 @@ class DMXController:
             if other != fx and self.fixtures[other].song_part_triggered:
                 self.blackout_fixture(other)
 
+    def set_fixture_auto(self, channel, enabled):
+        """Opt a fixture (by its stable MIDI channel) into/out of the song-part
+        program. The runtime mirror of the durable per-track setup — persistence
+        lives in the .mid (note 71) and is reapplied here via apply_auto()."""
+        with self.lock:
+            fx = self._fx_by_channel.get(channel)
+            if fx is not None:
+                self.fixtures[fx].auto = bool(enabled)
+
+    def is_fixture_auto(self, channel):
+        """True if the fixture on `channel` is following the song-part program."""
+        with self.lock:
+            fx = self._fx_by_channel.get(channel)
+            return bool(fx is not None and self.fixtures[fx].auto)
+
+    def apply_auto(self, channels):
+        """Set every fixture's auto flag from `channels` (the set of MIDI channels
+        that should be in auto), clearing the rest. Seeds the runtime mirror from
+        the document's persisted setup on load / when a controller attaches."""
+        wanted = set(channels)
+        with self.lock:
+            for channel, fx in self._fx_by_channel.items():
+                self.fixtures[fx].auto = channel in wanted
+
     # ------------------------------------------------------------------
     # Note-map helpers (a note is a universal verb; the channel picks the
     # fixture; each verb is resolved against that fixture's own def)
@@ -724,10 +744,12 @@ class DMXController:
         if part not in SONG_PARTS:
             return
 
-        # Fixtures whose type carries a song-part program are owned by the
-        # automatic show; leave anything else (e.g. a generic wash) untouched.
+        # Only fixtures opted into auto mode follow the song-part program; a
+        # fixture also needs a program to do anything. Everything else (manual
+        # fixtures, a generic wash) is left untouched.
         managed = [fx for fx in range(self.num_fixtures)
-                   if self.fixtures[fx].type.song_part_program]
+                   if self.fixtures[fx].auto
+                   and self.fixtures[fx].type.song_part_program]
 
         for fx in managed:
             self.blackout_fixture(fx)

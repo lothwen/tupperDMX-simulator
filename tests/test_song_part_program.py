@@ -76,10 +76,50 @@ def _fx(ctrl):
     return (ctrl.fixtures[0], ctrl.fixtures[1], ctrl.fixtures[2])
 
 
+def _enable_auto(ctrl):
+    # The song-part program only drives fixtures opted into auto mode; the
+    # deterministic/random tests below exercise the program, so opt them all in.
+    for fx in ctrl.fixtures:
+        fx.auto = True
+
+
+def _channel_of(ctrl, fx_index):
+    for ch, idx in ctrl._fx_by_channel.items():
+        if idx == fx_index:
+            return ch
+    return fx_index
+
+
+def test_auto_gating():
+    print("test_auto_gating")
+    # Default: every fixture is manual, so a song part drives nothing.
+    ctrl = DMXController()
+    ctrl.handle_note_on(0, INTRO, 64)
+    led, b1, b2 = _fx(ctrl)
+    _assert(led.is_blackout and b1.is_blackout and b2.is_blackout,
+            "with auto off, INTRO drives no fixture")
+
+    # set_fixture_auto / is_fixture_auto round-trip on the LED's channel.
+    ch0 = _channel_of(ctrl, 0)
+    ctrl.set_fixture_auto(ch0, True)
+    _assert(ctrl.is_fixture_auto(ch0), "set_fixture_auto opts the LED in")
+
+    # Opt in only the LED: the program touches it; blinders stay off + manual.
+    ctrl = DMXController()
+    ctrl.set_fixture_auto(_channel_of(ctrl, 0), True)
+    ctrl.handle_note_on(0, INTRO, 64)
+    led, b1, b2 = _fx(ctrl)
+    _assert((led.bank, led.scene, led.is_blackout) == ("FILLS2", 2, False),
+            "auto LED follows INTRO")
+    _assert(b1.is_blackout and b2.is_blackout and not b1.auto and not b2.auto,
+            "non-auto blinders are untouched by the program")
+
+
 def test_deterministic_parts_load_expected_scenes():
     print("test_deterministic_parts_load_expected_scenes")
 
     ctrl = DMXController()
+    _enable_auto(ctrl)
     ctrl.handle_note_on(0, INTRO, 64)
     led, b1, b2 = _fx(ctrl)
     _assert((led.bank, led.scene, led.is_blackout) == ("FILLS2", 2, False),
@@ -90,6 +130,7 @@ def test_deterministic_parts_load_expected_scenes():
     _assert(not led.song_part_triggered, "LED is not flagged song-part-owned")
 
     ctrl = DMXController()
+    _enable_auto(ctrl)
     ctrl.handle_note_on(0, VERSE, 64)
     led, b1, b2 = _fx(ctrl)
     _assert((led.bank, led.scene, led.is_blackout) == ("FILLS2", 1, False),
@@ -97,6 +138,7 @@ def test_deterministic_parts_load_expected_scenes():
     _assert(b1.is_blackout and b2.is_blackout, "VERSE leaves blinders blacked out")
 
     ctrl = DMXController()
+    _enable_auto(ctrl)
     ctrl.handle_note_on(0, BREAK, 64)
     led, b1, b2 = _fx(ctrl)
     _assert(led.is_blackout, "BREAK leaves the LED blacked out")
@@ -110,12 +152,14 @@ def test_random_parts_stay_in_range():
     random.seed(0)
     for _ in range(50):
         ctrl = DMXController()
+        _enable_auto(ctrl)
         ctrl.handle_note_on(0, CHORUS, 64)
         led = ctrl.fixtures[0]
         _assert(led.is_chasing and 9 <= led.chase <= 14,
                 "CHORUS runs a ledbar chase in 9..14")
 
         ctrl = DMXController()
+        _enable_auto(ctrl)
         ctrl.handle_note_on(0, OUTRO, 64)
         led = ctrl.fixtures[0]
         b1 = ctrl.fixtures[1]
@@ -127,6 +171,7 @@ def test_random_parts_stay_in_range():
 
 def main():
     test_program_index_matches_legacy_targets()
+    test_auto_gating()
     test_deterministic_parts_load_expected_scenes()
     test_random_parts_stay_in_range()
     print("\nALL TESTS PASSED")

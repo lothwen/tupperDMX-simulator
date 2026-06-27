@@ -463,6 +463,13 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Software controller changed: {controller}")
         self.software_controller = controller
         self.midi_manager.set_software_controller(controller)
+        # Seed the fresh controller from the document's persisted per-track setup
+        # (note 71), then re-sync the 'A' buttons to the restored state.
+        self.midi_manager.seed_controller_auto(controller)
+        self.timeline.refresh_auto_buttons()
+        # Redraw so the auto-mode song-part visualization appears when a
+        # software controller attaches and clears when it detaches.
+        self.timeline._schedule_refresh()
 
     def _preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) to the current
