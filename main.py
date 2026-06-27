@@ -463,8 +463,9 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Software controller changed: {controller}")
         self.software_controller = controller
         self.midi_manager.set_software_controller(controller)
-        # A fresh controller starts with auto off on every fixture (no
-        # persistence), so re-sync the per-track 'A' buttons.
+        # Seed the fresh controller from the document's persisted per-track setup
+        # (note 71), then re-sync the 'A' buttons to the restored state.
+        self.midi_manager.seed_controller_auto(controller)
         self.timeline.refresh_auto_buttons()
         # Redraw so the auto-mode song-part visualization appears when a
         # software controller attaches and clears when it detaches.

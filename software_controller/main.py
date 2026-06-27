@@ -572,7 +572,8 @@ class DMXController:
 
     def set_fixture_auto(self, channel, enabled):
         """Opt a fixture (by its stable MIDI channel) into/out of the song-part
-        program. In-memory only — not persisted across patch swaps/restarts."""
+        program. The runtime mirror of the durable per-track setup — persistence
+        lives in the .mid (note 71) and is reapplied here via apply_auto()."""
         with self.lock:
             fx = self._fx_by_channel.get(channel)
             if fx is not None:
@@ -583,6 +584,15 @@ class DMXController:
         with self.lock:
             fx = self._fx_by_channel.get(channel)
             return bool(fx is not None and self.fixtures[fx].auto)
+
+    def apply_auto(self, channels):
+        """Set every fixture's auto flag from `channels` (the set of MIDI channels
+        that should be in auto), clearing the rest. Seeds the runtime mirror from
+        the document's persisted setup on load / when a controller attaches."""
+        wanted = set(channels)
+        with self.lock:
+            for channel, fx in self._fx_by_channel.items():
+                self.fixtures[fx].auto = channel in wanted
 
     # ------------------------------------------------------------------
     # Note-map helpers (a note is a universal verb; the channel picks the

@@ -963,13 +963,15 @@ class MidiEventsTrack(BaseTrack):
         return getattr(mm, "software_controller", None) if mm else None
 
     def _on_auto_toggled(self, checked: bool):
-        controller = self._software_controller()
-        if controller is not None:
-            controller.set_fixture_auto(self.fixture_index, checked)
-            # Draw / clear this lane's auto-mode visualization. Deferred because
-            # we're inside a QWidget signal handler (see _schedule_refresh).
-            if self.timeline_manager:
-                self.timeline_manager._schedule_refresh()
+        # Auto is only meaningful with a software controller (the button is
+        # disabled otherwise). Persist through the manager: it writes the
+        # per-track note-71 setup flag, mirrors onto the controller, and commits
+        # — the resulting data_changed redraws this lane's auto visualization.
+        if self._software_controller() is None:
+            return
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        if mm is not None:
+            mm.set_fixture_auto(self.fixture_index, checked)
 
     def sync_auto_button(self):
         """Reflect the controller's current auto state on the button (and enable

@@ -527,6 +527,11 @@ class Timeline(QWidget):
         # Restore the selection (the redraw rebuilt every clip from scratch).
         self._reapply_selection()
 
+        # Sync each fixture's 'A' (auto) button to the controller, which
+        # load_from_file / create_empty_track re-seed from the song's persisted
+        # setup notes — so switching songs follows the saved auto state.
+        self.refresh_auto_buttons()
+
         # Song-structure arrangement overlay on the waveform.
         self._draw_song_sections()
 
