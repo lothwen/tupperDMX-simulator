@@ -45,6 +45,10 @@ SCENE_PACKED = 59
 START = 60                       # palette init (global verb)
 SONG_PART_BASE = 61              # 61-69 INTRO..END (global verbs)
 CHASE_LOAD = 70                  # load chase (velocity = chase index) — NEW verb
+FIXTURE_SETUP = 71               # per-track setup flags packed in velocity
+                                 # (auto on/off now; mute/solo reserved). Lives
+                                 # in the .mid for persistence but describe_note
+                                 # returns None so it never renders as a clip.
 COLOR_MACRO_BASE = 72            # 72-75 WHITE/ORANGE/CYAN/PINK
 
 # Ordered names (match handle_note_on's SONG_PARTS / colour-macro cases).
@@ -101,6 +105,28 @@ def _in(rng: Tuple[int, int], n: int) -> bool:
 def is_song_part(note: int) -> bool:
     """True for the global song-part markers (notes 61-69)."""
     return SONG_PART_BASE <= int(note) <= SONG_PART_BASE + len(SONG_PARTS) - 1
+
+
+def is_fixture_setup(note: int) -> bool:
+    """True for the per-track setup note (note 71)."""
+    return int(note) == FIXTURE_SETUP
+
+
+# Setup-note velocity bitfield. Each fixture's persisted track setup is packed
+# into one note-71 velocity (mirrors the START note packing palette into
+# velocity). Only `auto` is defined now; mute/solo are reserved bits so adding
+# them later is a one-line change here and in (un)pack_setup.
+SETUP_AUTO = 0x01
+
+
+def pack_setup(*, auto: bool) -> int:
+    """Pack the per-track setup flags into a MIDI velocity (0-127)."""
+    return SETUP_AUTO if auto else 0
+
+
+def unpack_setup(velocity: int) -> Dict[str, bool]:
+    """Unpack a setup-note velocity into ``{"auto": bool}``."""
+    return {"auto": bool(int(velocity) & SETUP_AUTO)}
 
 
 def is_global_verb(note: int) -> bool:
@@ -198,7 +224,11 @@ def describe_note(note: int, fdef: Optional[FixtureDef] = None,
         idx = n - BANK_SELECT_RANGE[0]
         return NoteInfo(_bank_name(fdef, idx) or f'Bank {idx}', _NEUTRAL)
 
-    return None  # 0, 71, 76-127: reserved / NOP
+    # 0, 76-127: reserved / NOP. Note 71 (FIXTURE_SETUP) is intentionally None
+    # here: it persists per-track setup flags in the .mid but must never render
+    # as a timeline clip (the codec keeps it in midi_notes, drops it from
+    # midi_events).
+    return None
 
 
 def note_applies_to(note: int, fdef: Optional[FixtureDef]) -> bool:
@@ -282,6 +312,57 @@ def scene_rgb_from_notes(fdef: FixtureDef, velocity_by_note: Dict[int, int]
         return min(255, velocity_by_note.get(field_to_note.get(field, -1), 0) * 2)
 
     return _rgb_from_values(fdef, value_of)
+
+
+# ---------------------------------------------------------------------------
+# Song-part program (the auto-mode arrangement, data-driven from "song_parts").
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SongPartRef:
+    """One scene or chase a fixture runs for a song part, indexed from the
+    ``"song_parts"`` tags on its def. For chases ``bank`` is "" and ``index`` is
+    the chase index; for scenes ``bank``/``index`` locate the scene in a bank.
+    Single source for both the runtime program builder
+    (software_controller._build_song_part_program) and the timeline auto-mode
+    visualization (MidiEventsTrack)."""
+    is_chase: bool
+    bank: str
+    index: int
+
+
+def song_part_refs(fdef: FixtureDef) -> Dict[str, List[SongPartRef]]:
+    """``{part-name: [SongPartRef, ...]}`` indexed from the ``"song_parts"`` tags
+    on `fdef`'s scenes and chases — i.e. what auto mode may run per song part."""
+    program: Dict[str, List[SongPartRef]] = {}
+    for bank_name, scenes in fdef.banks.items():
+        for idx, scene in enumerate(scenes):
+            for part in scene.get("song_parts", []):
+                program.setdefault(part, []).append(SongPartRef(False, bank_name, idx))
+    for idx, chase in enumerate(fdef.chases):
+        for part in chase.get("song_parts", []):
+            program.setdefault(part, []).append(SongPartRef(True, "", idx))
+    return program
+
+
+def song_part_clip_info(fdef: Optional[FixtureDef], part: str) -> Optional[NoteInfo]:
+    """Label/colour for the auto-mode visualization clip of `part` on `fdef`.
+
+    None when the fixture has nothing tagged for `part` (the lane shows no clip
+    there). Otherwise the name of the FIRST tagged scene/chase (with a ``" +N"``
+    suffix when several are tagged, since the runtime pick is random), coloured
+    by the song part's own palette colour — the same per-part colour the
+    waveform arrangement overlay uses, so every CHORUS/VERSE/etc. reads alike."""
+    if fdef is None:
+        return None
+    refs = song_part_refs(fdef).get(part) or []
+    if not refs:
+        return None
+    ref = refs[0]
+    name = (_chase_name(fdef, ref.index) if ref.is_chase
+            else _scene_name(fdef, ref.index, ref.bank)) or part
+    if len(refs) > 1:
+        name = f'{name} +{len(refs) - 1}'
+    return NoteInfo(name, _SONG_PART_COLORS.get(part, _NEUTRAL))
 
 
 # ---------------------------------------------------------------------------

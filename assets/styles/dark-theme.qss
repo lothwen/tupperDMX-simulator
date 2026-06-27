@@ -764,6 +764,38 @@ QPushButton#ColorSwatch:checked {
     border: 3px solid white;
 }
 
+/* Timeline track-header "A" (auto) toggle — green while following the
+   song-part program, matching the play button's accent. */
+QPushButton#AutoModeButton {
+    background-color: #2a2a2a;
+    color: #cccccc;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-weight: bold;
+    font-size: 11px;
+}
+
+QPushButton#AutoModeButton:hover {
+    background-color: #3a3a3a;
+    border-color: #777;
+}
+
+QPushButton#AutoModeButton:checked {
+    background-color: #4CAF50;
+    color: white;
+    border: 1px solid #45a049;
+}
+
+QPushButton#AutoModeButton:checked:hover {
+    background-color: #45a049;
+}
+
+QPushButton#AutoModeButton:disabled {
+    background-color: #222;
+    color: #555;
+    border-color: #333;
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;

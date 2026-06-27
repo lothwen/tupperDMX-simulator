@@ -18,7 +18,7 @@ mid-drag is purely visual.
 from typing import List, Optional
 
 from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject,
-                             QGraphicsItem, QMenu)
+                             QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget)
 from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter, QPolygonF
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
 
@@ -104,6 +104,13 @@ FADE_HANDLE_SIZE_PX = 10
 FADE_HANDLE_COLOR = QColor(255, 215, 0)        # match the selection-border gold
 FADE_LINE_COLOR = QColor(255, 215, 0, 220)
 FADE_LINE_WIDTH_PX = 2
+
+# Auto-mode visualization clip styling (read-only song-part preview, see
+# AutoSceneClip). Diagonal hatch + dashed border mark it as auto / not editable;
+# the hatch is drawn in device pixels so its spacing/angle stay constant at any
+# zoom. Fill is the scene swatch colour.
+AUTO_CLIP_HATCH_SPACING_PX = 7
+AUTO_CLIP_HATCH_ALPHA = 70
 
 
 class FadeHandle(QGraphicsObject):
@@ -854,6 +861,70 @@ class DraggableMidiEvent(QGraphicsObject):
         menu.exec(global_pos)
 
 
+class AutoSceneClip(QGraphicsObject):
+    """Read-only visualization of what the song-part program runs for one
+    section on this fixture, shown only while the fixture's 'A' (auto) toggle is
+    on. Carries no MIDI event and is never persisted — it's recomputed on every
+    redraw from the song-part markers + the fixture's def. Fully non-interactive
+    (a preview aid); the diagonal hatch + dashed border mark it as auto / not
+    editable. Hatch/border ink flips black<->white for contrast against the
+    fill so it stays visible on both light and dark scene colours."""
+
+    def __init__(self, x, y, width, height, color: QColor):
+        super().__init__()
+        self.rect = QRectF(0, 0, width, height)
+        self._color = QColor(color)
+        b = color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
+        ink = QColor(0, 0, 0) if b >= 128 else QColor(235, 235, 235)
+        self._border_color = ink
+        self._hatch_color = QColor(ink)
+        self._hatch_color.setAlpha(AUTO_CLIP_HATCH_ALPHA)
+        self.setPos(x, y)
+        # Ignore all input so it never steals hover/drag/clicks from the empty
+        # space behind it or the manual clips painted on top.
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.setAcceptHoverEvents(False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+
+    def boundingRect(self):
+        return QRectF(0, 0, self.rect.width(), self.rect.height())
+
+    def paint(self, painter, option, widget):
+        rect = self.boundingRect()
+        # Scene-colour fill (square corners — distinct from the rounded,
+        # gradient-filled editable clips).
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self._color))
+        painter.drawRect(rect)
+
+        # Diagonal hatch, drawn in device space so its 45° angle and spacing
+        # stay constant under the view's horizontal-only zoom.
+        dev = painter.transform().mapRect(rect)
+        painter.save()
+        painter.resetTransform()
+        painter.setClipRect(dev)
+        pen = QPen(self._hatch_color)
+        pen.setWidth(1)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        x = dev.left() - dev.height()
+        while x < dev.right():
+            painter.drawLine(QPointF(x, dev.bottom()),
+                             QPointF(x + dev.height(), dev.top()))
+            x += AUTO_CLIP_HATCH_SPACING_PX
+        painter.restore()
+
+        # Dashed border = read-only / auto marker.
+        pen = QPen(self._border_color)
+        pen.setWidth(1)
+        pen.setCosmetic(True)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+
+
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
 
@@ -867,39 +938,69 @@ class MidiEventsTrack(BaseTrack):
         self.fixture_index = fixture_index
         self.label = label
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
+        # Persistent "auto" toggle proxy — survives header redraws (like the
+        # waveform's audio-controls proxy) so its QWidget isn't destroyed.
+        self._auto_proxy = None
+        self._auto_button = None
         self.logger = get_logger("timeline.tracks.midi_events")
+
+    def clear_items(self):
+        """Tear down for a patch rebuild / timeline cleanup. The 'A' proxy lives
+        outside header_items (so per-redraw header clears don't destroy it), so
+        dispose it explicitly here."""
+        super().clear_items()
+        if self._auto_proxy is not None:
+            if self._auto_proxy.scene():
+                self._auto_proxy.scene().removeItem(self._auto_proxy)
+            self._auto_proxy.deleteLater()
+            self._auto_proxy = None
+            self._auto_button = None
+
+    def _software_controller(self):
+        """The live software DMX controller, or None. Auto mode is a property of
+        its runtime fixtures, so the toggle only applies when it's present."""
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        return getattr(mm, "software_controller", None) if mm else None
+
+    def _on_auto_toggled(self, checked: bool):
+        # Auto is only meaningful with a software controller (the button is
+        # disabled otherwise). Persist through the manager: it writes the
+        # per-track note-71 setup flag, mirrors onto the controller, and commits
+        # — the resulting data_changed redraws this lane's auto visualization.
+        if self._software_controller() is None:
+            return
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        if mm is not None:
+            mm.set_fixture_auto(self.fixture_index, checked)
+
+    def sync_auto_button(self):
+        """Reflect the controller's current auto state on the button (and enable
+        it only when a software controller exists)."""
+        if self._auto_button is None:
+            return
+        controller = self._software_controller()
+        self._auto_button.setEnabled(controller is not None)
+        self._auto_button.blockSignals(True)
+        self._auto_button.setChecked(
+            bool(controller is not None
+                 and controller.is_fixture_auto(self.fixture_index)))
+        self._auto_button.blockSignals(False)
 
     def matches_filter(self, event) -> bool:
         """True if `event` belongs on this fixture's lane.
 
-        Song-part markers (61-69) are global verbs that reset every fixture,
-        so they appear on every lane. Everything else is scoped to the fixture
-        whose patch index (= MIDI channel) matches this track.
+        Song parts (61-69) are global verbs rendered as an arrangement overlay
+        on the waveform (see WaveformTrack.draw_song_sections), not on any
+        fixture lane. Everything else is scoped to the fixture whose patch index
+        (= MIDI channel) matches this track.
         """
         mm = self.timeline_manager.midi_manager if self.timeline_manager else None
         if mm is not None and mm.is_song_part(event):
-            return True
+            return False
         if mm is not None:
             return mm._event_fixture(event) == self.fixture_index
         info = event.get('info') if event else None
         return getattr(info, 'fixture', None) == self.fixture_index
-
-    def _is_home_song_part(self, event) -> bool:
-        """True when a global song-part event is editable on THIS lane.
-
-        A song part routes to one home channel; on that lane it is a normal
-        editable clip, on every other lane it is a read-only segment marker.
-        """
-        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
-        if mm is None or not mm.is_song_part(event):
-            return False
-        home = mm._event_fixture(event)
-        # No channel (synthetic / no patch) -> the top display lane is home.
-        if not isinstance(home, int):
-            tracks = (self.timeline_manager.midi_events_tracks
-                      if self.timeline_manager else None)
-            return bool(tracks) and tracks[0] is self
-        return home == self.fixture_index
 
     def get_track_height(self) -> int:
         return self.timeline_manager.midi_events_track_height
@@ -925,6 +1026,24 @@ class MidiEventsTrack(BaseTrack):
         header_text.setPos(5, y_offset + 5)
         self.header_scene.addItem(header_text)
         self.header_items.append(header_text)
+
+        # "A" = auto: opt this fixture into the song-part program. Kept on a
+        # persistent proxy so the redraw on every reflow doesn't destroy it.
+        if self._auto_proxy is None:
+            self._auto_button = QPushButton("A")
+            self._auto_button.setCheckable(True)
+            self._auto_button.setFixedSize(20, 20)
+            self._auto_button.setObjectName("AutoModeButton")
+            self._auto_button.setToolTip("Follow the song-part program (auto)")
+            self._auto_button.toggled.connect(self._on_auto_toggled)
+            self._auto_proxy = QGraphicsProxyWidget()
+            self._auto_proxy.setWidget(self._auto_button)
+            self._auto_proxy.setZValue(1)
+        if self._auto_proxy.scene() is None:
+            self.header_scene.addItem(self._auto_proxy)
+        self._auto_proxy.setPos(self.timeline_manager.HEADER_WIDTH - 26,
+                                y_offset + 5)
+        self.sync_auto_button()
 
     # --- Bounds computation ----------------------------------------------
 
@@ -984,49 +1103,91 @@ class MidiEventsTrack(BaseTrack):
         scale = max(brightness / 255.0, 0.18)
         return QColor(int(red * scale), int(green * scale), int(blue * scale))
 
-    def _add_song_part_marker(self, rep, x_pos, y_offset, width, track_height):
-        """Render a non-interactive segment marker for a global song part.
+    def _auto_markers(self, cached_events):
+        """``(managed, [(time, NoteInfo|None), ...] sorted)`` for the song-part
+        program as it applies to THIS fixture.
 
-        Used on lanes that are not the song part's home lane: the marker is
-        visible (a semi-transparent band in the part's color, with its label)
-        but accepts no mouse gestures, so all editing flows through the single
-        clip on the home lane.
-        """
-        info = rep['info']
-        base = QColor(info.color)
-        fill = QColor(base)
-        fill.setAlpha(70)  # ghosted, to read as "not editable here"
+        `managed` is True only when the fixture's 'A' (auto) toggle is on, a
+        software controller exists, and its type has a song-part program — i.e.
+        when song-part markers actually drive it. Each marker carries the scene
+        info this fixture runs there, or None when the part isn't programmed
+        (the program blacks the fixture out, so no clip is drawn). Returns
+        ``(False, [])`` when the program doesn't drive this lane."""
+        controller = self._software_controller()
+        if controller is None or not controller.is_fixture_auto(self.fixture_index):
+            return False, []
+        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        if mm is None:
+            return False, []
+        fdef = self.timeline_manager._fdef(self.fixture_index)
+        if fdef is None or not note_layout.song_part_refs(fdef):
+            return False, []   # this fixture type has no song-part program
+        markers = [(ev["time"],
+                    note_layout.song_part_clip_info(
+                        fdef, getattr(ev.get("info"), "part", "") or ""))
+                   for ev in cached_events if mm.is_song_part(ev)]
+        markers.sort(key=lambda m: m[0])
+        return True, markers
 
-        marker = QGraphicsRectItem(x_pos, y_offset, width, track_height)
-        marker.setBrush(QBrush(fill))
-        marker.setPen(QPen(QColor(20, 20, 20)))
-        marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        marker.setAcceptHoverEvents(False)
-        marker.setZValue(1)
-        self.content_scene.addItem(marker)
-        self.items.append(marker)
+    def _draw_auto_scene_clips(self, markers, units, song_end_time,
+                               y_offset, pps, track_height):
+        """Draw the read-only song-part preview from `markers` (see
+        _auto_markers). One AutoSceneClip per programmed marker, spanning from
+        the marker to the next event that changes the fixture: the next manual
+        clip that starts within the section, else the next song-part marker."""
+        if not markers:
+            return
+        # The first manual clip after a marker ends its auto clip: the manual
+        # clip fires its own note and changes the fixture; auto only resumes at
+        # the next marker (it does not pick back up afterwards).
+        manual_starts = sorted(units[i]["time"] for i in range(len(units))
+                               if not self._is_blackout_unit(units[i]))
+        eps = 1e-3
 
-        label_text = info.part
-        brightness = (base.red() * 0.299 + base.green() * 0.587
-                      + base.blue() * 0.114)
-        text_color = QColor(200, 200, 200) if brightness < 128 else QColor(0, 0, 0)
-        zoom_factor = self.timeline_manager.content_view.transform().m11()
-        available_width = (width - 10) * zoom_factor
+        for j, (sec_start, clip_info) in enumerate(markers):
+            sec_end = (markers[j + 1][0] if j + 1 < len(markers)
+                       else song_end_time)
+            # Only programmed parts draw a clip; the rest leave the fixture dark.
+            if clip_info is None:
+                continue
+            end = sec_end
+            for s in manual_starts:
+                if s > sec_start + eps:
+                    if s < sec_end:
+                        end = s
+                    break
+            if end - sec_start <= eps:
+                continue
+            self._add_auto_scene_clip(sec_start, end, clip_info.part,
+                                      QColor(clip_info.color), y_offset, pps,
+                                      track_height)
+
+    def _add_auto_scene_clip(self, start, end, label, color, y_offset, pps, height):
+        """Add one AutoSceneClip (+ its unscaled label) for the range
+        [start, end). Beneath the manual clips (z<1) and non-interactive."""
+        x_pos = start * pps
+        width = max((end - start) * pps, MIN_HIT_WIDTH_PX)
+        clip = AutoSceneClip(x_pos, y_offset, width, height, color)
+        clip.setZValue(0.5)  # under manual clips (z=1) and their labels (z=2)
+        self.content_scene.addItem(clip)
+        self.items.append(clip)
+
+        brightness = color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
+        text_color = QColor(235, 235, 235) if brightness < 128 else QColor(20, 20, 20)
+        zoom = self.timeline_manager.content_view.transform().m11()
+        available_width = (width - 10) * zoom
         fm = self.timeline_manager.content_view.fontMetrics()
-        text_to_display = self.timeline_manager.get_truncated_text(
-            label_text, available_width, fm)
+        text = self.timeline_manager.get_truncated_text(label, available_width, fm)
 
-        text_item = QGraphicsTextItem(text_to_display)
+        text_item = QGraphicsTextItem(text)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         text_item.setDefaultTextColor(text_color)
         text_item.setPos(x_pos + 5, y_offset + 5)
-        text_item.setZValue(2)
+        text_item.setZValue(0.6)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
         text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         text_item.setAcceptHoverEvents(False)
-        text_item.setData(0, label_text)
-        text_item.setData(1, rep['id'])
         self.content_scene.addItem(text_item)
         self.items.append(text_item)
 
@@ -1088,14 +1249,27 @@ class MidiEventsTrack(BaseTrack):
             # neighbor lookups, MOVE bounds, and BLACKOUT gap logic all
             # operate on the per-track slice, not the global event list.
             events = [e for e in cached_events if self.matches_filter(e)]
-            if not events:
-                return
 
             # Collapse same-time scene groups into single render units before
             # drawing. A 7-event group becomes ONE clip box.
             units = build_render_units(events)
+
+            # The song-part program as it drives THIS lane (empty unless its 'A'
+            # auto toggle is on). `managed` means song-part markers actually
+            # change this fixture, so each marker both ends the manual clip
+            # spanning it and starts the read-only auto-scene preview.
+            managed, auto_markers = self._auto_markers(cached_events)
+
+            # The auto visualization sits BENEATH the manual clips and must
+            # render even when this lane has no manual clips of its own, so it
+            # runs before the early-out below.
+            self._draw_auto_scene_clips(auto_markers, units, song_end_time,
+                                        y_offset, pps, track_height)
+
             if not units:
                 return
+
+            marker_times = [t for t, _ in auto_markers]
 
             for i, unit in enumerate(units):
                 # BLACKOUTs are pure data — gap markers used by the manager
@@ -1110,23 +1284,20 @@ class MidiEventsTrack(BaseTrack):
                 start_time = unit["time"]
                 end_time = (units[i + 1]["time"]
                             if i + 1 < len(units) else song_end_time)
+                # A song-part marker fires its program here and changes the
+                # fixture (to an auto scene or, for unprogrammed parts, black),
+                # so it also ends a manual clip that spans it.
+                if managed:
+                    for t in marker_times:
+                        if t > start_time + 1e-3:
+                            if t < end_time:
+                                end_time = t
+                            break
                 duration = max(0.0, end_time - start_time)
                 rep = unit["representative"]
 
                 x_pos = start_time * pps
                 width = max(duration * pps, MIN_HIT_WIDTH_PX)
-
-                # A global song part on a lane that is not its home is shown as
-                # a read-only segment marker: visible (it still segments the
-                # lane, since a song part resets every fixture) but with no
-                # drag/select/edit gestures — the single editable instance
-                # lives on its home lane.
-                mm = self.timeline_manager.midi_manager
-                if (mm is not None and mm.is_song_part(rep)
-                        and not self._is_home_song_part(rep)):
-                    self._add_song_part_marker(rep, x_pos, y_offset, width,
-                                               track_height)
-                    continue
 
                 bounds = self._compute_bounds(units, i, song_end_time)
 

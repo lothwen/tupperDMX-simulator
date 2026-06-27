@@ -230,6 +230,12 @@ class Timeline(QWidget):
         """Y offset of the first (top) MIDI events track."""
         return self._waveform_y() + self.waveform_track_height + self.TRACK_SPACING
 
+    def _in_waveform_band(self, scene_y: float) -> bool:
+        """True if `scene_y` falls within the waveform track's vertical band
+        (where song-part sections are dropped/overlaid)."""
+        top = self._waveform_y()
+        return top <= scene_y < top + self.waveform_track_height
+
     def _midi_track_y(self, index: int) -> int:
         """Y offset of the MIDI events track at `index` (all share one height)."""
         return self._midi_tracks_top() + index * (self.midi_events_track_height
@@ -431,6 +437,9 @@ class Timeline(QWidget):
             # Keep existing pixmap visible at the new track top while dragging
             self.waveform_track.waveform_item.setYPos(self._waveform_y())
 
+        # Song-structure overlay follows the (possibly resized) waveform band.
+        self._draw_song_sections()
+
         # Playhead height + grid lines span the full scene
         if hasattr(self, 'playhead') and self.playhead is not None:
             self.playhead.setLine(0, 0, 0, self.scene_height)
@@ -517,6 +526,14 @@ class Timeline(QWidget):
 
         # Restore the selection (the redraw rebuilt every clip from scratch).
         self._reapply_selection()
+
+        # Sync each fixture's 'A' (auto) button to the controller, which
+        # load_from_file / create_empty_track re-seed from the song's persisted
+        # setup notes — so switching songs follows the saved auto state.
+        self.refresh_auto_buttons()
+
+        # Song-structure arrangement overlay on the waveform.
+        self._draw_song_sections()
 
         # Detect BPM from first event if available (load-time only).
         if detect_bpm and self._cached_events:
@@ -783,6 +800,47 @@ class Timeline(QWidget):
         evt = self._find_cached_event(event_id)
         return evt.get('group_id') if evt else None
 
+    def refresh_auto_buttons(self) -> None:
+        """Re-sync every fixture track's 'A' (auto) button from the controller."""
+        for track in getattr(self, 'midi_events_tracks', []):
+            track.sync_auto_button()
+
+    def _draw_song_sections(self) -> None:
+        """Redraw the song-part arrangement overlay on the waveform band."""
+        if not self.midi_manager:
+            return
+        song_parts = [e for e in self._cached_events
+                      if self.midi_manager.is_song_part(e)]
+        self.waveform_track.draw_song_sections(song_parts, self._waveform_y())
+
+    def on_song_section_moved(self, event_id: str, new_time: float):
+        """A song-section box MOVE committed. A song part is a point-in-time
+        global marker (no BLACKOUT extent machinery), so set its time directly
+        and let the overlay recompute contiguous spans by sorted time."""
+        if not self.midi_manager or not event_id:
+            return
+        self.midi_manager.update_event_timing(event_id, new_time)
+        self._schedule_refresh()
+
+    def on_song_section_delete(self, event_id: str):
+        """Delete a song-section marker outright (no blackout conversion — that
+        is fixture-lane behaviour; song parts are a global arrangement)."""
+        if not self.midi_manager or not event_id:
+            return
+        event_data = self._find_cached_event(event_id)
+        part = (getattr(event_data.get('info'), 'part', None)
+                if event_data else None) or "section"
+        reply = QMessageBox.question(
+            None, "Delete Song Section",
+            f"Delete the '{part}' section marker?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if self.midi_manager.delete_event(event_id):
+            self._schedule_refresh()
+
     def on_midi_event_moved(self, event_id: str, new_time: float):
         """Whole-clip MOVE drag committed.
 
@@ -1014,9 +1072,12 @@ class Timeline(QWidget):
 
         A note is droppable on a fixture lane when it is a meaningful verb for
         that fixture (channel offsets within range, scene/bank/chase verbs when
-        the fixture defines them, global/utility verbs anywhere)."""
+        the fixture defines them, global/utility verbs anywhere). Song parts
+        drop onto the waveform band, where they form the arrangement overlay."""
         if not self.midi_manager:
             return False
+        if self._note_is_song_part(note):
+            return self._in_waveform_band(scene_y)
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
             return False
@@ -1028,18 +1089,20 @@ class Timeline(QWidget):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
         clamped_velocity = max(1, min(127, int(velocity)))
-        target_idx = self.fixture_at_y(scene_y)
-        # Song parts stay global (route to their home channel); fixture notes
-        # land on the exact fixture instance they were dropped on.
-        channel = None if self._note_is_song_part(note) else target_idx
+        # Song parts stay global (channel=None) and land on the waveform
+        # arrangement overlay; fixture notes land on the exact fixture instance
+        # they were dropped on.
+        is_song_part = self._note_is_song_part(note)
+        target_idx = None if is_song_part else self.fixture_at_y(scene_y)
+        channel = None if is_song_part else target_idx
         event_id = self.midi_manager.add_event(note, time_seconds,
                                                clamped_velocity, channel)
         if not event_id:
             return False
         self._schedule_refresh()
+        where = "arrangement" if is_song_part else f"fixture #{target_idx}"
         self.logger.info(
-            f"Clip dropped: note={note} at {time_seconds:.3f}s "
-            f"on fixture #{target_idx}"
+            f"Clip dropped: note={note} at {time_seconds:.3f}s on {where}"
         )
         return True
 
