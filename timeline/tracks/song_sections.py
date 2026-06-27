@@ -169,14 +169,16 @@ class SongSectionItem(QGraphicsObject):
 
     def hoverEnterEvent(self, event):
         if self.timeline is not None:
-            self.timeline.content_view.viewport().setCursor(
-                Qt.CursorShape.SizeHorCursor)
+            # Set the cursor on the view (not the viewport) to match the MIDI
+            # clips / fade handles. Touching viewport().setCursor() would give
+            # the viewport its own cursor and stop it inheriting the view's,
+            # silently killing the clips' resize/move cursors afterwards.
+            self.timeline.content_view.setCursor(Qt.CursorShape.SizeHorCursor)
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
         if self.timeline is not None:
-            self.timeline.content_view.viewport().setCursor(
-                Qt.CursorShape.ArrowCursor)
+            self.timeline.content_view.setCursor(Qt.CursorShape.ArrowCursor)
         super().hoverLeaveEvent(event)
 
     def _show_context_menu(self, global_pos):
