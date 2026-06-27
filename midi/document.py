@@ -501,6 +501,61 @@ class MidiDocument:
                 break
         return True
 
+    # --- per-track setup persistence (note 71) -------------------------------
+
+    def auto_channels(self) -> set:
+        """Channels whose persisted setup note (note 71) has the auto flag set.
+
+        Lives in ``midi_notes`` only (note 71 never enters ``midi_events`` — see
+        note_layout.describe_note), so it round-trips through save/load without
+        rendering as a timeline clip."""
+        out = set()
+        for n in self.midi_notes:
+            if n.get('note') != note_layout.FIXTURE_SETUP:
+                continue
+            ch = n.get('channel')
+            if ch is not None and note_layout.unpack_setup(
+                    n.get('velocity', 0)).get('auto'):
+                out.add(ch)
+        return out
+
+    def set_fixture_auto_flag(self, channel: int, auto: bool) -> bool:
+        """Insert/update/remove the per-track setup note (note 71) for `channel`
+        so its packed velocity reflects `auto`. midi_notes only; no rebuild/emit.
+
+        Returns True if anything changed. The note is dropped when the packed
+        velocity is 0 (all flags off), since the save loop only keeps notes with
+        velocity > 0 — absence means all-default."""
+        existing = next(
+            (n for n in self.midi_notes
+             if n.get('note') == note_layout.FIXTURE_SETUP
+             and n.get('channel') == channel),
+            None)
+        new_velocity = note_layout.pack_setup(auto=auto)
+
+        if new_velocity == 0:
+            if existing is None:
+                return False
+            self.midi_notes.remove(existing)
+            return True
+
+        if existing is not None:
+            if existing.get('velocity') == new_velocity:
+                return False
+            existing['velocity'] = new_velocity
+            return True
+
+        self.midi_notes.append({
+            "id": str(uuid.uuid4()),
+            "note": note_layout.FIXTURE_SETUP,
+            "time": 0.0,
+            "velocity": new_velocity,
+            "duration": 0.1,
+            "channel": channel,
+        })
+        self.midi_notes.sort(key=lambda x: x['time'])
+        return True
+
     # --- integrity -----------------------------------------------------------
 
     def reconcile_blackouts(self, fixture: Optional[str] = None) -> None:

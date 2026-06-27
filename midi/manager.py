@@ -93,6 +93,35 @@ class MidiManager(QObject):
             self.current_worker.set_software_controller(controller)
 
     # ------------------------------------------------------------------
+    # Per-track auto mode (persisted in the .mid via note 71)
+    # ------------------------------------------------------------------
+    def auto_channels(self) -> set:
+        """Channels whose persisted setup note has the auto flag (from the doc)."""
+        return self._doc.auto_channels()
+
+    def set_fixture_auto(self, channel, on: bool) -> bool:
+        """Persist `channel`'s auto flag into the document (note 71) and mirror it
+        onto the live controller, then commit (rebuild + worker + data_changed,
+        which redraws the lane and lets it persist on the next Export).
+
+        Distinct from DMXController.set_fixture_auto — that one is the runtime
+        mirror; this is the durable, document-backed entry point."""
+        if self.software_controller is not None:
+            self.software_controller.set_fixture_auto(channel, on)
+        if self._doc.set_fixture_auto_flag(channel, on):
+            self._commit()
+            return True
+        return False
+
+    def seed_controller_auto(self, controller=None) -> None:
+        """Apply the document's persisted auto flags (note 71) onto `controller`
+        (defaults to the attached one) — the runtime mirror of the durable
+        per-track setup stored in the .mid."""
+        controller = controller or self.software_controller
+        if controller is not None:
+            controller.apply_auto(self._doc.auto_channels())
+
+    # ------------------------------------------------------------------
     # MidiDocument bridge: data proxies + a few query delegations
     # ------------------------------------------------------------------
     # The mutable MIDI state lives on self._doc. These proxies keep the
@@ -171,6 +200,9 @@ class MidiManager(QObject):
             self.midi_data = self._codec.read(file_path)
             self.current_filename = file_path
             self._parse_midi_data()
+            # Restore each track's persisted auto state onto the controller so the
+            # 'A' buttons + auto visualization reflect the file when tracks rebuild.
+            self.seed_controller_auto()
             self._reset_history()
             self.logger.info(f"Loaded MIDI file: {file_path}")
             self.data_changed.emit()
@@ -186,6 +218,9 @@ class MidiManager(QObject):
         self.midi_events.clear()
         self.midi_notes.clear()
         self.current_filename = None
+        # No persisted setup notes -> clear any attached controller's auto state
+        # so a MIDI-less song doesn't inherit the previous song's auto flags.
+        self.seed_controller_auto()
         self._reset_history()
         self.logger.info("Created empty MIDI track")
         self.data_changed.emit()
