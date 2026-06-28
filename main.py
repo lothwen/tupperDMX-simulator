@@ -198,7 +198,6 @@ class MainWindow(QMainWindow):
         # the app to edit clips, not to verify channel output.
         self.right_sidebar = QTabWidget()
         self.right_sidebar.setObjectName("RightSidebar")
-        self.right_sidebar.setMaximumWidth(260)
         self.right_sidebar.addTab(self.clip_library, "Library")
         self.right_sidebar.addTab(self.dmx_display, "DMX Channels")
         self.main_content.addWidget(self.right_sidebar)
