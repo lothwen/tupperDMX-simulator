@@ -33,11 +33,15 @@ class TimelineToolbar(QWidget):
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
+    row_height_changed = pyqtSignal(int)  # fixture-track height in px
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
     ZOOM_MIN = 20
     ZOOM_MAX = 400
     ZOOM_DEFAULT = 100
+
+    # Rows segmented preset -> fixture-track height in px (M == timeline default).
+    ROW_HEIGHT_PRESETS = {"S": 30, "M": 50, "L": 80}
 
     def __init__(self, play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon, parent=None):
         super().__init__(parent)
@@ -193,20 +197,30 @@ class TimelineToolbar(QWidget):
         rows_label.setObjectName("TTRowsLabel")
         row.addWidget(rows_label)
 
-        # S / M / L segmented preset (placeholder)
-        rows_group = QButtonGroup(self)
-        rows_group.setExclusive(True)
+        # S / M / L segmented preset for fixture-track height
+        self.rows_group = QButtonGroup(self)
+        self.rows_group.setExclusive(True)
+        self._row_buttons = {}
         seg = QHBoxLayout()
         seg.setContentsMargins(0, 0, 0, 0)
         seg.setSpacing(0)
-        for label in ("S", "M", "L"):
+        labels = ("S", "M", "L")
+        for i, label in enumerate(labels):
             btn = QPushButton(label)
             btn.setObjectName("TTSegment")
+            # Round only the outer corners of the segmented control.
+            if i == 0:
+                btn.setProperty("seg", "left")
+            elif i == len(labels) - 1:
+                btn.setProperty("seg", "right")
             btn.setCheckable(True)
             btn.setFixedWidth(28)
             if label == "M":
                 btn.setChecked(True)
-            rows_group.addButton(btn)
+            height = self.ROW_HEIGHT_PRESETS[label]
+            btn.clicked.connect(lambda _checked, h=height: self.row_height_changed.emit(h))
+            self.rows_group.addButton(btn)
+            self._row_buttons[label] = btn
             seg.addWidget(btn)
         seg_wrap = QWidget()
         seg_wrap.setLayout(seg)
@@ -270,3 +284,11 @@ class TimelineToolbar(QWidget):
         self.zoom_slider.blockSignals(True)
         self.zoom_slider.setValue(value)
         self.zoom_slider.blockSignals(False)
+
+    def set_row_height(self, height: int) -> None:
+        """Check the segment whose preset is closest to `height` (used on
+        startup to reflect the persisted track height). setChecked fires
+        `toggled`, not `clicked`, so this does not re-emit row_height_changed."""
+        label = min(self.ROW_HEIGHT_PRESETS,
+                    key=lambda k: abs(self.ROW_HEIGHT_PRESETS[k] - height))
+        self._row_buttons[label].setChecked(True)
