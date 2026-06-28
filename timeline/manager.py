@@ -42,6 +42,7 @@ class Timeline(QWidget):
     audio_mute_toggled = pyqtSignal(bool)
     midi_data_changed = pyqtSignal()  # Emitted when MIDI data is modified
     track_heights_changed = pyqtSignal(int, int)  # waveform_height, midi_events_height (on commit)
+    zoom_changed = pyqtSignal(float)  # current horizontal zoom factor (m11)
 
     # Constants
     HEADER_WIDTH = 100
@@ -52,9 +53,6 @@ class Timeline(QWidget):
     TRACK_SPACING = 5
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
-
-    # Preferred widget height (px) for the timeline container
-    DEFAULT_HEIGHT = 230
 
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
                  initial_audio_volume=0.5,
@@ -1205,8 +1203,8 @@ class Timeline(QWidget):
         """Fit timeline to view width."""
         view_width = self.content_view.viewport().width()
         scene_width = self.content_scene.width()
-        
-        if scene_width <= 0 or view_width <= 0: 
+
+        if scene_width <= 0 or view_width <= 0:
             return
 
         min_scale = view_width / scene_width
@@ -1214,6 +1212,25 @@ class Timeline(QWidget):
         self.content_view.scale(min_scale, 1)
         self.update_ruler_labels()
         self.update_midi_text_truncation()
+        self.emit_zoom_changed()
+
+    def set_zoom(self, factor: float):
+        """Set an absolute horizontal zoom factor on the timeline view."""
+        if factor <= 0:
+            return
+        self.content_view.resetTransform()
+        self.content_view.scale(factor, 1)
+        self.update_ruler_labels()
+        self.update_midi_text_truncation()
+        self.emit_zoom_changed()
+
+    def emit_zoom_changed(self):
+        """Report the current horizontal zoom factor (m11) to listeners.
+
+        Called after any zoom change — Fit, the toolbar slider, or Ctrl+wheel
+        (from ContentView) — so the toolbar slider can track the live zoom.
+        """
+        self.zoom_changed.emit(self.content_view.transform().m11())
 
     def get_modified_midi_data(self):
         """Get the modified MIDI data from MidiManager."""

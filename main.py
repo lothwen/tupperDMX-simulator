@@ -21,8 +21,9 @@ from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import setup_logging, get_logger
 from ui import (MediaController, DMXDisplayWidget, AudioController, StageController,
-                ToolbarManager, ErrorDialogManager, ClipLibraryWidget, AboutDialog,
-                SettingsDialog, PlaylistController, StageEditToolbar, FixtureInspector)
+                ToolbarManager, TimelineToolbar, ErrorDialogManager, ClipLibraryWidget,
+                AboutDialog, SettingsDialog, PlaylistController, StageEditToolbar,
+                FixtureInspector)
 
 
 def _base_dir() -> str:
@@ -156,8 +157,9 @@ class MainWindow(QMainWindow):
         
         self.stage_controller = StageController(self.config)
 
-        self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager,
-                                            play_icon, pause_icon, stop_icon)
+        self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager)
+        # Transport lives in a toolbar above the timeline (built in setup_ui).
+        self.timeline_toolbar = TimelineToolbar(play_icon, pause_icon, stop_icon)
         self._connect_toolbar_signals()
 
     def _connect_toolbar_signals(self):
@@ -165,12 +167,13 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
-        self.toolbar_manager.play_pause_requested.connect(self.play_pause_playback)
-        self.toolbar_manager.stop_requested.connect(self.stop_playback)
-        self.toolbar_manager.bpm_changed.connect(self.bpm_changed)
         self.toolbar_manager.dmx_source_changed.connect(self.on_dmx_source_changed)
         self.toolbar_manager.midi_port_changed.connect(self.set_midi_port)
-        self.toolbar_manager.metronome_mute_toggled.connect(self.on_toolbar_metronome_mute_toggled)
+        # Transport signals now originate from the timeline toolbar.
+        self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
+        self.timeline_toolbar.stop_requested.connect(self.stop_playback)
+        self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
+        self.timeline_toolbar.metronome_mute_toggled.connect(self.on_toolbar_metronome_mute_toggled)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
@@ -185,9 +188,9 @@ class MainWindow(QMainWindow):
         toolbar = self.toolbar_manager.create_toolbar(self)
         self.addToolBar(toolbar)
 
-        # Create main content splitter
+        # Create main content splitter (stage | sidebar); added to the vertical
+        # splitter below so the timeline section can be resized against it.
         self.main_content = QSplitter(Qt.Orientation.Horizontal)
-        self.main_layout.addWidget(self.main_content, 1)
 
         # Add stage view
         stage_view = self.stage_controller.get_stage_view()
@@ -211,7 +214,6 @@ class MainWindow(QMainWindow):
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
             fixtures=self.config.fixtures,
         )
-        self.timeline.setFixedHeight(Timeline.DEFAULT_HEIGHT)
         self.timeline.seek_requested.connect(self.seek_playback)
         self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
@@ -221,7 +223,33 @@ class MainWindow(QMainWindow):
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
-        self.main_layout.addWidget(self.timeline)
+        # Wire the timeline toolbar's view controls to the timeline view, and
+        # mirror live zoom (Fit / Ctrl+wheel) back onto the toolbar slider.
+        self.timeline_toolbar.fit_requested.connect(self.timeline.fit_to_width)
+        self.timeline_toolbar.zoom_changed.connect(self.timeline.set_zoom)
+        self.timeline.zoom_changed.connect(self.timeline_toolbar.set_zoom_value)
+
+        # Bundle the timeline toolbar + tracks into one resizable section.
+        timeline_section = QWidget()
+        section_layout = QVBoxLayout(timeline_section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(0)
+        section_layout.addWidget(self.timeline_toolbar)
+        section_layout.addWidget(self.timeline)
+        timeline_section.setMinimumHeight(160)
+
+        # Vertical splitter: drag the divider to resize the timeline section.
+        self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.vertical_splitter.addWidget(self.main_content)
+        self.vertical_splitter.addWidget(timeline_section)
+        self.vertical_splitter.setCollapsible(0, False)
+        self.vertical_splitter.setCollapsible(1, False)
+        self.main_layout.addWidget(self.vertical_splitter, 1)
+
+        section_height = self.config.window.timeline_section_height
+        self.vertical_splitter.setSizes(
+            [max(160, self.height() - section_height), section_height])
+        self.vertical_splitter.splitterMoved.connect(self._on_vertical_splitter_moved)
 
         self.main_content.setSizes([self.width() - 250, 250])
 
@@ -348,7 +376,7 @@ class MainWindow(QMainWindow):
             )
             # Reset to valid range
             value = max(40, min(300, value))
-            self.toolbar_manager.set_bpm(value)
+            self.timeline_toolbar.set_bpm(value)
             return
         
         was_running = self.audio_controller.is_metronome_running()
@@ -374,7 +402,7 @@ class MainWindow(QMainWindow):
 
     def on_bpm_detected_from_timeline(self, value):
         """Handle BPM detection from timeline analysis."""
-        self.toolbar_manager.set_bpm(value)
+        self.timeline_toolbar.set_bpm(value)
         
         was_running = self.audio_controller.is_metronome_running()
         current_position = self.media_controller.get_current_position() if was_running else 0.0
@@ -389,7 +417,7 @@ class MainWindow(QMainWindow):
     
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
-        self.toolbar_manager.update_play_pause_icon(is_playing)
+        self.timeline_toolbar.update_play_pause_icon(is_playing)
         
         if is_playing:
             # Start metronome synchronized to current timeline position
@@ -405,7 +433,7 @@ class MainWindow(QMainWindow):
         minutes = int(position_seconds // 60)
         seconds = position_seconds % 60
         time_str = f"{minutes:02d}:{seconds:06.3f}"
-        self.toolbar_manager.update_time_display(time_str)
+        self.timeline_toolbar.update_time_display(time_str)
     
     def _on_media_error(self, error_message, file_path=None):
         """Handle media errors from media controller."""
@@ -545,7 +573,7 @@ class MainWindow(QMainWindow):
         """Handle metronome mute toggle from timeline."""
         self.audio_controller.set_metronome_muted(muted)
         # Update toolbar button to reflect mute state
-        self.toolbar_manager.set_metronome_mute(muted)
+        self.timeline_toolbar.set_metronome_mute(muted)
 
     def on_toolbar_metronome_mute_toggled(self, muted):
         """Handle metronome mute toggle from toolbar."""
@@ -658,6 +686,16 @@ class MainWindow(QMainWindow):
         self.config.window.waveform_track_height = int(waveform_height)
         self.config.window.midi_events_track_height = int(midi_events_height)
         self.save_config()
+
+    def _on_vertical_splitter_moved(self, _pos, _index):
+        """Track the timeline section height as the divider is dragged.
+
+        Updated in-memory only (the drag fires continuously); it is flushed to
+        disk by the existing save_config() calls and on closeEvent.
+        """
+        sizes = self.vertical_splitter.sizes()
+        if len(sizes) == 2:
+            self.config.window.timeline_section_height = int(sizes[1])
 
 
     def on_midi_data_changed_from_manager(self):
@@ -790,7 +828,7 @@ class MainWindow(QMainWindow):
                     path += '.mid'
                 
                 # Export via MidiManager
-                if self.midi_manager.export_to_file(path, self.toolbar_manager.get_bpm()):
+                if self.midi_manager.export_to_file(path, self.timeline_toolbar.get_bpm()):
                     self.logger.info(f"MIDI file exported successfully to: {path}")
                     QMessageBox.information(self, "Export Success", f"MIDI file exported to:\n{path}")
                 else:

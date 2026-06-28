@@ -1,10 +1,8 @@
-import os
-import sys
 from typing import Callable, Optional
-from PyQt6.QtWidgets import (QToolBar, QSpinBox, QComboBox, QLabel, QWidget, QSizePolicy,
+from PyQt6.QtWidgets import (QToolBar, QComboBox, QLabel, QWidget, QSizePolicy,
                              QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QToolButton, QMenu)
-from PyQt6.QtGui import QAction, QIcon, QFont
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
+from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 from tupperlogger import get_logger
 from dmx import DMXManager
@@ -19,12 +17,8 @@ class ToolbarManager(QObject):
     load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
     new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
-    play_pause_requested = pyqtSignal()
-    stop_requested = pyqtSignal()
-    bpm_changed = pyqtSignal(int)  # new_bpm
     dmx_source_changed = pyqtSignal(str)  # source_name
     midi_port_changed = pyqtSignal(str)  # port_name
-    metronome_mute_toggled = pyqtSignal(bool)  # mute_state
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
@@ -33,28 +27,18 @@ class ToolbarManager(QObject):
     settings_requested = pyqtSignal()
     about_requested = pyqtSignal()
 
-    def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager, 
-                 play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon):
+    def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager):
         super().__init__()
         self.config = config
         self.dmx_manager = dmx_manager
         self.midi_manager = midi_manager
         self.logger = get_logger("ui.toolbar")
-        
-        # Icons
-        self.play_icon = play_icon
-        self.pause_icon = pause_icon
-        self.stop_icon = stop_icon
-        
+
         # Toolbar and widgets
         self.toolbar: Optional[QToolBar] = None
-        self.play_pause_button: Optional[QPushButton] = None
         self.export_midi_button: Optional[QPushButton] = None
-        self.bpm_spinbox: Optional[QSpinBox] = None
-        self.metronome_button: Optional[QPushButton] = None
         self.dmx_source_combo: Optional[QComboBox] = None
         self.midi_port_combo: Optional[QComboBox] = None
-        self.time_display: Optional[QLabel] = None
         self.audio_file_label: Optional[QLabel] = None
         self.midi_file_label: Optional[QLabel] = None
         # Playlist navigation widgets
@@ -63,10 +47,7 @@ class ToolbarManager(QObject):
         self.remove_button: Optional[QPushButton] = None
         self.song_counter_label: Optional[QLabel] = None
         self.menu_button: Optional[QToolButton] = None
-        
-        # State
-        self.is_playing = False
-        
+
         self.logger.info("Toolbar manager initialized")
     
     def create_toolbar(self, parent) -> QToolBar:
@@ -85,20 +66,7 @@ class ToolbarManager(QObject):
         # Files Section (left - expandable to fill left space)
         files_section = self._create_files_section()
         container_layout.addWidget(files_section, 1)  # stretch factor 1 = expandable
-        
-        # Center group container for Transport + Timeline
-        center_container = QWidget()
-        center_layout = QHBoxLayout(center_container)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(15)
-        
-        # Transport Controls Section (center - fixed)
-        transport_section = self._create_transport_section()
-        center_layout.addWidget(transport_section)
-        
-        # Add center container as fixed (no stretch)
-        container_layout.addWidget(center_container, 0)  # stretch factor 0 = fixed/centered
-        
+
         # Sources Section (right - expandable to fill right space)
         sources_section = self._create_sources_section()
         container_layout.addWidget(sources_section, 1)  # stretch factor 1 = expandable
@@ -224,83 +192,6 @@ class ToolbarManager(QObject):
         layout.addLayout(file_paths_layout)
         
         self.logger.debug("Files section created")
-        return section
-
-    def _create_transport_section(self) -> QFrame:
-        """Create the transport controls section."""
-        section = QFrame()
-        section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setObjectName("ToolbarSection")
-        
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Section title
-        title = QLabel("TRANSPORT")
-        title.setObjectName("SectionTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        
-        # Controls layout
-        controls_layout = QHBoxLayout()
-        controls_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        # Stop button
-        stop_btn = QPushButton()
-        stop_btn.setIcon(self.stop_icon)
-        stop_btn.setFixedSize(40, 40)
-        stop_btn.setObjectName("StopButton")
-        stop_btn.clicked.connect(self.stop_requested.emit)
-        controls_layout.addWidget(stop_btn)
-        
-        # Play/Pause button (larger)
-        self.play_pause_button = QPushButton()
-        self.play_pause_button.setIcon(self.play_icon)
-        self.play_pause_button.setFixedSize(50, 50)
-        self.play_pause_button.setObjectName("PlayPauseButton")
-        self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
-        controls_layout.addWidget(self.play_pause_button)
-        
-        # Time display
-        self.time_display = QLabel("00:00.000")
-        self.time_display.setFixedSize(120, 50)
-        self.time_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_display.setObjectName("TimeDisplay")
-        controls_layout.addWidget(self.time_display)
-        
-        # BPM display with metronome icon and spinbox
-        bpm_container = QWidget()
-        bpm_layout = QHBoxLayout(bpm_container)
-        bpm_layout.setContentsMargins(0, 0, 0, 0)
-        bpm_layout.setSpacing(2)
-        
-        # Metronome icon button (clickable)
-        self.metronome_button = QPushButton()
-        if getattr(sys, "frozen", False):
-            _base = sys._MEIPASS
-        else:
-            _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        metronome_icon = QIcon(os.path.join(_base, "assets", "icons", "metronome_icon.png"))
-        self.metronome_button.setIcon(metronome_icon)
-        self.metronome_button.setIconSize(QSize(28, 28))  # Set icon size explicitly
-        self.metronome_button.setFixedSize(32, 32)
-        self.metronome_button.setCheckable(True)
-        self.metronome_button.setObjectName("MetronomeButton")
-        self.metronome_button.toggled.connect(self.metronome_mute_toggled.emit)
-        bpm_layout.addWidget(self.metronome_button)
-        
-        self.bpm_spinbox = QSpinBox()
-        self.bpm_spinbox.setRange(40, 300)
-        self.bpm_spinbox.setValue(120)
-        self.bpm_spinbox.setFixedSize(50, 30)
-        self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
-        bpm_layout.addWidget(self.bpm_spinbox)
-        
-        controls_layout.addWidget(bpm_container)
-
-        layout.addLayout(controls_layout)
-        
-        self.logger.debug("Transport section created")
         return section
 
     def _create_sources_section(self) -> QFrame:
@@ -433,31 +324,6 @@ class ToolbarManager(QObject):
                 self.midi_file_label.setToolTip("")
             self.logger.debug(f"MIDI file display updated: {display_name}")
 
-    def update_time_display(self, time_str: str) -> None:
-        """Update the time display."""
-        if hasattr(self, 'time_display') and self.time_display:
-            self.time_display.setText(time_str)
-
-    def update_play_pause_icon(self, is_playing: bool) -> None:
-        """Update the play/pause button icon based on current state."""
-        self.is_playing = is_playing
-        if self.play_pause_button:
-            icon = self.pause_icon if is_playing else self.play_icon
-            self.play_pause_button.setIcon(icon)
-            self.logger.debug(f"Play/pause icon updated: {'pause' if is_playing else 'play'}")
-    
-    def set_bpm(self, bpm: int) -> None:
-        """Set the BPM value in the spinbox."""
-        if self.bpm_spinbox:
-            self.bpm_spinbox.setValue(bpm)
-            self.logger.debug(f"BPM spinbox set to {bpm}")
-    
-    def get_bpm(self) -> int:
-        """Get current BPM value from spinbox."""
-        if self.bpm_spinbox:
-            return self.bpm_spinbox.value()
-        return 120
-    
     def get_selected_dmx_source(self) -> str:
         """Get currently selected DMX source."""
         if self.dmx_source_combo:
@@ -528,12 +394,6 @@ class ToolbarManager(QObject):
             self.export_midi_button.setEnabled(enabled)
             self.logger.debug(f"Export MIDI button {'enabled' if enabled else 'disabled'}")
     
-    def set_metronome_mute(self, is_muted: bool) -> None:
-        """Set the metronome mute button state."""
-        if self.metronome_button:
-            self.metronome_button.setChecked(is_muted)
-            self.logger.debug(f"Metronome mute button set to: {'muted' if is_muted else 'unmuted'}")
-
     def update_configuration(self, config: Config) -> None:
         """Update toolbar with new configuration."""
         self.config = config

@@ -219,6 +219,7 @@ class ContentView(QGraphicsView):
                     self.scale(zoom_out_factor, 1)
             self.timeline.update_ruler_labels()
             self.timeline.update_midi_text_truncation()
+            self.timeline.emit_zoom_changed()
         else:
             super().wheelEvent(event)
 

@@ -61,6 +61,7 @@ class WindowConfig:
     dmx_panel_collapsed: bool = False
     waveform_track_height: int = 100
     midi_events_track_height: int = 50
+    timeline_section_height: int = 230
 
 
 @dataclass
@@ -232,7 +233,8 @@ class Config:
                 height=cls._validate_int(window_data.get("height", 720), 300, 3000),
                 dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False)),
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
-                midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000)
+                midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
+                timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000)
             )
 
         if "artnet" in data:
