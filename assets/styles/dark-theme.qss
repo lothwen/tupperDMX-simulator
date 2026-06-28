@@ -370,8 +370,8 @@ QPushButton#StopButton {
     background-color: #555;
     color: white;
     border: 1px solid #666;
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 5px;
+    padding: 4px;
 }
 
 QPushButton#StopButton:hover {
@@ -386,7 +386,7 @@ QPushButton#PlayPauseButton {
     background-color: #4CAF50;
     color: white;
     border: 2px solid #45a049;
-    border-radius: 25px;
+    border-radius: 5px;
 }
 
 QPushButton#PlayPauseButton:hover {
@@ -1026,4 +1026,104 @@ QPushButton#InspectorDelete:hover {
 
 QPushButton#InspectorDelete:pressed {
     background-color: rgba(100, 30, 30, 230);
+}
+
+/* ============================================================
+   Timeline toolbar (strip above the timeline tracks)
+   Transport widgets reuse #StopButton/#PlayPauseButton/
+   #TimeDisplay/#MetronomeButton styles defined above.
+   ============================================================ */
+QWidget#TimelineToolbar {
+    background-color: #2b2b2b;
+    border-top: 2px solid #181818;
+    border-bottom: 1px solid #181818;
+}
+
+QFrame#TTSeparator {
+    color: rgba(255, 255, 255, 30);
+    max-width: 1px;
+    margin: 4px 4px;
+}
+
+QLabel#TTRowsLabel {
+    color: #aaa;
+    padding: 0 2px;
+}
+
+/* Generic tool buttons + Add track */
+QWidget#TimelineToolbar QPushButton#TTToolButton,
+QWidget#TimelineToolbar QPushButton#TTAddTrack,
+QWidget#TimelineToolbar QPushButton#TTFit {
+    color: #e0e0e0;
+    background-color: #3a3a3a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTToolButton:hover,
+QWidget#TimelineToolbar QPushButton#TTAddTrack:hover,
+QWidget#TimelineToolbar QPushButton#TTFit:hover {
+    background-color: #4a4a4a;
+}
+
+QWidget#TimelineToolbar QPushButton#TTAddTrack {
+    background-color: #2f6db0;
+    border-color: #3f7dc0;
+    font-weight: bold;
+}
+
+QWidget#TimelineToolbar QPushButton#TTAddTrack:hover {
+    background-color: #3f7dc0;
+}
+
+/* Snap toggle */
+QWidget#TimelineToolbar QPushButton#TTSnap {
+    color: #e0e0e0;
+    background-color: #3a3a3a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSnap:checked {
+    color: white;
+    background-color: #4CAF50;
+    border-color: #45a049;
+    font-weight: bold;
+}
+
+/* Segmented toggles (Bars|Time, Rows S/M/L) */
+QWidget#TimelineToolbar QPushButton#TTSegment {
+    color: #cfcfcf;
+    background-color: #333;
+    border: 1px solid #444;
+    padding: 5px 10px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSegment:checked {
+    color: white;
+    background-color: #4a4a4a;
+    border-color: #5a5a5a;
+    font-weight: bold;
+}
+
+/* Zoom slider */
+QSlider#TTZoom::groove:horizontal {
+    background: #1a1a1a;
+    height: 6px;
+    border: 1px solid #444;
+    border-radius: 3px;
+}
+
+QSlider#TTZoom::handle:horizontal {
+    background: #d0d0d0;
+    border: 1px solid #222;
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+QSlider#TTZoom::handle:horizontal:hover {
+    background: #ffffff;
 }
