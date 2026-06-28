@@ -34,10 +34,9 @@ class DMXDisplayWidget(QTableWidget):
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setVisible(False)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        # Allow the panel to resize within bounds; the slide animation drives
-        # the actual width via the splitter.
+        # Allow the panel to resize freely; the splitter (and the slide
+        # animation) drive the actual width.
         self.setMinimumWidth(0)
-        self.setMaximumWidth(260)
         self._distribute_column_widths()
 
         # Set font

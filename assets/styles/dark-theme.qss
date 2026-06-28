@@ -568,7 +568,7 @@ QPushButton#DmxPanelToggle:pressed {
 
 /* Right Sidebar (Tabbed: Library + DMX Channels) */
 QTabWidget#RightSidebar::pane {
-    border: 1px solid #444;
+    border: 1px solid #1f1f1f;
     background-color: #2b2b2b;
     top: -1px;
 }
@@ -581,13 +581,9 @@ QTabWidget#RightSidebar QTabBar::tab {
     background-color: #2b2b2b;
     color: #aaa;
     padding: 6px 14px;
-    border: 1px solid #444;
-    border-bottom: none;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    margin-right: 2px;
+    border: 1px solid #1f1f1f;
     font-size: 12px;
-    font-weight: bold;
+    font-weight: normal;
     min-width: 80px;
 }
 
@@ -600,6 +596,8 @@ QTabWidget#RightSidebar QTabBar::tab:selected {
     background-color: #3a3a3a;
     color: #fff;
     border-color: #666;
+    font-weight: bold;
+    border-bottom: 2px solid #79cdf0;
 }
 
 QTabWidget#RightSidebar QTabBar::tab:!selected {
@@ -611,71 +609,150 @@ QWidget#ClipLibrary {
     background-color: #2b2b2b;
 }
 
-/* Clip Library — QToolBox (one page per fixture) */
-QToolBox#ClipLibraryToolBox {
-    background-color: #2b2b2b;
-    border: none;
+/* Clip Library — Search row */
+QWidget#ClipSearchRow {
+    background-color: transparent;
 }
 
-QToolBox#ClipLibraryToolBox::tab {
-    background-color: #383838;
+QLineEdit#ClipSearchBox {
+    background-color: #1a1a1a;
     color: #ddd;
     border: 1px solid #444;
     border-radius: 4px;
-    padding: 6px 8px;
+    padding: 5px 8px;
     font-size: 12px;
-    font-weight: bold;
 }
 
-QToolBox#ClipLibraryToolBox::tab:hover {
-    background-color: #4a4a4a;
+QLineEdit#ClipSearchBox:focus {
+    border-color: #5a6578;
+}
+
+QToolButton#ClipViewToggle {
+    background-color: #1a1a1a;
+    color: #aaa;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 7px;
+    font-size: 13px;
+}
+
+QToolButton#ClipViewToggle:hover {
     color: #fff;
     border-color: #666;
 }
 
-QToolBox#ClipLibraryToolBox::tab:selected {
+QToolButton#ClipViewToggle:checked {
     background-color: #4a5568;
     color: #fff;
     border-color: #5a6578;
 }
 
-/* Clip Library — Clip List & Scene List (per-fixture clips and LED scenes) */
-QListWidget#ClipList,
-QListWidget#SceneList {
-    background-color: #1a1a1a;
-    color: #ddd;
+/* Clip Library — Group pills */
+QWidget#ClipPillBar {
+    background-color: transparent;
+}
+
+QFrame#ClipPill {
+    background-color: #383838;
     border: 1px solid #444;
-    border-radius: 4px;
-    padding: 2px;
-    font-size: 12px;
-    outline: 0;
-    show-decoration-selected: 1;
+    border-radius: 6px;
 }
 
-QListWidget#ClipList::item,
-QListWidget#SceneList::item {
-    padding: 6px 8px;
-    border-radius: 3px;
-    margin: 1px 0;
+QFrame#ClipPill:hover {
+    background-color: #4a4a4a;
+    border-color: #666;
+}
+
+QFrame#ClipPill[selected="true"] {
+    background-color: #5e9ec2;
+    border-color: #5a6578;
+}
+
+QLabel#ClipPillLabel {
     color: #ddd;
+    font-size: 11px;
+    font-weight: normal;
+    background: transparent;
 }
 
-QListWidget#ClipList::item:hover,
-QListWidget#SceneList::item:hover {
-    background-color: #3a4558;
-    color: #fff;
+QFrame#ClipPill[selected="true"] QLabel#ClipPillLabel {
+    color: #082230;
+    font-weight: bold;
 }
 
-QListWidget#ClipList::item:selected,
-QListWidget#SceneList::item:selected {
-    background-color: #4a5568;
-    color: #fff;
+QLabel#ClipPillCount {
+    color: #999;
+    border-radius: 7px;
+    /*padding: 0 4px;*/
+    font-size: 9px;
+    font-weight: normal;
 }
 
-QListWidget#ClipList::item:selected:!active,
-QListWidget#SceneList::item:selected:!active {
-    background-color: #4a5568;
-    color: #fff;
+QFrame#ClipPillNew {
+    background-color: transparent;
+    border: 1px dashed #666;
+    border-radius: 12px;
+}
+
+QFrame#ClipPillNew QLabel#ClipPillLabel {
+    color: #888;
+    font-weight: normal;
+}
+
+/* Clip Library — Group header */
+QWidget#ClipHeaderRow {
+    background-color: transparent;
+}
+
+QLabel#ClipGroupHeader {
+    color: #bbb;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+QLabel#ClipSortLabel {
+    color: #888;
+    font-size: 11px;
+}
+
+/* Clip Library — Clip cards */
+QScrollArea#ClipCardScroll {
+    background-color: transparent;
+    border: none;
+}
+
+QWidget#ClipCardGrid {
+    background-color: transparent;
+}
+
+QFrame#ClipCard {
+    background-color: #262626;
+    border: 1px solid #1c1c1c;
+    border-radius: 5px;
+}
+
+QFrame#ClipCard:hover {
+    background-color: #2a3038;
+    border-color: #5a6578;
+}
+
+QLabel#ClipCardTitle {
+    color: #eee;
+    font-size: 11px;
+    font-weight: bold;
+    background: transparent;
+}
+
+QLabel#ClipCardType {
+    color: #888;
+    font-size: 10px;
+    background: transparent;
+}
+
+QLabel#ClipLibraryPlaceholder {
+    color: #888;
+    font-size: 12px;
 }
 
 /* Scene Edit — Animation grid tiles */
