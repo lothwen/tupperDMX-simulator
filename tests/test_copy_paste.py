@@ -156,7 +156,10 @@ def test_scene_paste_roundtrip():
               if _near(min(x["time"] for x in evs), 40.0)]
     _assert(len(pasted) == 1, "one scene group pasted at the target time")
     members = m._doc._group_members(pasted[0])
-    _assert(len(members) == 7, "pasted scene has all 7 channels")
+    ctrl = [x for x in members if 1 <= x["note"] <= 7]
+    _assert(len(ctrl) == 7, "pasted scene has all 7 channels")
+    _assert(any(x["note"] == note_layout.TAKE_MANUAL for x in members),
+            "pasted scene keeps the take-manual verb")
     _assert(members[0].get("scene_name") == "MyScene", "scene name preserved")
     brightness = next(x for x in members if x["note"] == 1)
     _assert(brightness["velocity"] == 127,

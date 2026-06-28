@@ -122,17 +122,18 @@ def test_scene_group_roundtrip():
     m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     m.add_scene(12.0, SCENE_CH, "B", channel=LEDBAR_CH)
 
+    expected = [1, 2, 3, 4, 5, 6, 7, note_layout.TAKE_MANUAL]
     before = _scene_groups(m)
     _assert(len(before) == 2, f"two scene groups before (got {len(before)})")
-    _assert(all(notes == [1, 2, 3, 4, 5, 6, 7] for notes in before.values()),
-            "each group has all 7 channel notes before")
+    _assert(all(notes == expected for notes in before.values()),
+            "each group has all 7 channel notes + take-manual before")
 
     m2 = _roundtrip(m)
     after = _scene_groups(m2)
     _assert(set(before.keys()) == set(after.keys()),
             f"group start times preserved (before={sorted(before)}, after={sorted(after)})")
-    _assert(all(notes == [1, 2, 3, 4, 5, 6, 7] for notes in after.values()),
-            "each reloaded group still has all 7 channel notes")
+    _assert(all(notes == expected for notes in after.values()),
+            "each reloaded group still has all 7 channel notes + take-manual")
 
 
 def test_scene_fade_roundtrip():
