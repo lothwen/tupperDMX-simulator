@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.fit_requested.connect(self.timeline.fit_to_width)
         self.timeline_toolbar.zoom_changed.connect(self.timeline.set_zoom)
         self.timeline.zoom_changed.connect(self.timeline_toolbar.set_zoom_value)
+        self.timeline_toolbar.row_height_changed.connect(self._on_row_height_preset)
 
         # Bundle the timeline toolbar + tracks into one resizable section.
         timeline_section = QWidget()
@@ -250,6 +251,8 @@ class MainWindow(QMainWindow):
         self.vertical_splitter.setSizes(
             [max(160, self.height() - section_height), section_height])
         self.vertical_splitter.splitterMoved.connect(self._on_vertical_splitter_moved)
+        # Reflect the persisted track height on the toolbar's S/M/L segments.
+        self.timeline_toolbar.set_row_height(self.config.window.midi_events_track_height)
 
         self.main_content.setSizes([self.width() - 250, 250])
 
@@ -685,6 +688,24 @@ class MainWindow(QMainWindow):
         """Persist track heights when the user finishes resizing."""
         self.config.window.waveform_track_height = int(waveform_height)
         self.config.window.midi_events_track_height = int(midi_events_height)
+        self.save_config()
+
+    def _on_row_height_preset(self, height):
+        """Apply an S/M/L fixture-track height preset, then grow/shrink the
+        timeline section so every track is visible without scrolling."""
+        self.timeline.set_midi_events_height(height)
+        self._fit_timeline_section_to_content()
+
+    def _fit_timeline_section_to_content(self):
+        """Resize the timeline section to fit its content, clamped so the stage
+        area above keeps a minimum height."""
+        needed = self.timeline_toolbar.sizeHint().height() + self.timeline.viewport_height_hint()
+        sizes = self.vertical_splitter.sizes()
+        total = sum(sizes)
+        top_min = 200  # keep the stage above visible
+        section = max(160, min(needed, total - top_min))
+        self.vertical_splitter.setSizes([total - section, section])
+        self.config.window.timeline_section_height = int(section)
         self.save_config()
 
     def _on_vertical_splitter_moved(self, _pos, _index):

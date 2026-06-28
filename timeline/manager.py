@@ -401,10 +401,23 @@ class Timeline(QWidget):
 
     def _on_midi_events_height_committed(self, new_height: int):
         """Drag finished for MIDI events — persist and reflow."""
-        self.midi_events_track_height = max(self.MIN_TRACK_HEIGHT, int(new_height))
+        self.set_midi_events_height(new_height)
+
+    def set_midi_events_height(self, height: int):
+        """Set the shared fixture-track height, reflow, and persist. Used by
+        both the resize-handle commit and the toolbar's S/M/L presets."""
+        self.midi_events_track_height = max(self.MIN_TRACK_HEIGHT, int(height))
         self._reflow_layout(redraw_waveform=False)
         self.logger.info(f"MIDI events track height set to {self.midi_events_track_height}px")
         self.track_heights_changed.emit(self.waveform_track_height, self.midi_events_track_height)
+
+    def viewport_height_hint(self) -> int:
+        """Height the timeline widget needs so the content view shows the whole
+        scene without a vertical scrollbar (content is always wider than the
+        view, so the horizontal scrollbar is accounted for)."""
+        return (self.scene_height
+                + self.content_view.horizontalScrollBar().sizeHint().height()
+                + 2 * self.content_view.frameWidth())
 
     def _reflow_layout(self, redraw_waveform: bool = False):
         """Reposition headers, content, and overlays after a height change."""

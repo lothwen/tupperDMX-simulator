@@ -1098,7 +1098,7 @@ QWidget#TimelineToolbar QPushButton#TTSegment {
     color: #cfcfcf;
     background-color: #333;
     border: 1px solid #444;
-    padding: 5px 10px;
+    padding: 5px 2px;
 }
 
 QWidget#TimelineToolbar QPushButton#TTSegment:checked {
@@ -1106,6 +1106,17 @@ QWidget#TimelineToolbar QPushButton#TTSegment:checked {
     background-color: #4a4a4a;
     border-color: #5a5a5a;
     font-weight: bold;
+}
+
+/* Round only the outer corners of the segmented control */
+QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSegment[seg="right"] {
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
 }
 
 /* Zoom slider */
