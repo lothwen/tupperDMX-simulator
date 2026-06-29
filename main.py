@@ -229,6 +229,9 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.zoom_changed.connect(self.timeline.set_zoom)
         self.timeline.zoom_changed.connect(self.timeline_toolbar.set_zoom_value)
         self.timeline_toolbar.row_height_changed.connect(self._on_row_height_preset)
+        self.timeline_toolbar.ruler_mode_changed.connect(self.timeline.set_ruler_mode)
+        self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
+        self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
 
         # Bundle the timeline toolbar + tracks into one resizable section.
         timeline_section = QWidget()
