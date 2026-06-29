@@ -697,28 +697,30 @@ class DraggableMidiEvent(QGraphicsObject):
     # Each preview computes the proposed new position/width, clamps to bounds,
     # snaps to nearby targets, and updates the visual state. No data mutation.
 
-    def _beat_px(self) -> Optional[float]:
-        """Scene-px width of one beat at the current bpm/zoom, or None.
+    def _snap_px(self) -> Optional[float]:
+        """Scene-px spacing of the grid clips snap to, or None.
 
-        Beats are uniform from t=0 at 60/bpm spacing — the same grid the
-        RulerTrack draws. Returns None when the timeline/bpm is unavailable.
+        Delegates to the timeline so snapping follows the visible grid: the
+        per-second lines in Time mode, or the bar/beat-division lines in Bars
+        mode. Returns None when the timeline is unavailable.
         """
         if self.timeline is None:
             return None
-        bpm = self.timeline.bpm
-        pps = self.timeline.PIXELS_PER_SECOND
-        if bpm <= 0 or pps <= 0:
-            return None
-        beat_px = (60.0 / bpm) * pps
-        return beat_px if beat_px > 0 else None
+        return self.timeline.snap_interval_px()
+
+    def _snap_targets(self):
+        """Neighbour-edge snap targets, or empty when snapping is disabled."""
+        if self.timeline is not None and not self.timeline.snap_enabled:
+            return []
+        return self.bounds.snap_xs
 
     def _apply_move_preview(self, delta_x: float):
         # SNAP_PX is a screen-space radius; convert to scene-space at the
         # current zoom so the snap zone stays a constant on-screen distance.
         proposed = self._press_self_pos.x() + delta_x
         new_x = resolve_move_x(proposed, self.bounds.move_intervals,
-                               self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
-                               self._beat_px())
+                               self._snap_targets(), SNAP_PX / self._zoom_x(),
+                               self._snap_px())
         if new_x is None:
             return  # no slot fits; nothing to preview
         self.setPos(new_x, self.pos().y())
@@ -730,8 +732,8 @@ class DraggableMidiEvent(QGraphicsObject):
         new_x = resolve_resize_x(self._press_self_pos.x() + delta_x,
                                  self.bounds.resize_left_min_x,
                                  self.bounds.resize_left_max_x,
-                                 self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
-                                 self._beat_px())
+                                 self._snap_targets(), SNAP_PX / self._zoom_x(),
+                                 self._snap_px())
         new_width = max(MIN_HIT_WIDTH_PX, original_right - new_x)
         self.setPos(new_x, self.pos().y())
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
@@ -745,8 +747,8 @@ class DraggableMidiEvent(QGraphicsObject):
         new_right = resolve_resize_x(original_left + self._press_width + delta_x,
                                      self.bounds.resize_right_min_x,
                                      self.bounds.resize_right_max_x,
-                                     self.bounds.snap_xs, SNAP_PX / self._zoom_x(),
-                                     self._beat_px())
+                                     self._snap_targets(), SNAP_PX / self._zoom_x(),
+                                     self._snap_px())
         new_width = max(MIN_HIT_WIDTH_PX, new_right - original_left)
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
         self._refresh_text_truncation(new_width)

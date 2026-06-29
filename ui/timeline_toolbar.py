@@ -34,6 +34,9 @@ class TimelineToolbar(QWidget):
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
     row_height_changed = pyqtSignal(int)  # fixture-track height in px
+    ruler_mode_changed = pyqtSignal(str)  # "bars" | "time"
+    beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
+    snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
     ZOOM_MIN = 20
@@ -42,6 +45,10 @@ class TimelineToolbar(QWidget):
 
     # Rows segmented preset -> fixture-track height in px (M == timeline default).
     ROW_HEIGHT_PRESETS = {"S": 30, "M": 50, "L": 80}
+
+    # Beat-division combo label -> ruler grid lines per bar ("1/4 beat" == default).
+    BEAT_DIVISIONS = {"1 beat": 1, "1/4 beat": 4, "1/8 beat": 8}
+    BEAT_DIVISION_DEFAULT = "1/4 beat"
 
     def __init__(self, play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon, parent=None):
         super().__init__(parent)
@@ -106,24 +113,31 @@ class TimelineToolbar(QWidget):
         snap_btn.setObjectName("TTSnap")
         snap_btn.setCheckable(True)
         snap_btn.setChecked(True)
+        snap_btn.toggled.connect(self.snap_toggled.emit)
         row.addWidget(snap_btn)
 
-        beat_combo = QComboBox()
-        beat_combo.setObjectName("TTBeatCombo")
-        beat_combo.addItems(["1/4 beat", "1/8 beat", "1/16 beat", "1/32 beat"])
-        beat_combo.setCurrentText("1/8 beat")
-        row.addWidget(beat_combo)
+        self.beat_combo = QComboBox()
+        self.beat_combo.setObjectName("TTBeatCombo")
+        self.beat_combo.addItems(list(self.BEAT_DIVISIONS))
+        self.beat_combo.setCurrentText(self.BEAT_DIVISION_DEFAULT)
+        self.beat_combo.currentTextChanged.connect(
+            lambda text: self.beat_division_changed.emit(self.BEAT_DIVISIONS[text]))
+        row.addWidget(self.beat_combo)
 
         # Bars | Time segmented toggle
         bars_time = QButtonGroup(self)
         bars_time.setExclusive(True)
         bars_btn = QPushButton("Bars")
         bars_btn.setObjectName("TTSegment")
+        bars_btn.setProperty("seg", "left")
         bars_btn.setCheckable(True)
         bars_btn.setChecked(True)
         time_btn = QPushButton("Time")
         time_btn.setObjectName("TTSegment")
+        time_btn.setProperty("seg", "right")
         time_btn.setCheckable(True)
+        bars_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("bars"))
+        time_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("time"))
         bars_time.addButton(bars_btn)
         bars_time.addButton(time_btn)
         seg = QHBoxLayout()

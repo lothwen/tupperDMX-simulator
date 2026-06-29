@@ -91,18 +91,14 @@ class SongSectionItem(QGraphicsObject):
         return m11 if m11 > 0 else 1.0
 
     def _snap_x(self, x: float) -> float:
-        """Clamp to >=0 and snap to the nearest beat line within SNAP_PX."""
+        """Clamp to >=0 and snap to the nearest visible grid line within SNAP_PX."""
         x = max(0.0, x)
         if self.timeline is None:
             return x
-        bpm = getattr(self.timeline, "bpm", 0)
-        pps = self.timeline.PIXELS_PER_SECOND
-        if bpm <= 0 or pps <= 0:
+        snap_px = self.timeline.snap_interval_px()
+        if not snap_px:
             return x
-        beat_px = (60.0 / bpm) * pps
-        if beat_px <= 0:
-            return x
-        nearest = round(x / beat_px) * beat_px
+        nearest = round(x / snap_px) * snap_px
         if abs(nearest - x) <= SNAP_PX / self._zoom_x():
             return max(0.0, nearest)
         return x

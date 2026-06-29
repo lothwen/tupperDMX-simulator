@@ -67,6 +67,9 @@ class Timeline(QWidget):
         self.fixtures = list(fixtures or [])
 
         self.bpm = 120
+        self.ruler_mode = "bars"  # "bars" | "time"
+        self.beat_division = 4  # ruler/grid lines per bar in Bars mode (1, 4 or 8)
+        self.snap_enabled = True  # snap clip drags to the grid + neighbour edges
 
         # Resizable track heights (instance attributes so they can be changed at runtime)
         self.waveform_track_height = max(
@@ -474,18 +477,32 @@ class Timeline(QWidget):
         self.playhead.setX(x_pos)
 
     def draw_time_grid(self):
-        """Draw the time grid lines."""
-        for item in self.time_grid_items: 
+        """Draw the background grid lines, following the active ruler mode.
+
+        Bars mode: `beat_division` lines per bar, brighter on bar boundaries.
+        Time mode: a line per second, brighter on the ruler's major interval
+        (every 5 s) so the grid aligns with the m:ss ticks above it.
+        """
+        for item in self.time_grid_items:
             self.content_scene.removeItem(item)
         self.time_grid_items.clear()
 
-        seconds_per_beat = 60.0 / self.bpm
-        total_beats = int(self.content_width / (seconds_per_beat * self.PIXELS_PER_SECOND))
-        
-        for beat in range(total_beats):
-            x_pos = beat * seconds_per_beat * self.PIXELS_PER_SECOND
+        if self.ruler_mode == "time":
+            step_px = self.PIXELS_PER_SECOND
+            major_every = self.ruler_track.TIME_MAJOR_INTERVAL
+        else:
+            seconds_per_bar = (60.0 / self.bpm) * 4
+            step_px = (seconds_per_bar / self.beat_division) * self.PIXELS_PER_SECOND
+            major_every = self.beat_division
+
+        if step_px == 0:
+            return
+        count = int(self.content_width / step_px)
+
+        for i in range(count):
+            x_pos = i * step_px
             line = QGraphicsLineItem(x_pos, self.RULER_TRACK_HEIGHT, x_pos, self.scene_height)
-            if beat % 4 == 0:
+            if i % major_every == 0:
                 grid_pen = QPen(QColor(80, 80, 80), 1.5)
             else:
                 grid_pen = QPen(QColor(60, 60, 60), 0.8)
@@ -708,6 +725,52 @@ class Timeline(QWidget):
             self.ruler_track.redraw()
             self.draw_time_grid()
             self.logger.info(f"Timeline BPM updated to {bpm}")
+
+    def set_ruler_mode(self, mode):
+        """Switch the ruler between musical bars and mm:ss clock time."""
+        if mode not in ("bars", "time") or mode == self.ruler_mode:
+            return
+        self.ruler_mode = mode
+        self.ruler_track.redraw()
+        self.draw_time_grid()
+        self.logger.info(f"Timeline ruler mode set to {mode}")
+
+    def set_beat_division(self, divisions):
+        """Set how many ruler/grid lines subdivide each bar in Bars mode."""
+        if divisions <= 0 or divisions == self.beat_division:
+            return
+        self.beat_division = divisions
+        self.ruler_track.redraw()
+        self.draw_time_grid()
+        self.logger.info(f"Timeline beat division set to {divisions} per bar")
+
+    def set_snap_enabled(self, enabled):
+        """Enable/disable snapping of clip drags to the grid and clip edges."""
+        self.snap_enabled = bool(enabled)
+        self.logger.info(f"Timeline snap {'enabled' if self.snap_enabled else 'disabled'}")
+
+    def snap_interval_px(self):
+        """Scene-px spacing of the finest visible grid line, for clip snapping.
+
+        Mirrors what the ruler/grid draw so snapping lands on visible lines:
+        one-second lines in Time mode, or bar/`beat_division` lines in Bars
+        mode. Returns None when snapping is off or unavailable (callers then
+        skip grid snapping).
+        """
+        if not self.snap_enabled:
+            return None
+        pps = self.PIXELS_PER_SECOND
+        if pps <= 0:
+            return None
+        if self.ruler_mode == "time":
+            spacing_sec = self.ruler_track.TIME_MINOR_INTERVAL
+        else:
+            if self.bpm <= 0:
+                return None
+            seconds_per_bar = (60.0 / self.bpm) * 4
+            spacing_sec = seconds_per_bar / self.beat_division
+        px = spacing_sec * pps
+        return px if px > 0 else None
 
     def update_ruler_labels(self):
         """Update ruler labels based on zoom level."""
