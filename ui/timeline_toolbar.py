@@ -1,20 +1,11 @@
-import os
-import sys
 from typing import Optional
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox,
                              QComboBox, QSlider, QButtonGroup, QFrame, QSizePolicy)
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import QObject, Qt, QSize, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
 from tupperlogger import get_logger
-
-
-def _assets_base() -> str:
-    """Base directory holding the bundled ``assets/`` tree (frozen-aware)."""
-    if getattr(sys, "frozen", False):
-        return sys._MEIPASS
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class TimelineToolbar(QWidget):
@@ -29,7 +20,6 @@ class TimelineToolbar(QWidget):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     bpm_changed = pyqtSignal(int)  # new_bpm
-    metronome_mute_toggled = pyqtSignal(bool)  # mute_state
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
@@ -64,7 +54,6 @@ class TimelineToolbar(QWidget):
         # Widget handles needed after construction
         self.play_pause_button: Optional[QPushButton] = None
         self.time_display: Optional[QLabel] = None
-        self.metronome_button: Optional[QPushButton] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
 
         layout = QHBoxLayout(self)
@@ -180,16 +169,14 @@ class TimelineToolbar(QWidget):
         self.time_display.setObjectName("TimeDisplay")
         row.addWidget(self.time_display)
 
-        # BPM cluster: metronome mute toggle + spinbox
-        self.metronome_button = QPushButton("♩")
-        metronome_icon = QIcon(os.path.join(_assets_base(), "assets", "icons", "metronome_icon.png"))
-        self.metronome_button.setIcon(metronome_icon)
-        self.metronome_button.setIconSize(QSize(28, 28))
-        self.metronome_button.setFixedSize(32, 32)
-        self.metronome_button.setCheckable(True)
-        self.metronome_button.setObjectName("MetronomeButton")
-        self.metronome_button.toggled.connect(self.metronome_mute_toggled.emit)
-        row.addWidget(self.metronome_button)
+        # BPM cluster: decorative tempo glyph + spinbox. (Metronome mute now
+        # lives solely on the timeline header's CLICK row, so this is a
+        # non-interactive label.)
+        tempo_glyph = QLabel("♩")
+        tempo_glyph.setObjectName("MetronomeButton")
+        tempo_glyph.setFixedSize(32, 32)
+        tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(tempo_glyph)
 
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(40, 300)
@@ -284,11 +271,6 @@ class TimelineToolbar(QWidget):
         if self.bpm_spinbox:
             return self.bpm_spinbox.value()
         return 120
-
-    def set_metronome_mute(self, is_muted: bool) -> None:
-        """Reflect the metronome mute state on the toggle button."""
-        if self.metronome_button:
-            self.metronome_button.setChecked(is_muted)
 
     def set_zoom_value(self, factor: float) -> None:
         """Move the zoom slider to reflect a zoom change driven elsewhere

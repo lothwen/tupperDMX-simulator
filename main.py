@@ -173,7 +173,6 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
         self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
-        self.timeline_toolbar.metronome_mute_toggled.connect(self.on_toolbar_metronome_mute_toggled)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
@@ -576,16 +575,8 @@ class MainWindow(QMainWindow):
         self.save_config()
 
     def on_metronome_mute_toggled(self, muted):
-        """Handle metronome mute toggle from timeline."""
+        """Handle metronome mute toggle from the timeline header's CLICK row."""
         self.audio_controller.set_metronome_muted(muted)
-        # Update toolbar button to reflect mute state
-        self.timeline_toolbar.set_metronome_mute(muted)
-
-    def on_toolbar_metronome_mute_toggled(self, muted):
-        """Handle metronome mute toggle from toolbar."""
-        self.audio_controller.set_metronome_muted(muted)
-        # Update timeline 'M' button to reflect mute state
-        self.timeline.metronome_mute_button.setChecked(muted)
 
     def show_settings_dialog(self):
         """Open the preferences editor and apply any changes live."""

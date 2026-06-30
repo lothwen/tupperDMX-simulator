@@ -105,9 +105,10 @@ QMenu::separator {
 
 /* Mute Buttons */
 #MetronomeMuteButton, #AudioMuteButton {
-    color: white;
+    color: #8a8a8a;
     border: none;
     border-radius: 2px;
+    font-size: 10px;
 }
 
 #MetronomeMuteButton:checked, #AudioMuteButton:checked {
@@ -115,33 +116,71 @@ QMenu::separator {
     color: white;
 }
 
-/* Toolbar Metronome Button */
+/* Toolbar tempo glyph (decorative ♩ next to the BPM spinbox) */
 #MetronomeButton {
-    /*border: 1px solid #555555;*/
-    border-radius: 3px;
-    background-color: #404040;
-    padding: 2px;
+    background-color: transparent;
+    color: #cfcfcf;
+    font-size: 22px;
 }
 
-#MetronomeButton:hover {
-    background-color: #505050;
-    border-color: #777777;
+/* Combined track-header panel (TRACKS counter + MASTER/METRO volumes) */
+#TrackHeaderPanel {
+    background-color: #2f2f2f;
 }
 
-#MetronomeButton:checked {
-    background-color: #ff4444;
-    border-color: #ff6666;
+#TracksTitle {
+    color: #d0d0d0;
+    font-weight: bold;
+    font-size: 12px;
 }
 
-#MetronomeButton:checked:hover {
-    background-color: #ff6666;
-    border-color: #ff8888;
+#TracksCount {
+    color: #8a8a8a;
+    font-size: 11px;
 }
 
-/* Control Containers */
-#MetronomeControlsContainer, #AudioControlsContainer {
-    background-color: #383838;
-    border-radius: 5px;
+#VolumeRowLabel {
+    color: #9a9a9a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+#VolumeDbLabel {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* MASTER (audio) and METRO (metronome) volumes share a green→orange level
+   gradient. The groove carries the full-width gradient; the unfilled (add-page)
+   part is dimmed so it reads as a level meter. */
+QSlider#MasterVolumeSlider::groove:horizontal,
+QSlider#MetroVolumeSlider::groove:horizontal {
+    height: 8px;
+    border-radius: 4px;
+    border: 1px solid #333;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #43d65a, stop:0.55 #cdd23f, stop:1 #ef8b2b);
+}
+
+QSlider#MasterVolumeSlider::add-page:horizontal,
+QSlider#MetroVolumeSlider::add-page:horizontal {
+    background: rgba(18, 18, 18, 190);
+    border-radius: 4px;
+}
+
+QSlider#MasterVolumeSlider::sub-page:horizontal,
+QSlider#MetroVolumeSlider::sub-page:horizontal {
+    background: transparent;
+}
+
+/* No visible knob — the gradient fill alone shows the level. The handle stays
+   present (width > 0) so the groove is still click/drag-able. */
+QSlider#MasterVolumeSlider::handle:horizontal,
+QSlider#MetroVolumeSlider::handle:horizontal {
+    background: transparent;
+    border: none;
+    width: 6px;
+    margin: 0;
 }
 
 /* DMX Display Table */
