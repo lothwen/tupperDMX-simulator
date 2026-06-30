@@ -6,7 +6,7 @@ Displays time markers, bar numbers, and beat subdivisions.
 
 import math
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem, QGraphicsProxyWidget
+from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem
 from PyQt6.QtGui import QColor, QBrush, QPen
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGraphicsItem
@@ -34,23 +34,18 @@ class RulerTrack(BaseTrack):
         return self.timeline_manager.RULER_TRACK_HEIGHT
         
     def draw_header(self):
-        """Draw the ruler header with metronome controls."""
-        # Only create permanent items (metronome controls) once
+        """Draw the ruler header background.
+
+        The visible controls live on the manager-owned combined header panel
+        (TRACKS / MASTER / METRO), which overlays this band as one block.
+        """
+        # Only create the permanent background once.
         if not self.permanent_header_items:
             ruler_header_bg = QGraphicsRectItem(0, 0, self.timeline_manager.HEADER_WIDTH, self.get_track_height())
             ruler_header_bg.setBrush(QBrush(QColor(50, 50, 50)))
             ruler_header_bg.setPen(QPen(QColor(20, 20, 20)))
             self.header_scene.addItem(ruler_header_bg)
             self.permanent_header_items.append(ruler_header_bg)
-
-            # Add metronome controls (these should never be cleared)
-            if hasattr(self.timeline_manager, 'metronome_controls_container'):
-                proxy = QGraphicsProxyWidget()
-                proxy.setWidget(self.timeline_manager.metronome_controls_container)
-                proxy.setPos(5, 5)
-                proxy.setZValue(1)
-                self.header_scene.addItem(proxy)
-                self.permanent_header_items.append(proxy)
 
     def draw_ruler(self):
         """Draw the ruler with bar or clock-time markers based on the mode."""
