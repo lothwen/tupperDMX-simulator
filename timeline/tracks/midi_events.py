@@ -17,9 +17,11 @@ mid-drag is purely visual.
 
 from typing import List, Optional
 
-from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsTextItem, QGraphicsObject,
-                             QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget)
-from PyQt6.QtGui import QColor, QBrush, QPen, QLinearGradient, QPainter, QPolygonF
+from PyQt6.QtWidgets import (QGraphicsTextItem, QGraphicsObject,
+                             QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget,
+                             QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout)
+from PyQt6.QtGui import (QColor, QBrush, QPen, QLinearGradient, QPainter,
+                         QPolygonF)
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
 
 from .base import BaseTrack
@@ -29,6 +31,7 @@ from .clip_geometry import (
     zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
 )
 import note_layout
+from fixture_colors import color_for_type, GROUP_COLORS
 from tupperlogger import get_logger
 
 
@@ -111,6 +114,10 @@ FADE_LINE_WIDTH_PX = 2
 # zoom. Fill is the scene swatch colour.
 AUTO_CLIP_HATCH_SPACING_PX = 7
 AUTO_CLIP_HATCH_ALPHA = 70
+
+# Opacity applied to every clip on a muted (eye-off) track so the lane reads as
+# silenced but its content stays visible.
+MUTED_CLIP_OPACITY = 0.35
 
 
 class FadeHandle(QGraphicsObject):
@@ -258,6 +265,7 @@ class DraggableMidiEvent(QGraphicsObject):
                  bounds: ClipBounds, is_blackout: bool = False,
                  group_id: Optional[str] = None,
                  group_event_ids: Optional[List[str]] = None,
+                 locked: bool = False,
                  parent=None):
         super().__init__(parent)
         self.rect = QRectF(0, 0, max(width, MIN_HIT_WIDTH_PX), height)
@@ -267,17 +275,22 @@ class DraggableMidiEvent(QGraphicsObject):
         self.event_data = event_data
         self.bounds = bounds
         self.is_blackout_clip = is_blackout
+        # Locked clips (their track's lock toggle is on) are read-only: no
+        # select/move/resize/fade/edit, and no context menu. Hover tooltips
+        # (pure info) stay available.
+        self.locked = locked
         # Scene-clip grouping: when set, this DraggableMidiEvent represents a
         # whole scene group; the Timeline routes drag signals to the scene API
         # rather than the single-event API.
         self.group_id = group_id
         self.group_event_ids = list(group_event_ids) if group_event_ids else []
 
-        # Qt item flags
+        # Qt item flags. Locked clips are non-selectable/focusable so they
+        # can't be marquee-selected or dragged.
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, not locked)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, not locked)
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton)
 
@@ -324,7 +337,7 @@ class DraggableMidiEvent(QGraphicsObject):
         self.fade_out_seconds = float(event_data.get("fade_out", 0.0)) if event_data else 0.0
         self._fade_in_handle: Optional[FadeHandle] = None
         self._fade_out_handle: Optional[FadeHandle] = None
-        if not is_blackout:
+        if not is_blackout and not locked:
             self._fade_in_handle = FadeHandle("in", self)
             self._fade_out_handle = FadeHandle("out", self)
             self._fade_in_handle.fade_committed.connect(self._on_handle_committed)
@@ -586,6 +599,13 @@ class DraggableMidiEvent(QGraphicsObject):
                 clip.text_item.setPos(text_start.x() + clamped, text_start.y())
 
     def mousePressEvent(self, event):
+        if self.locked:
+            # Read-only: swallow the press so there's no select/drag/menu.
+            if self.timeline:
+                self.timeline.hide_clip_tooltip()
+            self._tooltip_shown = False
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             if self.timeline:
                 self.timeline.hide_clip_tooltip()
@@ -629,7 +649,8 @@ class DraggableMidiEvent(QGraphicsObject):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and not self.is_blackout_clip:
+        if (event.button() == Qt.MouseButton.LeftButton
+                and not self.is_blackout_clip and not self.locked):
             self.edit_requested.emit(self.event_id)
             event.accept()
             return
@@ -801,6 +822,11 @@ class DraggableMidiEvent(QGraphicsObject):
         super().hoverEnterEvent(event)
 
     def hoverMoveEvent(self, event):
+        if self.locked:
+            # No move/resize affordance on a locked clip.
+            self._set_view_cursor(Qt.CursorShape.ArrowCursor)
+            super().hoverMoveEvent(event)
+            return
         zone = self._zone_at(event.pos().x())
         if zone in (self.MODE_RESIZE_LEFT, self.MODE_RESIZE_RIGHT):
             self._set_view_cursor(Qt.CursorShape.SizeHorCursor)
@@ -927,6 +953,134 @@ class AutoSceneClip(QGraphicsObject):
         painter.drawRect(rect)
 
 
+# Header toggle-bar glyphs (plain UTF characters; styled via the app stylesheet
+# by objectName). The lock swaps open<->closed with its state; the eye keeps one
+# glyph and signals "muted" via its checked (amber) background.
+_GRIP_GLYPH = "⠿"
+_CHEVRON_GLYPH = "▾"
+_EYE_GLYPH = "👁"
+_LOCK_OPEN_GLYPH = "🔓"
+_LOCK_CLOSED_GLYPH = "🔒"
+
+
+def _header_button(glyph: str, object_name: str, tooltip: str,
+                   checkable: bool = False) -> QPushButton:
+    """A 22px header button showing a single UTF glyph, styled by the app QSS."""
+    btn = QPushButton(glyph)
+    btn.setObjectName(object_name)
+    btn.setFixedSize(22, 22)
+    btn.setToolTip(tooltip)
+    btn.setCheckable(checkable)
+    return btn
+
+
+class TrackHeaderWidget(QWidget):
+    """The per-fixture timeline track header.
+
+    Left to right: a reorder grip and a collapse chevron (both visual
+    placeholders for now), a type-coloured swatch that matches the fixture's
+    clip-library section, the fixture name over its MIDI/DMX address, and the
+    eye (mute) / lock / A (auto) toggle bar. Each toggle emits a signal; the
+    owning MidiEventsTrack routes it to the MidiManager, and pushes state back
+    in via set_states()."""
+
+    eye_toggled = pyqtSignal(bool)   # True == muted
+    lock_toggled = pyqtSignal(bool)  # True == locked
+    auto_toggled = pyqtSignal(bool)  # True == auto
+
+    def __init__(self, label: str, channel: int, dmx_start: int, dmx_end: int,
+                 accent: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TrackHeader")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Per-instance accent: the left border + swatch use the fixture colour;
+        # the rest of the styling comes from the app stylesheet by objectName.
+        self.setStyleSheet(
+            "QWidget#TrackHeader { background-color: #323232; "
+            f"border-left: 4px solid {accent}; "
+            "border-bottom: 1px solid #444; }")
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(8, 4, 6, 4)
+        root.setSpacing(4)
+
+        self.grip = _header_button(_GRIP_GLYPH, "TrackGrip",
+                                   "Drag to reorder (coming soon)")
+        self.grip.setEnabled(False)
+        self.chevron = _header_button(_CHEVRON_GLYPH, "TrackChevron",
+                                      "Collapse track (coming soon)")
+        root.addWidget(self.grip)
+        root.addWidget(self.chevron)
+
+        self.swatch = QFrame()
+        self.swatch.setObjectName("TrackSwatch")
+        self.swatch.setFixedSize(12, 12)
+        self.swatch.setStyleSheet(
+            f"background-color: {accent}; border-radius: 2px;")
+
+        # Swatch sits on the name's row; the address sits below, left-aligned to
+        # the same edge as the swatch. Stretches keep the block vertically
+        # centred as the track height grows (they collapse to 0 when small).
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(2, 0, 0, 0)
+        text_col.setSpacing(0)
+        self.name_label = QLabel(label)
+        self.name_label.setObjectName("TrackName")
+        addr = f"Ch. {channel + 1}"
+        if dmx_end >= dmx_start:
+            addr += f"  ·  DMX {dmx_start}–{dmx_end}"
+        self.info_label = QLabel(addr)
+        self.info_label.setObjectName("TrackInfo")
+
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(6)
+        name_row.addWidget(self.swatch)
+        name_row.addWidget(self.name_label)
+        name_row.addStretch(1)
+
+        text_col.addStretch(1)
+        text_col.addLayout(name_row)
+        text_col.addWidget(self.info_label)
+        text_col.addStretch(1)
+        root.addLayout(text_col, 1)
+
+        self.eye_btn = _header_button(_EYE_GLYPH, "TrackEyeButton",
+                                      "Hide / mute this track's MIDI output",
+                                      checkable=True)
+        self.eye_btn.toggled.connect(self.eye_toggled.emit)
+
+        self.lock_btn = _header_button(_LOCK_OPEN_GLYPH, "TrackLockButton",
+                                       "Lock this track (no move, resize or new clips)",
+                                       checkable=True)
+        self.lock_btn.toggled.connect(self.lock_toggled.emit)
+        self.lock_btn.toggled.connect(
+            lambda on: self.lock_btn.setText(
+                _LOCK_CLOSED_GLYPH if on else _LOCK_OPEN_GLYPH))
+
+        self.auto_btn = _header_button("A", "AutoModeButton",
+                                       "Follow the song-part program (auto)",
+                                       checkable=True)
+        self.auto_btn.toggled.connect(self.auto_toggled.emit)
+
+        root.addWidget(self.eye_btn)
+        root.addWidget(self.lock_btn)
+        root.addWidget(self.auto_btn)
+
+    def set_states(self, *, auto: bool, mute: bool, lock: bool,
+                   auto_enabled: bool):
+        """Reflect the persisted/runtime state on the toggles without
+        re-emitting (blockSignals guards the programmatic setChecked)."""
+        for btn, val in ((self.eye_btn, mute), (self.lock_btn, lock),
+                         (self.auto_btn, auto)):
+            btn.blockSignals(True)
+            btn.setChecked(val)
+            btn.blockSignals(False)
+        # The lock glyph swap rides the toggled signal, which is blocked above.
+        self.lock_btn.setText(_LOCK_CLOSED_GLYPH if lock else _LOCK_OPEN_GLYPH)
+        self.auto_btn.setEnabled(auto_enabled)
+
+
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
 
@@ -940,29 +1094,33 @@ class MidiEventsTrack(BaseTrack):
         self.fixture_index = fixture_index
         self.label = label
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
-        # Persistent "auto" toggle proxy — survives header redraws (like the
+        # Persistent header proxy — the whole TrackHeaderWidget lives on one
+        # QGraphicsProxyWidget that survives per-reflow header redraws (like the
         # waveform's audio-controls proxy) so its QWidget isn't destroyed.
-        self._auto_proxy = None
-        self._auto_button = None
+        self._header_proxy = None
+        self._header_widget = None
         self.logger = get_logger("timeline.tracks.midi_events")
 
     def clear_items(self):
-        """Tear down for a patch rebuild / timeline cleanup. The 'A' proxy lives
-        outside header_items (so per-redraw header clears don't destroy it), so
-        dispose it explicitly here."""
+        """Tear down for a patch rebuild / timeline cleanup. The header proxy
+        lives outside header_items (so per-redraw header clears don't destroy
+        it), so dispose it explicitly here."""
         super().clear_items()
-        if self._auto_proxy is not None:
-            if self._auto_proxy.scene():
-                self._auto_proxy.scene().removeItem(self._auto_proxy)
-            self._auto_proxy.deleteLater()
-            self._auto_proxy = None
-            self._auto_button = None
+        if self._header_proxy is not None:
+            if self._header_proxy.scene():
+                self._header_proxy.scene().removeItem(self._header_proxy)
+            self._header_proxy.deleteLater()
+            self._header_proxy = None
+            self._header_widget = None
 
     def _software_controller(self):
         """The live software DMX controller, or None. Auto mode is a property of
         its runtime fixtures, so the toggle only applies when it's present."""
         mm = self.timeline_manager.midi_manager if self.timeline_manager else None
         return getattr(mm, "software_controller", None) if mm else None
+
+    def _midi_manager(self):
+        return self.timeline_manager.midi_manager if self.timeline_manager else None
 
     def _on_auto_toggled(self, checked: bool):
         # Auto is only meaningful with a software controller (the button is
@@ -971,22 +1129,39 @@ class MidiEventsTrack(BaseTrack):
         # — the resulting data_changed redraws this lane's auto visualization.
         if self._software_controller() is None:
             return
-        mm = self.timeline_manager.midi_manager if self.timeline_manager else None
+        mm = self._midi_manager()
         if mm is not None:
             mm.set_fixture_auto(self.fixture_index, checked)
 
-    def sync_auto_button(self):
-        """Reflect the controller's current auto state on the button (and enable
-        it only when a software controller exists)."""
-        if self._auto_button is None:
+    def _on_eye_toggled(self, muted: bool):
+        # Eye off == muted: the manager persists the note-71 mute bit, tells the
+        # worker to skip this fixture's MIDI channel, and commits so the lane
+        # redraws dimmed.
+        mm = self._midi_manager()
+        if mm is not None:
+            mm.set_fixture_mute(self.fixture_index, muted)
+
+    def _on_lock_toggled(self, locked: bool):
+        # Lock persists the note-71 lock bit and commits so this lane's clips
+        # redraw read-only (non-interactive) and drops onto it are blocked.
+        mm = self._midi_manager()
+        if mm is not None:
+            mm.set_fixture_lock(self.fixture_index, locked)
+
+    def sync_header_state(self):
+        """Reflect this fixture's auto/mute/lock state on the header toggles.
+        Auto follows the runtime controller (and is enabled only when one
+        exists); mute/lock follow the document's persisted note-71 flags."""
+        if self._header_widget is None:
             return
         controller = self._software_controller()
-        self._auto_button.setEnabled(controller is not None)
-        self._auto_button.blockSignals(True)
-        self._auto_button.setChecked(
-            bool(controller is not None
-                 and controller.is_fixture_auto(self.fixture_index)))
-        self._auto_button.blockSignals(False)
+        mm = self._midi_manager()
+        self._header_widget.set_states(
+            auto=bool(controller is not None
+                      and controller.is_fixture_auto(self.fixture_index)),
+            mute=bool(mm is not None and mm.is_fixture_muted(self.fixture_index)),
+            lock=bool(mm is not None and mm.is_fixture_locked(self.fixture_index)),
+            auto_enabled=controller is not None)
 
     def matches_filter(self, event) -> bool:
         """True if `event` belongs on this fixture's lane.
@@ -1007,45 +1182,38 @@ class MidiEventsTrack(BaseTrack):
     def get_track_height(self) -> int:
         return self.timeline_manager.midi_events_track_height
 
+    def _header_accent(self) -> str:
+        """The fixture's type colour (matches its clip-library section)."""
+        tm = self.timeline_manager
+        ftype = tm._fixture_type(self.fixture_index) if tm else None
+        return color_for_type(tm.fixtures, ftype) if ftype else GROUP_COLORS[0]
+
     def draw_header(self, y_offset: int):
-        for item in self.header_items:
-            if item.scene():
-                item.scene().removeItem(item)
-        self.header_items.clear()
-
-        header_rect = QGraphicsRectItem(
-            0, y_offset,
-            self.timeline_manager.HEADER_WIDTH,
-            self.get_track_height()
-        )
-        header_rect.setBrush(QBrush(QColor(50, 50, 50)))
-        header_rect.setPen(QPen(QColor(20, 20, 20)))
-        self.header_scene.addItem(header_rect)
-        self.header_items.append(header_rect)
-
-        header_text = QGraphicsTextItem(self.label)
-        header_text.setDefaultTextColor(QColor(200, 200, 200))
-        header_text.setPos(5, y_offset + 5)
-        self.header_scene.addItem(header_text)
-        self.header_items.append(header_text)
-
-        # "A" = auto: opt this fixture into the song-part program. Kept on a
-        # persistent proxy so the redraw on every reflow doesn't destroy it.
-        if self._auto_proxy is None:
-            self._auto_button = QPushButton("A")
-            self._auto_button.setCheckable(True)
-            self._auto_button.setFixedSize(20, 20)
-            self._auto_button.setObjectName("AutoModeButton")
-            self._auto_button.setToolTip("Follow the song-part program (auto)")
-            self._auto_button.toggled.connect(self._on_auto_toggled)
-            self._auto_proxy = QGraphicsProxyWidget()
-            self._auto_proxy.setWidget(self._auto_button)
-            self._auto_proxy.setZValue(1)
-        if self._auto_proxy.scene() is None:
-            self.header_scene.addItem(self._auto_proxy)
-        self._auto_proxy.setPos(self.timeline_manager.HEADER_WIDTH - 26,
-                                y_offset + 5)
-        self.sync_auto_button()
+        # The whole header is one TrackHeaderWidget on a persistent proxy (built
+        # once, then just repositioned/resized on reflow) — it paints its own
+        # background, so no separate rect/text items are needed.
+        if self._header_proxy is None:
+            tm = self.timeline_manager
+            inst = tm._fixture_for_channel(self.fixture_index)
+            fdef = tm._fdef(self.fixture_index)
+            dmx_start = getattr(inst, "dmx_start", 0) if inst else 0
+            count = fdef.channel_count if fdef else 0
+            dmx_end = dmx_start + count - 1 if count else dmx_start - 1
+            self._header_widget = TrackHeaderWidget(
+                self.label, self.fixture_index, dmx_start, dmx_end,
+                self._header_accent())
+            self._header_widget.eye_toggled.connect(self._on_eye_toggled)
+            self._header_widget.lock_toggled.connect(self._on_lock_toggled)
+            self._header_widget.auto_toggled.connect(self._on_auto_toggled)
+            self._header_proxy = QGraphicsProxyWidget()
+            self._header_proxy.setWidget(self._header_widget)
+            self._header_proxy.setZValue(1)
+        if self._header_proxy.scene() is None:
+            self.header_scene.addItem(self._header_proxy)
+        self._header_widget.setFixedSize(self.timeline_manager.HEADER_WIDTH,
+                                         self.get_track_height())
+        self._header_proxy.setPos(0, y_offset)
+        self.sync_header_state()
 
     # --- Bounds computation ----------------------------------------------
 
@@ -1132,7 +1300,7 @@ class MidiEventsTrack(BaseTrack):
         return True, markers
 
     def _draw_auto_scene_clips(self, markers, units, song_end_time,
-                               y_offset, pps, track_height):
+                               y_offset, pps, track_height, muted=False):
         """Draw the read-only song-part preview from `markers` (see
         _auto_markers). One AutoSceneClip per programmed marker, spanning from
         the marker to the next event that changes the fixture: the next manual
@@ -1162,15 +1330,18 @@ class MidiEventsTrack(BaseTrack):
                 continue
             self._add_auto_scene_clip(sec_start, end, clip_info.part,
                                       QColor(clip_info.color), y_offset, pps,
-                                      track_height)
+                                      track_height, muted)
 
-    def _add_auto_scene_clip(self, start, end, label, color, y_offset, pps, height):
+    def _add_auto_scene_clip(self, start, end, label, color, y_offset, pps,
+                             height, muted=False):
         """Add one AutoSceneClip (+ its unscaled label) for the range
         [start, end). Beneath the manual clips (z<1) and non-interactive."""
         x_pos = start * pps
         width = max((end - start) * pps, MIN_HIT_WIDTH_PX)
         clip = AutoSceneClip(x_pos, y_offset, width, height, color)
         clip.setZValue(0.5)  # under manual clips (z=1) and their labels (z=2)
+        if muted:
+            clip.setOpacity(MUTED_CLIP_OPACITY)
         self.content_scene.addItem(clip)
         self.items.append(clip)
 
@@ -1190,6 +1361,8 @@ class MidiEventsTrack(BaseTrack):
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
         text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         text_item.setAcceptHoverEvents(False)
+        if muted:
+            text_item.setOpacity(MUTED_CLIP_OPACITY)
         self.content_scene.addItem(text_item)
         self.items.append(text_item)
 
@@ -1247,6 +1420,11 @@ class MidiEventsTrack(BaseTrack):
             pps = self.timeline_manager.PIXELS_PER_SECOND
             track_height = self.get_track_height()
 
+            # Per-track header toggles: muted lanes draw every clip dimmed;
+            # locked lanes draw clips read-only (non-interactive).
+            muted = bool(mm and mm.is_fixture_muted(self.fixture_index))
+            locked = bool(mm and mm.is_fixture_locked(self.fixture_index))
+
             # Filter by fixture so each track only handles its own clips —
             # neighbor lookups, MOVE bounds, and BLACKOUT gap logic all
             # operate on the per-track slice, not the global event list.
@@ -1266,7 +1444,7 @@ class MidiEventsTrack(BaseTrack):
             # render even when this lane has no manual clips of its own, so it
             # runs before the early-out below.
             self._draw_auto_scene_clips(auto_markers, units, song_end_time,
-                                        y_offset, pps, track_height)
+                                        y_offset, pps, track_height, muted)
 
             if not units:
                 return
@@ -1310,6 +1488,7 @@ class MidiEventsTrack(BaseTrack):
                     bounds=bounds, is_blackout=False,
                     group_id=unit["group_id"] if is_group else None,
                     group_event_ids=unit["event_ids"] if is_group else None,
+                    locked=locked,
                 )
                 event_rect.set_timeline(self.timeline_manager)
 
@@ -1375,6 +1554,10 @@ class MidiEventsTrack(BaseTrack):
 
                 self.content_scene.addItem(text_item)
                 self.items.append(text_item)
+
+                if muted:
+                    event_rect.setOpacity(MUTED_CLIP_OPACITY)
+                    text_item.setOpacity(MUTED_CLIP_OPACITY)
 
         except Exception as e:
             self.logger.error(f"Error redrawing midi events: {e}")

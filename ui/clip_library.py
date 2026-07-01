@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
 
 import note_layout
 from config import Config
+from fixture_colors import GROUP_COLORS
 from fixture_library import (FixtureDef, load_fixture_defs,
                              ROLE_RED, ROLE_GREEN, ROLE_BLUE)
 from software_controller.scene_loader import Scene, load_scenes
@@ -35,8 +36,9 @@ SCENE_MIME_TYPE = "application/x-tupperdmx-led-scene"
 # the patch; every group belonging to a fixture — its channel page, each scene
 # bank and its chases — shares that fixture's colour. The global Show group uses
 # the neutral colour below.
-_GROUP_COLORS = ['#4a90e2', '#e2904a', '#4caf50', '#e24a4a', '#9b59b6',
-                 '#e24ad0', '#4ad0e2', '#7f8c8d', '#1abc9c', '#d4b106']
+# Shared with the timeline track headers so a fixture's swatch matches its
+# library section (see fixture_colors.GROUP_COLORS).
+_GROUP_COLORS = GROUP_COLORS
 _SHOW_COLOR = '#888888'
 
 # Fixed pill size — long labels elide and reveal the full name on hover, the

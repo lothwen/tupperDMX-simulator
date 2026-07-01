@@ -330,9 +330,12 @@ class Timeline(QWidget):
         return top <= scene_y < top + self.waveform_track_height
 
     def _midi_track_y(self, index: int) -> int:
-        """Y offset of the MIDI events track at `index` (all share one height)."""
-        return self._midi_tracks_top() + index * (self.midi_events_track_height
-                                                   + self.TRACK_SPACING)
+        """Y offset of the MIDI events track at `index` (all share one height).
+
+        Fixture tracks stack flush (no inter-track gap): each header draws its
+        own 1px separator line, so a TRACK_SPACING gap here would just show the
+        dark scene background as an extra black band between rows."""
+        return self._midi_tracks_top() + index * self.midi_events_track_height
 
     def _midi_tracks_bottom(self) -> int:
         """Y just past the last MIDI events track (== top when the patch is empty)."""
@@ -974,9 +977,10 @@ class Timeline(QWidget):
         return evt.get('group_id') if evt else None
 
     def refresh_auto_buttons(self) -> None:
-        """Re-sync every fixture track's 'A' (auto) button from the controller."""
+        """Re-sync every fixture track's header toggles (auto/mute/lock) from the
+        controller + document."""
         for track in getattr(self, 'midi_events_tracks', []):
-            track.sync_auto_button()
+            track.sync_header_state()
 
     def _draw_song_sections(self) -> None:
         """Redraw the song-part arrangement overlay on the waveform band."""
@@ -1254,6 +1258,9 @@ class Timeline(QWidget):
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
             return False
+        # A locked track rejects new clips.
+        if self.midi_manager.is_fixture_locked(target_idx):
+            return False
         return note_layout.note_applies_to(note, self._fdef(target_idx))
 
     def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
@@ -1285,7 +1292,11 @@ class Timeline(QWidget):
         type matches the scene's owning fixture (when the payload names one)."""
         if not self.midi_manager:
             return False
-        target_type = self._fixture_type(self.fixture_at_y(scene_y))
+        target_idx = self.fixture_at_y(scene_y)
+        # A locked track rejects new clips.
+        if target_idx is not None and self.midi_manager.is_fixture_locked(target_idx):
+            return False
+        target_type = self._fixture_type(target_idx)
         fdef = load_fixture_defs().get(target_type)
         if not (fdef and fdef.banks):
             return False
