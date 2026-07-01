@@ -131,7 +131,8 @@ QMenu::separator {
 #TracksTitle {
     color: #d0d0d0;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 14px;
+    letter-spacing: 1px;
 }
 
 #TracksCount {
@@ -912,9 +913,74 @@ QPushButton#AutoModeButton:disabled {
     border-color: #333;
 }
 
+/* ---- Timeline track-header (TrackHeaderWidget) ---- */
+
+/* Fixture name + MIDI/DMX address, stacked next to the swatch. */
+QLabel#TrackName {
+    color: #eaeaea;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+QLabel#TrackInfo {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* Reorder grip + collapse chevron — placeholders, so no frame/hover. */
+QPushButton#TrackGrip,
+QPushButton#TrackChevron {
+    background-color: transparent;
+    border: none;
+    color: #8a8a8a;
+    font-size: 13px;
+}
+
+QPushButton#TrackChevron:hover {
+    background-color: #3a3a3a;
+    border-radius: 3px;
+}
+
+/* Eye (mute) + lock toggles — same frame as the "A" button; the UTF glyph is
+   set as the button text (see TrackHeaderWidget). */
+QPushButton#TrackEyeButton,
+QPushButton#TrackLockButton {
+    background-color: #2a2a2a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+QPushButton#TrackEyeButton:hover,
+QPushButton#TrackLockButton:hover {
+    background-color: #3a3a3a;
+    border-color: #777;
+}
+
+/* Muted: warm amber highlight. */
+QPushButton#TrackEyeButton:checked {
+    background-color: #6b4a1f;
+    border: 1px solid #a5742c;
+}
+
+QPushButton#TrackEyeButton:checked:hover {
+    background-color: #7c561f;
+}
+
+/* Locked: gold fill (the glyph also swaps to a closed padlock). */
+QPushButton#TrackLockButton:checked {
+    background-color: #c9a227;
+    border: 1px solid #b08f1f;
+}
+
+QPushButton#TrackLockButton:checked:hover {
+    background-color: #d4ac2c;
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;
+    font-family: "Helvetica Neue";
 }
 
 QLabel {

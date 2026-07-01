@@ -37,7 +37,12 @@ class MidiWorker(QThread):
         self.port: Optional[mido.ports.BaseOutput] = None
         self.status = MidiConnectionStatus.DISCONNECTED
         self.logger = get_logger("midi.worker")
-        
+
+        # MIDI channels (== fixture index) whose output is muted. Replaced
+        # atomically by the manager when a track's eye is toggled, so the
+        # playback thread only ever reads a whole set (no torn reads).
+        self.muted_channels: set = set()
+
         # Software controller reference
         self.software_controller = None
 
@@ -139,6 +144,13 @@ class MidiWorker(QThread):
             msg_time, msg = self.messages[self.last_played_index]
             
             if msg_time <= timeline_time_sec:
+                # Skip muted fixtures: a track's eye toggle mutes its MIDI
+                # channel (== fixture index), suppressing all its output.
+                ch = getattr(msg, 'channel', None)
+                if ch is not None and ch in self.muted_channels:
+                    self.last_played_index += 1
+                    continue
+
                 # Send all MIDI messages, not just note_on
                 if self.port_name == "Software emulated" and self.software_controller:
                     if msg.type == 'note_on':

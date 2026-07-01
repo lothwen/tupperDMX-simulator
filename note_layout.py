@@ -114,19 +114,36 @@ def is_fixture_setup(note: int) -> bool:
 
 # Setup-note velocity bitfield. Each fixture's persisted track setup is packed
 # into one note-71 velocity (mirrors the START note packing palette into
-# velocity). Only `auto` is defined now; mute/solo are reserved bits so adding
-# them later is a one-line change here and in (un)pack_setup.
+# velocity): `auto` (follows the song-part program), `mute` (its MIDI output is
+# suppressed), and `lock` (its clips are read-only in the timeline). Solo stays
+# reserved. handle_note_on treats note 71 as a NOP, so these bits are pure
+# persistence and never affect the live output when the note replays.
 SETUP_AUTO = 0x01
+SETUP_MUTE = 0x02
+SETUP_LOCK = 0x04
 
 
-def pack_setup(*, auto: bool) -> int:
+def pack_setup(*, auto: bool = False, mute: bool = False,
+               lock: bool = False) -> int:
     """Pack the per-track setup flags into a MIDI velocity (0-127)."""
-    return SETUP_AUTO if auto else 0
+    v = 0
+    if auto:
+        v |= SETUP_AUTO
+    if mute:
+        v |= SETUP_MUTE
+    if lock:
+        v |= SETUP_LOCK
+    return v
 
 
 def unpack_setup(velocity: int) -> Dict[str, bool]:
-    """Unpack a setup-note velocity into ``{"auto": bool}``."""
-    return {"auto": bool(int(velocity) & SETUP_AUTO)}
+    """Unpack a setup-note velocity into ``{"auto", "mute", "lock"}`` bools."""
+    v = int(velocity)
+    return {
+        "auto": bool(v & SETUP_AUTO),
+        "mute": bool(v & SETUP_MUTE),
+        "lock": bool(v & SETUP_LOCK),
+    }
 
 
 def is_global_verb(note: int) -> bool:
