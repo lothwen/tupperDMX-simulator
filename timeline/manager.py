@@ -52,7 +52,6 @@ class Timeline(QWidget):
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
     DEFAULT_MIDI_EVENTS_TRACK_HEIGHT = 50
     MIN_TRACK_HEIGHT = 30
-    TRACK_SPACING = 5
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
 
@@ -316,12 +315,16 @@ class Timeline(QWidget):
         self.draw_time_grid()
 
     def _waveform_y(self) -> int:
-        """Y offset of the waveform track."""
-        return self.RULER_TRACK_HEIGHT + self.TRACK_SPACING
+        """Y offset of the waveform track (flush under the ruler)."""
+        return self.RULER_TRACK_HEIGHT
 
     def _midi_tracks_top(self) -> int:
-        """Y offset of the first (top) MIDI events track."""
-        return self._waveform_y() + self.waveform_track_height + self.TRACK_SPACING
+        """Y offset of the first (top) MIDI events track.
+
+        Only a 1px hairline separates the waveform band from the first fixture
+        header (each header carries its own bottom border); a wider gap would
+        show the dark scene background as a black band."""
+        return self._waveform_y() + self.waveform_track_height
 
     def _in_waveform_band(self, scene_y: float) -> bool:
         """True if `scene_y` falls within the waveform track's vertical band
@@ -333,8 +336,8 @@ class Timeline(QWidget):
         """Y offset of the MIDI events track at `index` (all share one height).
 
         Fixture tracks stack flush (no inter-track gap): each header draws its
-        own 1px separator line, so a TRACK_SPACING gap here would just show the
-        dark scene background as an extra black band between rows."""
+        own 1px separator line, so any gap here would just show the dark scene
+        background as an extra black band between rows."""
         return self._midi_tracks_top() + index * self.midi_events_track_height
 
     def _midi_tracks_bottom(self) -> int:
@@ -346,7 +349,7 @@ class Timeline(QWidget):
 
     def _recompute_scene_height(self):
         """Compute total scene height from the current track layout."""
-        self.scene_height = self._midi_tracks_bottom() + self.TRACK_SPACING
+        self.scene_height = self._midi_tracks_bottom()
 
     def _fixture_labels(self, ordered) -> List[str]:
         """Header label per patched fixture (in display order): its name, or the
