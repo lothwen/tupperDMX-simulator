@@ -92,9 +92,15 @@ SNAP_PX = 6
 # clickable until the user zooms in).
 MIN_HIT_WIDTH_PX = 1
 # Visual styling for clip boxes.
-CLIP_CORNER_RADIUS_PX = 8
-CLIP_GRADIENT_LIGHTEN = 118   # top of gradient = base.lighter(LIGHTEN)
-CLIP_GRADIENT_DARKEN = 140    # bottom of gradient = base.darker(DARKEN)
+CLIP_CORNER_RADIUS_PX = 4
+# Vertical breathing room around a clip, as a FRACTION of the track height
+# (not fixed pixels — tracks are user-resizable, so a ratio keeps the top/bottom
+# gap proportional at any track height). 0.0 = clips fill the lane flush with the
+# neighbouring tracks; e.g. 0.1 leaves 10% of the lane height blank above and
+# below each clip.
+CLIP_VERTICAL_MARGIN_RATIO = 0.1
+CLIP_GRADIENT_LIGHTEN = 0 # 118   # top of gradient = base.lighter(LIGHTEN)
+CLIP_GRADIENT_DARKEN = 0 # 140    # bottom of gradient = base.darker(DARKEN)
 # Selection-border styling.
 SELECTION_BORDER_COLOR = QColor(255, 215, 0)  # warm gold — visible on any clip color
 SELECTION_BORDER_WIDTH_PX = 2
@@ -1182,6 +1188,13 @@ class MidiEventsTrack(BaseTrack):
     def get_track_height(self) -> int:
         return self.timeline_manager.midi_events_track_height
 
+    def _clip_band(self, y_offset: int, track_height: int):
+        """Vertical placement (top y, height) of a clip inside its lane, inset
+        top and bottom by CLIP_VERTICAL_MARGIN_RATIO of the track height so the
+        gap stays proportional as the user resizes tracks. Returns integers."""
+        inset = round(track_height * CLIP_VERTICAL_MARGIN_RATIO)
+        return y_offset + inset, track_height - 2 * inset
+
     def _header_accent(self) -> str:
         """The fixture's type colour (matches its clip-library section)."""
         tm = self.timeline_manager
@@ -1338,7 +1351,8 @@ class MidiEventsTrack(BaseTrack):
         [start, end). Beneath the manual clips (z<1) and non-interactive."""
         x_pos = start * pps
         width = max((end - start) * pps, MIN_HIT_WIDTH_PX)
-        clip = AutoSceneClip(x_pos, y_offset, width, height, color)
+        clip_y, clip_h = self._clip_band(y_offset, height)
+        clip = AutoSceneClip(x_pos, clip_y, width, clip_h, color)
         clip.setZValue(0.5)  # under manual clips (z=1) and their labels (z=2)
         if muted:
             clip.setOpacity(MUTED_CLIP_OPACITY)
@@ -1355,7 +1369,8 @@ class MidiEventsTrack(BaseTrack):
         text_item = QGraphicsTextItem(text)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         text_item.setDefaultTextColor(text_color)
-        text_item.setPos(x_pos + 5, y_offset + 5)
+        text_y = clip_y + (clip_h - text_item.boundingRect().height()) / 2
+        text_item.setPos(x_pos + 5, text_y)
         text_item.setZValue(0.6)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
@@ -1481,9 +1496,10 @@ class MidiEventsTrack(BaseTrack):
 
                 bounds = self._compute_bounds(units, i, song_end_time)
 
+                clip_y, clip_h = self._clip_band(y_offset, track_height)
                 is_group = unit["kind"] == "group"
                 event_rect = DraggableMidiEvent(
-                    x_pos, y_offset, width, track_height,
+                    x_pos, clip_y, width, clip_h,
                     event_id=rep["id"], event_data=rep,
                     bounds=bounds, is_blackout=False,
                     group_id=unit["group_id"] if is_group else None,
@@ -1541,7 +1557,8 @@ class MidiEventsTrack(BaseTrack):
                 text_item = QGraphicsTextItem(text_to_display)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
                 text_item.setDefaultTextColor(text_color)
-                text_item.setPos(x_pos + 5, y_offset + 5)
+                text_y = clip_y + (clip_h - text_item.boundingRect().height()) / 2
+                text_item.setPos(x_pos + 5, text_y)
                 text_item.setZValue(2)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)

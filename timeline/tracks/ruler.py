@@ -97,7 +97,8 @@ class RulerTrack(BaseTrack):
             bar_text = QGraphicsTextItem(str(bar_num + 1))
             bar_text.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
             bar_text.setDefaultTextColor(QColor(200, 200, 200))
-            bar_text.setPos(bar_x + 5, 5)
+            text_y = (self.get_track_height() - bar_text.boundingRect().height()) / 2
+            bar_text.setPos(bar_x + 2, text_y)
             self.content_scene.addItem(bar_text)
             self.items.append(bar_text)
             self.bar_text_items.append((bar_num + 1, bar_text))
@@ -136,7 +137,8 @@ class RulerTrack(BaseTrack):
                 label = QGraphicsTextItem(f"{sec // 60}:{sec % 60:02d}")
                 label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
                 label.setDefaultTextColor(QColor(200, 200, 200))
-                label.setPos(tick_x + 5, 5)
+                label_y = (self.get_track_height() - label.boundingRect().height()) / 2
+                label.setPos(tick_x + 2, label_y)
                 self.content_scene.addItem(label)
                 self.items.append(label)
                 self.time_text_items.append((sec, label))
