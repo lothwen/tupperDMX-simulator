@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.zoom_changed.connect(self.timeline.set_zoom)
         self.timeline.zoom_changed.connect(self.timeline_toolbar.set_zoom_value)
         self.timeline_toolbar.row_height_changed.connect(self._on_row_height_preset)
+        self.timeline_toolbar.collapse_all_requested.connect(self._on_collapse_all_tracks)
         self.timeline_toolbar.ruler_mode_changed.connect(self.timeline.set_ruler_mode)
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
@@ -252,9 +253,22 @@ class MainWindow(QMainWindow):
         section_height = self.config.window.timeline_section_height
         self.vertical_splitter.setSizes(
             [max(160, self.height() - section_height), section_height])
+        # self.height() is the whole window, but the splitter only fills the
+        # central widget (the top toolbar sits above it). Sizing from the window
+        # height over-counts by the toolbar, so Qt scales the request down and
+        # the section loses ~the toolbar's height on load. Re-apply once the
+        # splitter has real geometry, using its own available height.
+        QTimer.singleShot(0, self._apply_persisted_section_height)
         self.vertical_splitter.splitterMoved.connect(self._on_vertical_splitter_moved)
-        # Reflect the persisted track height on the toolbar's S/M/L segments.
-        self.timeline_toolbar.set_row_height(self.config.window.midi_events_track_height)
+        # Reflect the persisted row state. In collapsed ("S") mode the tracks
+        # must be re-collapsed so their 30px lanes match the section height that
+        # was fitted to them; otherwise 50px lanes would overflow the small
+        # section. Otherwise reflect the persisted track height on M/L.
+        if self.config.window.tracks_collapsed:
+            self.timeline.set_all_tracks_collapsed(True)
+            self.timeline_toolbar.set_rows_collapsed()
+        else:
+            self.timeline_toolbar.set_row_height(self.config.window.midi_events_track_height)
 
         self.main_content.setSizes([self.width() - 250, 250])
 
@@ -685,10 +699,30 @@ class MainWindow(QMainWindow):
         self.save_config()
 
     def _on_row_height_preset(self, height):
-        """Apply an S/M/L fixture-track height preset, then grow/shrink the
-        timeline section so every track is visible without scrolling."""
+        """Apply an M/L fixture-track height preset: expand every (possibly
+        collapsed) lane, set the shared height, then grow/shrink the timeline
+        section so every track is visible without scrolling."""
+        self.timeline.set_all_tracks_collapsed(False)
+        self.config.window.tracks_collapsed = False
         self.timeline.set_midi_events_height(height)
         self._fit_timeline_section_to_content()
+
+    def _on_collapse_all_tracks(self):
+        """The Rows 'S' preset collapses every fixture lane to a single header
+        row, then shrinks the timeline section to fit."""
+        self.timeline.set_all_tracks_collapsed(True)
+        self.config.window.tracks_collapsed = True
+        self._fit_timeline_section_to_content()
+
+    def _apply_persisted_section_height(self) -> None:
+        """Restore the timeline section to its persisted height using the
+        splitter's actual height (which excludes the top toolbar), so the
+        section isn't scaled down by the toolbar's height on load."""
+        avail = self.vertical_splitter.height()
+        if avail <= 0:
+            return
+        section = self.config.window.timeline_section_height
+        self.vertical_splitter.setSizes([max(160, avail - section), section])
 
     def _fit_timeline_section_to_content(self):
         """Resize the timeline section to fit its content, clamped so the stage

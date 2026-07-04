@@ -961,9 +961,11 @@ class AutoSceneClip(QGraphicsObject):
 
 # Header toggle-bar glyphs (plain UTF characters; styled via the app stylesheet
 # by objectName). The lock swaps open<->closed with its state; the eye keeps one
-# glyph and signals "muted" via its checked (amber) background.
+# glyph and signals "muted" via its checked (amber) background. The chevron
+# points down when expanded and right when the track is collapsed.
 _GRIP_GLYPH = "⠿"
 _CHEVRON_GLYPH = "▾"
+_CHEVRON_COLLAPSED_GLYPH = "▸"
 _EYE_GLYPH = "👁"
 _LOCK_OPEN_GLYPH = "🔓"
 _LOCK_CLOSED_GLYPH = "🔒"
@@ -983,16 +985,18 @@ def _header_button(glyph: str, object_name: str, tooltip: str,
 class TrackHeaderWidget(QWidget):
     """The per-fixture timeline track header.
 
-    Left to right: a reorder grip and a collapse chevron (both visual
-    placeholders for now), a type-coloured swatch that matches the fixture's
-    clip-library section, the fixture name over its MIDI/DMX address, and the
-    eye (mute) / lock / A (auto) toggle bar. Each toggle emits a signal; the
-    owning MidiEventsTrack routes it to the MidiManager, and pushes state back
-    in via set_states()."""
+    Left to right: a reorder grip (visual placeholder for now) and a collapse
+    chevron, a type-coloured swatch that matches the fixture's clip-library
+    section, the fixture name over its MIDI/DMX address, and the eye (mute) /
+    lock / A (auto) toggle bar. Each toggle emits a signal; the owning
+    MidiEventsTrack routes it to the MidiManager, and pushes state back in via
+    set_states(). The chevron collapses the track to a single row, hiding the
+    MIDI/DMX address line and flipping its glyph to point right."""
 
-    eye_toggled = pyqtSignal(bool)   # True == muted
-    lock_toggled = pyqtSignal(bool)  # True == locked
-    auto_toggled = pyqtSignal(bool)  # True == auto
+    eye_toggled = pyqtSignal(bool)      # True == muted
+    lock_toggled = pyqtSignal(bool)     # True == locked
+    auto_toggled = pyqtSignal(bool)     # True == auto
+    collapse_toggled = pyqtSignal(bool)  # True == collapsed
 
     def __init__(self, label: str, channel: int, dmx_start: int, dmx_end: int,
                  accent: str, parent=None):
@@ -1014,7 +1018,8 @@ class TrackHeaderWidget(QWidget):
                                    "Drag to reorder (coming soon)")
         self.grip.setEnabled(False)
         self.chevron = _header_button(_CHEVRON_GLYPH, "TrackChevron",
-                                      "Collapse track (coming soon)")
+                                      "Collapse track", checkable=True)
+        self.chevron.toggled.connect(self._on_chevron_toggled)
         root.addWidget(self.grip)
         root.addWidget(self.chevron)
 
@@ -1086,6 +1091,25 @@ class TrackHeaderWidget(QWidget):
         self.lock_btn.setText(_LOCK_CLOSED_GLYPH if lock else _LOCK_OPEN_GLYPH)
         self.auto_btn.setEnabled(auto_enabled)
 
+    def _on_chevron_toggled(self, collapsed: bool):
+        """Hide the MIDI/DMX address row and flip the chevron glyph, then let
+        the owning track restack the timeline to the new (collapsed) height."""
+        self.info_label.setVisible(not collapsed)
+        self.chevron.setText(
+            _CHEVRON_COLLAPSED_GLYPH if collapsed else _CHEVRON_GLYPH)
+        self.collapse_toggled.emit(collapsed)
+
+    def set_collapsed(self, collapsed: bool):
+        """Reflect collapse state on the chevron/address row without emitting
+        collapse_toggled — used when the toolbar collapses/expands every lane at
+        once, so the owning track can batch a single reflow."""
+        self.chevron.blockSignals(True)
+        self.chevron.setChecked(collapsed)
+        self.chevron.blockSignals(False)
+        self.info_label.setVisible(not collapsed)
+        self.chevron.setText(
+            _CHEVRON_COLLAPSED_GLYPH if collapsed else _CHEVRON_GLYPH)
+
 
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
@@ -1099,6 +1123,9 @@ class MidiEventsTrack(BaseTrack):
         # the fixture.
         self.fixture_index = fixture_index
         self.label = label
+        # View-only collapse state (not persisted): when True the lane shrinks
+        # to a single header row (MIN_TRACK_HEIGHT), hiding the MIDI/DMX address.
+        self.collapsed = False
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
         # Persistent header proxy — the whole TrackHeaderWidget lives on one
         # QGraphicsProxyWidget that survives per-reflow header redraws (like the
@@ -1154,6 +1181,21 @@ class MidiEventsTrack(BaseTrack):
         if mm is not None:
             mm.set_fixture_lock(self.fixture_index, locked)
 
+    def _on_collapse_toggled(self, collapsed: bool):
+        # Collapse is view-only (not persisted): shrink this lane to one header
+        # row and restack every track below it. The header widget already hid
+        # its address row and flipped the chevron glyph.
+        self.collapsed = collapsed
+        self.timeline_manager.reflow_tracks()
+
+    def set_collapsed(self, collapsed: bool):
+        """Set collapse state and sync the header, WITHOUT reflowing — the caller
+        (a collapse-all/expand-all pass) batches a single reflow. Safe before the
+        header widget is built."""
+        self.collapsed = collapsed
+        if self._header_widget is not None:
+            self._header_widget.set_collapsed(collapsed)
+
     def sync_header_state(self):
         """Reflect this fixture's auto/mute/lock state on the header toggles.
         Auto follows the runtime controller (and is enabled only when one
@@ -1186,6 +1228,8 @@ class MidiEventsTrack(BaseTrack):
         return getattr(info, 'fixture', None) == self.fixture_index
 
     def get_track_height(self) -> int:
+        if self.collapsed:
+            return self.timeline_manager.MIN_TRACK_HEIGHT
         return self.timeline_manager.midi_events_track_height
 
     def _clip_band(self, y_offset: int, track_height: int):
@@ -1218,6 +1262,7 @@ class MidiEventsTrack(BaseTrack):
             self._header_widget.eye_toggled.connect(self._on_eye_toggled)
             self._header_widget.lock_toggled.connect(self._on_lock_toggled)
             self._header_widget.auto_toggled.connect(self._on_auto_toggled)
+            self._header_widget.collapse_toggled.connect(self._on_collapse_toggled)
             self._header_proxy = QGraphicsProxyWidget()
             self._header_proxy.setWidget(self._header_widget)
             self._header_proxy.setZValue(1)

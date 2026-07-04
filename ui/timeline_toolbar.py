@@ -13,7 +13,8 @@ class TimelineToolbar(QWidget):
 
     Three zones: left edit controls (placeholders for now), the center
     transport (moved out of the top toolbar — fully wired), and right view
-    controls (Rows preset placeholder + a wired zoom slider and Fit button).
+    controls (Rows preset — S collapses all lanes, M/L set the row height —
+    plus a wired zoom slider and Fit button).
     """
 
     # Transport signals (moved verbatim from ToolbarManager)
@@ -23,7 +24,8 @@ class TimelineToolbar(QWidget):
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
-    row_height_changed = pyqtSignal(int)  # fixture-track height in px
+    row_height_changed = pyqtSignal(int)  # fixture-track height in px (M/L, expands)
+    collapse_all_requested = pyqtSignal()  # Rows "S": collapse every fixture lane
     ruler_mode_changed = pyqtSignal(str)  # "bars" | "time"
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
@@ -188,7 +190,8 @@ class TimelineToolbar(QWidget):
         return zone
 
     def _build_right_zone(self) -> QWidget:
-        """View controls — Rows preset (placeholder) + wired zoom & Fit."""
+        """View controls — Rows preset (S collapses all, M/L set height) + wired
+        zoom & Fit."""
         zone = QWidget()
         row = QHBoxLayout(zone)
         row.setContentsMargins(0, 0, 0, 0)
@@ -218,8 +221,15 @@ class TimelineToolbar(QWidget):
             btn.setFixedWidth(28)
             if label == "M":
                 btn.setChecked(True)
-            height = self.ROW_HEIGHT_PRESETS[label]
-            btn.clicked.connect(lambda _checked, h=height: self.row_height_changed.emit(h))
+            if label == "S":
+                # "S" collapses every lane to a single header row (the smallest
+                # possible row) rather than picking a height preset.
+                btn.setToolTip("Collapse all tracks")
+                btn.clicked.connect(lambda _checked: self.collapse_all_requested.emit())
+            else:
+                height = self.ROW_HEIGHT_PRESETS[label]
+                btn.clicked.connect(
+                    lambda _checked, h=height: self.row_height_changed.emit(h))
             self.rows_group.addButton(btn)
             self._row_buttons[label] = btn
             seg.addWidget(btn)
@@ -282,9 +292,16 @@ class TimelineToolbar(QWidget):
         self.zoom_slider.blockSignals(False)
 
     def set_row_height(self, height: int) -> None:
-        """Check the segment whose preset is closest to `height` (used on
-        startup to reflect the persisted track height). setChecked fires
-        `toggled`, not `clicked`, so this does not re-emit row_height_changed."""
-        label = min(self.ROW_HEIGHT_PRESETS,
-                    key=lambda k: abs(self.ROW_HEIGHT_PRESETS[k] - height))
+        """Check the M/L segment whose preset is closest to `height` (used on
+        startup to reflect the persisted track height). 'S' is excluded — it is
+        the collapse toggle, reflected separately via set_rows_collapsed().
+        setChecked fires `toggled`, not `clicked`, so this does not re-emit."""
+        presets = {k: v for k, v in self.ROW_HEIGHT_PRESETS.items() if k != "S"}
+        label = min(presets, key=lambda k: abs(presets[k] - height))
         self._row_buttons[label].setChecked(True)
+
+    def set_rows_collapsed(self) -> None:
+        """Check the 'S' (collapse) segment to reflect a restored collapsed state
+        on startup. setChecked fires `toggled`, not `clicked`, so this does not
+        re-emit collapse_all_requested."""
+        self._row_buttons["S"].setChecked(True)
