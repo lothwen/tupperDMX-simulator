@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
         self.media_controller.error_occurred.connect(self._on_media_error)
         
         self.dmx_display = DMXDisplayWidget(self.config)
+        self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
         self.clip_library = ClipLibraryWidget(self.config)
         self.clip_library.preview_requested.connect(self._preview_clip)
 
@@ -509,6 +510,12 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Software controller changed: {controller}")
         self.software_controller = controller
         self.midi_manager.set_software_controller(controller)
+        # Live channel editing in the DMX monitor only works when a software
+        # controller is present to receive the overrides (its universe size caps
+        # which channels are editable).
+        self.dmx_display.set_editing_enabled(
+            controller is not None,
+            len(controller.present) if controller is not None else 0)
         # Seed the fresh controller from the document's persisted per-track setup
         # (note 71), then re-sync the 'A' buttons to the restored state.
         self.midi_manager.seed_controller_auto(controller)
@@ -572,6 +579,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.warning(
                 f"Preview open/send on '{port_name}' failed: {e}")
+
+    def _on_dmx_channel_edited(self, channel, value):
+        """Apply a manual value dragged in the DMX monitor to the live software
+        controller. Transient: the normal workflow (scenes, chases, MIDI)
+        overwrites it on its next frame; a no-op if no controller is active."""
+        controller = getattr(self, "software_controller", None)
+        if controller is not None:
+            controller.set_manual_channel(channel, value)
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""

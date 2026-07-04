@@ -370,6 +370,22 @@ class DMXController:
         else:
             self.present[self.fixtures[fx].base + i] = value
 
+    def set_manual_channel(self, channel, value):
+        """Force one absolute DMX channel (1-based) to ``value`` right now.
+
+        A transient manual override for live poking from the DMX monitor: it
+        writes straight into the output frame — and the blend target, so an
+        active blend doesn't drag it back — with no persistence. The normal
+        workflow (scene / chase / colour / blackout, or a repatch) overwrites it
+        on its next update. Out-of-range channels are ignored; values clamp to
+        0-255."""
+        if not 1 <= channel <= UNIVERSE_SIZE:
+            return
+        value = max(0, min(255, int(value)))
+        with self.lock:
+            self.present[channel - 1] = value
+            self.target[channel - 1] = value
+
     def reseed_all_blend_starts(self):
         """Snapshot the current present[] frame as the blend start for every
         blend channel. Mirrors the old global universe_past = present copy done
