@@ -62,6 +62,9 @@ class WindowConfig:
     waveform_track_height: int = 100
     midi_events_track_height: int = 50
     timeline_section_height: int = 230
+    # Rows "S" mode: every fixture lane collapsed to one row. Persisted so the
+    # section height (fitted to collapsed lanes) stays consistent on reload.
+    tracks_collapsed: bool = False
 
 
 @dataclass
@@ -234,7 +237,8 @@ class Config:
                 dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False)),
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
-                timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000)
+                timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
+                tracks_collapsed=bool(window_data.get("tracks_collapsed", False))
             )
 
         if "artnet" in data:

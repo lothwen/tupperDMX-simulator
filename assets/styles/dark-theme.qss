@@ -927,7 +927,8 @@ QLabel#TrackInfo {
     font-size: 10px;
 }
 
-/* Reorder grip + collapse chevron — placeholders, so no frame/hover. */
+/* Reorder grip (placeholder) + collapse chevron — frameless; the chevron
+   collapses the track and swaps its glyph rather than showing a checked fill. */
 QPushButton#TrackGrip,
 QPushButton#TrackChevron {
     background-color: transparent;

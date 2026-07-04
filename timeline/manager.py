@@ -88,6 +88,10 @@ class Timeline(QWidget):
             else self.DEFAULT_MIDI_EVENTS_TRACK_HEIGHT
         )
 
+        # One MidiEventsTrack per patched fixture (built in _init_tracks). Seeded
+        # empty so the layout helpers work during pre-track scene setup.
+        self.midi_events_tracks = []
+
         # Resize handle items (created in _init_tracks)
         self.waveform_resize_handle = None
         self.midi_events_resize_handle = None
@@ -131,8 +135,12 @@ class Timeline(QWidget):
         
         # Initialize UI
         self.init_ui()
+        # Build the fixture tracks before the scenes so setup_scenes() can derive
+        # the scene height from them (each track's height is per-instance now, so
+        # the total is the sum of the real track objects, not fixture count).
+        self._build_midi_event_tracks()
         self.setup_scenes()
-        
+
         # Initialize tracks
         self._init_tracks()
         
@@ -333,19 +341,25 @@ class Timeline(QWidget):
         return top <= scene_y < top + self.waveform_track_height
 
     def _midi_track_y(self, index: int) -> int:
-        """Y offset of the MIDI events track at `index` (all share one height).
+        """Y offset of the MIDI events track at `index`.
+
+        Heights are per-track (a collapsed lane is shorter), so the offset is the
+        running sum of the preceding tracks' heights rather than `index * h`.
 
         Fixture tracks stack flush (no inter-track gap): each header draws its
         own 1px separator line, so any gap here would just show the dark scene
         background as an extra black band between rows."""
-        return self._midi_tracks_top() + index * self.midi_events_track_height
+        y = self._midi_tracks_top()
+        for track in self.midi_events_tracks[:index]:
+            y += track.get_track_height()
+        return y
 
     def _midi_tracks_bottom(self) -> int:
         """Y just past the last MIDI events track (== top when the patch is empty)."""
-        n = len(self.fixtures)
-        if n == 0:
+        if not self.midi_events_tracks:
             return self._midi_tracks_top()
-        return self._midi_track_y(n - 1) + self.midi_events_track_height
+        last = len(self.midi_events_tracks) - 1
+        return self._midi_track_y(last) + self.midi_events_tracks[last].get_track_height()
 
     def _recompute_scene_height(self):
         """Compute total scene height from the current track layout."""
@@ -402,7 +416,8 @@ class Timeline(QWidget):
         self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
         self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
 
-        self._build_midi_event_tracks()
+        # MIDI tracks are already built (before setup_scenes, so the scene height
+        # could account for them); here we just lay out their headers.
 
         # Draw initial track layout
         self.ruler_track.draw_header()
@@ -523,6 +538,22 @@ class Timeline(QWidget):
         return (self.scene_height
                 + self.content_view.horizontalScrollBar().sizeHint().height()
                 + 2 * self.content_view.frameWidth())
+
+    def reflow_tracks(self):
+        """Restack every track after a per-track height change (e.g. a fixture
+        lane collapsing/expanding). Same layout pass as a resize, minus the
+        waveform pixmap rebuild."""
+        self._reflow_layout(redraw_waveform=False)
+
+    def set_all_tracks_collapsed(self, collapsed: bool):
+        """Collapse or expand every fixture lane at once, then restack.
+
+        Drives the toolbar's Rows presets: 'S' collapses all lanes to a single
+        header row; 'M'/'L' expand them (the height itself is set separately).
+        View-only — collapse state isn't persisted."""
+        for track in self.midi_events_tracks:
+            track.set_collapsed(collapsed)
+        self.reflow_tracks()
 
     def _reflow_layout(self, redraw_waveform: bool = False):
         """Reposition headers, content, and overlays after a height change."""
@@ -1211,10 +1242,9 @@ class Timeline(QWidget):
         Lanes are laid out by display row (DMX order); the returned value is the
         fixture's stable channel, not its row.
         """
-        height = self.midi_events_track_height
         for row, track in enumerate(self.midi_events_tracks):
             top = self._midi_track_y(row)
-            if top <= scene_y < top + height:
+            if top <= scene_y < top + track.get_track_height():
                 return track.fixture_index
         return None
 
