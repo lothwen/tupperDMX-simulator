@@ -105,9 +105,10 @@ QMenu::separator {
 
 /* Mute Buttons */
 #MetronomeMuteButton, #AudioMuteButton {
-    color: white;
+    color: #8a8a8a;
     border: none;
     border-radius: 2px;
+    font-size: 10px;
 }
 
 #MetronomeMuteButton:checked, #AudioMuteButton:checked {
@@ -115,33 +116,72 @@ QMenu::separator {
     color: white;
 }
 
-/* Toolbar Metronome Button */
+/* Toolbar tempo glyph (decorative ♩ next to the BPM spinbox) */
 #MetronomeButton {
-    /*border: 1px solid #555555;*/
-    border-radius: 3px;
-    background-color: #404040;
-    padding: 2px;
+    background-color: transparent;
+    color: #cfcfcf;
+    font-size: 22px;
 }
 
-#MetronomeButton:hover {
-    background-color: #505050;
-    border-color: #777777;
+/* Combined track-header panel (TRACKS counter + MASTER/METRO volumes) */
+#TrackHeaderPanel {
+    background-color: #2f2f2f;
 }
 
-#MetronomeButton:checked {
-    background-color: #ff4444;
-    border-color: #ff6666;
+#TracksTitle {
+    color: #d0d0d0;
+    font-weight: bold;
+    font-size: 14px;
+    letter-spacing: 1px;
 }
 
-#MetronomeButton:checked:hover {
-    background-color: #ff6666;
-    border-color: #ff8888;
+#TracksCount {
+    color: #8a8a8a;
+    font-size: 11px;
 }
 
-/* Control Containers */
-#MetronomeControlsContainer, #AudioControlsContainer {
-    background-color: #383838;
-    border-radius: 5px;
+#VolumeRowLabel {
+    color: #9a9a9a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+#VolumeDbLabel {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* MASTER (audio) and METRO (metronome) volumes share a green→orange level
+   gradient. The groove carries the full-width gradient; the unfilled (add-page)
+   part is dimmed so it reads as a level meter. */
+QSlider#MasterVolumeSlider::groove:horizontal,
+QSlider#MetroVolumeSlider::groove:horizontal {
+    height: 8px;
+    border-radius: 4px;
+    border: 1px solid #333;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #43d65a, stop:0.55 #cdd23f, stop:1 #ef8b2b);
+}
+
+QSlider#MasterVolumeSlider::add-page:horizontal,
+QSlider#MetroVolumeSlider::add-page:horizontal {
+    background: rgba(18, 18, 18, 190);
+    border-radius: 4px;
+}
+
+QSlider#MasterVolumeSlider::sub-page:horizontal,
+QSlider#MetroVolumeSlider::sub-page:horizontal {
+    background: transparent;
+}
+
+/* No visible knob — the gradient fill alone shows the level. The handle stays
+   present (width > 0) so the groove is still click/drag-able. */
+QSlider#MasterVolumeSlider::handle:horizontal,
+QSlider#MetroVolumeSlider::handle:horizontal {
+    background: transparent;
+    border: none;
+    width: 6px;
+    margin: 0;
 }
 
 /* DMX Display Table */
@@ -370,8 +410,8 @@ QPushButton#StopButton {
     background-color: #555;
     color: white;
     border: 1px solid #666;
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 5px;
+    padding: 4px;
 }
 
 QPushButton#StopButton:hover {
@@ -386,7 +426,7 @@ QPushButton#PlayPauseButton {
     background-color: #4CAF50;
     color: white;
     border: 2px solid #45a049;
-    border-radius: 25px;
+    border-radius: 5px;
 }
 
 QPushButton#PlayPauseButton:hover {
@@ -568,7 +608,7 @@ QPushButton#DmxPanelToggle:pressed {
 
 /* Right Sidebar (Tabbed: Library + DMX Channels) */
 QTabWidget#RightSidebar::pane {
-    border: 1px solid #444;
+    border: 1px solid #1f1f1f;
     background-color: #2b2b2b;
     top: -1px;
 }
@@ -581,13 +621,9 @@ QTabWidget#RightSidebar QTabBar::tab {
     background-color: #2b2b2b;
     color: #aaa;
     padding: 6px 14px;
-    border: 1px solid #444;
-    border-bottom: none;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-    margin-right: 2px;
+    border: 1px solid #1f1f1f;
     font-size: 12px;
-    font-weight: bold;
+    font-weight: normal;
     min-width: 80px;
 }
 
@@ -600,10 +636,54 @@ QTabWidget#RightSidebar QTabBar::tab:selected {
     background-color: #3a3a3a;
     color: #fff;
     border-color: #666;
+    font-weight: bold;
+    border-bottom: 2px solid #79cdf0;
 }
 
 QTabWidget#RightSidebar QTabBar::tab:!selected {
     margin-top: 2px;
+}
+
+/* DMX Channels — segmented USED/FULL toggle + universe indicator */
+QWidget#DmxDisplay {
+    background-color: #2b2b2b;
+}
+
+QPushButton#DmxSeg {
+    background-color: #3a3a3a;
+    color: #cfcfcf;
+    border: 1px solid #1f1f1f;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: normal;
+}
+
+QPushButton#DmxSeg[pos="left"] {
+    border-top-left-radius: 6px;
+    border-bottom-left-radius: 6px;
+    border-right: none;
+}
+
+QPushButton#DmxSeg[pos="right"] {
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+QPushButton#DmxSeg:hover {
+    background-color: #454545;
+    color: #fff;
+}
+
+QPushButton#DmxSeg:checked {
+    background-color: #e6e6e6;
+    color: #1e1e1e;
+    font-weight: bold;
+}
+
+QLabel#DmxUniverse {
+    color: #cfcfcf;
+    font-size: 11px;
+    padding-right: 4px;
 }
 
 /* Clip Library — Container */
@@ -611,71 +691,150 @@ QWidget#ClipLibrary {
     background-color: #2b2b2b;
 }
 
-/* Clip Library — QToolBox (one page per fixture) */
-QToolBox#ClipLibraryToolBox {
-    background-color: #2b2b2b;
-    border: none;
+/* Clip Library — Search row */
+QWidget#ClipSearchRow {
+    background-color: transparent;
 }
 
-QToolBox#ClipLibraryToolBox::tab {
-    background-color: #383838;
+QLineEdit#ClipSearchBox {
+    background-color: #1a1a1a;
     color: #ddd;
     border: 1px solid #444;
     border-radius: 4px;
-    padding: 6px 8px;
+    padding: 5px 8px;
     font-size: 12px;
-    font-weight: bold;
 }
 
-QToolBox#ClipLibraryToolBox::tab:hover {
-    background-color: #4a4a4a;
+QLineEdit#ClipSearchBox:focus {
+    border-color: #5a6578;
+}
+
+QToolButton#ClipViewToggle {
+    background-color: #1a1a1a;
+    color: #aaa;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 7px;
+    font-size: 13px;
+}
+
+QToolButton#ClipViewToggle:hover {
     color: #fff;
     border-color: #666;
 }
 
-QToolBox#ClipLibraryToolBox::tab:selected {
+QToolButton#ClipViewToggle:checked {
     background-color: #4a5568;
     color: #fff;
     border-color: #5a6578;
 }
 
-/* Clip Library — Clip List & Scene List (per-fixture clips and LED scenes) */
-QListWidget#ClipList,
-QListWidget#SceneList {
-    background-color: #1a1a1a;
-    color: #ddd;
+/* Clip Library — Group pills */
+QWidget#ClipPillBar {
+    background-color: transparent;
+}
+
+QFrame#ClipPill {
+    background-color: #383838;
     border: 1px solid #444;
-    border-radius: 4px;
-    padding: 2px;
-    font-size: 12px;
-    outline: 0;
-    show-decoration-selected: 1;
+    border-radius: 6px;
 }
 
-QListWidget#ClipList::item,
-QListWidget#SceneList::item {
-    padding: 6px 8px;
-    border-radius: 3px;
-    margin: 1px 0;
+QFrame#ClipPill:hover {
+    background-color: #4a4a4a;
+    border-color: #666;
+}
+
+QFrame#ClipPill[selected="true"] {
+    background-color: #5e9ec2;
+    border-color: #5a6578;
+}
+
+QLabel#ClipPillLabel {
     color: #ddd;
+    font-size: 11px;
+    font-weight: normal;
+    background: transparent;
 }
 
-QListWidget#ClipList::item:hover,
-QListWidget#SceneList::item:hover {
-    background-color: #3a4558;
-    color: #fff;
+QFrame#ClipPill[selected="true"] QLabel#ClipPillLabel {
+    color: #082230;
+    font-weight: bold;
 }
 
-QListWidget#ClipList::item:selected,
-QListWidget#SceneList::item:selected {
-    background-color: #4a5568;
-    color: #fff;
+QLabel#ClipPillCount {
+    color: #999;
+    border-radius: 7px;
+    /*padding: 0 4px;*/
+    font-size: 9px;
+    font-weight: normal;
 }
 
-QListWidget#ClipList::item:selected:!active,
-QListWidget#SceneList::item:selected:!active {
-    background-color: #4a5568;
-    color: #fff;
+QFrame#ClipPillNew {
+    background-color: transparent;
+    border: 1px dashed #666;
+    border-radius: 12px;
+}
+
+QFrame#ClipPillNew QLabel#ClipPillLabel {
+    color: #888;
+    font-weight: normal;
+}
+
+/* Clip Library — Group header */
+QWidget#ClipHeaderRow {
+    background-color: transparent;
+}
+
+QLabel#ClipGroupHeader {
+    color: #bbb;
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+QLabel#ClipSortLabel {
+    color: #888;
+    font-size: 11px;
+}
+
+/* Clip Library — Clip cards */
+QScrollArea#ClipCardScroll {
+    background-color: transparent;
+    border: none;
+}
+
+QWidget#ClipCardGrid {
+    background-color: transparent;
+}
+
+QFrame#ClipCard {
+    background-color: #262626;
+    border: 1px solid #1c1c1c;
+    border-radius: 5px;
+}
+
+QFrame#ClipCard:hover {
+    background-color: #2a3038;
+    border-color: #5a6578;
+}
+
+QLabel#ClipCardTitle {
+    color: #eee;
+    font-size: 11px;
+    font-weight: bold;
+    background: transparent;
+}
+
+QLabel#ClipCardType {
+    color: #888;
+    font-size: 10px;
+    background: transparent;
+}
+
+QLabel#ClipLibraryPlaceholder {
+    color: #888;
+    font-size: 12px;
 }
 
 /* Scene Edit — Animation grid tiles */
@@ -796,9 +955,75 @@ QPushButton#AutoModeButton:disabled {
     border-color: #333;
 }
 
+/* ---- Timeline track-header (TrackHeaderWidget) ---- */
+
+/* Fixture name + MIDI/DMX address, stacked next to the swatch. */
+QLabel#TrackName {
+    color: #eaeaea;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+QLabel#TrackInfo {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* Reorder grip (placeholder) + collapse chevron — frameless; the chevron
+   collapses the track and swaps its glyph rather than showing a checked fill. */
+QPushButton#TrackGrip,
+QPushButton#TrackChevron {
+    background-color: transparent;
+    border: none;
+    color: #8a8a8a;
+    font-size: 13px;
+}
+
+QPushButton#TrackChevron:hover {
+    background-color: #3a3a3a;
+    border-radius: 3px;
+}
+
+/* Eye (mute) + lock toggles — same frame as the "A" button; the UTF glyph is
+   set as the button text (see TrackHeaderWidget). */
+QPushButton#TrackEyeButton,
+QPushButton#TrackLockButton {
+    background-color: #2a2a2a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+QPushButton#TrackEyeButton:hover,
+QPushButton#TrackLockButton:hover {
+    background-color: #3a3a3a;
+    border-color: #777;
+}
+
+/* Muted: warm amber highlight. */
+QPushButton#TrackEyeButton:checked {
+    background-color: #6b4a1f;
+    border: 1px solid #a5742c;
+}
+
+QPushButton#TrackEyeButton:checked:hover {
+    background-color: #7c561f;
+}
+
+/* Locked: gold fill (the glyph also swaps to a closed padlock). */
+QPushButton#TrackLockButton:checked {
+    background-color: #c9a227;
+    border: 1px solid #b08f1f;
+}
+
+QPushButton#TrackLockButton:checked:hover {
+    background-color: #d4ac2c;
+}
+
 /* General Widget Styling */
 QWidget {
     color: white;
+    font-family: "Helvetica Neue";
 }
 
 QLabel {
@@ -949,4 +1174,115 @@ QPushButton#InspectorDelete:hover {
 
 QPushButton#InspectorDelete:pressed {
     background-color: rgba(100, 30, 30, 230);
+}
+
+/* ============================================================
+   Timeline toolbar (strip above the timeline tracks)
+   Transport widgets reuse #StopButton/#PlayPauseButton/
+   #TimeDisplay/#MetronomeButton styles defined above.
+   ============================================================ */
+QWidget#TimelineToolbar {
+    background-color: #2b2b2b;
+    border-top: 2px solid #181818;
+    border-bottom: 1px solid #181818;
+}
+
+QFrame#TTSeparator {
+    color: rgba(255, 255, 255, 30);
+    max-width: 1px;
+    margin: 4px 4px;
+}
+
+QLabel#TTRowsLabel {
+    color: #aaa;
+    padding: 0 2px;
+}
+
+/* Generic tool buttons + Add track */
+QWidget#TimelineToolbar QPushButton#TTToolButton,
+QWidget#TimelineToolbar QPushButton#TTAddTrack,
+QWidget#TimelineToolbar QPushButton#TTFit {
+    color: #e0e0e0;
+    background-color: #3a3a3a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTToolButton:hover,
+QWidget#TimelineToolbar QPushButton#TTAddTrack:hover,
+QWidget#TimelineToolbar QPushButton#TTFit:hover {
+    background-color: #4a4a4a;
+}
+
+QWidget#TimelineToolbar QPushButton#TTAddTrack {
+    background-color: #2f6db0;
+    border-color: #3f7dc0;
+    font-weight: bold;
+}
+
+QWidget#TimelineToolbar QPushButton#TTAddTrack:hover {
+    background-color: #3f7dc0;
+}
+
+/* Snap toggle */
+QWidget#TimelineToolbar QPushButton#TTSnap {
+    color: #e0e0e0;
+    background-color: #3a3a3a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 5px;
+    padding: 5px 10px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSnap:checked {
+    color: white;
+    background-color: #4CAF50;
+    border-color: #45a049;
+    font-weight: bold;
+}
+
+/* Segmented toggles (Bars|Time, Rows S/M/L) */
+QWidget#TimelineToolbar QPushButton#TTSegment {
+    color: #cfcfcf;
+    background-color: #333;
+    border: 1px solid #444;
+    padding: 5px 2px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSegment:checked {
+    color: white;
+    background-color: #4a4a4a;
+    border-color: #5a5a5a;
+    font-weight: bold;
+}
+
+/* Round only the outer corners of the segmented control */
+QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
+    border-top-left-radius: 5px;
+    border-bottom-left-radius: 5px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTSegment[seg="right"] {
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+
+/* Zoom slider */
+QSlider#TTZoom::groove:horizontal {
+    background: #1a1a1a;
+    height: 6px;
+    border: 1px solid #444;
+    border-radius: 3px;
+}
+
+QSlider#TTZoom::handle:horizontal {
+    background: #d0d0d0;
+    border: 1px solid #222;
+    width: 12px;
+    margin: -5px 0;
+    border-radius: 6px;
+}
+
+QSlider#TTZoom::handle:horizontal:hover {
+    background: #ffffff;
 }

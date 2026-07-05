@@ -107,9 +107,12 @@ def test_blinder_scene_roundtrip(tmp_path=None):
     gid = m.add_scene(2.0, dict(scene.values), scene.name, channel=1)
     _assert(gid is not None, "blinder scene added")
     members = [e for e in m.midi_events if e.get("group_id") == gid]
-    notes = sorted(e["note"] for e in members)
-    _assert(notes == list(range(1, 9)),
+    ctrl = sorted(e["note"] for e in members
+                  if e["note"] != note_layout.TAKE_MANUAL)
+    _assert(ctrl == list(range(1, 9)),
             "blinder scene expands to one note per channel (1..8)")
+    _assert(any(e["note"] == note_layout.TAKE_MANUAL for e in members),
+            "take-manual (48) folded into the blinder scene group")
     _assert({e["channel"] for e in members} == {1},
             "all members route to the blinder's channel (1)")
 
@@ -121,8 +124,12 @@ def test_blinder_scene_roundtrip(tmp_path=None):
         m2 = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
         _assert(m2.load_from_file(path), "reload blinder scene")
         g2 = [e for e in m2.midi_events if e.get("group_id")]
-        _assert(sorted(e["note"] for e in g2) == list(range(1, 9)),
+        ctrl2 = sorted(e["note"] for e in g2
+                       if e["note"] != note_layout.TAKE_MANUAL)
+        _assert(ctrl2 == list(range(1, 9)),
                 "all 8 channel notes survive the round-trip")
+        _assert(any(e["note"] == note_layout.TAKE_MANUAL for e in g2),
+                "take-manual survives the round-trip and regroups on reload")
         _assert(g2[0]["scene_name"] == scene.name,
                 "scene name recovered from the blinder's library")
     finally:

@@ -5,12 +5,14 @@ Coordinates multiple timeline tracks and provides the main timeline interface.
 """
 
 import os
+import math
 import mido
 import copy
 from typing import Optional, List, Dict, Any
 
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QGraphicsView, QGraphicsScene,
-                             QSlider, QPushButton, QSizePolicy, QGraphicsLineItem,
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
+                             QGraphicsScene, QSlider, QPushButton, QLabel,
+                             QSizePolicy, QGraphicsLineItem, QGraphicsProxyWidget,
                              QDialog, QMessageBox)
 from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -42,19 +44,16 @@ class Timeline(QWidget):
     audio_mute_toggled = pyqtSignal(bool)
     midi_data_changed = pyqtSignal()  # Emitted when MIDI data is modified
     track_heights_changed = pyqtSignal(int, int)  # waveform_height, midi_events_height (on commit)
+    zoom_changed = pyqtSignal(float)  # current horizontal zoom factor (m11)
 
     # Constants
-    HEADER_WIDTH = 100
-    RULER_TRACK_HEIGHT = 30
+    HEADER_WIDTH = 240
+    RULER_TRACK_HEIGHT = 25
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
     DEFAULT_MIDI_EVENTS_TRACK_HEIGHT = 50
     MIN_TRACK_HEIGHT = 30
-    TRACK_SPACING = 5
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
-
-    # Preferred widget height (px) for the timeline container
-    DEFAULT_HEIGHT = 230
 
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
                  initial_audio_volume=0.5,
@@ -68,7 +67,14 @@ class Timeline(QWidget):
         # (a fixture's index == the MIDI channel that routes to it).
         self.fixtures = list(fixtures or [])
 
+        # Header "TRACKS" counter: fixture count is live; group count is a
+        # placeholder until fixture groups are implemented.
+        self._group_count = 0
+
         self.bpm = 120
+        self.ruler_mode = "bars"  # "bars" | "time"
+        self.beat_division = 4  # ruler/grid lines per bar in Bars mode (1, 4 or 8)
+        self.snap_enabled = True  # snap clip drags to the grid + neighbour edges
 
         # Resizable track heights (instance attributes so they can be changed at runtime)
         self.waveform_track_height = max(
@@ -82,9 +88,16 @@ class Timeline(QWidget):
             else self.DEFAULT_MIDI_EVENTS_TRACK_HEIGHT
         )
 
+        # One MidiEventsTrack per patched fixture (built in _init_tracks). Seeded
+        # empty so the layout helpers work during pre-track scene setup.
+        self.midi_events_tracks = []
+
         # Resize handle items (created in _init_tracks)
         self.waveform_resize_handle = None
         self.midi_events_resize_handle = None
+
+        # Combined header panel proxy (spans the ruler + waveform header band).
+        self._master_header_proxy = None
 
         # Legacy compatibility - populated by tracks
         self.midi_event_items = []
@@ -122,56 +135,143 @@ class Timeline(QWidget):
         
         # Initialize UI
         self.init_ui()
+        # Build the fixture tracks before the scenes so setup_scenes() can derive
+        # the scene height from them (each track's height is per-instance now, so
+        # the total is the sum of the real track objects, not fixture count).
+        self._build_midi_event_tracks()
         self.setup_scenes()
-        
+
         # Initialize tracks
         self._init_tracks()
         
     def _create_control_widgets(self, initial_metronome_volume, initial_audio_volume):
-        """Create volume control widgets."""
-        # Metronome controls
-        self.metronome_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.metronome_volume_slider.setRange(0, 100)
-        self.metronome_volume_slider.setValue(int(initial_metronome_volume * 100))
-        self.metronome_volume_slider.setFixedWidth(60)
-        self.metronome_volume_slider.valueChanged.connect(self.metronome_volume_changed.emit)
-
-        self.metronome_mute_button = QPushButton("M")
-        self.metronome_mute_button.setCheckable(True)
-        self.metronome_mute_button.toggled.connect(self.on_mute_toggled)
-        self.metronome_mute_button.setFixedSize(20, 20)
-        self.metronome_mute_button.setObjectName("MetronomeMuteButton")
-
-        self.metronome_controls_container = QWidget()
-        self.metronome_controls_container.setFixedWidth(90)
-        self.metronome_controls_container.setObjectName("MetronomeControlsContainer")
-        controls_layout = QHBoxLayout(self.metronome_controls_container)
-        controls_layout.setContentsMargins(2, 2, 2, 2)
-        controls_layout.setSpacing(2)
-        controls_layout.addWidget(self.metronome_mute_button)
-        controls_layout.addWidget(self.metronome_volume_slider)
-
-        # Audio controls
+        """Build the combined header panel: a "TRACKS" title + fixture/group
+        counter over MASTER (audio) and METRO (metronome) volume rows."""
+        # MASTER = audio output volume, drawn with a green→orange level gradient.
         self.audio_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.audio_volume_slider.setObjectName("MasterVolumeSlider")
         self.audio_volume_slider.setRange(0, 100)
         self.audio_volume_slider.setValue(int(initial_audio_volume * 100))
-        self.audio_volume_slider.setFixedWidth(60)
         self.audio_volume_slider.valueChanged.connect(self.audio_volume_changed.emit)
+        self.audio_volume_slider.valueChanged.connect(self._update_audio_db)
 
         self.audio_mute_button = QPushButton("M")
-        self.audio_mute_button.setCheckable(True)
-        self.audio_mute_button.toggled.connect(self.on_audio_mute_toggled)
-        self.audio_mute_button.setFixedSize(20, 20)
         self.audio_mute_button.setObjectName("AudioMuteButton")
+        self.audio_mute_button.setCheckable(True)
+        self.audio_mute_button.setFixedSize(18, 18)
+        self.audio_mute_button.toggled.connect(self.on_audio_mute_toggled)
 
-        self.audio_controls_container = QWidget()
-        self.audio_controls_container.setFixedWidth(90)
-        self.audio_controls_container.setObjectName("AudioControlsContainer")
-        audio_controls_layout = QHBoxLayout(self.audio_controls_container)
-        audio_controls_layout.setContentsMargins(2, 2, 2, 2)
-        audio_controls_layout.setSpacing(2)
-        audio_controls_layout.addWidget(self.audio_mute_button)
-        audio_controls_layout.addWidget(self.audio_volume_slider)
+        self._audio_db_label = QLabel()
+        self._audio_db_label.setObjectName("VolumeDbLabel")
+        self._audio_db_label.setFixedWidth(36)
+        self._audio_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+
+        # METRO = metronome volume (kept here so the control isn't lost; the
+        # metronome mute also lives on the toolbar).
+        self.metronome_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.metronome_volume_slider.setObjectName("MetroVolumeSlider")
+        self.metronome_volume_slider.setRange(0, 100)
+        self.metronome_volume_slider.setValue(int(initial_metronome_volume * 100))
+        self.metronome_volume_slider.valueChanged.connect(self.metronome_volume_changed.emit)
+        self.metronome_volume_slider.valueChanged.connect(self._update_metro_db)
+
+        self.metronome_mute_button = QPushButton("M")
+        self.metronome_mute_button.setObjectName("MetronomeMuteButton")
+        self.metronome_mute_button.setCheckable(True)
+        self.metronome_mute_button.setFixedSize(18, 18)
+        self.metronome_mute_button.toggled.connect(self.on_mute_toggled)
+
+        self._metro_db_label = QLabel()
+        self._metro_db_label.setObjectName("VolumeDbLabel")
+        self._metro_db_label.setFixedWidth(36)
+        self._metro_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+
+        # "TRACKS" title row with the live fixture / placeholder group counter.
+        tracks_title = QLabel("TRACKS")
+        tracks_title.setObjectName("TracksTitle")
+        self.track_count_label = QLabel()
+        self.track_count_label.setObjectName("TracksCount")
+        self.track_count_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                            | Qt.AlignmentFlag.AlignVCenter)
+        tracks_row = QHBoxLayout()
+        tracks_row.setContentsMargins(0, 0, 0, 0)
+        tracks_row.addWidget(tracks_title)
+        tracks_row.addStretch(1)
+        tracks_row.addWidget(self.track_count_label)
+
+        self.master_header_container = QWidget()
+        self.master_header_container.setObjectName("TrackHeaderPanel")
+        self.master_header_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.master_header_container.setFixedWidth(self.HEADER_WIDTH)
+        panel = QVBoxLayout(self.master_header_container)
+        panel.setContentsMargins(8, 6, 8, 8)
+        panel.setSpacing(4)
+        panel.addLayout(tracks_row)
+        panel.addStretch(1)
+        panel.addLayout(self._volume_row("MASTER", self.audio_mute_button,
+                                         self.audio_volume_slider, self._audio_db_label))
+        panel.addLayout(self._volume_row("CLICK", self.metronome_mute_button,
+                                         self.metronome_volume_slider, self._metro_db_label))
+        panel.addStretch(1)
+
+        self._update_audio_db(self.audio_volume_slider.value())
+        self._update_metro_db(self.metronome_volume_slider.value())
+        self._update_track_counts()
+
+    def _volume_row(self, label_text, mute_button, slider, db_label) -> QHBoxLayout:
+        """One labeled volume row: title, mute toggle, slider, dB readout."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        label = QLabel(label_text)
+        label.setObjectName("VolumeRowLabel")
+        label.setFixedWidth(46)
+        row.addWidget(label)
+        row.addWidget(mute_button)
+        row.addWidget(slider, 1)
+        row.addWidget(db_label)
+        return row
+
+    @staticmethod
+    def _format_db(percent: int) -> str:
+        """Render a 0-100 volume percentage as an approximate dB readout
+        (100% = 0 dB, 0% = -∞)."""
+        if percent <= 0:
+            return "-∞"
+        db = 20.0 * math.log10(percent / 100.0)
+        return "0dB" if db >= -0.5 else f"{round(db)}dB"
+
+    def _update_audio_db(self, value: int) -> None:
+        self._audio_db_label.setText(self._format_db(value))
+
+    def _update_metro_db(self, value: int) -> None:
+        self._metro_db_label.setText(self._format_db(value))
+
+    def _update_track_counts(self) -> None:
+        """Refresh the TRACKS counter (live fixtures · placeholder groups)."""
+        self.track_count_label.setText(f"{len(self.fixtures)} · {self._group_count} grp")
+
+    def set_group_count(self, count: int) -> None:
+        """Set the group count shown in the TRACKS header (groups TBD)."""
+        self._group_count = max(0, int(count))
+        self._update_track_counts()
+
+    def _layout_master_header(self) -> None:
+        """Create/position the combined header panel so it spans the ruler and
+        waveform header band as one block."""
+        if self._master_header_proxy is None:
+            self._master_header_proxy = QGraphicsProxyWidget()
+            self._master_header_proxy.setWidget(self.master_header_container)
+            # Above the per-track background rects, below the resize handle (z=6).
+            self._master_header_proxy.setZValue(1)
+        if self._master_header_proxy.scene() is None:
+            self.header_scene.addItem(self._master_header_proxy)
+        bottom = self._waveform_y() + self.waveform_track_height
+        self.master_header_container.setFixedWidth(self.HEADER_WIDTH)
+        self.master_header_container.setFixedHeight(int(bottom))
+        self._master_header_proxy.setPos(0, 0)
 
     def init_ui(self):
         """Initialize the UI layout."""
@@ -223,12 +323,16 @@ class Timeline(QWidget):
         self.draw_time_grid()
 
     def _waveform_y(self) -> int:
-        """Y offset of the waveform track."""
-        return self.RULER_TRACK_HEIGHT + self.TRACK_SPACING
+        """Y offset of the waveform track (flush under the ruler)."""
+        return self.RULER_TRACK_HEIGHT
 
     def _midi_tracks_top(self) -> int:
-        """Y offset of the first (top) MIDI events track."""
-        return self._waveform_y() + self.waveform_track_height + self.TRACK_SPACING
+        """Y offset of the first (top) MIDI events track.
+
+        Only a 1px hairline separates the waveform band from the first fixture
+        header (each header carries its own bottom border); a wider gap would
+        show the dark scene background as a black band."""
+        return self._waveform_y() + self.waveform_track_height
 
     def _in_waveform_band(self, scene_y: float) -> bool:
         """True if `scene_y` falls within the waveform track's vertical band
@@ -237,20 +341,29 @@ class Timeline(QWidget):
         return top <= scene_y < top + self.waveform_track_height
 
     def _midi_track_y(self, index: int) -> int:
-        """Y offset of the MIDI events track at `index` (all share one height)."""
-        return self._midi_tracks_top() + index * (self.midi_events_track_height
-                                                   + self.TRACK_SPACING)
+        """Y offset of the MIDI events track at `index`.
+
+        Heights are per-track (a collapsed lane is shorter), so the offset is the
+        running sum of the preceding tracks' heights rather than `index * h`.
+
+        Fixture tracks stack flush (no inter-track gap): each header draws its
+        own 1px separator line, so any gap here would just show the dark scene
+        background as an extra black band between rows."""
+        y = self._midi_tracks_top()
+        for track in self.midi_events_tracks[:index]:
+            y += track.get_track_height()
+        return y
 
     def _midi_tracks_bottom(self) -> int:
         """Y just past the last MIDI events track (== top when the patch is empty)."""
-        n = len(self.fixtures)
-        if n == 0:
+        if not self.midi_events_tracks:
             return self._midi_tracks_top()
-        return self._midi_track_y(n - 1) + self.midi_events_track_height
+        last = len(self.midi_events_tracks) - 1
+        return self._midi_track_y(last) + self.midi_events_tracks[last].get_track_height()
 
     def _recompute_scene_height(self):
         """Compute total scene height from the current track layout."""
-        self.scene_height = self._midi_tracks_bottom() + self.TRACK_SPACING
+        self.scene_height = self._midi_tracks_bottom()
 
     def _fixture_labels(self, ordered) -> List[str]:
         """Header label per patched fixture (in display order): its name, or the
@@ -303,7 +416,8 @@ class Timeline(QWidget):
         self.ruler_track = RulerTrack(self, self.content_scene, self.header_scene)
         self.waveform_track = WaveformTrack(self, self.content_scene, self.header_scene)
 
-        self._build_midi_event_tracks()
+        # MIDI tracks are already built (before setup_scenes, so the scene height
+        # could account for them); here we just lay out their headers.
 
         # Draw initial track layout
         self.ruler_track.draw_header()
@@ -315,6 +429,9 @@ class Timeline(QWidget):
 
         # Resize handles for the resizable tracks
         self._create_resize_handles()
+
+        # Combined header panel overlaying the ruler + waveform header band.
+        self._layout_master_header()
 
         # Draw initial waveform if audio file provided
         if self.audio_file:
@@ -362,6 +479,7 @@ class Timeline(QWidget):
             self.midi_events_resize_handle = None
 
         self.fixtures = list(fixtures or [])
+        self._update_track_counts()
         self._build_midi_event_tracks()
         self._create_midi_resize_handle()
         # Reposition headers/content, redraw clips onto the new lanes (by
@@ -403,10 +521,39 @@ class Timeline(QWidget):
 
     def _on_midi_events_height_committed(self, new_height: int):
         """Drag finished for MIDI events — persist and reflow."""
-        self.midi_events_track_height = max(self.MIN_TRACK_HEIGHT, int(new_height))
+        self.set_midi_events_height(new_height)
+
+    def set_midi_events_height(self, height: int):
+        """Set the shared fixture-track height, reflow, and persist. Used by
+        both the resize-handle commit and the toolbar's S/M/L presets."""
+        self.midi_events_track_height = max(self.MIN_TRACK_HEIGHT, int(height))
         self._reflow_layout(redraw_waveform=False)
         self.logger.info(f"MIDI events track height set to {self.midi_events_track_height}px")
         self.track_heights_changed.emit(self.waveform_track_height, self.midi_events_track_height)
+
+    def viewport_height_hint(self) -> int:
+        """Height the timeline widget needs so the content view shows the whole
+        scene without a vertical scrollbar (content is always wider than the
+        view, so the horizontal scrollbar is accounted for)."""
+        return (self.scene_height
+                + self.content_view.horizontalScrollBar().sizeHint().height()
+                + 2 * self.content_view.frameWidth())
+
+    def reflow_tracks(self):
+        """Restack every track after a per-track height change (e.g. a fixture
+        lane collapsing/expanding). Same layout pass as a resize, minus the
+        waveform pixmap rebuild."""
+        self._reflow_layout(redraw_waveform=False)
+
+    def set_all_tracks_collapsed(self, collapsed: bool):
+        """Collapse or expand every fixture lane at once, then restack.
+
+        Drives the toolbar's Rows presets: 'S' collapses all lanes to a single
+        header row; 'M'/'L' expand them (the height itself is set separately).
+        View-only — collapse state isn't persisted."""
+        for track in self.midi_events_tracks:
+            track.set_collapsed(collapsed)
+        self.reflow_tracks()
 
     def _reflow_layout(self, redraw_waveform: bool = False):
         """Reposition headers, content, and overlays after a height change."""
@@ -419,6 +566,9 @@ class Timeline(QWidget):
         self.waveform_track.draw_header(self._waveform_y())
         for i, track in enumerate(self.midi_events_tracks):
             track.draw_header(self._midi_track_y(i))
+
+        # Combined header panel follows the (possibly resized) waveform band.
+        self._layout_master_header()
 
         # MIDI events content (cheap to redraw — keeps box heights in sync)
         if self._cached_events:
@@ -463,18 +613,32 @@ class Timeline(QWidget):
         self.playhead.setX(x_pos)
 
     def draw_time_grid(self):
-        """Draw the time grid lines."""
-        for item in self.time_grid_items: 
+        """Draw the background grid lines, following the active ruler mode.
+
+        Bars mode: `beat_division` lines per bar, brighter on bar boundaries.
+        Time mode: a line per second, brighter on the ruler's major interval
+        (every 5 s) so the grid aligns with the m:ss ticks above it.
+        """
+        for item in self.time_grid_items:
             self.content_scene.removeItem(item)
         self.time_grid_items.clear()
 
-        seconds_per_beat = 60.0 / self.bpm
-        total_beats = int(self.content_width / (seconds_per_beat * self.PIXELS_PER_SECOND))
-        
-        for beat in range(total_beats):
-            x_pos = beat * seconds_per_beat * self.PIXELS_PER_SECOND
+        if self.ruler_mode == "time":
+            step_px = self.PIXELS_PER_SECOND
+            major_every = self.ruler_track.TIME_MAJOR_INTERVAL
+        else:
+            seconds_per_bar = (60.0 / self.bpm) * 4
+            step_px = (seconds_per_bar / self.beat_division) * self.PIXELS_PER_SECOND
+            major_every = self.beat_division
+
+        if step_px == 0:
+            return
+        count = int(self.content_width / step_px)
+
+        for i in range(count):
+            x_pos = i * step_px
             line = QGraphicsLineItem(x_pos, self.RULER_TRACK_HEIGHT, x_pos, self.scene_height)
-            if beat % 4 == 0:
+            if i % major_every == 0:
                 grid_pen = QPen(QColor(80, 80, 80), 1.5)
             else:
                 grid_pen = QPen(QColor(60, 60, 60), 0.8)
@@ -698,6 +862,52 @@ class Timeline(QWidget):
             self.draw_time_grid()
             self.logger.info(f"Timeline BPM updated to {bpm}")
 
+    def set_ruler_mode(self, mode):
+        """Switch the ruler between musical bars and mm:ss clock time."""
+        if mode not in ("bars", "time") or mode == self.ruler_mode:
+            return
+        self.ruler_mode = mode
+        self.ruler_track.redraw()
+        self.draw_time_grid()
+        self.logger.info(f"Timeline ruler mode set to {mode}")
+
+    def set_beat_division(self, divisions):
+        """Set how many ruler/grid lines subdivide each bar in Bars mode."""
+        if divisions <= 0 or divisions == self.beat_division:
+            return
+        self.beat_division = divisions
+        self.ruler_track.redraw()
+        self.draw_time_grid()
+        self.logger.info(f"Timeline beat division set to {divisions} per bar")
+
+    def set_snap_enabled(self, enabled):
+        """Enable/disable snapping of clip drags to the grid and clip edges."""
+        self.snap_enabled = bool(enabled)
+        self.logger.info(f"Timeline snap {'enabled' if self.snap_enabled else 'disabled'}")
+
+    def snap_interval_px(self):
+        """Scene-px spacing of the finest visible grid line, for clip snapping.
+
+        Mirrors what the ruler/grid draw so snapping lands on visible lines:
+        one-second lines in Time mode, or bar/`beat_division` lines in Bars
+        mode. Returns None when snapping is off or unavailable (callers then
+        skip grid snapping).
+        """
+        if not self.snap_enabled:
+            return None
+        pps = self.PIXELS_PER_SECOND
+        if pps <= 0:
+            return None
+        if self.ruler_mode == "time":
+            spacing_sec = self.ruler_track.TIME_MINOR_INTERVAL
+        else:
+            if self.bpm <= 0:
+                return None
+            seconds_per_bar = (60.0 / self.bpm) * 4
+            spacing_sec = seconds_per_bar / self.beat_division
+        px = spacing_sec * pps
+        return px if px > 0 else None
+
     def update_ruler_labels(self):
         """Update ruler labels based on zoom level."""
         self.ruler_track.update_ruler_labels()
@@ -801,9 +1011,10 @@ class Timeline(QWidget):
         return evt.get('group_id') if evt else None
 
     def refresh_auto_buttons(self) -> None:
-        """Re-sync every fixture track's 'A' (auto) button from the controller."""
+        """Re-sync every fixture track's header toggles (auto/mute/lock) from the
+        controller + document."""
         for track in getattr(self, 'midi_events_tracks', []):
-            track.sync_auto_button()
+            track.sync_header_state()
 
     def _draw_song_sections(self) -> None:
         """Redraw the song-part arrangement overlay on the waveform band."""
@@ -1031,10 +1242,9 @@ class Timeline(QWidget):
         Lanes are laid out by display row (DMX order); the returned value is the
         fixture's stable channel, not its row.
         """
-        height = self.midi_events_track_height
         for row, track in enumerate(self.midi_events_tracks):
             top = self._midi_track_y(row)
-            if top <= scene_y < top + height:
+            if top <= scene_y < top + track.get_track_height():
                 return track.fixture_index
         return None
 
@@ -1081,6 +1291,9 @@ class Timeline(QWidget):
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
             return False
+        # A locked track rejects new clips.
+        if self.midi_manager.is_fixture_locked(target_idx):
+            return False
         return note_layout.note_applies_to(note, self._fdef(target_idx))
 
     def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
@@ -1112,7 +1325,11 @@ class Timeline(QWidget):
         type matches the scene's owning fixture (when the payload names one)."""
         if not self.midi_manager:
             return False
-        target_type = self._fixture_type(self.fixture_at_y(scene_y))
+        target_idx = self.fixture_at_y(scene_y)
+        # A locked track rejects new clips.
+        if target_idx is not None and self.midi_manager.is_fixture_locked(target_idx):
+            return False
+        target_type = self._fixture_type(target_idx)
         fdef = load_fixture_defs().get(target_type)
         if not (fdef and fdef.banks):
             return False
@@ -1205,8 +1422,8 @@ class Timeline(QWidget):
         """Fit timeline to view width."""
         view_width = self.content_view.viewport().width()
         scene_width = self.content_scene.width()
-        
-        if scene_width <= 0 or view_width <= 0: 
+
+        if scene_width <= 0 or view_width <= 0:
             return
 
         min_scale = view_width / scene_width
@@ -1214,6 +1431,25 @@ class Timeline(QWidget):
         self.content_view.scale(min_scale, 1)
         self.update_ruler_labels()
         self.update_midi_text_truncation()
+        self.emit_zoom_changed()
+
+    def set_zoom(self, factor: float):
+        """Set an absolute horizontal zoom factor on the timeline view."""
+        if factor <= 0:
+            return
+        self.content_view.resetTransform()
+        self.content_view.scale(factor, 1)
+        self.update_ruler_labels()
+        self.update_midi_text_truncation()
+        self.emit_zoom_changed()
+
+    def emit_zoom_changed(self):
+        """Report the current horizontal zoom factor (m11) to listeners.
+
+        Called after any zoom change — Fit, the toolbar slider, or Ctrl+wheel
+        (from ContentView) — so the toolbar slider can track the live zoom.
+        """
+        self.zoom_changed.emit(self.content_view.transform().m11())
 
     def get_modified_midi_data(self):
         """Get the modified MIDI data from MidiManager."""
@@ -1239,6 +1475,9 @@ class Timeline(QWidget):
 
     def cleanup(self):
         """Cleanup all tracks when timeline is destroyed."""
+        if (self._master_header_proxy is not None
+                and self._master_header_proxy.scene()):
+            self.header_scene.removeItem(self._master_header_proxy)
         if hasattr(self, 'ruler_track'):
             self.ruler_track.cleanup()
         if hasattr(self, 'waveform_track'):

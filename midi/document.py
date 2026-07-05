@@ -503,8 +503,22 @@ class MidiDocument:
 
     # --- per-track setup persistence (note 71) -------------------------------
 
-    def auto_channels(self) -> set:
-        """Channels whose persisted setup note (note 71) has the auto flag set.
+    def _setup_note_for(self, channel: int):
+        """The note-71 setup entry for `channel` in ``midi_notes``, or None."""
+        return next(
+            (n for n in self.midi_notes
+             if n.get('note') == note_layout.FIXTURE_SETUP
+             and n.get('channel') == channel),
+            None)
+
+    def setup_flags(self, channel: int) -> Dict[str, bool]:
+        """The per-track setup flags (auto/mute/lock) for `channel`, all-False
+        when the channel has no persisted setup note."""
+        n = self._setup_note_for(channel)
+        return note_layout.unpack_setup(n.get('velocity', 0) if n else 0)
+
+    def _channels_with_setup_flag(self, key: str) -> set:
+        """Channels whose persisted setup note (note 71) has flag `key` set.
 
         Lives in ``midi_notes`` only (note 71 never enters ``midi_events`` — see
         note_layout.describe_note), so it round-trips through save/load without
@@ -515,23 +529,34 @@ class MidiDocument:
                 continue
             ch = n.get('channel')
             if ch is not None and note_layout.unpack_setup(
-                    n.get('velocity', 0)).get('auto'):
+                    n.get('velocity', 0)).get(key):
                 out.add(ch)
         return out
 
-    def set_fixture_auto_flag(self, channel: int, auto: bool) -> bool:
-        """Insert/update/remove the per-track setup note (note 71) for `channel`
-        so its packed velocity reflects `auto`. midi_notes only; no rebuild/emit.
+    def auto_channels(self) -> set:
+        """Channels whose persisted setup note has the auto flag set."""
+        return self._channels_with_setup_flag('auto')
+
+    def mute_channels(self) -> set:
+        """Channels whose persisted setup note has the mute flag set."""
+        return self._channels_with_setup_flag('mute')
+
+    def lock_channels(self) -> set:
+        """Channels whose persisted setup note has the lock flag set."""
+        return self._channels_with_setup_flag('lock')
+
+    def _set_setup_flags(self, channel: int, **changes: bool) -> bool:
+        """Insert/update/remove `channel`'s setup note (note 71), updating the
+        named flags (auto/mute/lock) while preserving the rest. midi_notes only;
+        no rebuild/emit.
 
         Returns True if anything changed. The note is dropped when the packed
         velocity is 0 (all flags off), since the save loop only keeps notes with
         velocity > 0 — absence means all-default."""
-        existing = next(
-            (n for n in self.midi_notes
-             if n.get('note') == note_layout.FIXTURE_SETUP
-             and n.get('channel') == channel),
-            None)
-        new_velocity = note_layout.pack_setup(auto=auto)
+        flags = self.setup_flags(channel)
+        flags.update(changes)
+        new_velocity = note_layout.pack_setup(**flags)
+        existing = self._setup_note_for(channel)
 
         if new_velocity == 0:
             if existing is None:
@@ -555,6 +580,18 @@ class MidiDocument:
         })
         self.midi_notes.sort(key=lambda x: x['time'])
         return True
+
+    def set_fixture_auto_flag(self, channel: int, auto: bool) -> bool:
+        """Persist `channel`'s auto flag into its setup note (note 71)."""
+        return self._set_setup_flags(channel, auto=auto)
+
+    def set_fixture_mute_flag(self, channel: int, mute: bool) -> bool:
+        """Persist `channel`'s mute flag into its setup note (note 71)."""
+        return self._set_setup_flags(channel, mute=mute)
+
+    def set_fixture_lock_flag(self, channel: int, lock: bool) -> bool:
+        """Persist `channel`'s lock flag into its setup note (note 71)."""
+        return self._set_setup_flags(channel, lock=lock)
 
     # --- integrity -----------------------------------------------------------
 
