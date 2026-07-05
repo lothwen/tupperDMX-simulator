@@ -8,7 +8,7 @@ import io
 import librosa
 import matplotlib.pyplot as plt
 
-from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsProxyWidget,
+from PyQt6.QtWidgets import (QGraphicsRectItem,
                              QGraphicsTextItem, QGraphicsDropShadowEffect)
 from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF
@@ -57,7 +57,6 @@ class WaveformTrack(BaseTrack):
     def __init__(self, timeline_manager, content_scene, header_scene):
         super().__init__(timeline_manager, content_scene, header_scene)
         self.waveform_item = None
-        self._audio_controls_proxy = None  # Persistent proxy — survives header redraws
         # Song-structure overlay items (kept separate from self.items, which
         # holds the waveform pixmap, so a section redraw never disposes it).
         self._section_items = []
@@ -69,7 +68,11 @@ class WaveformTrack(BaseTrack):
         return self.timeline_manager.waveform_track_height
         
     def draw_header(self, y_offset: int):
-        """Draw the waveform track header."""
+        """Draw the waveform track header background.
+
+        The visible controls (MASTER/METRO volumes) live on the manager-owned
+        combined header panel that overlays this band.
+        """
         self.clear_header_items()
 
         # Draw header background
@@ -83,23 +86,8 @@ class WaveformTrack(BaseTrack):
         self.header_scene.addItem(header_rect)
         self.header_items.append(header_rect)
 
-        # Add audio controls — keep a single persistent proxy so the underlying
-        # QWidget isn't destroyed when the header is redrawn during reflow.
-        if hasattr(self.timeline_manager, 'audio_controls_container'):
-            if self._audio_controls_proxy is None:
-                self._audio_controls_proxy = QGraphicsProxyWidget()
-                self._audio_controls_proxy.setWidget(self.timeline_manager.audio_controls_container)
-                # Stay above the header background, which is re-added on every reflow
-                # and would otherwise occlude the proxy at the same z-value.
-                self._audio_controls_proxy.setZValue(1)
-            if self._audio_controls_proxy.scene() is None:
-                self.header_scene.addItem(self._audio_controls_proxy)
-            proxy_height = self._audio_controls_proxy.size().height()
-            centered_y = y_offset + max(0, (self.get_track_height() - proxy_height) / 2)
-            self._audio_controls_proxy.setPos(5, centered_y)
-
     def clear_header_items(self):
-        """Clear only header items (preserve the persistent audio-controls proxy)."""
+        """Clear the header background items."""
         for item in self.header_items:
             if item.scene():
                 item.scene().removeItem(item)

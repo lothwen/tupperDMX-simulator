@@ -122,6 +122,47 @@ class MidiManager(QObject):
             controller.apply_auto(self._doc.auto_channels())
 
     # ------------------------------------------------------------------
+    # Per-track mute / lock (persisted alongside auto in the note-71 setup)
+    # ------------------------------------------------------------------
+    def mute_channels(self) -> set:
+        """Channels whose persisted setup note has the mute flag (from the doc)."""
+        return self._doc.mute_channels()
+
+    def lock_channels(self) -> set:
+        """Channels whose persisted setup note has the lock flag (from the doc)."""
+        return self._doc.lock_channels()
+
+    def is_fixture_muted(self, channel) -> bool:
+        return channel in self._doc.mute_channels()
+
+    def is_fixture_locked(self, channel) -> bool:
+        return channel in self._doc.lock_channels()
+
+    def set_fixture_mute(self, channel, on: bool) -> bool:
+        """Persist `channel`'s mute flag (note 71) and suppress its live output:
+        the worker skips messages on that MIDI channel. Commits so the lane
+        redraws dimmed and the flag persists on the next Export. (_commit ->
+        _auto_update_worker pushes the new muted set onto a running worker.)"""
+        if self._doc.set_fixture_mute_flag(channel, on):
+            self._commit()
+            return True
+        return False
+
+    def set_fixture_lock(self, channel, on: bool) -> bool:
+        """Persist `channel`'s lock flag (note 71) and commit so its lane
+        redraws read-only (clips become non-interactive, drops are blocked)."""
+        if self._doc.set_fixture_lock_flag(channel, on):
+            self._commit()
+            return True
+        return False
+
+    def _apply_muted_to_worker(self) -> None:
+        """Push the current muted-channel set onto the running worker (if any),
+        so muting takes effect mid-playback without a restart."""
+        if self.current_worker is not None:
+            self.current_worker.muted_channels = set(self._doc.mute_channels())
+
+    # ------------------------------------------------------------------
     # MidiDocument bridge: data proxies + a few query delegations
     # ------------------------------------------------------------------
     # The mutable MIDI state lives on self._doc. These proxies keep the
@@ -587,6 +628,9 @@ class MidiManager(QObject):
                 # Fallback to restarting if in-place update fails
                 self.logger.debug("In-place update failed, restarting worker with modified MIDI data")
                 self.start_worker(self.current_filename or "modified", self.current_port_name, self.midi_data)
+            # Re-seed muted channels from the doc on every worker refresh so
+            # mute toggles — and undo/redo of them — take effect immediately.
+            self._apply_muted_to_worker()
 
     def _update_worker_in_place(self) -> bool:
         """Update the worker's MIDI data without restarting, preserving playback position."""
@@ -670,6 +714,9 @@ class MidiManager(QObject):
             worker = MidiWorker(filename, port_name, midi_data)
             if self.software_controller:
                 worker.set_software_controller(self.software_controller)
+            # Seed persisted per-track mutes so a fresh worker starts silent on
+            # muted fixtures (note 71 mute bit -> skipped MIDI channels).
+            worker.muted_channels = set(self._doc.mute_channels())
 
             # Connect signals
             worker.connection_status_changed.connect(

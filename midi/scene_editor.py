@@ -15,6 +15,7 @@ from typing import Optional, List, Dict, Any, Tuple
 import uuid
 
 from tupperlogger import get_logger
+from note_layout import TAKE_MANUAL
 from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
     MIN_EVENT_DURATION,
@@ -23,6 +24,12 @@ from .constants import (
     DEFAULT_FIXTURE_TYPE,
     _channel_to_velocity,
 )
+
+# Velocity for the take-manual verb folded into each scene group. The runtime
+# ignores it (take_manual_control reads no parameter), but it must be non-zero
+# so the codec doesn't treat the note_on as a note_off. Matches the value the
+# v2 MIDI migration injects.
+TAKE_MANUAL_VELOCITY = 64
 
 
 class SceneEditor:
@@ -117,6 +124,18 @@ class SceneEditor:
                 for c in cluster:
                     c["group_id"] = gid
                     c["scene_name"] = scene_name
+                # Fold a co-located take-manual verb (same time + channel) into
+                # the group so it renders as part of the scene clip, not a
+                # standalone TAKE MANUAL clip. Order-independent scan: the verb
+                # may sit before or after the cluster in the event list
+                # (authored scenes emit it; migrated files inject it).
+                for m in self._doc.midi_events:
+                    if (int(m["note"]) == TAKE_MANUAL
+                            and m.get("channel") == channel
+                            and not m.get("group_id")
+                            and abs(m["time"] - e["time"]) <= BLACKOUT_EPSILON):
+                        m["group_id"] = gid
+                        m["scene_name"] = scene_name
             i += 1
 
     def add_scene(self, time: float, channels: Dict[str, int],
@@ -143,6 +162,13 @@ class SceneEditor:
                 "(channel-control notes missing from midi_note_map?)"
             )
             return None
+        # A manual scene takes manual control of its fixture (note 48) so the
+        # auto/song-part program stops stomping its channel values. The verb is
+        # stamped into the same group so it renders as part of the scene clip
+        # rather than a standalone TAKE MANUAL clip.
+        self._doc._add_event_internal(TAKE_MANUAL, time, TAKE_MANUAL_VELOCITY,
+                                      group_id=group_id, scene_name=name,
+                                      channel=channel)
         # Reconcile in case the scene landed on top of a cap-BLACKOUT;
         # otherwise reconcile would have to wait for a later mutation to
         # clear the now-zero-duration BLACKOUT.

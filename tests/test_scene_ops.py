@@ -1,11 +1,12 @@
 """
 Characterization test: scene-clip group ops on MidiManager.
 
-A scene is 7 simultaneous channel-control note_on events (notes 1..7) sharing a
-group_id. Covers add_scene / move_scene / update_scene / delete_scene /
-set_scene_left_edge / set_scene_right_edge, asserting the group stays atomic
-(7 members, one timestamp) and gap markers behave. Locks current behavior
-before the collaborator-object refactor.
+A scene is 7 simultaneous channel-control note_on events (notes 1..7) plus a
+take-manual verb (note 48), all sharing a group_id (8 members). Covers
+add_scene / move_scene / update_scene / delete_scene / set_scene_left_edge /
+set_scene_right_edge, asserting the group stays atomic (8 members, one
+timestamp) and gap markers behave. Locks current behavior before the
+collaborator-object refactor.
 
 Run with:
     uv run python tests/test_scene_ops.py
@@ -70,7 +71,11 @@ def test_add_scene_atomic():
     g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(g is not None, "add_scene returned a group_id")
     members = _members(m, g)
-    _assert(len(members) == 7, f"group has 7 members (got {len(members)})")
+    ctrl = [mm for mm in members if 1 <= mm["note"] <= 7]
+    _assert(len(ctrl) == 7, f"7 channel-control members (got {len(ctrl)})")
+    _assert(any(mm["note"] == note_layout.TAKE_MANUAL for mm in members),
+            "take-manual (48) folded into the scene group")
+    _assert(len(members) == 8, f"group has 8 members (got {len(members)})")
     _assert(len({mm["time"] for mm in members}) == 1, "all members share one timestamp")
     _assert(all(abs(mm["time"] - 4.0) < 1e-6 for mm in members), "members at 4.0s")
     bright = next(mm for mm in members if mm["note"] == 1)
@@ -83,7 +88,7 @@ def test_move_scene():
     g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
     _assert(m.move_scene(g, 9.0), "move_scene returned True")
     members = _members(m, g)
-    _assert(len(members) == 7, "still 7 members after move")
+    _assert(len(members) == 8, "still 8 members after move")
     _assert(all(abs(mm["time"] - 9.0) < 1e-6 for mm in members), "all members at 9.0s")
 
 

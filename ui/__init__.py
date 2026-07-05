@@ -3,6 +3,7 @@ from .dmx_display import DMXDisplayWidget
 from .audio_controller import AudioController
 from .stage_controller import StageController, StageView
 from .toolbar_manager import ToolbarManager
+from .timeline_toolbar import TimelineToolbar
 from .error_dialogs import ErrorDialogManager
 from .clip_library import ClipLibraryWidget, CLIP_MIME_TYPE
 from .about_dialog import AboutDialog
@@ -17,6 +18,7 @@ __all__ = [
     'StageController',
     'StageView',
     'ToolbarManager',
+    'TimelineToolbar',
     'ErrorDialogManager',
     'ClipLibraryWidget',
     'CLIP_MIME_TYPE',
