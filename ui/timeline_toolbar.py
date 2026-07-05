@@ -86,17 +86,18 @@ class TimelineToolbar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
 
-        add_track = QPushButton("+ Add track")
-        add_track.setObjectName("TTAddTrack")
-        row.addWidget(add_track)
+        # TODO: Future implementation
+        #add_track = QPushButton("+ Add track")
+        #add_track.setObjectName("TTAddTrack")
+        #row.addWidget(add_track)
 
-        group_btn = QPushButton("🖿 Group")
-        group_btn.setObjectName("TTToolButton")
-        row.addWidget(group_btn)
+        #group_btn = QPushButton("🖿 Group")
+        #group_btn.setObjectName("TTToolButton")
+        #row.addWidget(group_btn)
 
-        delete_btn = QPushButton("🗑")
-        delete_btn.setObjectName("TTToolButton")
-        row.addWidget(delete_btn)
+        #delete_btn = QPushButton("🗑")
+        #delete_btn.setObjectName("TTToolButton")
+        #row.addWidget(delete_btn)
 
         row.addWidget(self._separator())
 
