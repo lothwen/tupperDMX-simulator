@@ -5,6 +5,7 @@ import mido
 import copy
 
 from tupperlogger import get_logger
+from io_routing import MidiRouting
 from .worker import MidiWorker, MidiConnectionStatus
 from .document import MidiDocument
 from .codec import MidiCodec
@@ -43,7 +44,9 @@ class MidiManager(QObject):
         super().__init__()
         self.current_worker: Optional[MidiWorker] = None
         self.current_filename: Optional[str] = None
-        self.current_port_name: Optional[str] = None
+        # Where playback sends MIDI (internal controller and/or external
+        # port); set from config.io before playback starts.
+        self.midi_routing = MidiRouting(to_controller=False, port=None)
 
         # Shared data model — the single source of truth (midi_data,
         # midi_events, midi_notes, midi_note_map) plus the low-level queries,
@@ -91,6 +94,12 @@ class MidiManager(QObject):
         self.software_controller = controller
         if self.current_worker:
             self.current_worker.set_software_controller(controller)
+
+    def set_midi_routing(self, routing: MidiRouting) -> None:
+        """Set the playback MIDI routing. Takes effect on the next worker
+        start; the MediaController restarts a live worker when playing."""
+        self.midi_routing = routing
+        self.logger.info(f"MIDI routing set: {routing}")
 
     # ------------------------------------------------------------------
     # Per-track auto mode (persisted in the .mid via note 71)
@@ -620,14 +629,14 @@ class MidiManager(QObject):
 
     def _auto_update_worker(self) -> None:
         """Automatically update the worker with current MIDI data if running."""
-        if self.current_worker and self.current_port_name and self.midi_data:
+        if self.current_worker and self.midi_data:
             # Try to update worker in-place to preserve playback position
             if self._update_worker_in_place():
                 self.logger.debug("Updated worker MIDI data in-place")
             else:
                 # Fallback to restarting if in-place update fails
                 self.logger.debug("In-place update failed, restarting worker with modified MIDI data")
-                self.start_worker(self.current_filename or "modified", self.current_port_name, self.midi_data)
+                self.start_worker(self.current_filename or "modified", self.midi_data)
             # Re-seed muted channels from the doc on every worker refresh so
             # mute toggles — and undo/redo of them — take effect immediately.
             self._apply_muted_to_worker()
@@ -667,21 +676,20 @@ class MidiManager(QObject):
 
     # Enhanced playback methods
 
-    def start_playback(self, port_name: str) -> bool:
-        """Start MIDI playback with current data."""
+    def start_playback(self) -> bool:
+        """Start MIDI playback with current data and the current routing."""
         if not self.midi_data:
             self.logger.warning("No MIDI data available for playback")
             return False
 
-        return self.start_worker(self.current_filename or "current", port_name, self.midi_data)
+        return self.start_worker(self.current_filename or "current", self.midi_data)
 
-    def start_worker(self, filename: str, port_name: str, midi_data: Optional[mido.MidiFile] = None) -> bool:
+    def start_worker(self, filename: str, midi_data: Optional[mido.MidiFile] = None) -> bool:
         """
-        Start a MIDI worker with the specified file and port.
+        Start a MIDI worker with the specified file and the current routing.
 
         Args:
             filename: Path to MIDI file (used for identification)
-            port_name: MIDI output port name
             midi_data: Optional MidiFile object to use instead of loading from file
 
         Returns:
@@ -696,34 +704,44 @@ class MidiManager(QObject):
 
         # Validate inputs
         if not filename and not midi_data:
-            self.error_occurred.emit(port_name or "Unknown", "No MIDI file or data specified")
+            self.error_occurred.emit("Unknown", "No MIDI file or data specified")
             return False
 
-        if not port_name:
-            self.error_occurred.emit("Unknown", "No MIDI port specified")
+        routing = self.midi_routing
+        if not routing.has_output():
+            self.logger.warning("No MIDI outputs configured; not starting worker")
             return False
 
-        # Validate port availability
-        available_ports = MidiWorker.get_available_ports()
-        if port_name not in available_ports:
-            self.error_occurred.emit(port_name, f"MIDI port not available. Available ports: {available_ports}")
-            return False
+        # Fail fast only when the external port is the sole destination; with
+        # the controller also routed the worker keeps that leg alive and the
+        # port failure surfaces through the error dialog.
+        if routing.port and not routing.to_controller:
+            available_ports = MidiWorker.get_available_ports()
+            if routing.port not in available_ports:
+                self.error_occurred.emit(routing.port, f"MIDI port not available. Available ports: {available_ports}")
+                return False
+
+        port_label = routing.port or "Internal controller"
 
         # Create and start worker
         try:
-            worker = MidiWorker(filename, port_name, midi_data)
+            worker = MidiWorker(filename, routing.port, midi_data,
+                                route_to_controller=routing.to_controller)
             if self.software_controller:
                 worker.set_software_controller(self.software_controller)
+            elif routing.to_controller:
+                self.logger.warning(
+                    "Routing to internal controller but none attached yet")
             # Seed persisted per-track mutes so a fresh worker starts silent on
             # muted fixtures (note 71 mute bit -> skipped MIDI channels).
             worker.muted_channels = set(self._doc.mute_channels())
 
             # Connect signals
             worker.connection_status_changed.connect(
-                lambda status: self.connection_status_changed.emit(port_name, status)
+                lambda status: self.connection_status_changed.emit(port_label, status)
             )
             worker.error_occurred.connect(
-                lambda error: self.error_occurred.emit(port_name, error)
+                lambda error: self.error_occurred.emit(port_label, error)
             )
             worker.playback_position_changed.connect(self.playback_position_changed.emit)
             worker.finished.connect(self.worker_finished.emit)
@@ -732,7 +750,6 @@ class MidiManager(QObject):
             # Store references
             self.current_worker = worker
             self.current_filename = filename
-            self.current_port_name = port_name
 
             # Reset playback time tracking when starting new worker
             self._current_playback_time = 0.0
@@ -740,12 +757,12 @@ class MidiManager(QObject):
             # Start the worker thread
             worker.start()
 
-            self.logger.info(f"Started MIDI worker for {filename} on port {port_name}")
+            self.logger.info(f"Started MIDI worker for {filename} ({routing})")
             return True
 
         except Exception as e:
             self.logger.error(f"Failed to start MIDI worker: {e}")
-            self.error_occurred.emit(port_name, f"Failed to start MIDI worker: {e}")
+            self.error_occurred.emit(port_label, f"Failed to start MIDI worker: {e}")
             return False
 
     def stop_worker(self) -> None:
@@ -768,7 +785,6 @@ class MidiManager(QObject):
             # Clean up references
             self.current_worker = None
             self.current_filename = None
-            self.current_port_name = None
 
             self.logger.info("MIDI worker stopped")
 
@@ -789,10 +805,6 @@ class MidiManager(QObject):
     def get_current_filename(self) -> Optional[str]:
         """Get the current MIDI filename."""
         return self.current_filename
-
-    def get_current_port_name(self) -> Optional[str]:
-        """Get the current MIDI port name."""
-        return self.current_port_name
 
     def get_current_status(self) -> Optional[MidiConnectionStatus]:
         """Get the current connection status."""
@@ -819,7 +831,7 @@ class MidiManager(QObject):
             return {
                 'type': 'MIDI',
                 'filename': self.current_filename,
-                'port_name': self.current_port_name,
+                'routing': str(self.midi_routing),
                 'status': self.current_worker.get_status().value,
                 'message_count': self.current_worker.get_message_count(),
                 'duration': self.current_worker.get_duration()
@@ -836,30 +848,15 @@ class MidiManager(QObject):
         Returns:
             True if reload was successful
         """
-        if not self.current_port_name:
+        if not self.midi_routing.has_output():
             return False
 
         if filename:
             # Loading a new file
-            return self.load_from_file(filename) and self.start_playback(self.current_port_name)
+            return self.load_from_file(filename) and self.start_playback()
         else:
             # Reloading current data
-            return self.start_playback(self.current_port_name)
-
-    def switch_port(self, new_port_name: str) -> bool:
-        """
-        Switch to a different MIDI port while keeping current data.
-
-        Args:
-            new_port_name: New MIDI port name
-
-        Returns:
-            True if switch was successful
-        """
-        if not self.midi_data:
-            return False
-
-        return self.start_playback(new_port_name)
+            return self.start_playback()
 
     def cleanup(self) -> None:
         """Clean up resources when shutting down."""

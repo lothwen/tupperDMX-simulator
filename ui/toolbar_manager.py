@@ -1,24 +1,20 @@
 from typing import Callable, Optional
-from PyQt6.QtWidgets import (QToolBar, QComboBox, QLabel, QWidget, QSizePolicy,
+from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
                              QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QToolButton, QMenu)
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 from tupperlogger import get_logger
-from dmx import DMXManager
-from midi import MidiManager
 from config import Config
 
 
 class ToolbarManager(QObject):
     """Manages the main application toolbar with media controls and configuration options."""
-    
+
     # Signals
     load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
     new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
-    dmx_source_changed = pyqtSignal(str)  # source_name
-    midi_port_changed = pyqtSignal(str)  # port_name
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
@@ -27,18 +23,14 @@ class ToolbarManager(QObject):
     settings_requested = pyqtSignal()
     about_requested = pyqtSignal()
 
-    def __init__(self, config: Config, dmx_manager: DMXManager, midi_manager: MidiManager):
+    def __init__(self, config: Config):
         super().__init__()
         self.config = config
-        self.dmx_manager = dmx_manager
-        self.midi_manager = midi_manager
         self.logger = get_logger("ui.toolbar")
 
         # Toolbar and widgets
         self.toolbar: Optional[QToolBar] = None
         self.export_midi_button: Optional[QPushButton] = None
-        self.dmx_source_combo: Optional[QComboBox] = None
-        self.midi_port_combo: Optional[QComboBox] = None
         self.audio_file_label: Optional[QLabel] = None
         self.midi_file_label: Optional[QLabel] = None
         # Playlist navigation widgets
@@ -66,10 +58,6 @@ class ToolbarManager(QObject):
         # Files Section (left - expandable to fill left space)
         files_section = self._create_files_section()
         container_layout.addWidget(files_section, 1)  # stretch factor 1 = expandable
-
-        # Sources Section (right - expandable to fill right space)
-        sources_section = self._create_sources_section()
-        container_layout.addWidget(sources_section, 1)  # stretch factor 1 = expandable
 
         # Menu Section (far right - fixed width hamburger button)
         menu_section = self._create_menu_section()
@@ -194,73 +182,6 @@ class ToolbarManager(QObject):
         self.logger.debug("Files section created")
         return section
 
-    def _create_sources_section(self) -> QFrame:
-        """Create the sources section."""
-        section = QFrame()
-        section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        section.setObjectName("ToolbarSection")
-        
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Section title
-        title = QLabel("SOURCES")
-        title.setObjectName("SectionTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-       
-        # Sources layout with more spacing
-        sources_layout = QHBoxLayout()
-        sources_layout.setSpacing(20)  # More space between MIDI and DMX
-        
-        # MIDI source column
-        midi_container = QWidget()
-        midi_layout = QVBoxLayout(midi_container)
-        midi_layout.setContentsMargins(0, 0, 0, 0)
-        midi_layout.setSpacing(5)
-        
-        midi_label = QLabel("MIDI Port")
-        midi_label.setObjectName("SubsectionLabel")
-        midi_layout.addWidget(midi_label)
-        
-        self.midi_port_combo = QComboBox()
-        self.midi_port_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.midi_port_combo.setMinimumHeight(25)
-        available_ports = self.midi_manager.get_available_ports()
-        self.midi_port_combo.addItems(available_ports)
-        if self.config.last_midi_port and self.config.last_midi_port in available_ports:
-            self.midi_port_combo.setCurrentText(self.config.last_midi_port)
-        self.midi_port_combo.currentTextChanged.connect(self.midi_port_changed.emit)
-        midi_layout.addWidget(self.midi_port_combo)
-        
-        sources_layout.addWidget(midi_container, 1)  # expandable
-        
-        # DMX source column
-        dmx_container = QWidget()
-        dmx_layout = QVBoxLayout(dmx_container)
-        dmx_layout.setContentsMargins(0, 0, 0, 0)
-        dmx_layout.setSpacing(5)
-        
-        dmx_label = QLabel("DMX Input")
-        dmx_label.setObjectName("SubsectionLabel")
-        dmx_layout.addWidget(dmx_label)
-        
-        self.dmx_source_combo = QComboBox()
-        self.dmx_source_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.dmx_source_combo.setMinimumHeight(25)
-        dmx_sources = self.dmx_manager.get_available_sources()
-        self.dmx_source_combo.addItems(dmx_sources)
-        self.dmx_source_combo.currentTextChanged.connect(self.dmx_source_changed.emit)
-        dmx_layout.addWidget(self.dmx_source_combo)
-        
-        sources_layout.addWidget(dmx_container, 1)  # expandable
-        
-        layout.addLayout(sources_layout)
-        
-        self.logger.debug("Sources section created")
-        return section
-
     def _create_menu_section(self) -> QFrame:
         """Create the hamburger application menu section (far-right)."""
         section = QFrame()
@@ -324,83 +245,12 @@ class ToolbarManager(QObject):
                 self.midi_file_label.setToolTip("")
             self.logger.debug(f"MIDI file display updated: {display_name}")
 
-    def get_selected_dmx_source(self) -> str:
-        """Get currently selected DMX source."""
-        if self.dmx_source_combo:
-            return self.dmx_source_combo.currentText()
-        return ""
-    
-    def get_selected_midi_port(self) -> str:
-        """Get currently selected MIDI port."""
-        if self.midi_port_combo:
-            return self.midi_port_combo.currentText()
-        return ""
-    
-    def refresh_dmx_sources(self) -> None:
-        """Refresh the list of available DMX sources."""
-        if self.dmx_source_combo:
-            current_selection = self.dmx_source_combo.currentText()
-            
-            self.dmx_source_combo.clear()
-            dmx_sources = self.dmx_manager.get_available_sources()
-            self.dmx_source_combo.addItems(dmx_sources)
-            
-            # Restore selection if still available
-            if current_selection in dmx_sources:
-                self.dmx_source_combo.setCurrentText(current_selection)
-            
-            self.logger.debug(f"DMX sources refreshed: {len(dmx_sources)} sources")
-    
-    def refresh_midi_ports(self) -> None:
-        """Refresh the list of available MIDI ports."""
-        if self.midi_port_combo:
-            current_selection = self.midi_port_combo.currentText()
-            
-            self.midi_port_combo.clear()
-            available_ports = self.midi_manager.get_available_ports()
-            self.midi_port_combo.addItems(available_ports)
-            
-            # Restore selection if still available
-            if current_selection in available_ports:
-                self.midi_port_combo.setCurrentText(current_selection)
-            elif self.config.last_midi_port and self.config.last_midi_port in available_ports:
-                self.midi_port_combo.setCurrentText(self.config.last_midi_port)
-            
-            self.logger.debug(f"MIDI ports refreshed: {len(available_ports)} ports")
-    
-    def set_dmx_source(self, source_name: str) -> None:
-        """Set the selected DMX source."""
-        if self.dmx_source_combo:
-            index = self.dmx_source_combo.findText(source_name)
-            if index >= 0:
-                self.dmx_source_combo.setCurrentIndex(index)
-                self.logger.debug(f"DMX source set to: {source_name}")
-            else:
-                self.logger.warning(f"DMX source not found: {source_name}")
-    
-    def set_midi_port(self, port_name: str) -> None:
-        """Set the selected MIDI port."""
-        if self.midi_port_combo:
-            index = self.midi_port_combo.findText(port_name)
-            if index >= 0:
-                self.midi_port_combo.setCurrentIndex(index)
-                self.logger.debug(f"MIDI port set to: {port_name}")
-            else:
-                self.logger.warning(f"MIDI port not found: {port_name}")
-    
     def set_export_midi_enabled(self, enabled: bool) -> None:
         """Enable or disable the export MIDI button."""
         if self.export_midi_button:
             self.export_midi_button.setEnabled(enabled)
             self.logger.debug(f"Export MIDI button {'enabled' if enabled else 'disabled'}")
-    
-    def update_configuration(self, config: Config) -> None:
-        """Update toolbar with new configuration."""
-        self.config = config
-        self.refresh_dmx_sources()
-        self.refresh_midi_ports()
-        self.logger.info("Toolbar configuration updated")
-    
+
     def update_song_counter(self, current: int, total: int) -> None:
         """Update the song counter display (e.g., '2/5')."""
         if self.song_counter_label:
