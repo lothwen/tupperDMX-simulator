@@ -4,12 +4,10 @@ import socket
 import struct
 import errno
 from typing import Optional
-from PyQt6.QtCore import pyqtSignal
 
 from config import Config
 from tupperlogger import get_logger
 from .base import DMXWorkerBase, DMXConnectionStatus
-from software_controller.main import DMXController
 
 
 class ArtNetProtocol(asyncio.DatagramProtocol):
@@ -63,20 +61,19 @@ class ArtNetProtocol(asyncio.DatagramProtocol):
 
 
 class ArtNetWorker(DMXWorkerBase):
-    """Worker for receiving DMX data via Art-Net protocol."""
-    
-    # Signal to notify when software controller instance changes
-    software_controller_changed = pyqtSignal(object)
-    
+    """Worker for receiving DMX data via Art-Net protocol.
+
+    Pure listener: binds all interfaces on the configured port and feeds the
+    frames of the configured universe to dmx_data_received."""
+
     def __init__(self, config: Config):
-        super().__init__(f"Art-Net ({config.artnet.ip}:{config.artnet.port})")
+        super().__init__(f"Art-Net (listen :{config.artnet.port})")
         self.config = config
         self.transport = None
         self.protocol = None
         self.stop_event = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.logger = get_logger("dmx.artnet")
-        self.software_controller: Optional[DMXController] = None
 
     def run(self) -> None:
         """Start the Art-Net worker in async event loop."""
@@ -102,25 +99,13 @@ class ArtNetWorker(DMXWorkerBase):
     async def _async_worker(self) -> None:
         """Async worker function."""
         try:
-            # Check if we should start the software controller (local simulation)
-            if self.config.artnet.ip in ["127.0.0.1", "localhost"]:
-                self.logger.info("Starting local software controller for simulation")
-                self.software_controller = DMXController(self.config.fixtures)
-                self.software_controller.start_background()
-                self.software_controller_changed.emit(self.software_controller)
-            
-            # Start UDP listener
-            self.logger.info(f"Listening for Art-Net at {self.config.artnet.ip}:{self.config.artnet.port}")
-            
-            # Bind to all interfaces if 0.0.0.0, otherwise specific IP
-            # For localhost, we bind to 127.0.0.1
-            bind_ip = self.config.artnet.ip
-            if bind_ip == "localhost":
-                bind_ip = "127.0.0.1"
-                
+            # Start UDP listener on all interfaces (config.artnet.ip is the
+            # controller's *output* target, not the listen address).
+            self.logger.info(f"Listening for Art-Net on 0.0.0.0:{self.config.artnet.port}")
+
             self.transport, self.protocol = await self._loop.create_datagram_endpoint(
                 lambda: ArtNetProtocol(self._on_dmx_data, self.config.artnet.universe, self.logger),
-                local_addr=(bind_ip, self.config.artnet.port)
+                local_addr=("0.0.0.0", self.config.artnet.port)
             )
             
             self._set_status(DMXConnectionStatus.CONNECTED)
@@ -147,12 +132,6 @@ class ArtNetWorker(DMXWorkerBase):
             if self.transport:
                 self.transport.close()
                 self.transport = None
-                
-            if self.software_controller:
-                self.logger.info("Stopping local software controller")
-                self.software_controller.stop()
-                self.software_controller = None
-                self.software_controller_changed.emit(None)
 
     def _on_dmx_data(self, data):
         """Callback when DMX data is received."""
@@ -169,7 +148,7 @@ class ArtNetWorker(DMXWorkerBase):
         """Get detailed connection information."""
         return {
             'type': 'Art-Net',
-            'ip': self.config.artnet.ip,
+            'bind': '0.0.0.0',
             'port': self.config.artnet.port,
             'universe': self.config.artnet.universe,
             'status': self.status.value

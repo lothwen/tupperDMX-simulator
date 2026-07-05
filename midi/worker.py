@@ -26,10 +26,13 @@ class MidiWorker(QThread):
     error_occurred = pyqtSignal(str)  # Error message
     playback_position_changed = pyqtSignal(float)  # Current playback time
     
-    def __init__(self, filename: str, port_name: str, midi_data: Optional[mido.MidiFile] = None):
+    def __init__(self, filename: str, port_name: Optional[str],
+                 midi_data: Optional[mido.MidiFile] = None,
+                 route_to_controller: bool = False):
         super().__init__()
         self.filename = filename
         self.port_name = port_name
+        self.route_to_controller = route_to_controller
         self.messages: List[Tuple[float, mido.Message]] = []
         self.last_played_index = 0
         self._is_running = True
@@ -101,23 +104,25 @@ class MidiWorker(QThread):
         self._cleanup()
 
     def _connect_midi_port(self) -> bool:
-        """Connect to the specified MIDI output port."""
-        try:
-            if not self.port_name:
-                raise ValueError("No MIDI port specified")
-            
-            if self.port_name == "Software emulated":
-                self.logger.info("Connected to Software emulated MIDI port")
-                return True
+        """Open the external MIDI output port, if one is routed."""
+        if not self.port_name:
+            if not self.route_to_controller:
+                self.logger.error("No MIDI output route configured")
+                self._emit_error("No MIDI output route configured")
+                return False
+            return True
 
+        try:
             self.port = mido.open_output(self.port_name)
             self.logger.info(f"Connected to MIDI port: {self.port_name}")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Could not open MIDI port {self.port_name}: {e}")
             self._emit_error(f"Could not open MIDI port {self.port_name}: {e}")
-            return False
+            # With the controller also routed, keep playing on that leg; the
+            # error dialog lets the user retry the external port.
+            return self.route_to_controller
 
     def _playback_loop(self) -> None:
         """Main playback loop that processes timeline updates."""
@@ -151,15 +156,17 @@ class MidiWorker(QThread):
                     self.last_played_index += 1
                     continue
 
-                # Send all MIDI messages, not just note_on
-                if self.port_name == "Software emulated" and self.software_controller:
-                    if msg.type == 'note_on':
-                        try:
-                            self.software_controller.handle_note_on(msg.channel, msg.note, msg.velocity)
-                            self.logger.debug(f"Sent MIDI message to software controller: {msg}")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to send MIDI message to software controller: {e}")
-                elif self.port and msg.type in ('note_on', 'note_off', 'control_change', 'program_change'):
+                # Fan out to every routed destination independently: the
+                # software controller consumes note_on verbs, an external
+                # port receives the full stream.
+                if (self.route_to_controller and self.software_controller
+                        and msg.type == 'note_on'):
+                    try:
+                        self.software_controller.handle_note_on(msg.channel, msg.note, msg.velocity)
+                        self.logger.debug(f"Sent MIDI message to software controller: {msg}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to send MIDI message to software controller: {e}")
+                if self.port and msg.type in ('note_on', 'note_off', 'control_change', 'program_change'):
                     try:
                         self.port.send(msg)
                         self.logger.debug(f"Sent MIDI message: {msg}")
@@ -308,12 +315,10 @@ class MidiWorker(QThread):
 
     @staticmethod
     def get_available_ports() -> List[str]:
-        """Get list of available MIDI output ports."""
-        ports = []
-        ports.insert(0, "Software emulated")
+        """Get list of available external MIDI output ports."""
         try:
-            ports.extend(mido.get_output_names())
+            return list(mido.get_output_names())
         except Exception as e:
             logger = get_logger("midi.worker")
             logger.error(f"Error getting MIDI ports: {e}")
-        return ports
+            return []
