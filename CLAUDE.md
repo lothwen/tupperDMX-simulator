@@ -114,12 +114,17 @@ reading the shipped seed (so shipped-config updates still reach it).
 
 - `ToolbarManager` (`ui/toolbar_manager.py`): file loading/export, playlist
   nav (prev/next/remove + counter), and the ☰ menu (Settings…, About).
-- `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor. Its
-  **Input / Output** section edits `config.io` by block (① sequencer MIDI
-  outputs = checkboxes, ② internal controller enable + DMX output checkboxes
-  incl. the Art-Net target fields, ③ stage input radios), with quick-mode
-  presets, a live "resulting flow" strip, and validation from
-  `io_routing.validate()` (hard errors block accept; soft warnings inline).
+- `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
+  **Input / Output** page. Left: three numbered routing cards editing `config.io`
+  (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
+  `_ToggleSwitch` for `controller_enabled` greys the body — + DMX output checkboxes
+  incl. the Art-Net target fields, ③ stage input radios) plus quick-mode presets
+  and a compact Logging card. Right: a live signal-flow graph (`ui/io_flow_widget.py`
+  `IOFlowWidget`, rendered from `io_routing.flow_state(io, ip, universe)` — nodes/
+  edges light up, animated dashes MIDI=violet/DMX=amber, dead routes red, stage
+  "BLACKOUT" pill) over a live validation strip from `io_routing.validate()` (hard
+  errors block accept; soft warnings inline). The two universe spinboxes (blocks
+  ②/③) edit the one shared `ArtNetConfig.universe` and mirror each other.
 - `Timeline` (`timeline/manager.py`): waveform, beat detection, seeking, and
   clip-style MIDI editing — one `MidiEventsTrack` per fixture filter
   (`ledbar`, `blinder`).
@@ -199,7 +204,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
 - `fixture_library.py` (repo root) — data-driven fixture-type library
   (`FixtureDef`, JSON loaders, role/flag maps). `fixtures/` (repo root) — shipped
   fixture-type definitions (`*.json`). `io_routing.py` (repo root) — pure
-  routing logic: `MidiRouting`, presets, `validate()`, `flow_text()`.
+  routing logic: `MidiRouting`, presets, `validate()`, `flow_text()`, and
+  `flow_state()` (→ `FlowState`, the render-ready signal-flow graph state).
 - `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
   stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure
   listener on 0.0.0.0), `usb_worker.py` (FTDI/serial reader), `base.py`.
