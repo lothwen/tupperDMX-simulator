@@ -1,7 +1,8 @@
 # ABOUTME: Pure (Qt-free) I/O routing logic: MIDI routing derivation, quick-mode
-# ABOUTME: presets, validation rules and the "resulting flow" text for IOConfig.
+# ABOUTME: presets, validation rules, the "resulting flow" text and the live
+# ABOUTME: signal-flow graph state for IOConfig.
 from dataclasses import dataclass, replace
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from config import IOConfig
 
@@ -129,3 +130,137 @@ def flow_text(io: IOConfig) -> str:
         lines.append("USB DMX read ─DMX→ Stage")
 
     return "\n".join(lines)
+
+
+# --- signal-flow graph state -------------------------------------------------
+
+# Per-node / per-edge render status. A node/edge is ACTIVE when it carries live
+# data (colored, animated), DIM when it's an unused route (grey), or DEAD when
+# it's configured but broken (red — e.g. MIDI into a disabled controller, or a
+# stage pointed at a dark source).
+STATUS_ACTIVE = "active"
+STATUS_DIM = "dim"
+STATUS_DEAD = "dead"
+
+NODE_SEQ = "seq"
+NODE_MIDI_PORT = "midi_port"
+NODE_CTRL = "ctrl"
+NODE_ARTNET = "artnet"
+NODE_USB = "usb"
+NODE_STAGE = "stage"
+
+EDGE_SEQ_CTRL = (NODE_SEQ, NODE_CTRL)          # MIDI
+EDGE_SEQ_PORT = (NODE_SEQ, NODE_MIDI_PORT)     # MIDI
+EDGE_CTRL_STAGE = (NODE_CTRL, NODE_STAGE)      # DMX
+EDGE_CTRL_ARTNET = (NODE_CTRL, NODE_ARTNET)    # DMX
+EDGE_CTRL_USB = (NODE_CTRL, NODE_USB)          # DMX
+EDGE_ARTNET_STAGE = (NODE_ARTNET, NODE_STAGE)  # DMX return path
+EDGE_USB_STAGE = (NODE_USB, NODE_STAGE)        # DMX return path
+
+# Edges that carry MIDI (the widget picks the MIDI vs DMX pen colour from this).
+MIDI_EDGES = (EDGE_SEQ_CTRL, EDGE_SEQ_PORT)
+
+
+@dataclass(frozen=True)
+class FlowState:
+    """Render-ready state of the I/O signal-flow graph: a status per node and
+    per edge, plus the dynamic subtitle line of every node. Pure data — the
+    widget only draws it."""
+    nodes: Dict[str, str]              # node id -> STATUS_*
+    edges: Dict[Tuple[str, str], str]  # (src, dst) -> STATUS_*
+    subtitles: Dict[str, str]          # node id -> dynamic second line
+
+
+def _device_label(device: Optional[str], fallback: str = "no device") -> str:
+    """Short label for a "FTDI:<desc>:<serial>" device id — the middle part
+    (the human description) when present, else the raw string or a fallback."""
+    if not device:
+        return fallback
+    parts = device.split(":")
+    if len(parts) >= 3:
+        return parts[1]
+    return device
+
+
+def flow_state(io: IOConfig, artnet_ip: str = "", artnet_universe: int = 0) -> FlowState:
+    """Derive the signal-flow graph state from an IOConfig (plus the live
+    Art-Net target, which lives in ArtNetConfig, not IOConfig). The dead-route
+    predicates mirror validate()'s hard error / stage-dark warning."""
+    # Predicates shared with validate().
+    usb_conflict = (io.dmx_to_usb and io.stage_source == "usb"
+                    and io.usb_out_device
+                    and io.usb_out_device == io.stage_usb_device)
+    stage_dark = (io.stage_source == "internal"
+                  and not (io.controller_enabled and io.dmx_to_stage))
+
+    edges: Dict[Tuple[str, str], str] = {}
+
+    # Sequencer MIDI out.
+    if io.midi_to_controller and not io.controller_enabled:
+        edges[EDGE_SEQ_CTRL] = STATUS_DEAD
+    elif io.midi_to_controller:
+        edges[EDGE_SEQ_CTRL] = STATUS_ACTIVE
+    else:
+        edges[EDGE_SEQ_CTRL] = STATUS_DIM
+    edges[EDGE_SEQ_PORT] = STATUS_ACTIVE if io.midi_to_port else STATUS_DIM
+
+    # Controller DMX out. The stage edge is only wired in-process when the
+    # stage input *is* the internal controller; other sources leave it idle.
+    if io.stage_source == "internal":
+        edges[EDGE_CTRL_STAGE] = (STATUS_ACTIVE
+                                  if io.controller_enabled and io.dmx_to_stage
+                                  else STATUS_DEAD)
+    else:
+        edges[EDGE_CTRL_STAGE] = STATUS_DIM
+    edges[EDGE_CTRL_ARTNET] = (STATUS_ACTIVE
+                               if io.controller_enabled and io.dmx_to_artnet
+                               else STATUS_DIM)
+    edges[EDGE_CTRL_USB] = (STATUS_ACTIVE
+                            if io.controller_enabled and io.dmx_to_usb
+                            else STATUS_DIM)
+
+    # Stage input return paths.
+    edges[EDGE_ARTNET_STAGE] = (STATUS_ACTIVE if io.stage_source == "artnet"
+                                else STATUS_DIM)
+    if usb_conflict:
+        edges[EDGE_USB_STAGE] = STATUS_DEAD
+    else:
+        edges[EDGE_USB_STAGE] = (STATUS_ACTIVE if io.stage_source == "usb"
+                                 else STATUS_DIM)
+
+    nodes: Dict[str, str] = {}
+    nodes[NODE_SEQ] = STATUS_ACTIVE
+    nodes[NODE_MIDI_PORT] = STATUS_ACTIVE if io.midi_to_port else STATUS_DIM
+    if io.midi_to_controller and not io.controller_enabled:
+        nodes[NODE_CTRL] = STATUS_DEAD
+    elif io.controller_enabled:
+        nodes[NODE_CTRL] = STATUS_ACTIVE
+    else:
+        nodes[NODE_CTRL] = STATUS_DIM
+    artnet_active = ((io.controller_enabled and io.dmx_to_artnet)
+                     or io.stage_source == "artnet")
+    nodes[NODE_ARTNET] = STATUS_ACTIVE if artnet_active else STATUS_DIM
+    if usb_conflict:
+        nodes[NODE_USB] = STATUS_DEAD
+    else:
+        usb_active = ((io.controller_enabled and io.dmx_to_usb)
+                      or io.stage_source == "usb")
+        nodes[NODE_USB] = STATUS_ACTIVE if usb_active else STATUS_DIM
+    nodes[NODE_STAGE] = STATUS_DEAD if stage_dark else STATUS_ACTIVE
+
+    stage_input = {
+        "internal": "input: internal ctrl",
+        "artnet": "input: Art-Net",
+        "usb": "input: USB DMX",
+    }.get(io.stage_source, "input: internal ctrl")
+    subtitles = {
+        NODE_SEQ: "timeline",
+        NODE_MIDI_PORT: io.midi_port or "no port selected",
+        NODE_CTRL: "MIDI → DMX" if io.controller_enabled else "disabled",
+        NODE_ARTNET: f"{artnet_ip or '—'} · U{artnet_universe}",
+        NODE_USB: _device_label(
+            io.stage_usb_device if io.stage_source == "usb" else io.usb_out_device),
+        NODE_STAGE: "no signal" if stage_dark else stage_input,
+    }
+
+    return FlowState(nodes=nodes, edges=edges, subtitles=subtitles)
