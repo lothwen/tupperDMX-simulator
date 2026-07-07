@@ -28,7 +28,7 @@ from tupperlogger import get_logger
 
 # MIDI note number for the song-part marker that triggers START handling in
 # the software controller (see software_controller/main.py:pick_scene_from_song_part).
-START_NOTE = 40
+START_NOTE = note_layout.START
 
 
 class Timeline(QWidget):

@@ -1,4 +1,4 @@
-# ABOUTME: Edit dialog for the special START MIDI event (note 40).
+# ABOUTME: Edit dialog for the special START MIDI event (note 60).
 # ABOUTME: Encodes a hue choice (12 fixed hues + random) and palette mode
 # ABOUTME: into the event's velocity as: hue_index * 6 + palette_mode_index.
 

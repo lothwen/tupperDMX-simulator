@@ -5,6 +5,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from tupperlogger import get_logger
+from io_routing import MidiRouting
 from midi import MidiManager
 
 
@@ -32,7 +33,8 @@ class MediaController(QObject):
         
         # Current files
         self.audio_file: Optional[str] = None
-        self.port_name: Optional[str] = None
+        # Where playback sends MIDI; set from config.io by MainWindow.
+        self.midi_routing = MidiRouting(to_controller=False, port=None)
         
         # Setup media player
         self.media_player = QMediaPlayer()
@@ -73,14 +75,15 @@ class MediaController(QObject):
         if midi_file:
             self.logger.info(f"MIDI file should be loaded via MidiManager.load_from_file(): {midi_file}")
     
-    def set_midi_port(self, port_name: str) -> None:
-        """Set the MIDI output port."""
-        self.port_name = port_name
-        self.logger.info(f"MIDI port set: {port_name}")
-        
-        # Switch MIDI port if currently playing
+    def set_midi_routing(self, routing: MidiRouting) -> None:
+        """Set the MIDI output routing (controller and/or external port)."""
+        self.midi_routing = routing
+        self.midi_manager.set_midi_routing(routing)
+        self.logger.info(f"MIDI routing set: {routing}")
+
+        # Re-route live playback (mirrors the old switch-port behaviour).
         if self.is_playing and self.midi_manager.midi_data:
-            self.midi_manager.switch_port(port_name)
+            self.midi_manager.start_playback()
     
     def set_audio_volume(self, volume: float) -> None:
         """Set audio output volume (0.0 to 1.0)."""
@@ -115,9 +118,9 @@ class MediaController(QObject):
         self.last_pause_time = 0
         self.is_playing = False
         
-        # Start MIDI playback if we have MIDI data and port
-        if self.midi_manager.midi_data and self.port_name:
-            midi_started = self.midi_manager.start_playback(self.port_name)
+        # Start MIDI playback if we have MIDI data and somewhere to send it
+        if self.midi_manager.midi_data and self.midi_routing.has_output():
+            midi_started = self.midi_manager.start_playback()
             if not midi_started:
                 self.logger.warning("Failed to start MIDI playback, continuing with audio only")
         
@@ -176,9 +179,9 @@ class MediaController(QObject):
             return
         
         # Check if we need to restart MIDI playback after stop
-        if self.midi_manager.midi_data and self.port_name and not self.midi_manager.is_running() and self.last_pause_time == 0:
+        if self.midi_manager.midi_data and self.midi_routing.has_output() and not self.midi_manager.is_running() and self.last_pause_time == 0:
             self.logger.info("Restarting MIDI playback after stop")
-            if not self.midi_manager.start_playback(self.port_name):
+            if not self.midi_manager.start_playback():
                 self.logger.warning("Failed to restart MIDI playback, continuing with audio only")
         
         self.logger.info(f"Resuming playback from {self.current_timeline_time:.2f}s")

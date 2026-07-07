@@ -95,8 +95,11 @@ def test_userprefs_roundtrip():
         cfg.logging.level = "DEBUG"
         cfg.window.width = 1600
         cfg.window.height = 900
-        cfg.last_dmx_source = "Art-Net"
-        cfg.last_midi_port = "Software emulated"
+        cfg.io.midi_to_port = True
+        cfg.io.midi_port = "Arduino Leonardo"
+        cfg.io.dmx_to_artnet = True
+        cfg.io.stage_source = "usb"
+        cfg.io.stage_usb_device = "FTDI:FT232R:A1B2C3"
         cfg.add_song(audio=str(audio), offset=1.5)
         _assert(cfg.save() is True, "save() reported success")
 
@@ -109,11 +112,70 @@ def test_userprefs_roundtrip():
         _assert(cfg2.logging.level == "DEBUG", "log level round-tripped")
         _assert(cfg2.window.width == 1600 and cfg2.window.height == 900,
                 "window size round-tripped")
-        _assert(cfg2.last_dmx_source == "Art-Net", "last_dmx_source round-tripped")
-        _assert(cfg2.last_midi_port == "Software emulated", "last_midi_port round-tripped")
+        _assert(cfg2.io.midi_to_port and cfg2.io.midi_port == "Arduino Leonardo",
+                "io MIDI routing round-tripped")
+        _assert(cfg2.io.dmx_to_artnet, "io Art-Net output round-tripped")
+        _assert(cfg2.io.stage_source == "usb"
+                and cfg2.io.stage_usb_device == "FTDI:FT232R:A1B2C3",
+                "io stage input round-tripped")
         _assert(len(cfg2.playlist.songs) == 1, "playlist song round-tripped")
         _assert(cfg2.playlist.songs[0].audio == str(audio), "song audio path round-tripped")
         _assert(abs(cfg2.playlist.songs[0].offset - 1.5) < 1e-9, "song offset round-tripped")
+
+
+def test_io_migration_from_legacy_keys():
+    """Pre-io userprefs (last_dmx_source/last_midi_port + localhost convention)
+    map onto an explicit IOConfig; the next save drops the legacy keys."""
+    print("test_io_migration_from_legacy_keys")
+    cases = [
+        # (legacy prefs, expectation description, checker)
+        ({"last_midi_port": "Software emulated", "last_dmx_source": "Art-Net"},
+         "sentinel + localhost Art-Net -> all-software defaults",
+         lambda io: (io.midi_to_controller and not io.midi_to_port
+                     and io.controller_enabled and io.dmx_to_stage
+                     and io.stage_source == "internal")),
+        ({"last_midi_port": "Arduino Leonardo", "last_dmx_source": "Art-Net"},
+         "real port -> external MIDI only",
+         lambda io: (not io.midi_to_controller and io.midi_to_port
+                     and io.midi_port == "Arduino Leonardo")),
+        ({"last_dmx_source": "Art-Net",
+          "artnet": {"ip": "192.168.1.50", "port": 6454, "universe": 0}},
+         "Art-Net + remote ip -> controller off, stage listens",
+         lambda io: (not io.controller_enabled and not io.dmx_to_stage
+                     and io.stage_source == "artnet")),
+        ({"last_dmx_source": "FTDI:FT232R:A1B2C3"},
+         "FTDI source -> controller off, stage reads USB",
+         lambda io: (not io.controller_enabled and io.stage_source == "usb"
+                     and io.stage_usb_device == "FTDI:FT232R:A1B2C3")),
+        ({"last_midi_port": "Arduino Leonardo",
+          "io": {"midi_to_controller": True, "midi_to_port": False}},
+         "an io section wins over legacy keys",
+         lambda io: io.midi_to_controller and not io.midi_to_port),
+    ]
+    for prefs_data, desc, check in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            shipped, prefs = _patch_paths(tmp)
+            shipped.write_text(json.dumps(SHIPPED))
+            prefs.write_text(json.dumps(prefs_data))
+            cfg = Config.load()
+            _assert(check(cfg.io), desc)
+
+            cfg.save()
+            data = json.loads(prefs.read_text())
+            _assert("io" in data, "post-save userprefs carries the io section")
+            _assert("last_dmx_source" not in data and "last_midi_port" not in data,
+                    "post-save userprefs drops the legacy keys")
+
+
+def test_io_invalid_stage_source_falls_back():
+    print("test_io_invalid_stage_source_falls_back")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        prefs.write_text(json.dumps({"io": {"stage_source": "bogus"}}))
+        cfg = Config.load()
+        _assert(cfg.io.stage_source == "internal",
+                "invalid stage_source falls back to internal")
 
 
 def test_save_writes_only_userprefs():
@@ -318,6 +380,8 @@ def test_next_free_channel():
 def main():
     test_first_launch_creates_userprefs()
     test_userprefs_roundtrip()
+    test_io_migration_from_legacy_keys()
+    test_io_invalid_stage_source_falls_back()
     test_save_writes_only_userprefs()
     test_validation_clamps_out_of_range()
     test_corrupted_userprefs_falls_back()

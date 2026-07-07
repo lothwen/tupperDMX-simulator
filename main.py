@@ -15,6 +15,8 @@ from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QUrl, QTimer, QEvent
 
 import note_layout
 from config import Config, userprefs_path
+from dataclasses import asdict
+from io_routing import midi_routing_from_io
 from fixtures import LedBar, Blinder
 from timeline import Timeline
 from dmx import DMXManager
@@ -103,17 +105,9 @@ class MainWindow(QMainWindow):
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
         
-        # Set initial MIDI port
-        initial_midi_port = self.toolbar_manager.get_selected_midi_port()
-        if initial_midi_port:
-            self.media_controller.set_midi_port(initial_midi_port)
-            self.logger.info(f"Initial MIDI port set to: {initial_midi_port}")
-        
-        # Start DMX with last used source
-        initial_dmx_source = self.config.last_dmx_source or "Art-Net"
-        if initial_dmx_source in self.dmx_manager.get_available_sources():
-            self.toolbar_manager.set_dmx_source(initial_dmx_source)
-            self.dmx_manager.start_worker(initial_dmx_source)
+        # Apply the persisted I/O routing (MIDI destinations, controller
+        # lifecycle + DMX sinks, stage input).
+        self._apply_io_config()
         
         # Install global event filter for spacebar handling
         QApplication.instance().installEventFilter(self)
@@ -158,7 +152,7 @@ class MainWindow(QMainWindow):
         
         self.stage_controller = StageController(self.config)
 
-        self.toolbar_manager = ToolbarManager(self.config, self.dmx_manager, self.midi_manager)
+        self.toolbar_manager = ToolbarManager(self.config)
         # Transport lives in a toolbar above the timeline (built in setup_ui).
         self.timeline_toolbar = TimelineToolbar(play_icon, pause_icon, stop_icon)
         self._connect_toolbar_signals()
@@ -168,8 +162,6 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
-        self.toolbar_manager.dmx_source_changed.connect(self.on_dmx_source_changed)
-        self.toolbar_manager.midi_port_changed.connect(self.set_midi_port)
         # Transport signals now originate from the timeline toolbar.
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
@@ -466,15 +458,11 @@ class MainWindow(QMainWindow):
             # Generic media error
             ErrorDialogManager.show_media_file_error(self, "Unknown file", error_message)
 
-    def on_dmx_source_changed(self, source):
-        """Handle DMX source change from UI."""
-        self.dmx_manager.switch_source(source)
-        self.save_config()
-    
-    def on_dmx_source_changed_internal(self, source):
-        """Handle DMX source change from manager."""
-        self.config.last_dmx_source = source
-    
+    def _apply_io_config(self):
+        """Apply config.io end to end: MIDI routing + controller/sinks/stage."""
+        self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
+        self.dmx_manager.apply_io(self.config.io)
+
     def on_dmx_status_changed(self, source, status):
         """Handle DMX connection status changes."""
         self.logger.info(f"DMX {source} status: {status}")
@@ -485,8 +473,8 @@ class MainWindow(QMainWindow):
         
         # Show user-friendly error dialog with retry option
         if ErrorDialogManager.show_dmx_connection_error(self, source, error):
-            # User wants to retry
-            self.dmx_manager.switch_source(source)
+            # User wants to retry: re-apply the stage-input leg from config.io
+            self.dmx_manager.restart_stage_input()
     
     def on_midi_status_changed(self, port_name, status):
         """Handle MIDI connection status changes."""
@@ -498,8 +486,8 @@ class MainWindow(QMainWindow):
         
         # Show user-friendly error dialog with retry option
         if ErrorDialogManager.show_midi_connection_error(self, port_name, error):
-            # User wants to retry
-            self.media_controller.set_midi_port(port_name)
+            # User wants to retry: re-apply the routing (restarts a live worker)
+            self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
     
     def on_midi_finished(self):
         """Handle MIDI worker finished signal."""
@@ -525,41 +513,40 @@ class MainWindow(QMainWindow):
         self.timeline._schedule_refresh()
 
     def _preview_clip(self, messages):
-        """Audition clip-library items live: route note_on(s) to the current
-        MIDI output without modifying the timeline. `messages` is a list of
-        (channel, note, velocity) tuples — length 1 for clips, 7 for LED
-        scenes. The channel selects the target fixture (its patch index)."""
+        """Audition clip-library items live: route note_on(s) through the
+        configured MIDI outputs without modifying the timeline. `messages` is
+        a list of (channel, note, velocity) tuples — length 1 for clips, 7 for
+        LED scenes. The channel selects the target fixture (its patch index)."""
         if not messages:
             return
-        port_name = self.media_controller.port_name
-        if not port_name:
-            self.logger.debug("Preview ignored: no MIDI port selected")
+        routing = midi_routing_from_io(self.config.io)
+        if not routing.has_output():
+            self.logger.debug("Preview ignored: no MIDI outputs configured")
             return
 
-        if port_name == "Software emulated":
+        if routing.to_controller:
             controller = getattr(self, "software_controller", None)
             if controller is None:
                 self.logger.debug(
-                    "Preview ignored: software controller not active "
-                    "(set Art-Net target to 127.0.0.1)"
-                )
-                return
-            for channel, note, velocity in messages:
-                try:
-                    controller.handle_note_on(
-                        int(channel), int(note), int(velocity))
-                except Exception as e:
-                    self.logger.warning(
-                        f"Preview to software controller failed: {e}"
-                    )
+                    "Preview: software controller routed but not active")
+            else:
+                for channel, note, velocity in messages:
+                    try:
+                        controller.handle_note_on(
+                            int(channel), int(note), int(velocity))
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Preview to software controller failed: {e}")
+
+        if not routing.port:
             return
 
-        # Hardware port: reuse the running worker's open handle when it
+        # External port: reuse the running worker's open handle when it
         # matches, since some MIDI backends refuse a second open on the
         # same device. Otherwise open a transient port for this preview.
         worker = self.midi_manager.current_worker
         if (worker and worker.isRunning() and worker.port
-                and worker.port_name == port_name):
+                and worker.port_name == routing.port):
             for channel, note, velocity in messages:
                 try:
                     worker.port.send(mido.Message(
@@ -571,14 +558,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            with mido.open_output(port_name) as port:
+            with mido.open_output(routing.port) as port:
                 for channel, note, velocity in messages:
                     port.send(mido.Message(
                         'note_on', channel=int(channel),
                         note=int(note), velocity=int(velocity)))
         except Exception as e:
             self.logger.warning(
-                f"Preview open/send on '{port_name}' failed: {e}")
+                f"Preview open/send on '{routing.port}' failed: {e}")
 
     def _on_dmx_channel_edited(self, channel, value):
         """Apply a manual value dragged in the DMX monitor to the live software
@@ -609,21 +596,17 @@ class MainWindow(QMainWindow):
 
     def show_settings_dialog(self):
         """Open the preferences editor and apply any changes live."""
-        old_artnet = (self.config.artnet.ip, self.config.artnet.port,
-                      self.config.artnet.universe)
+        old_io = asdict(self.config.io)
+        old_artnet = asdict(self.config.artnet)
 
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        # Re-target Art-Net only if it changed. switch_source() no-ops when the
-        # source name is unchanged, so force a restart via start_worker() to
-        # pick up the new ip/port/universe (worker reads config at creation).
-        new_artnet = (self.config.artnet.ip, self.config.artnet.port,
-                      self.config.artnet.universe)
-        current_source = self.dmx_manager.get_current_source()
-        if new_artnet != old_artnet and current_source:
-            self.dmx_manager.start_worker(current_source)
+        # Re-apply the routing when it (or the Art-Net target the sinks and
+        # listener read from) changed.
+        if asdict(self.config.io) != old_io or asdict(self.config.artnet) != old_artnet:
+            self._apply_io_config()
 
         self.save_config()
         self.logger.info("Settings updated")
@@ -905,14 +888,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 ErrorDialogManager.show_media_file_error(self, path, f"Export failed: {str(e)}")
 
-    def set_midi_port(self, port_name):
-        """Handle MIDI port selection from toolbar."""
-        self.config.last_midi_port = port_name
-        self.save_config()
-        
-        # Update media controller with new port
-        self.media_controller.set_midi_port(port_name)
-
     def save_config(self):
         """Save configuration with error handling."""
         prefs_file = str(userprefs_path())
@@ -985,12 +960,6 @@ class MainWindow(QMainWindow):
                 cleanup()
             except Exception as e:
                 self.logger.error(f"Error cleaning up {name}: {e}")
-
-        if hasattr(self, 'software_controller') and self.software_controller:
-            try:
-                self.software_controller.stop()
-            except Exception as e:
-                self.logger.error(f"Error stopping software controller: {e}")
 
         # Save configuration
         self.save_config()
