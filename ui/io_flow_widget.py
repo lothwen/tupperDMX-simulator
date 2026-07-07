@@ -26,16 +26,20 @@ COL_TITLE = QColor("#e0e0e0")
 COL_TITLE_DIM = QColor("#7a7a7a")
 COL_SUB = QColor("#8a8a8a")
 COL_PILL_BG = QColor("#c0392b")
+COL_BADGE = QColor("#2f6db0")           # numbered badge — matches the Settings cards
 
 # Static node titles; the dynamic second line comes from FlowState.subtitles.
 NODE_TITLES = {
-    NODE_SEQ: "① Sequencer",
+    NODE_SEQ: "Sequencer",
     NODE_MIDI_PORT: "MIDI Port",
-    NODE_CTRL: "② Internal ctrl",
+    NODE_CTRL: "Internal ctrl",
     NODE_ARTNET: "Art-Net",
     NODE_USB: "USB DMX",
-    NODE_STAGE: "③ Virtual stage",
+    NODE_STAGE: "Virtual stage",
 }
+
+# Nodes that carry a circled number, drawn as a blue badge (like the left cards).
+NODE_BADGES = {NODE_SEQ: "1", NODE_CTRL: "2", NODE_STAGE: "3"}
 
 # All edges + whether their destination arrow sits at the node's top / left /
 # right edge (used to place the arrowhead cleanly against the target node).
@@ -260,8 +264,8 @@ class IOFlowWidget(QWidget):
         title_font.setBold(True)
         p.setFont(title_font)
         p.setPen(COL_TITLE_DIM if dim else COL_TITLE)
-        p.drawText(rect.adjusted(10, 5, -8, -rect.height() / 2),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        p.drawText(rect.adjusted(8, 5, -8, -rect.height() / 2),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                    NODE_TITLES.get(node_id, node_id))
 
         sub_font = QFont()
@@ -269,13 +273,32 @@ class IOFlowWidget(QWidget):
         p.setFont(sub_font)
         p.setPen(COL_SUB)
         subtitle = self._state.subtitles.get(node_id, "")
-        p.drawText(rect.adjusted(10, rect.height() / 2, -8, -5),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        p.drawText(rect.adjusted(8, rect.height() / 2, -8, -5),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                    subtitle)
+
+        # Circled number as a blue badge pinned to the node's top-left corner.
+        number = NODE_BADGES.get(node_id)
+        if number:
+            self._draw_number_badge(p, QPointF(rect.left() + 13, rect.top() + 13),
+                                    number)
 
         # BLACKOUT pill on the stage node's top-right corner when it's dead.
         if node_id == NODE_STAGE and status == STATUS_DEAD:
             self._draw_blackout_pill(p, rect)
+
+    def _draw_number_badge(self, p: QPainter, center: QPointF, text: str):
+        r = 9.0
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(COL_BADGE))
+        p.drawEllipse(center, r, r)
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor("#ffffff"))
+        p.drawText(QRectF(center.x() - r, center.y() - r, 2 * r, 2 * r),
+                   Qt.AlignmentFlag.AlignCenter, text)
 
     def _draw_blackout_pill(self, p: QPainter, node_rect: QRectF):
         font = QFont()
