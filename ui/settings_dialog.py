@@ -23,9 +23,12 @@ LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 class _ToggleSwitch(QCheckBox):
     """An iOS-style sliding toggle. Stays a QCheckBox so isChecked()/setChecked()
     and the ``toggled`` signal work exactly like a checkbox; only the painting
-    and the click target change. The knob animation is driven from
-    checkStateSet() (not the ``toggled`` signal) so programmatic setChecked under
-    blockSignals() still animates correctly."""
+    and the click target change. The knob animation is driven from the state
+    hooks rather than the ``toggled`` signal: checkStateSet() covers programmatic
+    setChecked() (incl. under blockSignals()), and nextCheckState() covers user
+    clicks — a click routes through QAbstractButton::click(), which suppresses
+    checkStateSet() (blockRefresh), so without the latter hook the knob would
+    never move on click."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,13 +44,20 @@ class _ToggleSwitch(QCheckBox):
         self._pos = float(value)
         self.update()
 
-    def checkStateSet(self):
-        super().checkStateSet()
+    def _animate_to_checked(self):
         target = 1.0 if self.isChecked() else 0.0
         self._anim.stop()
         self._anim.setStartValue(self._pos)
         self._anim.setEndValue(target)
         self._anim.start()
+
+    def checkStateSet(self):
+        super().checkStateSet()
+        self._animate_to_checked()
+
+    def nextCheckState(self):
+        super().nextCheckState()
+        self._animate_to_checked()
 
     def hitButton(self, pos):
         return self.rect().contains(pos)
@@ -59,7 +69,7 @@ class _ToggleSwitch(QCheckBox):
 
         r = QRectF(1, 1, self.width() - 2, self.height() - 2)
         if self.isChecked():
-            track = QColor("#4CAF50")
+            track = QColor("#2f6db0")
         else:
             track = QColor("#555555")
         if not enabled:
@@ -416,6 +426,14 @@ class SettingsDialog(QDialog):
         self._populate_combo(self.midi_port_combo, midi_ports, io.midi_port)
         self._populate_combo(self.usb_out_combo, usb_devices, io.usb_out_device)
         self._populate_combo(self.stage_usb_combo, usb_devices, io.stage_usb_device)
+
+        # A route can't be enabled without detected hardware behind it.
+        self.midi_port_check.setEnabled(bool(midi_ports))
+        self.midi_port_check.setToolTip(
+            "" if midi_ports else "No MIDI output ports detected")
+        for w in (self.usb_out_check, self.stage_usb_radio):
+            w.setEnabled(bool(usb_devices))
+            w.setToolTip("" if usb_devices else "No USB DMX device detected")
 
     def _io_from_widgets(self) -> IOConfig:
         if self.stage_artnet_radio.isChecked():
