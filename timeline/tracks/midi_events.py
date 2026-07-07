@@ -1006,9 +1006,10 @@ class TrackHeaderWidget(QWidget):
         # Per-instance accent: the left border + swatch use the fixture colour;
         # the rest of the styling comes from the app stylesheet by objectName.
         self.setStyleSheet(
-            "QWidget#TrackHeader { background-color: #323232; "
+            "QWidget#TrackHeader { background-color: #242424; "
             f"border-left: 4px solid {accent}; "
-            "border-bottom: 1px solid #444; }")
+            "border-bottom: 1px solid #444; "
+            "border-right: 1px solid #444; }")
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 4, 6, 4)
