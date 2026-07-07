@@ -75,6 +75,26 @@ class ArtNetConfig:
 
 
 @dataclass
+class IOConfig:
+    """Explicit I/O routing between the three blocks (sequencer → internal
+    controller → virtual stage). Sequencer MIDI out and controller DMX out
+    fan out (any combination); the stage displays exactly one DMX feed."""
+    # Sequencer MIDI outputs
+    midi_to_controller: bool = True
+    midi_to_port: bool = False
+    midi_port: Optional[str] = None
+    # Internal software DMX controller
+    controller_enabled: bool = True
+    dmx_to_stage: bool = True
+    dmx_to_artnet: bool = False        # ArtNetSender → config.artnet target
+    dmx_to_usb: bool = False
+    usb_out_device: Optional[str] = None      # "FTDI:<desc>:<serial>"
+    # Virtual stage input: "internal" | "artnet" | "usb"
+    stage_source: str = "internal"
+    stage_usb_device: Optional[str] = None    # "FTDI:<desc>:<serial>"
+
+
+@dataclass
 class SongConfig:
     """Configuration for a single song in the playlist."""
     midi: Optional[str] = None
@@ -148,8 +168,7 @@ class Config:
     fixtures: List[FixtureInstance] = field(default_factory=list)
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
-    last_dmx_source: Optional[str] = None
-    last_midi_port: Optional[str] = None
+    io: IOConfig = field(default_factory=IOConfig)
 
     def __post_init__(self):
         # Fixture-patch persistence state (not serialized fields):
@@ -281,8 +300,63 @@ class Config:
                 backup_count=cls._validate_int(logging_data.get("backup_count", 5), 1, 20)
             )
 
-        config.last_dmx_source = data.get("last_dmx_source")
-        config.last_midi_port = data.get("last_midi_port")
+        if "io" in data:
+            io_data = data["io"]
+            defaults = IOConfig()
+            stage_source = io_data.get("stage_source", "internal")
+            if stage_source not in ("internal", "artnet", "usb"):
+                stage_source = "internal"
+            config.io = IOConfig(
+                midi_to_controller=bool(io_data.get("midi_to_controller", defaults.midi_to_controller)),
+                midi_to_port=bool(io_data.get("midi_to_port", defaults.midi_to_port)),
+                midi_port=cls._validate_optional_str(io_data.get("midi_port")),
+                controller_enabled=bool(io_data.get("controller_enabled", defaults.controller_enabled)),
+                dmx_to_stage=bool(io_data.get("dmx_to_stage", defaults.dmx_to_stage)),
+                dmx_to_artnet=bool(io_data.get("dmx_to_artnet", defaults.dmx_to_artnet)),
+                dmx_to_usb=bool(io_data.get("dmx_to_usb", defaults.dmx_to_usb)),
+                usb_out_device=cls._validate_optional_str(io_data.get("usb_out_device")),
+                stage_source=stage_source,
+                stage_usb_device=cls._validate_optional_str(io_data.get("stage_usb_device")),
+            )
+        else:
+            # Legacy prefs (pre-io): derive the routing from the old implicit
+            # selectors. One-time: the next save() writes the io section and
+            # drops the legacy keys.
+            config.io = cls._migrate_legacy_io(data, config.artnet.ip)
+
+    @staticmethod
+    def _migrate_legacy_io(data: Dict[str, Any], artnet_ip: str) -> "IOConfig":
+        """Map the pre-io implicit selectors (last_midi_port / last_dmx_source +
+        the localhost-spawns-controller convention) onto an explicit IOConfig."""
+        io = IOConfig()
+
+        last_midi_port = data.get("last_midi_port")
+        if isinstance(last_midi_port, str) and last_midi_port and last_midi_port != "Software emulated":
+            io.midi_to_controller = False
+            io.midi_to_port = True
+            io.midi_port = last_midi_port
+
+        last_dmx_source = data.get("last_dmx_source")
+        if isinstance(last_dmx_source, str):
+            if last_dmx_source.startswith("FTDI"):
+                io.controller_enabled = False
+                io.dmx_to_stage = False
+                io.stage_source = "usb"
+                io.stage_usb_device = last_dmx_source
+            elif last_dmx_source == "Art-Net" and artnet_ip not in ("127.0.0.1", "localhost"):
+                io.controller_enabled = False
+                io.dmx_to_stage = False
+                io.stage_source = "artnet"
+            # Art-Net + localhost == the old loopback simulation == defaults.
+
+        return io
+
+    @staticmethod
+    def _validate_optional_str(value: Any) -> Optional[str]:
+        """Pass through non-empty strings, anything else becomes None."""
+        if isinstance(value, str) and value:
+            return value
+        return None
 
     @staticmethod
     def _parse_fixtures(fixtures_data: Any) -> List[FixtureInstance]:
@@ -424,17 +498,13 @@ class Config:
         }
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
+        data["io"] = asdict(self.io)
 
         # The fixture patch is normally seeded read-only from config.json. Once
         # the user edits it (designer) or already owns it in prefs, persist it
         # here so userprefs.json overrides the seed on the next load.
         if self._patch_dirty or self._patch_from_prefs:
             data["fixtures"] = [asdict(fixture) for fixture in self.fixtures]
-
-        if self.last_dmx_source:
-            data["last_dmx_source"] = self.last_dmx_source
-        if self.last_midi_port:
-            data["last_midi_port"] = self.last_midi_port
 
         return data
 

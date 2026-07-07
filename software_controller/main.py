@@ -1,5 +1,3 @@
-from .artnet_sender import ArtNetSender
-
 import time
 import random
 import threading
@@ -292,6 +290,12 @@ class DMXController:
 
         self._running = False
         self._thread = None
+
+        # Frame sinks: objects with send_dmx(data)/close() that receive the
+        # 20 Hz universe snapshot (stage bridge, Art-Net sender, USB sender).
+        # Owned by whoever wires the routing (DMXManager); swapped atomically.
+        self._sinks = []
+        self._sink_errors = set()
 
     # ------------------------------------------------------------------
     # Setup
@@ -819,11 +823,31 @@ class DMXController:
             self._thread = None
         self.logger.info("Software Controller stopped")
 
-    def _run_loop(self):
-        # Initialize ArtNet Sender
-        # We use default localhost:6454 for simulation
-        dmx_sender = ArtNetSender(ip="127.0.0.1", port=6454, universe=0)
+    def set_sinks(self, sinks):
+        """Replace the frame sinks atomically; sinks that drop out are closed."""
+        sinks = list(sinks)
+        with self.lock:
+            removed = [s for s in self._sinks if s not in sinks]
+            self._sinks = sinks
+            self._sink_errors = set()
+        for sink in removed:
+            try:
+                sink.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing DMX sink {sink}: {e}")
 
+    def _send_frame_to_sinks(self, data, sinks):
+        """Fan one universe snapshot out to every sink. A failing sink is
+        logged once and never prevents the others from receiving the frame."""
+        for sink in sinks:
+            try:
+                sink.send_dmx(data)
+            except Exception as e:
+                if id(sink) not in self._sink_errors:
+                    self._sink_errors.add(id(sink))
+                    self.logger.warning(f"DMX sink {sink} failed: {e}")
+
+    def _run_loop(self):
         last_dmx_update = time.time()
 
         while self._running:
@@ -858,11 +882,20 @@ class DMXController:
                         # Blend logic
                         for fx in range(self.num_fixtures):
                             self.update_blend(fx, dt)
-                        data_to_send = self.present
+                        # Snapshot while holding the lock so sinks never see a
+                        # torn frame (present keeps mutating on the MIDI side).
+                        data_to_send = list(self.present)
+                    sinks = list(self._sinks)
 
                 if data_to_send:
-                    dmx_sender.send_dmx(data_to_send)
+                    self._send_frame_to_sinks(data_to_send, sinks)
 
             time.sleep(1.0 / LOOP_FREQUENCY_HZ)
 
-        dmx_sender.close()
+        with self.lock:
+            sinks, self._sinks = self._sinks, []
+        for sink in sinks:
+            try:
+                sink.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing DMX sink {sink}: {e}")

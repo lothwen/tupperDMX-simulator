@@ -44,15 +44,19 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
 - **`ui/audio_controller.py` — `AudioController`**: Drift-free metronome via
   QAudioSink. `start_metronome(timeline_position_sec)` aligns beats to
   timeline; high pitch on downbeat (1), low on 2/3/4.
-- **`dmx/` — `DMXManager`**: Factory for Art-Net (`ArtnetWorker`, asyncio UDP)
-  and USB (`USBWorker`, FTDI/serial). When Art-Net target is `127.0.0.1`,
-  `ArtnetWorker` auto-spawns the software `DMXController` and emits
-  `software_controller_changed`. Hot-swap supported.
+- **`dmx/` — `DMXManager`**: I/O coordinator driven by `config.io` via
+  `apply_io()`: owns the software `DMXController`'s lifecycle (emits
+  `software_controller_changed`), builds its DMX output *sinks*
+  (`StageFrameBridge` in-process feed → stage, `ArtNetSender` → network,
+  `USBDMXSender` → dongle), and runs the stage-input worker (`ArtnetWorker`
+  pure listener on 0.0.0.0, or `USBDMXWorker` FTDI reader) when the stage
+  input isn't the internal controller.
 - **`midi/` — `MidiManager` + `MidiWorker`**: `MidiManager` is a thin
   lifecycle/signals (`data_changed`) facade delegating edits to collaborators
   that share one `MidiDocument` (state + `reconcile_blackouts`). `MidiWorker`
-  does timeline-synced threaded output; `"Software emulated"` routes `note_on`
-  to `DMXController.handle_note_on()`.
+  does timeline-synced threaded output with **fan-out** per `MidiRouting`
+  (`io_routing.py`): `note_on` verbs to `DMXController.handle_note_on()`
+  and/or the full stream to an external mido port, independently.
 - **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering +
   scenario designer. Updates fixture color/intensity from live DMX data;
   dispatches render per type (bespoke `LedBar`/`Blinder`, else the data-driven
@@ -78,7 +82,9 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
   (velocity×2), 24–35 scene loaders, 36–47 bank select, 48 take-manual /
   49 manual / 50 blackout-fixture, 51 blackout-all (global), 52–59 timing /
   palette / scene step, 60 START, 61–69 song parts (global), 72–75 color macros.
-  `ArtNetSender` emits Art-Net UDP; each type's scene banks/chases live in its
+  The 20 Hz output loop fans each universe snapshot to pluggable *sinks*
+  (`set_sinks()`; `ArtNetSender` UDP, `USBDMXSender` FTDI DMX TX, or the Qt
+  `StageFrameBridge`); each type's scene banks/chases live in its
   `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
   upgraded by `scripts/migrate_midi_v2.py`.)
 
@@ -88,10 +94,13 @@ Storage splits across two files:
 - **`config.json`** (shipped, read-only): `fixtures` (a *seed* patch) +
   `midi_note_map`, bundled via PyInstaller, resolved at runtime by
   `shipped_config_path()` (`_MEIPASS`).
-- **`userprefs.json`** (user-writable): everything else (`window`, `artnet`,
-  `playlist`, `metronome`, `volume`, `logging`, `last_dmx_source`,
-  `last_midi_port`), resolved by `userprefs_path()` via `platformdirs`
+- **`userprefs.json`** (user-writable): everything else (`window`, `artnet`
+  — the controller's Art-Net *output* target — `playlist`, `metronome`,
+  `volume`, `logging`, and `io` — the explicit I/O routing, `IOConfig`),
+  resolved by `userprefs_path()` via `platformdirs`
   (e.g. `~/.config/tupperDMX/` on Linux; macOS/Windows app-data equivalents).
+  Legacy `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`
+  (`Config._migrate_legacy_io`) and are dropped on the next save.
 
 `Config.load()` reads both; `Config.save()` writes only `userprefs.json`
 (created eagerly with defaults on first launch). The fixture **patch** is seeded
@@ -103,9 +112,19 @@ reading the shipped seed (so shipped-config updates still reach it).
 
 ### UI Architecture
 
-- `ToolbarManager` (`ui/toolbar_manager.py`): media controls, BPM, source
-  selectors, playlist nav (prev/next/remove + counter), and a menu opening the
-  About dialog (`ui/about_dialog.py`, shows build info).
+- `ToolbarManager` (`ui/toolbar_manager.py`): file loading/export, playlist
+  nav (prev/next/remove + counter), and the ☰ menu (Settings…, About).
+- `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
+  **Input / Output** page. Left: three numbered routing cards editing `config.io`
+  (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
+  `_ToggleSwitch` for `controller_enabled` greys the body — + DMX output checkboxes
+  incl. the Art-Net target fields, ③ stage input radios) plus quick-mode presets
+  and a compact Logging card. Right: a live signal-flow graph (`ui/io_flow_widget.py`
+  `IOFlowWidget`, rendered from `io_routing.flow_state(io, ip, universe)` — nodes/
+  edges light up, animated dashes MIDI=violet/DMX=amber, dead routes red, stage
+  "BLACKOUT" pill) over a live validation strip from `io_routing.validate()` (hard
+  errors block accept; soft warnings inline). The two universe spinboxes (blocks
+  ②/③) edit the one shared `ArtNetConfig.universe` and mirror each other.
 - `Timeline` (`timeline/manager.py`): waveform, beat detection, seeking, and
   clip-style MIDI editing — one `MidiEventsTrack` per fixture filter
   (`ledbar`, `blinder`).
@@ -155,12 +174,18 @@ restart on seek-during-playback or BPM change.
 - Click-to-preview: `preview_requested` → `MainWindow._preview_clip()` routes
   to active MIDI output (or software controller) without touching the timeline.
 
-### Software Controller Activation Flow
-Set the DMX source IP to `127.0.0.1`: `ArtnetWorker` detects localhost,
-auto-instantiates `DMXController` (which loops DMX to `ArtNetSender`), and
-`DMXManager` emits `software_controller_changed` → `MainWindow` → `MidiManager`.
-Then select `"Software emulated"` as the MIDI port so `MidiWorker` routes
-`note_on` to `DMXController.handle_note_on()`.
+### I/O Routing (`config.io` + `io_routing.py`)
+All routing is explicit in Settings ▸ Input / Output (no toolbar selectors,
+no localhost magic). `MainWindow._apply_io_config()` applies `config.io`:
+`MediaController.set_midi_routing(midi_routing_from_io(io))` (fan-out:
+internal controller and/or one external port) and `DMXManager.apply_io(io)`
+(controller lifecycle → sinks → stage input). With the defaults ("All
+software" preset) the controller runs and feeds the stage **in-process** via
+`StageFrameBridge` (cross-thread queued signal into `dmx_data_received`) —
+no UDP loopback. `software_controller_changed` still reaches
+`MainWindow` → `MidiManager` exactly as before. Cardinalities: MIDI out 1→N
+(stateful command protocol: fan-out fine, fan-in forbidden), controller DMX
+out 1→N (idempotent snapshots), stage DMX in = exactly one selectable feed.
 
 Color palettes via `generate_song_colors(mode, hue_index)` (HSL→RGB,
 mutex-protected); `PALETTE_MODES = COMPLEMENTARY, ANALOGOUS, TRIADIC,
@@ -174,20 +199,24 @@ interpolates present↔future DMX to avoid blackout artifacts.
 
 - `ui/` — `media_controller.py`, `audio_controller.py`, `stage_controller.py`,
   `fixture_designer.py` (scenario-designer panel + add dialog), `dmx_display.py`,
-  `clip_library.py`, `toolbar_manager.py`, `error_dialogs.py`, `about_dialog.py`.
+  `clip_library.py`, `toolbar_manager.py`, `settings_dialog.py` (incl. the
+  Input/Output section), `error_dialogs.py`, `about_dialog.py`.
 - `fixture_library.py` (repo root) — data-driven fixture-type library
   (`FixtureDef`, JSON loaders, role/flag maps). `fixtures/` (repo root) — shipped
-  fixture-type definitions (`*.json`).
-- `dmx/` — `manager.py` (factory + hot-swap), `artnet_worker.py` (asyncio UDP,
-  auto-starts software controller on localhost), `usb_worker.py` (FTDI/serial),
-  `base.py`, `factory.py`.
+  fixture-type definitions (`*.json`). `io_routing.py` (repo root) — pure
+  routing logic: `MidiRouting`, presets, `validate()`, `flow_text()`, and
+  `flow_state()` (→ `FlowState`, the render-ready signal-flow graph state).
+- `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
+  stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure
+  listener on 0.0.0.0), `usb_worker.py` (FTDI/serial reader), `base.py`.
 - `midi/` — `manager.py` (facade: worker lifecycle, signals, data proxies),
   `document.py` (`MidiDocument`: state, queries, mutators, `reconcile_blackouts`),
   `codec.py` (`mido.MidiFile` ↔ event/note lists), `fade_engine.py`,
   `clip_editor.py` (single-clip CRUD/move/resize), `scene_editor.py`
   (scene-group ops), `selection_editor.py` (multi-select), `constants.py`,
-  `worker.py` (threaded output, `"Software emulated"` port).
+  `worker.py` (threaded output with controller/port fan-out).
 - `software_controller/` — `main.py` (`DMXController`), `artnet_sender.py`,
+  `usb_dmx_sender.py` (FTDI DMX512 TX: break/MAB/start-code, self-disabling),
   `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
   from the `ledbar` fixture def's banks). Scene banks/chases live in the
   `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
@@ -227,8 +256,13 @@ tail -f logs/tupperDMX_$(date +%Y%m%d).log
 # Enumerate MIDI outputs
 python -c "import mido; print(mido.get_output_names())"
 
-# Smoke-test software controller (Art-Net UDP → 127.0.0.1:6454)
-uv run python -c "from software_controller.main import DMXController; c = DMXController(); c.start(); import time; time.sleep(2); c.stop()"
+# Smoke-test software controller (emits nothing without sinks; give it one)
+uv run python -c "
+from software_controller.main import DMXController
+from software_controller.artnet_sender import ArtNetSender
+import time
+c = DMXController(); c.set_sinks([ArtNetSender(ip='127.0.0.1', port=6454)])
+c.start_background(); time.sleep(2); c.stop()"
 ```
 
 ## Key Import Reminders
