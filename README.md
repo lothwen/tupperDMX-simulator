@@ -58,7 +58,7 @@ No hardware? No problem. When Art-Net is pointed at localhost, a pure-Python DMX
 
 ## Installation & Running
 
-### With uv (Recommended)
+Dependencies are managed with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 # Clone the repository
@@ -70,13 +70,6 @@ uv sync
 
 # Run the application
 uv run python main.py
-```
-
-### With pip
-
-```bash
-pip install -r requirements.txt
-python main.py
 ```
 
 ---
