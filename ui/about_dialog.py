@@ -5,7 +5,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QHBoxLayout, QLabel,
                              QPushButton, QVBoxLayout)
 
-import buildinfo
+from core import buildinfo
 
 
 class AboutDialog(QDialog):

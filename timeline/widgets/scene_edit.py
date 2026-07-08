@@ -2,9 +2,10 @@
 # ABOUTME: Returns the modified channels dict and name on accept.
 
 import math
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from core.paths import asset_path
 
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QSpinBox, QSlider, QCheckBox,
@@ -18,12 +19,7 @@ from PyQt6.QtGui import (QColor, QPalette, QPainter, QPixmap, QBrush, QPen,
 
 def _animations_dir() -> Path:
     """Resolve assets/animations/ both in dev and under PyInstaller (_MEIPASS)."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        base = Path(sys._MEIPASS)
-    else:
-        # this file lives at timeline/widgets/scene_edit.py — project root is two up.
-        base = Path(__file__).resolve().parent.parent.parent
-    return base / "assets" / "animations"
+    return Path(asset_path("animations"))
 
 
 class _ColorWheel(QWidget):

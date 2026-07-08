@@ -1,11 +1,11 @@
 import glob
 import os
-import sys
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsObject, QStyle, QGraphicsEllipseItem, QGraphicsItem
 from PyQt6.QtGui import QColor, QBrush, QMovie, QPainter, QRadialGradient, QPen, QFont, QFontMetrics
 
-from fixture_library import (
+from core.paths import asset_path
+from core.fixture_library import (
     ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
     ROLE_WHITE_WARM, ROLE_WHITE_COOL,
 )
@@ -339,10 +339,7 @@ class LedBar(DesignableFixture, QGraphicsObject):
         if animation_number in self.animations:
             self.current_movie = self.animations[animation_number]
         else:
-            _assets = os.path.join(
-                getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))),
-                "assets", "animations",
-            )
+            _assets = asset_path("animations")
             gif_path_list = glob.glob(os.path.join(_assets, f"{animation_number:02d}-*.gif"))
             if gif_path_list:
                 movie = QMovie(gif_path_list[0])

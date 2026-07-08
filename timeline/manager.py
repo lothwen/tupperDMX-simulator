@@ -20,8 +20,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
                       TrackResizeHandle, CustomTooltip)
 from .widgets.scene_edit import SceneEditDialog
-import note_layout
-from fixture_library import load_fixture_defs
+from core import note_layout
+from core.fixture_library import load_fixture_defs
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger

@@ -17,7 +17,7 @@ Qt-free on purpose: imported by both the controller and the UI without a cycle
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from fixture_library import (
+from core.fixture_library import (
     FixtureDef,
     ROLE_GENERIC, ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
     ROLE_WHITE_WARM, ROLE_WHITE_COOL, ROLE_ANIMATION, ROLE_SPEED,

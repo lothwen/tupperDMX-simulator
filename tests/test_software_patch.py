@@ -25,7 +25,7 @@ import random
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import FixtureInstance, FixturePosition
+from core.config import FixtureInstance, FixturePosition
 from software_controller.main import (
     DMXController,
     FIXTURE_TYPES,

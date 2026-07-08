@@ -5,15 +5,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import json
 import os
-import sys
 
-import platformdirs
-
+from core.paths import bundle_dir, userprefs_dir
 from tupperlogger import get_logger
 
 logger = get_logger("fixture_library")
-
-_APP_NAME = "tupperDMX"
 
 # Channel semantic roles. These MIRROR the ROLE_* constants in
 # software_controller/main.py — keep the two in sync. They live here too so the
@@ -75,26 +71,13 @@ class FixtureDef:
 
 def fixtures_dir_shipped() -> str:
     """Directory of shipped, read-only fixture definitions (repo-root fixtures/)."""
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        base = sys._MEIPASS
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, "fixtures")
+    return os.path.join(bundle_dir(), "fixtures")
 
 
 def fixtures_dir_user() -> Path:
-    """Writable directory for user-imported fixture definitions.
-
-    Mirrors config.userprefs_dir() (platform-conventional) with a fixtures/
-    subfolder. Kept independent of config.py to avoid an import cycle.
-    """
-    if sys.platform == "win32":
-        base = Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False, roaming=True))
-    elif sys.platform == "darwin":
-        base = Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False))
-    else:
-        base = Path(platformdirs.user_config_dir(_APP_NAME, appauthor=False))
-    return base / "fixtures"
+    """Writable directory for user-imported fixture definitions: a fixtures/
+    subfolder of the platform-conventional user-prefs directory."""
+    return userprefs_dir() / "fixtures"
 
 
 def parse_fixture_def(data: dict) -> Optional[FixtureDef]:
@@ -207,3 +190,35 @@ def clear_cache() -> None:
     """Drop the memoized definitions (used by tests / after an import)."""
     global _cache
     _cache = None
+
+
+# --- fixture-type presentation colours ----------------------------------------
+#
+# Each patched fixture is coloured by its *type* so a fixture's clip-library
+# section, its timeline clips and its track-header swatch all read as one group.
+# The clip library and the timeline both derive the colour from here so the two
+# never drift.
+
+# Palette cycled across patched fixture types, ordered by DMX address.
+GROUP_COLORS = ['#4a90e2', '#e2904a', '#4caf50', '#e24a4a', '#9b59b6',
+                '#e24ad0', '#4ad0e2', '#7f8c8d', '#1abc9c', '#d4b106']
+
+
+def patched_types(fixtures) -> List[str]:
+    """Unique fixture-type names, deduped, ordered by DMX address."""
+    seen: List[str] = []
+    for inst in sorted(fixtures, key=lambda f: getattr(f, "dmx_start", 0)):
+        t = getattr(inst, "type", None)
+        if t and t not in seen:
+            seen.append(t)
+    return seen
+
+
+def color_for_type(fixtures, ftype: str) -> str:
+    """Hex colour assigned to `ftype` within `fixtures` (cycles GROUP_COLORS).
+
+    Falls back to the first palette entry for an unpatched/unknown type."""
+    types = patched_types(fixtures)
+    if ftype in types:
+        return GROUP_COLORS[types.index(ftype) % len(GROUP_COLORS)]
+    return GROUP_COLORS[0]

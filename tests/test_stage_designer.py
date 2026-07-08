@@ -18,7 +18,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import Config, FixtureInstance, FixturePosition
+from core.config import Config, FixtureInstance, FixturePosition
 
 
 def _assert(cond, msg):
@@ -66,7 +66,7 @@ def test_added_fixture_receives_dmx(qapp):
 
 def test_add_ledbar_seeds_all_bars(qapp):
     print("test_add_ledbar_seeds_all_bars")
-    from fixture_library import load_fixture_defs
+    from core.fixture_library import load_fixture_defs
     sc, _ = _stage()
     count = load_fixture_defs()["ledbar"].bar_count
     _assert(count > 1, "the ledbar type def declares more than one bar")

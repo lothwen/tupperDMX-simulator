@@ -7,8 +7,8 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QPainterPath, QBrush, QPolygonF
 from PyQt6.QtCore import Qt, QRectF, QPointF, QSize, QTimer
 
-import io_routing
-from io_routing import (STATUS_ACTIVE, STATUS_DIM, STATUS_DEAD,
+from core import io_routing
+from core.io_routing import (STATUS_ACTIVE, STATUS_DIM, STATUS_DEAD,
                         NODE_SEQ, NODE_MIDI_PORT, NODE_CTRL, NODE_ARTNET,
                         NODE_USB, NODE_STAGE, EDGE_SEQ_CTRL, EDGE_SEQ_PORT,
                         EDGE_CTRL_STAGE, EDGE_CTRL_ARTNET, EDGE_CTRL_USB,

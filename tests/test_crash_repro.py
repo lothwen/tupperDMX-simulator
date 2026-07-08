@@ -29,7 +29,7 @@ from PyQt6.QtCore import QTimer, Qt, QPointF, QPoint
 from PyQt6.QtGui import QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
 
-import note_layout
+from core import note_layout
 from midi.manager import MidiManager
 from timeline.manager import Timeline
 from timeline.tracks.midi_events import DraggableMidiEvent

@@ -22,8 +22,8 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import note_layout
-from fixture_library import load_fixture_defs
+from core import note_layout
+from core.fixture_library import load_fixture_defs
 from midi.manager import MidiManager
 from software_controller.main import DMXController
 from software_controller.scene_loader import load_scenes

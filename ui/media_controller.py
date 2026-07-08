@@ -5,7 +5,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from tupperlogger import get_logger
-from io_routing import MidiRouting
+from core.io_routing import MidiRouting
 from midi import MidiManager
 
 

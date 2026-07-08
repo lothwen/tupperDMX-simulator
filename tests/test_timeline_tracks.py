@@ -22,7 +22,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import note_layout
+from core import note_layout
 from midi.manager import MidiManager
 from timeline.manager import Timeline
 
@@ -241,7 +241,7 @@ def test_rebuild_to_empty_patch():
 def test_manager_update_fixtures_reflects_new_patch():
     print("test_manager_update_fixtures_reflects_new_patch")
     _ensure_app()
-    from fixture_library import load_fixture_defs
+    from core.fixture_library import load_fixture_defs
     m = MidiManager(note_layout.build_note_map(), fixtures=[FakeFixture("ledbar", 1, 0)])
     m.update_fixtures([FakeFixture("ledbar", 1, 0), FakeFixture("blinder", 33, 1)])
     _assert(m.channel_note_map(1) != m.channel_note_map(0),

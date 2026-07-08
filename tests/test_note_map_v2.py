@@ -18,7 +18,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from software_controller.main import DMXController, COLOR32_WHITE
-from config import FixtureInstance
+from core.config import FixtureInstance
 
 
 def _assert(cond, msg):

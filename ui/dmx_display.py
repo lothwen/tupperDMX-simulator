@@ -9,7 +9,7 @@ Two view modes toggled by a segmented control:
 
 The grid is drawn by a single custom-painted canvas (one paintEvent for every
 cell) rather than per-cell widgets, so live updates at ~10 Hz are cheap. Fixture
-colours come from ``fixture_colors.color_for_type`` so the panel reads as one
+colours come from ``core.fixture_library.color_for_type`` so the panel reads as one
 system with the clip library and the timeline track headers.
 """
 
@@ -23,8 +23,8 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QPainterPath
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 from tupperlogger import get_logger
-from config import Config, fixture_channel_count
-from fixture_colors import color_for_type
+from core.config import Config, fixture_channel_count
+from core.fixture_library import color_for_type
 
 
 MODE_USED = "used"

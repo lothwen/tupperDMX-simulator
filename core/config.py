@@ -4,26 +4,10 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 import json
 import os
-import sys
 from pathlib import Path
 
-import platformdirs
-
-from fixture_library import load_fixture_defs
-
-
-_APP_NAME = "tupperDMX"
-
-
-def _bundle_dir() -> str:
-    """Directory containing read-only resources shipped with the app.
-
-    Mirrors main._base_dir(): when frozen via PyInstaller, resources are
-    extracted to sys._MEIPASS; in development, they sit beside this file.
-    """
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return sys._MEIPASS
-    return os.path.dirname(os.path.abspath(__file__))
+from core.fixture_library import load_fixture_defs
+from core.paths import bundle_dir, userprefs_dir
 
 
 def shipped_config_path() -> str:
@@ -32,21 +16,7 @@ def shipped_config_path() -> str:
     Contains the fixture patch (seed). Bundled with the app via
     PyInstaller (see build.spec datas) and never written at runtime.
     """
-    return os.path.join(_bundle_dir(), "config.json")
-
-
-def userprefs_dir() -> Path:
-    """Platform-conventional directory for the writable userprefs.json.
-
-    Windows: %APPDATA%\\tupperDMX  (Roaming)
-    macOS:   ~/Library/Application Support/tupperDMX
-    Linux:   ~/.config/tupperDMX
-    """
-    if sys.platform == "win32":
-        return Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False, roaming=True))
-    if sys.platform == "darwin":
-        return Path(platformdirs.user_data_dir(_APP_NAME, appauthor=False))
-    return Path(platformdirs.user_config_dir(_APP_NAME, appauthor=False))
+    return os.path.join(bundle_dir(), "config.json")
 
 
 def userprefs_path() -> Path:

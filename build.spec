@@ -9,7 +9,7 @@ app_name = "TupperDMX-Simulator"
 main_script = "main.py"
 
 # Capture git metadata at build time and freeze it into _buildinfo.py.
-# The runtime accessor in buildinfo.py imports this module when the app is
+# The runtime accessor in core/buildinfo.py imports this module when the app is
 # frozen by PyInstaller; in dev runs the file may be absent and a live `git`
 # fallback is used instead.
 def _generate_buildinfo() -> None:
@@ -50,7 +50,7 @@ _generate_buildinfo()
 # Data files and assets.
 # config.json holds shipped, read-only data (fixtures + midi_note_map) and is
 # resolved at runtime via sys._MEIPASS. User-writable preferences live in
-# userprefs.json under the platform's user-config dir (see config.userprefs_path)
+# userprefs.json under the platform's user-config dir (see core.config.userprefs_path)
 # and are intentionally NOT bundled here.
 data_files = [
     ("assets", "assets"),
@@ -104,7 +104,7 @@ hidden_imports = [
     "scipy",
 
     # Build metadata
-    "buildinfo",
+    "core.buildinfo",
     "_buildinfo",
 ]
 

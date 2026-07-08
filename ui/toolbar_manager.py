@@ -5,7 +5,7 @@ from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 from tupperlogger import get_logger
-from config import Config
+from core.config import Config
 
 
 class ToolbarManager(QObject):

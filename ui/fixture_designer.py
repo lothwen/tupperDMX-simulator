@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from tupperlogger import get_logger
-from config import known_fixture_types
+from core.config import known_fixture_types
 
 
 def _suggest_free_dmx_start(stage_controller) -> int:

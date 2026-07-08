@@ -22,8 +22,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import note_layout
-from fixture_library import load_fixture_defs
+from core import note_layout
+from core.fixture_library import load_fixture_defs
 from timeline.tracks.midi_events import AutoSceneClip
 
 
