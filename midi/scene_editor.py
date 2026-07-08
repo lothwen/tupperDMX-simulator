@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any, Tuple
 import uuid
 
 from tupperlogger import get_logger
-from note_layout import TAKE_MANUAL
+from core.note_layout import TAKE_MANUAL
 from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
     MIN_EVENT_DURATION,

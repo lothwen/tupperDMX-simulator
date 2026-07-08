@@ -6,7 +6,7 @@ import os
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
-from config import SongConfig
+from core.config import SongConfig
 from tupperlogger import get_logger
 
 

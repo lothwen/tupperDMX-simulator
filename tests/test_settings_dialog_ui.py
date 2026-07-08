@@ -18,9 +18,9 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import Config, IOConfig
-import io_routing
-from io_routing import NODE_STAGE, STATUS_ACTIVE, STATUS_DEAD
+from core.config import Config, IOConfig
+from core import io_routing
+from core.io_routing import NODE_STAGE, STATUS_ACTIVE, STATUS_DEAD
 
 
 def _assert(cond, msg):

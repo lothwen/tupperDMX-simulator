@@ -4,7 +4,7 @@
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
-from config import IOConfig
+from core.config import IOConfig
 
 
 @dataclass(frozen=True)

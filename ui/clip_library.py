@@ -12,10 +12,10 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
 from PyQt6.QtGui import QColor, QPainter, QDrag
 from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
 
-import note_layout
-from config import Config
-from fixture_colors import GROUP_COLORS
-from fixture_library import (FixtureDef, load_fixture_defs,
+from core import note_layout
+from core.config import Config
+from core.fixture_library import GROUP_COLORS
+from core.fixture_library import (FixtureDef, load_fixture_defs,
                              ROLE_RED, ROLE_GREEN, ROLE_BLUE)
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
@@ -37,7 +37,7 @@ SCENE_MIME_TYPE = "application/x-tupperdmx-led-scene"
 # bank and its chases — shares that fixture's colour. The global Show group uses
 # the neutral colour below.
 # Shared with the timeline track headers so a fixture's swatch matches its
-# library section (see fixture_colors.GROUP_COLORS).
+# library section (see core.fixture_library.GROUP_COLORS).
 _GROUP_COLORS = GROUP_COLORS
 _SHOW_COLOR = '#888888'
 

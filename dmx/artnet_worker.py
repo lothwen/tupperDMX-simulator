@@ -5,7 +5,7 @@ import struct
 import errno
 from typing import Optional
 
-from config import Config
+from core.config import Config
 from tupperlogger import get_logger
 from .base import DMXWorkerBase, DMXConnectionStatus
 

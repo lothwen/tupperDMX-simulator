@@ -36,8 +36,10 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
 
 ### Core Components
 
-- **`main.py` — `MainWindow`**: Central orchestrator. Coordinates UI/managers,
-  syncs playback state across media/metronome/timeline, persists config.
+- **`ui/main_window.py` — `MainWindow`**: Central orchestrator. Coordinates
+  UI/managers, syncs playback state across media/metronome/timeline, persists
+  config. `main.py` (repo root) is just the thin launcher (QApplication +
+  theme + `Config.load()` + logging).
 - **`ui/media_controller.py` — `MediaController`**: MP3 playback + MIDI sync.
   Owns timeline position; key methods `start_playback`, `play_pause_playback`,
   `stop_playback`, `seek_to_position`.
@@ -55,16 +57,16 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
   lifecycle/signals (`data_changed`) facade delegating edits to collaborators
   that share one `MidiDocument` (state + `reconcile_blackouts`). `MidiWorker`
   does timeline-synced threaded output with **fan-out** per `MidiRouting`
-  (`io_routing.py`): `note_on` verbs to `DMXController.handle_note_on()`
+  (`core/io_routing.py`): `note_on` verbs to `DMXController.handle_note_on()`
   and/or the full stream to an external mido port, independently.
 - **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering +
   scenario designer. Updates fixture color/intensity from live DMX data;
   dispatches render per type (bespoke `LedBar`/`Blinder`, else the data-driven
-  `fixtures.GenericFixture`). `set_design_mode()` makes fixtures movable/
+  `GenericFixture`, all in `ui/stage_fixtures.py`). `set_design_mode()` makes fixtures movable/
   selectable; `add_fixture`/`remove_selected`/drag-to-move mutate `config.fixtures`
   and emit `fixture_added/moved/removed/selected`. The floating
   `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
-- **`fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
+- **`core/fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
   (channels with semantic role + flags, render hint, plus scene `banks`/`chases`)
   loaded from `fixtures/*.json` (shipped `fixtures/` + writable
   `userprefs_dir()/fixtures/`, user overrides by name; memoized). Every type —
@@ -88,7 +90,7 @@ detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
   `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
   upgraded by `scripts/migrate_midi_v2.py`.)
 
-### Configuration (`config.py`)
+### Configuration (`core/config.py`)
 
 Storage splits across two files:
 - **`config.json`** (shipped, read-only): `fixtures` (a *seed* patch) +
@@ -174,7 +176,7 @@ restart on seek-during-playback or BPM change.
 - Click-to-preview: `preview_requested` → `MainWindow._preview_clip()` routes
   to active MIDI output (or software controller) without touching the timeline.
 
-### I/O Routing (`config.io` + `io_routing.py`)
+### I/O Routing (`config.io` + `core/io_routing.py`)
 All routing is explicit in Settings ▸ Input / Output (no toolbar selectors,
 no localhost magic). `MainWindow._apply_io_config()` applies `config.io`:
 `MediaController.set_midi_routing(midi_routing_from_io(io))` (fan-out:
@@ -197,15 +199,27 @@ interpolates present↔future DMX to avoid blackout artifacts.
 
 ## File Organization
 
-- `ui/` — `media_controller.py`, `audio_controller.py`, `stage_controller.py`,
-  `fixture_designer.py` (scenario-designer panel + add dialog), `dmx_display.py`,
-  `clip_library.py`, `toolbar_manager.py`, `settings_dialog.py` (incl. the
-  Input/Output section), `error_dialogs.py`, `about_dialog.py`.
-- `fixture_library.py` (repo root) — data-driven fixture-type library
-  (`FixtureDef`, JSON loaders, role/flag maps). `fixtures/` (repo root) — shipped
-  fixture-type definitions (`*.json`). `io_routing.py` (repo root) — pure
-  routing logic: `MidiRouting`, presets, `validate()`, `flow_text()`, and
-  `flow_state()` (→ `FlowState`, the render-ready signal-flow graph state).
+- `main.py` (repo root, the only root source file) — thin entry point; the
+  window itself lives in `ui/main_window.py`.
+- `core/` — Qt-free shared domain layer (no eager re-exports; import
+  submodules directly): `config.py` (dataclass config, two-file split — see
+  Configuration), `paths.py` (single source of `bundle_dir()`/`asset_path()`/
+  `userprefs_dir()`, dev vs. PyInstaller `_MEIPASS`), `fixture_library.py`
+  (data-driven fixture-type library: `FixtureDef`, JSON loaders, role/flag
+  maps, plus the per-type presentation colours `GROUP_COLORS`/
+  `color_for_type()`), `note_layout.py` (note → label/colour lookup),
+  `io_routing.py` (pure routing logic: `MidiRouting`, presets, `validate()`,
+  `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
+  signal-flow graph state), `buildinfo.py` (build metadata accessor).
+- `fixtures/` (repo root) — shipped fixture-type definitions (`*.json`).
+- `ui/` — `main_window.py` (`MainWindow`), `media_controller.py`,
+  `audio_controller.py`, `stage_controller.py`, `stage_fixtures.py` (Qt render
+  objects: bespoke `LedBar`/`Blinder`, the data-driven `GenericFixture`, and
+  the `DesignableFixture` mixin — design-mode move/select + drag-release
+  position write-back), `fixture_designer.py` (scenario-designer panel + add
+  dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
+  `settings_dialog.py` (incl. the Input/Output section), `io_flow_widget.py`,
+  `error_dialogs.py`, `about_dialog.py`.
 - `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
   stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure
   listener on 0.0.0.0), `usb_worker.py` (FTDI/serial reader), `base.py`.
@@ -227,10 +241,6 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `start_event_edit.py` — START-event editor, `resize_handle.py`).
 - `tests/` — headless characterization tests (standalone scripts; see above).
 - `tupperlogger/` — custom logger with file rotation.
-- `config.py` — dataclass config, two-file split (see Configuration).
-- `fixtures.py` — Qt render objects: bespoke `LedBar`/`Blinder`, the data-driven
-  `GenericFixture`, and the `DesignableFixture` mixin (design-mode move/select +
-  drag-release position write-back).
 
 ## Timeline Architecture Notes
 

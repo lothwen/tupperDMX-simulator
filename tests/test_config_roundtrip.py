@@ -25,8 +25,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import config
-from config import Config, FixtureInstance
+from core import config
+from core.config import Config, FixtureInstance
 
 
 @pytest.fixture(autouse=True)

@@ -27,8 +27,8 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import note_layout
-from config import FixtureInstance, FixturePosition
+from core import note_layout
+from core.config import FixtureInstance, FixturePosition
 from midi.manager import MidiManager
 from software_controller.main import DMXController
 

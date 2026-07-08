@@ -4,10 +4,10 @@ import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
-from fixture_library import load_fixture_defs
-from config import shipped_fixtures
+from core.fixture_library import load_fixture_defs
+from core.config import shipped_fixtures
 from tupperlogger import get_logger
-import note_layout
+from core import note_layout
 
 
 # Constants from the Arduino code

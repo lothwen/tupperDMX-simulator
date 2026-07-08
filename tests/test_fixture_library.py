@@ -22,8 +22,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import fixture_library
-from fixture_library import (
+from core import fixture_library
+from core.fixture_library import (
     parse_fixture_def, load_fixture_defs, clear_cache, role_index_map,
     ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
 )
@@ -126,7 +126,7 @@ def test_builtin_types_data_driven():
 
 def test_config_channel_helpers():
     print("test_config_channel_helpers")
-    import config
+    from core import config
     _assert(config.fixture_channel_count("ledbar") == 7, "ledbar = 7 channels")
     _assert(config.fixture_channel_count("blinder") == 8, "blinder = 8 channels")
     _assert(config.fixture_channel_count("bogus") == 0, "unknown type = 0 channels")

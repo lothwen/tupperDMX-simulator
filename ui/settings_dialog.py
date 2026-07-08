@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
 from PyQt6.QtCore import Qt, QVariantAnimation, QEasingCurve, QRectF, QPointF
 from PyQt6.QtGui import QPainter, QColor, QBrush
 
-import io_routing
-from config import Config, IOConfig
+from core import io_routing
+from core.config import Config, IOConfig
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
 from ui.io_flow_widget import IOFlowWidget

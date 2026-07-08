@@ -1,14 +1,13 @@
-import os
-import sys
 from typing import List, Optional
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF, QRect, QLineF
 
 from tupperlogger import get_logger
-from config import Config, FixtureInstance, FixturePosition
-from fixtures import LedBar, Blinder, GenericFixture
-from fixture_library import load_fixture_defs, role_index_map
+from core.config import Config, FixtureInstance, FixturePosition
+from core.paths import asset_path
+from ui.stage_fixtures import LedBar, Blinder, GenericFixture
+from core.fixture_library import load_fixture_defs, role_index_map
 
 
 # Fallback scene size when no background pixmap is loaded; matches the native
@@ -171,12 +170,7 @@ class StageController(QObject):
         self.logger = get_logger("ui.stage")
 
         if background_image_path is None:
-            if getattr(sys, "frozen", False):
-                _base = sys._MEIPASS
-            else:
-                # __file__ is ui/stage_controller.py; assets/ is one level up
-                _base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            background_image_path = os.path.join(_base, "assets", "images", "stage_background.png")
+            background_image_path = asset_path("images", "stage_background.png")
 
         # Fixture collections
         self.led_bars: List[LedBar] = []

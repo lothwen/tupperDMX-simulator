@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Dict, List
 
-from fixture_library import load_fixture_defs
+from core.fixture_library import load_fixture_defs
 
 
 @dataclass(frozen=True)

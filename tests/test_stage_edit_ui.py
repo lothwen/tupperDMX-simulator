@@ -19,7 +19,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PyQt6.QtWidgets import QWidget, QPushButton
-from config import Config, FixtureInstance, FixturePosition
+from core.config import Config, FixtureInstance, FixturePosition
 
 
 def _assert(cond, msg):

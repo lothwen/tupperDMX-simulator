@@ -30,8 +30,8 @@ from .clip_geometry import (
     MODE_IDLE, MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT, MODE_GROUP_MOVE,
     zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
 )
-import note_layout
-from fixture_colors import color_for_type, GROUP_COLORS
+from core import note_layout
+from core.fixture_library import color_for_type, GROUP_COLORS
 from tupperlogger import get_logger
 
 

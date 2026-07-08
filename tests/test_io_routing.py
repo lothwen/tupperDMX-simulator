@@ -14,8 +14,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import io_routing
-from config import IOConfig
+from core import io_routing
+from core.config import IOConfig
 
 
 def _assert(cond, msg):

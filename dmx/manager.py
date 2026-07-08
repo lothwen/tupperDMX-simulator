@@ -1,7 +1,7 @@
 from typing import Optional
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from config import Config, IOConfig
+from core.config import Config, IOConfig
 from tupperlogger import get_logger
 from .base import DMXWorkerBase, DMXConnectionStatus
 from .artnet_worker import ArtNetWorker

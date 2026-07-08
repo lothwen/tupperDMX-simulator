@@ -16,8 +16,8 @@ import uuid
 import mido
 
 from tupperlogger import get_logger
-from fixture_library import load_fixture_defs
-import note_layout
+from core.fixture_library import load_fixture_defs
+from core import note_layout
 from .constants import (
     BLACKOUT_PART_NAME,
     MIN_EVENT_DURATION,

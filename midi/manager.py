@@ -5,7 +5,7 @@ import mido
 import copy
 
 from tupperlogger import get_logger
-from io_routing import MidiRouting
+from core.io_routing import MidiRouting
 from .worker import MidiWorker, MidiConnectionStatus
 from .document import MidiDocument
 from .codec import MidiCodec

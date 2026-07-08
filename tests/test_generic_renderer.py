@@ -15,7 +15,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from fixture_library import parse_fixture_def, role_index_map, ROLE_BRIGHTNESS
+from core.fixture_library import parse_fixture_def, role_index_map, ROLE_BRIGHTNESS
 
 
 def _assert(cond, msg):
@@ -37,7 +37,7 @@ PAR_RGB = {
 
 
 def _make(fdef):
-    from fixtures import GenericFixture
+    from ui.stage_fixtures import GenericFixture
     return GenericFixture(0, 0, fdef.channel_count, role_index_map(fdef))
 
 

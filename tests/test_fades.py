@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import note_layout
+from core import note_layout
 from midi.manager import MidiManager, FADE_BRIGHTNESS_NOTE
 
 

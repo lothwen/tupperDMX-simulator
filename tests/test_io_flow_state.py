@@ -15,13 +15,13 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import io_routing as ior
-from io_routing import (STATUS_ACTIVE, STATUS_DIM, STATUS_DEAD,
+from core import io_routing as ior
+from core.io_routing import (STATUS_ACTIVE, STATUS_DIM, STATUS_DEAD,
                         NODE_SEQ, NODE_MIDI_PORT, NODE_CTRL, NODE_ARTNET,
                         NODE_USB, NODE_STAGE, EDGE_SEQ_CTRL, EDGE_SEQ_PORT,
                         EDGE_CTRL_STAGE, EDGE_CTRL_ARTNET, EDGE_CTRL_USB,
                         EDGE_ARTNET_STAGE, EDGE_USB_STAGE)
-from config import IOConfig
+from core.config import IOConfig
 
 
 def _assert(cond, msg):
