@@ -94,8 +94,8 @@ hidden_imports = [
     
     # DMX
     "pyartnet",
-    "pylibftdi",
     "serial",
+    "serial.tools.list_ports",
     
     # Other
     "mutagen",

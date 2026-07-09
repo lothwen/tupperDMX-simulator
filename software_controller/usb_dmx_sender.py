@@ -4,13 +4,6 @@ import time
 
 from tupperlogger import get_logger
 
-# libftdi enum values for ftdi_set_line_property2
-_BITS_8 = 8
-_STOP_BIT_2 = 2
-_PARITY_NONE = 0
-_BREAK_ON = 1
-_BREAK_OFF = 0
-
 
 class USBDMXSender:
     """Transmit DMX frames over an FTDI USB device.
@@ -30,11 +23,19 @@ class USBDMXSender:
         parts = device_string.split(":")
         device_id = parts[2] if len(parts) >= 3 else device_string
         try:
-            from pylibftdi import Device
-            self.device = Device(device_id, mode='b')
-            self.device.baudrate = 250000
-            self.device.line_property = (8, 2, 0)  # 8 data bits, 2 stop, no parity
-            self.logger.info(f"USB DMX sender opened: {device_string}")
+            import serial
+            from dmx.usb_worker import find_port_by_serial
+            port = find_port_by_serial(device_id)
+            if port is None:
+                raise ConnectionError(f"No FTDI serial port found for {device_id}")
+            self.device = serial.Serial(
+                port,
+                baudrate=250000,
+                bytesize=serial.EIGHTBITS,
+                stopbits=serial.STOPBITS_TWO,
+                parity=serial.PARITY_NONE,
+            )
+            self.logger.info(f"USB DMX sender opened: {device_string} ({port})")
         except Exception as e:
             self.logger.error(f"USB DMX sender failed to open {device_string}: {e}")
             self._disable()
@@ -53,11 +54,10 @@ class USBDMXSender:
         if self._disabled or not self.device:
             return
         try:
-            set_line = self.device.ftdi_fn.ftdi_set_line_property2
             # Break (>88us) then mark-after-break (>8us).
-            set_line(_BITS_8, _STOP_BIT_2, _PARITY_NONE, _BREAK_ON)
+            self.device.break_condition = True
             time.sleep(0.0001)
-            set_line(_BITS_8, _STOP_BIT_2, _PARITY_NONE, _BREAK_OFF)
+            self.device.break_condition = False
             time.sleep(0.000012)
             # Null start code + up to 512 slots.
             self.device.write(bytes([0x00]) + bytes(bytearray(data[:512])))

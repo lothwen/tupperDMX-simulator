@@ -51,14 +51,18 @@ Creates:
 **System Dependencies:**
 ```bash
 # Ubuntu/Debian
-sudo apt-get install libasound2-dev portaudio19-dev libusb-1.0-0-dev libftdi1-dev
+sudo apt-get install libasound2-dev portaudio19-dev
 
 # Fedora/CentOS
-sudo dnf install alsa-lib-devel portaudio-devel libusb1-devel libftdi-devel
+sudo dnf install alsa-lib-devel portaudio-devel
 
 # Arch Linux
-sudo pacman -S alsa-lib portaudio libusb libftdi
+sudo pacman -S alsa-lib portaudio
 ```
+
+USB DMX dongles use the stock OS serial drivers (Windows FTDI VCP driver
+via Windows Update, Linux `ftdi_sio` — add the user to the `dialout`/`uucp`
+group for port access). No libftdi/libusb setup is needed.
 
 ## Build Configuration
 
@@ -204,7 +208,7 @@ All runtime dependencies are automatically detected and bundled:
 - librosa (audio processing)
 - mido/python-rtmidi (MIDI)
 - pyartnet (DMX Art-Net)
-- pylibftdi/pyserial (USB DMX)
+- pyserial (USB DMX)
 
 ### System Requirements
 

@@ -827,15 +827,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pylibftdi"
-version = "0.24.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/19/5f/f0e03128161fff27d4f92d57b7fab20fa64e9bcd53627442d2ef43b8882c/pylibftdi-0.24.0.tar.gz", hash = "sha256:e2229bc10d077f018cbe7b2b490227b2b538643fa6f7bff132cde15549ca129b", size = 32255, upload-time = "2026-04-04T10:59:00.171Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/09/9891a561c1aedf31c546624f715e626cbb16b179be93514f7cb0abf07083/pylibftdi-0.24.0-py3-none-any.whl", hash = "sha256:8b3ba2a2106bc50a8bb551772433ebc7eb52d22a03c75fff6552de5ada6c4127", size = 33176, upload-time = "2026-04-04T10:58:58.997Z" },
-]
-
-[[package]]
 name = "pyparsing"
 version = "3.3.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1160,7 +1151,6 @@ dependencies = [
     { name = "mutagen" },
     { name = "platformdirs" },
     { name = "pyartnet" },
-    { name = "pylibftdi" },
     { name = "pyqt6" },
     { name = "pyqt6-qt6" },
     { name = "pyserial" },
@@ -1188,7 +1178,6 @@ requires-dist = [
     { name = "pyartnet", specifier = ">=1.0.1" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = ">=6.0" },
     { name = "pyinstaller-hooks-contrib", marker = "extra == 'build'" },
-    { name = "pylibftdi", specifier = ">=0.23.0" },
     { name = "pyqt6", specifier = ">=6.8,<6.9" },
     { name = "pyqt6-qt6", specifier = ">=6.8,<6.9" },
     { name = "pyserial", specifier = ">=3.5" },

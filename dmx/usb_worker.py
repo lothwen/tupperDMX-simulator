@@ -1,10 +1,23 @@
 import threading
 import time
 from typing import Optional
-from pylibftdi import Device
+
+import serial
+from serial.tools import list_ports
 
 from tupperlogger import get_logger
 from .base import DMXWorkerBase, DMXConnectionStatus
+
+# FTDI USB vendor ID; all supported DMX dongles are FTDI-based.
+FTDI_VID = 0x0403
+
+
+def find_port_by_serial(serial_number: str) -> Optional[str]:
+    """Resolve an FTDI serial number to its serial port (COMx / /dev/ttyUSB*)."""
+    for port in list_ports.comports():
+        if port.vid == FTDI_VID and port.serial_number == serial_number:
+            return port.device
+    return None
 
 
 class USBDMXWorker(DMXWorkerBase):
@@ -17,9 +30,9 @@ class USBDMXWorker(DMXWorkerBase):
         super().__init__(f"USB DMX ({device_id})")
         self.device_id = device_id
         self.stop_event = threading.Event()
-        self.device: Optional[Device] = None
+        self.device: Optional[serial.Serial] = None
         self.logger = get_logger("dmx.usb")
-        
+
         # USB DMX configuration
         self.baudrate = 250000
         self.line_property = (8, 2, 0)  # 8 data bits, 2 stop bits, no parity
@@ -67,14 +80,22 @@ class USBDMXWorker(DMXWorkerBase):
         """Connect to the USB DMX device."""
         try:
             self.logger.info(f"Connecting to USB DMX device: {self.device_id}")
-            self.device = Device(self.device_id, mode='b')
-            self.device.baudrate = self.baudrate
-            self.device.line_property = self.line_property
-            self.device.flush_input()
-            
+            port = find_port_by_serial(self.device_id)
+            if port is None:
+                raise ConnectionError(f"No FTDI serial port found for {self.device_id}")
+            self.device = serial.Serial(
+                port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                stopbits=serial.STOPBITS_TWO,
+                parity=serial.PARITY_NONE,
+                timeout=self.read_timeout,
+            )
+            self.device.reset_input_buffer()
+
             self._set_status(DMXConnectionStatus.CONNECTED)
-            self.logger.info(f"USB DMX device connected: {self.device_id}")
-            
+            self.logger.info(f"USB DMX device connected: {self.device_id} ({port})")
+
         except Exception as e:
             self.logger.error(f"Failed to connect to USB DMX device {self.device_id}: {e}")
             raise ConnectionError(f"Failed to connect to USB DMX device {self.device_id}: {e}")
@@ -83,22 +104,21 @@ class USBDMXWorker(DMXWorkerBase):
         """Main data reading loop."""
         consecutive_errors = 0
         max_consecutive_errors = 10
-        
+
         while not self.stop_event.is_set() and self.device:
             try:
                 # Read data with timeout
                 data = self.device.read(1024)
-                
+
                 if data and len(data) >= 96:  # Minimum DMX frame size
-                    # Extract DMX data (skip first 2 bytes which are typically header)
-                    dmx_frame = bytearray(data[2:])
+                    dmx_frame = bytearray(data)
                     self.dmx_data_received.emit(dmx_frame)
                     self.logger.debug(f"Received USB DMX data: {len(dmx_frame)} bytes")
                     consecutive_errors = 0
                 else:
                     # No data or insufficient data, short pause
                     time.sleep(0.01)
-                    
+
             except Exception as e:
                 consecutive_errors += 1
                 self.logger.warning(f"USB DMX read error {consecutive_errors}/{max_consecutive_errors}: {e}")
@@ -123,7 +143,7 @@ class USBDMXWorker(DMXWorkerBase):
     def stop(self) -> None:
         """Stop the USB DMX worker."""
         self.stop_event.set()
-        
+
         # Close device to interrupt any blocking read operations
         if self.device:
             try:
@@ -143,10 +163,13 @@ class USBDMXWorker(DMXWorkerBase):
 
     @staticmethod
     def list_available_devices() -> list[str]:
-        """List all available FTDI devices."""
+        """List all available FTDI devices as "manufacturer:description:serial"."""
         try:
-            from pylibftdi import Driver
-            return [":".join(dev) for dev in Driver().list_devices()]
+            return [
+                f"{p.manufacturer or 'FTDI'}:{p.product or p.description}:{p.serial_number}"
+                for p in list_ports.comports()
+                if p.vid == FTDI_VID and p.serial_number
+            ]
         except Exception as e:
             logger = get_logger("dmx.usb")
             logger.error(f"Error listing FTDI devices: {e}")
