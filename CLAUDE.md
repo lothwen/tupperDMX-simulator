@@ -30,7 +30,8 @@ supports a `--sync` flag that way).
 ### Key Dependencies
 PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed on pause/resume),
 mido/python-rtmidi (MIDI), custom asyncio Art-Net UDP receiver, librosa (BPM
-detection), pylibftdi/pyserial (USB DMX), platformdirs (user-config paths).
+detection), pyserial (USB DMX via the stock VCP/ftdi_sio drivers),
+platformdirs (user-config paths).
 
 ## Architecture Overview
 
