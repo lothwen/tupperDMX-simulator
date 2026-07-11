@@ -114,6 +114,27 @@ class PlaylistController:
             total = len(w.config.playlist.songs)
             self.logger.info(f"Switched to song {current}/{total}")
 
+    def go_to_song(self, index):
+        """Switch to a specific song by playlist index (e.g. tapping the web
+        remote's setlist). No-op if the index is out of range or already
+        current, so re-tapping the playing song never interrupts it."""
+        w = self.window
+        total = len(w.config.playlist.songs)
+        current = w.config.playlist.current_song_index
+        if not (0 <= index < total) or index == current:
+            return
+
+        # Stop playback before switching
+        w.stop_playback()
+
+        w.config.set_current_song_index(index)
+        song = w.config.get_current_song()
+        if song:
+            self.apply_song_config(song)
+        self.update_song_counter()
+        w.save_config()
+        self.logger.info(f"Switched to song {index + 1}/{total}")
+
     def remove_current_song(self):
         """Remove the current song from the playlist."""
         w = self.window

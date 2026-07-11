@@ -31,7 +31,8 @@ supports a `--sync` flag that way).
 PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed on pause/resume),
 mido/python-rtmidi (MIDI), custom asyncio Art-Net UDP receiver, librosa (BPM
 detection), pyserial (USB DMX via the stock VCP/ftdi_sio drivers),
-platformdirs (user-config paths).
+platformdirs (user-config paths), aiohttp (embedded web-remote server),
+mutagen (setlist duration probes).
 
 ## Architecture Overview
 
@@ -90,6 +91,25 @@ platformdirs (user-config paths).
   `StageFrameBridge`); each type's scene banks/chases live in its
   `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
   upgraded by `scripts/migrate_midi_v2.py`.)
+- **`webremote/`**: Embedded tablet remote (Settings ▸ WEB REMOTE, off by
+  default; plain HTTP on the stage LAN, no auth). `WebRemoteWorker`
+  (`server.py`) runs an aiohttp HTTP+WS app on its own asyncio loop in a
+  QThread (ArtNetWorker pattern); `WebRemoteManager` (`manager.py`, owned by
+  `MainWindow`) subscribes to existing signals, publishes full-state snapshots
+  plus 10 Hz `pos` / per-beat `beat` events, and executes inbound commands on
+  the Qt thread — transport via MainWindow/PlaylistController, cues/blackout/
+  panic via `_preview_clip` (so `config.io` routing applies). Blackout is a
+  toggle: panic stops playback and sends note 51 only when
+  `blackout_all_state` is off. Qt-free logic in `state.py` (snapshot schema,
+  section spans, mtime-cached duration/BPM probes), `commands.py` (action
+  whitelist/parse) and `peaks.py` (waveform bins for the canvas). The
+  no-build page lives in `webremote/static/` and is responsive: a CSS-grid
+  (`grid-template-areas`) reflows the same blocks into a 3-column tablet
+  layout, a portrait-tablet rail layout, and a single-column phone layout
+  (≤600px) where the body scrolls under a sticky header + fixed transport,
+  the setlist becomes a "+"-triggered drawer, and a slim seek bar replaces
+  waveform-tap. Phase-3/4 widgets (count-in, click/backing meters, key,
+  show name) are inert `placeholder` elements.
 
 ### Configuration (`core/config.py`)
 
@@ -99,7 +119,8 @@ Storage splits across two files:
   `shipped_config_path()` (`_MEIPASS`).
 - **`userprefs.json`** (user-writable): everything else (`window`, `artnet`
   — the controller's Art-Net *output* target — `playlist`, `metronome`,
-  `volume`, `logging`, and `io` — the explicit I/O routing, `IOConfig`),
+  `volume`, `logging`, `io` — the explicit I/O routing, `IOConfig` — and
+  `webremote` — server enable/port + the cue-button list, `WebRemoteConfig`),
   resolved by `userprefs_path()` via `platformdirs`
   (e.g. `~/.config/tupperDMX/` on Linux; macOS/Windows app-data equivalents).
   Legacy `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`
@@ -235,6 +256,11 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
   from the `ledbar` fixture def's banks). Scene banks/chases live in the
   `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
+- `webremote/` — `server.py` (`WebRemoteWorker`: aiohttp HTTP+WS in a
+  QThread), `manager.py` (`WebRemoteManager`: Qt bridge — worker lifecycle,
+  snapshots, command execution), Qt-free `state.py` / `commands.py` /
+  `peaks.py`, and `static/` (the shipped tablet page: `index.html`,
+  `style.css`, `app.js`; bundled via build.spec).
 - `timeline/` — `manager.py` (coordinator, one `MidiEventsTrack` per fixture
   filter), `tracks/` (`base.py`, `ruler.py`, `waveform.py`, `midi_events.py`),
   `widgets/` (`tooltip.py`, `content_view.py`, `midi_event_edit.py`,

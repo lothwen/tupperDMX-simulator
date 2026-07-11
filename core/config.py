@@ -131,6 +131,39 @@ class LoggingConfig:
 
 
 @dataclass
+class WebCueConfig:
+    """One web-remote lighting cue: a labelled button that fires MIDI messages
+    through the configured MIDI outputs (same path as clip-library preview)."""
+    label: str
+    color: str = "#888888"                # hex swatch shown on the web button
+    messages: List[List[int]] = field(default_factory=list)  # [channel, note, velocity]
+
+
+def default_webremote_cues() -> List["WebCueConfig"]:
+    """Shipped cue set, built from existing controller verbs (color macros
+    72-75, ledbar bank-select 36+n / scene-load 24+n, blackout-all 51) against
+    the default patch channels (0 = ledbar, 1/2 = blinders)."""
+    all_fx = [0, 1, 2]
+    return [
+        WebCueConfig("Warm", "#ffb86b", [[c, 73, 127] for c in all_fx]),       # ORANGE macro
+        WebCueConfig("Cool Blue", "#7cc4ff", [[c, 74, 127] for c in all_fx]),  # CYAN macro
+        WebCueConfig("Strobe", "#e6e6e6", [[0, 40, 0], [0, 24, 100]]),         # STROBES bank + scene 0
+        WebCueConfig("Full flash", "#ffffff", [[c, 72, 127] for c in all_fx]), # WHITE macro
+        WebCueConfig("Magenta", "#ff5bd1", [[c, 75, 127] for c in all_fx]),    # PINK macro
+        WebCueConfig("Blackout", "#666666", [[0, 51, 0]]),                     # global toggle
+    ]
+
+
+@dataclass
+class WebRemoteConfig:
+    """Embedded web-remote server (tablet UI). Off by default; the page is
+    served on the LAN without auth, so enabling is an explicit choice."""
+    enabled: bool = False
+    port: int = 8765
+    cues: List[WebCueConfig] = field(default_factory=default_webremote_cues)
+
+
+@dataclass
 class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     artnet: ArtNetConfig = field(default_factory=ArtNetConfig)
@@ -139,6 +172,7 @@ class Config:
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     io: IOConfig = field(default_factory=IOConfig)
+    webremote: WebRemoteConfig = field(default_factory=WebRemoteConfig)
 
     def __post_init__(self):
         # Fixture-patch persistence state (not serialized fields):
@@ -294,6 +328,15 @@ class Config:
             # drops the legacy keys.
             config.io = cls._migrate_legacy_io(data, config.artnet.ip)
 
+        if "webremote" in data:
+            web_data = data["webremote"]
+            config.webremote = WebRemoteConfig(
+                enabled=bool(web_data.get("enabled", False)),
+                port=cls._validate_int(web_data.get("port", 8765), 1024, 65535),
+                cues=(cls._parse_web_cues(web_data["cues"])
+                      if "cues" in web_data else default_webremote_cues()),
+            )
+
     @staticmethod
     def _migrate_legacy_io(data: Dict[str, Any], artnet_ip: str) -> "IOConfig":
         """Map the pre-io implicit selectors (last_midi_port / last_dmx_source +
@@ -320,6 +363,43 @@ class Config:
             # Art-Net + localhost == the old loopback simulation == defaults.
 
         return io
+
+    @staticmethod
+    def _parse_web_cues(cues_data: Any) -> List[WebCueConfig]:
+        """Parse the webremote cue list. Entries without a label and malformed
+        messages are dropped; channel/note/velocity are clamped to MIDI ranges."""
+        cues: List[WebCueConfig] = []
+
+        if not isinstance(cues_data, list):
+            return cues
+
+        for entry in cues_data:
+            if not isinstance(entry, dict):
+                continue
+            label = entry.get("label")
+            if not isinstance(label, str) or not label:
+                continue
+
+            messages: List[List[int]] = []
+            raw_messages = entry.get("messages", [])
+            if isinstance(raw_messages, list):
+                for msg in raw_messages:
+                    if not isinstance(msg, (list, tuple)) or len(msg) != 3:
+                        continue
+                    messages.append([
+                        Config._validate_int(msg[0], 0, 15),
+                        Config._validate_int(msg[1], 0, 127),
+                        Config._validate_int(msg[2], 0, 127),
+                    ])
+
+            color = entry.get("color")
+            cues.append(WebCueConfig(
+                label=label,
+                color=color if isinstance(color, str) and color else "#888888",
+                messages=messages,
+            ))
+
+        return cues
 
     @staticmethod
     def _validate_optional_str(value: Any) -> Optional[str]:
@@ -469,6 +549,7 @@ class Config:
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
         data["io"] = asdict(self.io)
+        data["webremote"] = asdict(self.webremote)
 
         # The fixture patch is normally seeded read-only from config.json. Once
         # the user edits it (designer) or already owns it in prefs, persist it

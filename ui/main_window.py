@@ -31,6 +31,7 @@ from ui.settings_dialog import SettingsDialog
 from ui.stage_controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
+from webremote.manager import WebRemoteManager
 
 
 class MainWindow(QMainWindow):
@@ -101,7 +102,12 @@ class MainWindow(QMainWindow):
         # Apply the persisted I/O routing (MIDI destinations, controller
         # lifecycle + DMX sinks, stage input).
         self._apply_io_config()
-        
+
+        # Embedded web remote (tablet UI); only serves when config enables it.
+        self.webremote_manager = WebRemoteManager(self.config, self)
+        self.webremote_manager.apply_config()
+
+
         # Install global event filter for spacebar handling
         QApplication.instance().installEventFilter(self)
 
@@ -591,6 +597,7 @@ class MainWindow(QMainWindow):
         """Open the preferences editor and apply any changes live."""
         old_io = asdict(self.config.io)
         old_artnet = asdict(self.config.artnet)
+        old_webremote = asdict(self.config.webremote)
 
         dialog = SettingsDialog(self.config, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -600,6 +607,9 @@ class MainWindow(QMainWindow):
         # listener read from) changed.
         if asdict(self.config.io) != old_io or asdict(self.config.artnet) != old_artnet:
             self._apply_io_config()
+
+        if asdict(self.config.webremote) != old_webremote:
+            self.webremote_manager.apply_config()
 
         self.save_config()
         self.logger.info("Settings updated")
@@ -944,6 +954,7 @@ class MainWindow(QMainWindow):
         # Stop playback and cleanup components — guard each so one failure
         # doesn't abort the rest of the shutdown.
         for name, cleanup in (
+            ("webremote_manager", self.webremote_manager.cleanup),
             ("media_controller", self.media_controller.cleanup),
             ("audio_controller", self.audio_controller.cleanup),
             ("dmx_manager", self.dmx_manager.cleanup),
