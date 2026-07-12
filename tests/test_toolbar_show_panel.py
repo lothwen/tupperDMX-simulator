@@ -1,8 +1,8 @@
 """
 Characterization test: the toolbar's SHOW section (ui/toolbar_manager.py).
 
-Covers the four project buttons firing their signals, the show-name display
-and the autosave-state chip mapping.
+Covers the five project buttons firing their signals, the show-name display,
+the autosave-state chip mapping and the setlist/patch stats footer.
 
 Run with:
     uv run python tests/test_toolbar_show_panel.py
@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QApplication, QPushButton
 
 app = QApplication.instance() or QApplication([])
 
-from core.config import Config
+from core.config import Config, SongConfig
 from ui.toolbar_manager import ToolbarManager
 
 
@@ -44,11 +44,12 @@ def test_show_buttons_fire_signals():
     manager.open_show_requested.connect(lambda: fired.append("open"))
     manager.save_show_requested.connect(lambda: fired.append("save"))
     manager.save_show_as_requested.connect(lambda: fired.append("save_as"))
+    manager.import_bundle_requested.connect(lambda: fired.append("import"))
 
-    for text in ("New", "Open", "Save", "Save as…"):
+    for text in ("+ New", "📂 Open", "💾 Save", "Save as…", "Import"):
         _button(toolbar, text).click()
-    _assert(fired == ["new", "open", "save", "save_as"],
-            "the four SHOW buttons fire their signals")
+    _assert(fired == ["new", "open", "save", "save_as", "import"],
+            "the five SHOW buttons fire their signals")
 
 
 def test_show_name_and_autosave_chip():
@@ -57,8 +58,9 @@ def test_show_name_and_autosave_chip():
     manager.create_toolbar(None)
 
     manager.set_show_name("Directo Billares 2026")
-    _assert(manager.show_name_label.text() == "Directo Billares 2026.show",
-            "show name renders with the .show suffix")
+    text = manager.show_name_label.text()
+    _assert("Directo Billares 2026" in text and ".show" in text,
+            "show name renders with the dimmed .show suffix")
     manager.set_show_name("")
     _assert(manager.show_name_label.text() == "No show", "empty name -> No show")
 
@@ -76,9 +78,32 @@ def test_show_name_and_autosave_chip():
             "unknown state clears the chip")
 
 
+def test_show_stats_footer():
+    print("test_show_stats_footer")
+    config = Config()
+    config.playlist.songs = [
+        SongConfig(title="A", cache={"duration": 61.0}),
+        SongConfig(title="B", cache={"duration": 120.5}),
+    ]
+    manager = ToolbarManager(config)
+    manager.create_toolbar(None)
+
+    lines = manager.show_stats_label.text().splitlines()
+    _assert(lines[0] == "2 songs · 3:01s",
+            "stats show song count and summed cache duration")
+    _assert(lines[1] == f"patch {len(config.fixtures)} fix",
+            "stats show the fixture-patch size")
+
+    config.playlist.songs = [SongConfig(title="A", cache={"duration": 30.0})]
+    manager.update_show_stats()
+    _assert(manager.show_stats_label.text().startswith("1 song · 0:30s"),
+            "singular song count after an update")
+
+
 def main():
     test_show_buttons_fire_signals()
     test_show_name_and_autosave_chip()
+    test_show_stats_footer()
     print("\nALL TESTS PASSED")
 
 

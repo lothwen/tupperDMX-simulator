@@ -92,7 +92,9 @@ class PlaylistController:
             w.timeline.refresh_from_manager()
             w.toolbar_manager.update_midi_file_display("")
 
-        w.toolbar_manager.update_song_info(song.title, song_status(song))
+        w.toolbar_manager.update_song_info(
+            song.title, song_status(song),
+            bpm=w.timeline_toolbar.get_bpm(), offset=song.offset)
         w.update_window_title()
 
     # ------------------------------------------------------------------
@@ -159,14 +161,19 @@ class PlaylistController:
         w.update_window_title()
 
     def update_song_counter(self):
-        """Update the song counter display in toolbar."""
+        """Refresh the toolbar's setlist state: counter, nav buttons, the
+        song-selector combobox and the show stats."""
         w = self.window
-        total = len(w.config.playlist.songs)
-        current = w.config.playlist.current_song_index + 1 if total > 0 else 0
+        songs = w.config.playlist.songs
+        total = len(songs)
+        index = w.config.playlist.current_song_index
+        current = index + 1 if total > 0 else 0
         has_prev = current > 1
         has_next = current < total
         w.toolbar_manager.update_song_counter(current, total)
+        w.toolbar_manager.set_setlist([s.title for s in songs], index)
         w.toolbar_manager.set_navigation_enabled(has_prev, has_next)
+        w.toolbar_manager.update_show_stats()
 
     def next_song(self):
         """Switch to the next song in the playlist."""
