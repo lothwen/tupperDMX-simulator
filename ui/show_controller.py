@@ -39,6 +39,7 @@ class ShowManager(QObject):
 
     show_changed = pyqtSignal()
     autosave_state_changed = pyqtSignal(str)  # "saved" | "pending" | "error"
+    versions_changed = pyqtSignal()           # the snapshot list gained/lost an entry
 
     def __init__(self, config, window=None):
         super().__init__()
@@ -75,6 +76,7 @@ class ShowManager(QObject):
             self.logger.error(f"Opening snapshot failed: {e}")
         self._last_snapshot_monotonic = time.monotonic()
         self.show_changed.emit()
+        self.versions_changed.emit()
 
     def restore_version(self, version_id: str) -> Show:
         """Roll show.json + midis/ back to a snapshot (the pre-restore state
@@ -185,6 +187,7 @@ class ShowManager(QObject):
             self.logger.error(f"Automatic snapshot failed: {e}")
             return
         self._last_snapshot_monotonic = time.monotonic()
+        self.versions_changed.emit()
 
     def save_manifest_if_changed(self) -> bool:
         """notify_changed() semantics, but propagating the result (tests)."""

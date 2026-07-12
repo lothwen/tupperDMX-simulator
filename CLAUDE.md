@@ -166,13 +166,28 @@ objects, so all pre-show code paths keep working unchanged.
 
 ### UI Architecture
 
-- `ToolbarManager` (`ui/toolbar_manager.py`): SHOW section (New/Open/Save/
-  Save as… + show name + live autosave chip), song files/setlist section
-  (loading, playlist nav prev/next/remove + counter, editable song title +
-  derived "linked" media chip), EXPORT section (interop Export MIDI… +
-  Export bundle…), VERSIONS section (📌 Snapshot… + History… →
-  `ui/versions_dialog.py`), and the ☰ menu (Import show bundle…, Settings…,
-  About).
+- `ToolbarManager` (`ui/toolbar_manager.py`): PROJECT · SHOW section
+  (header with live autosave state; + New/📂 Open/💾 Save/Save as…/Import
+  bundle buttons; footer with show name + setlist/patch stats), SETLIST
+  section (header "N songs"; a row of prev / an editable song-selector
+  QComboBox — a "05/11" counter badge + the full setlist; activated() picks a
+  song via `song_selected`, edit+Enter renames via `song_title_edited` / next /
+  remove 🗑; footer BPM / offset / derived "linked" media chip), SONG FILES
+  section (audio + MIDI path displays with Load buttons and the ▷ Track new-MIDI
+  action), EXPORT section (header + two stacked buttons: interop ⤓ Export MIDI…
+  and the amber-accented 📦 Export bundle — the ▾ is a decorative cue, single
+  click exports the full .showpack), VERSIONS section (header; a snapshot-picker
+  QComboBox — newest first, autosave "● Autosave · time" vs pinned
+  "📌 name · time" — + a Restore button emitting
+  `restore_version_requested(version_id)` → `MainWindow.restore_version_from_toolbar`
+  which confirms then rolls back; footer 📌 Snapshot action + "N autosaves ·
+  M pinned" counts, fed by `set_versions(list_versions(show))`), and the ☰ menu
+  (Settings…, About). `PlaylistController.update_song_counter()` is the central
+  setlist refresh (counter + combobox `set_setlist` + nav + show stats);
+  `MainWindow._refresh_versions_ui` repopulates the picker on
+  `ShowManager.versions_changed` (emitted whenever a snapshot is created:
+  open/attach, autosave `_maybe_snapshot`, restore) plus after a manual
+  snapshot and at startup.
 - `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
   **Input / Output** page. Left: three numbered routing cards editing `config.io`
   (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
@@ -278,9 +293,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
   the `DesignableFixture` mixin — design-mode move/select + drag-release
   position write-back), `fixture_designer.py` (scenario-designer panel + add
   dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
-  `show_controller.py` (`ShowManager`: aliasing, autosave, open/restore),
-  `versions_dialog.py` (snapshot history/restore), `settings_dialog.py`
-  (incl. the Input/Output section), `io_flow_widget.py`,
+  `show_controller.py` (`ShowManager`: aliasing, autosave, open/restore;
+  snapshot restore is driven from the toolbar's VERSIONS picker),
+  `settings_dialog.py` (incl. the Input/Output section), `io_flow_widget.py`,
   `error_dialogs.py`, `about_dialog.py`.
 - `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
   stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure

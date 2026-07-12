@@ -191,12 +191,13 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.save_show_requested.connect(self.save_show_now)
         self.toolbar_manager.save_show_as_requested.connect(self.save_show_as_dialog)
         self.toolbar_manager.snapshot_requested.connect(self.take_snapshot_dialog)
-        self.toolbar_manager.history_requested.connect(self.show_history_dialog)
+        self.toolbar_manager.restore_version_requested.connect(self.restore_version_from_toolbar)
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
         self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
+        self.show_manager.versions_changed.connect(self._refresh_versions_ui)
         # Transport signals now originate from the timeline toolbar.
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
@@ -205,6 +206,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
         self.toolbar_manager.remove_song_requested.connect(self.playlist_controller.remove_current_song)
+        self.toolbar_manager.song_selected.connect(self.playlist_controller.go_to_song)
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
@@ -217,6 +219,7 @@ class MainWindow(QMainWindow):
         show = self.show_manager.show
         self.toolbar_manager.set_show_name(show.name if show else "")
         self.toolbar_manager.set_autosave_state("saved")
+        self._refresh_versions_ui()
 
         # Create main content splitter (stage | sidebar); added to the vertical
         # splitter below so the timeline section can be resized against it.
@@ -434,12 +437,13 @@ class MainWindow(QMainWindow):
         
         self.audio_controller.set_bpm(value)
         self.timeline.set_bpm(value)
-        
+        self.toolbar_manager.set_song_bpm(value)
+
         # Restart metronome with new BPM if it was running
         if was_running:
             self.audio_controller.stop_metronome()
             self.audio_controller.start_metronome(current_position)
-    
+
     def _on_metronome_beat(self, beat_number):
         """Handle metronome beat events."""
         # Update any UI that needs to respond to beats
@@ -453,7 +457,8 @@ class MainWindow(QMainWindow):
     def on_bpm_detected_from_timeline(self, value):
         """Handle BPM detection from timeline analysis."""
         self.timeline_toolbar.set_bpm(value)
-        
+        self.toolbar_manager.set_song_bpm(value)
+
         was_running = self.audio_controller.is_metronome_running()
         current_position = self.media_controller.get_current_position() if was_running else 0.0
         
@@ -720,6 +725,8 @@ class MainWindow(QMainWindow):
             self._last_dmx_sig = dmx_sig
             controller.repatch(self.config.fixtures)
 
+        self.toolbar_manager.update_show_stats()
+
     # ------------------------------------------------------------------
     # Show project operations
     # ------------------------------------------------------------------
@@ -873,6 +880,8 @@ class MainWindow(QMainWindow):
             return
         song.title = title.strip()
         self.save_config()
+        # Refresh the setlist combobox so the renamed entry updates in place.
+        self.playlist_controller.update_song_counter()
         webremote = getattr(self, "webremote_manager", None)
         if webremote is not None:
             webremote._publish_full()
@@ -892,14 +901,37 @@ class MainWindow(QMainWindow):
         except Exception as e:
             ErrorDialogManager.show_validation_error(
                 self, "Snapshot", str(e), "a writable show folder")
-
-    def show_history_dialog(self):
-        """Browse/restore the show's snapshot history."""
-        if self.show_manager.show is None:
             return
-        self.show_manager.flush("history")
-        from ui.versions_dialog import VersionsDialog
-        VersionsDialog(self.show_manager, self).exec()
+        self._refresh_versions_ui()
+
+    def _refresh_versions_ui(self):
+        """Repopulate the toolbar's snapshot picker + counts from disk."""
+        show = self.show_manager.show
+        if show is None:
+            self.toolbar_manager.set_versions([])
+            return
+        from core.show import versions
+        self.toolbar_manager.set_versions(versions.list_versions(show))
+
+    def restore_version_from_toolbar(self, version_id: str):
+        """Restore the snapshot picked in the toolbar's VERSIONS combobox,
+        confirming first (the rollback itself snapshots the current state, so
+        it stays undoable from History)."""
+        if self.show_manager.show is None or not version_id:
+            return
+        reply = QMessageBox.question(
+            self, "Restore version",
+            "Restore the show to the selected snapshot?\n\n"
+            "The current state is snapshotted first, so this can be undone "
+            "from History.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.show_manager.restore_version(version_id)
+        except Exception as e:
+            QMessageBox.critical(self, "Restore failed", str(e))
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""
