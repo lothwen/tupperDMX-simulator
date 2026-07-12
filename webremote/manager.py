@@ -121,7 +121,7 @@ class WebRemoteManager(QObject):
                 target = min(target, duration)
             w.seek_playback(target)
         elif action == "cue":
-            cues = self.config.webremote.cues
+            cues = self._cues()
             index = cmd.get("index", -1)
             if 0 <= index < len(cues):
                 w._preview_clip([tuple(m) for m in cues[index].messages])
@@ -143,6 +143,17 @@ class WebRemoteManager(QObject):
         controller = getattr(self.window, "software_controller", None)
         return bool(getattr(controller, "blackout_all_state", False))
 
+    def _open_show(self):
+        """The open show project, or None (e.g. test fakes without one)."""
+        manager = getattr(self.window, "show_manager", None)
+        return manager.show if manager is not None else None
+
+    def _cues(self) -> list:
+        """Active cue set: the open show's; config only serves showless
+        windows (the cues in userprefs just seed new shows)."""
+        show = self._open_show()
+        return show.cues if show is not None else self.config.webremote.cues
+
     def _current_duration(self) -> Optional[float]:
         song = self.config.get_current_song()
         audio = song.audio if song else None
@@ -157,6 +168,7 @@ class WebRemoteManager(QObject):
                    if w.midi_manager.is_song_part(e) and e.get("info")]
         blackout = self._blackout_state()
         self._last_blackout = blackout
+        show = self._open_show()
         return remote_state.build_state(
             playing=w.media_controller.get_playback_state(),
             position=w.media_controller.get_current_position(),
@@ -168,7 +180,8 @@ class WebRemoteManager(QObject):
                 self.config.playlist.current_song_index),
             sections=remote_state.compute_sections(markers, duration or 0.0),
             cues=[{"index": i, "label": c.label, "color": c.color}
-                  for i, c in enumerate(self.config.webremote.cues)],
+                  for i, c in enumerate(self._cues())],
+            show_name=show.name if show is not None else None,
         )
 
     def _publish_full(self, *_) -> None:

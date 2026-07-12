@@ -169,19 +169,34 @@ def _load_dir(directory) -> Dict[str, FixtureDef]:
 
 
 _cache: Optional[Dict[str, FixtureDef]] = None
+_show_fixtures_dir: Optional[str] = None
+
+
+def set_show_fixtures_dir(path) -> None:
+    """Activate (or clear, with None) the show-local fixture-defs layer — the
+    fixtures/ folder inside the open show project. Show defs override user
+    defs, which override shipped ones. Invalidates the memoized registry."""
+    global _show_fixtures_dir
+    new = str(path) if path else None
+    if new != _show_fixtures_dir:
+        _show_fixtures_dir = new
+        clear_cache()
 
 
 def load_fixture_defs(force_reload: bool = False) -> Dict[str, FixtureDef]:
-    """Return {name: FixtureDef} from the shipped then the user fixtures dirs.
+    """Return {name: FixtureDef} from the shipped, user, then show-local
+    fixtures dirs (later layers override same-name defs from earlier ones).
 
-    User defs override shipped defs of the same name. The result is memoized;
-    pass force_reload=True (or call clear_cache()) after writing new files.
+    The result is memoized; pass force_reload=True (or call clear_cache())
+    after writing new files.
     """
     global _cache
     if _cache is not None and not force_reload:
         return _cache
     defs = _load_dir(fixtures_dir_shipped())
     defs.update(_load_dir(fixtures_dir_user()))
+    if _show_fixtures_dir:
+        defs.update(_load_dir(_show_fixtures_dir))
     _cache = defs
     return defs
 

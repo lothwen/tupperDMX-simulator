@@ -39,6 +39,11 @@ class MidiDocument:
         self.midi_notes: List[Dict[str, Any]] = []
         self.midi_note_map = midi_note_map or {}
 
+        # Authoring metadata parsed from tdmx1 text metas in the file (stable
+        # scene group ids, custom scene names, per-clip fades). Filled by the
+        # codec on parse, consumed once by MidiManager._apply_sidecar_meta.
+        self.sidecar_meta: List[Dict[str, Any]] = []
+
         # The patch (config.fixtures): index == the MIDI channel that routes to
         # that fixture instance. Lets per-fixture verbs (channel names, scene
         # expansion) resolve against each instance's own def. Empty for

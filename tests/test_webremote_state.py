@@ -75,6 +75,11 @@ def test_build_setlist():
             "title falls back to the MIDI basename")
     _assert(setlist["songs"][2]["title"] == "Untitled",
             "pathless song gets a placeholder title")
+
+    titled = FakeSong(audio="/no/such/dir/5-el-acantilado.mp3")
+    titled.title = "El Acantilado"
+    _assert(build_setlist([titled], 0)["songs"][0]["title"] == "El Acantilado",
+            "an explicit show-manifest title wins over the basename")
     _assert(all(s["duration"] is None and s["bpm"] is None
                 for s in setlist["songs"]),
             "unreadable files probe to None (client renders '—')")

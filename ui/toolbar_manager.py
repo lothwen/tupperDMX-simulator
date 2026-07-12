@@ -1,6 +1,7 @@
 from typing import Callable, Optional
 from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
-                             QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QToolButton, QMenu)
+                             QFrame, QHBoxLayout, QLineEdit, QPushButton,
+                             QVBoxLayout, QToolButton, QMenu)
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
@@ -15,6 +16,18 @@ class ToolbarManager(QObject):
     load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
     new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
+    # Show project signals
+    new_show_requested = pyqtSignal()
+    open_show_requested = pyqtSignal()
+    save_show_requested = pyqtSignal()
+    save_show_as_requested = pyqtSignal()
+    # Version signals
+    snapshot_requested = pyqtSignal()
+    history_requested = pyqtSignal()
+    # Bundle / setlist signals
+    export_bundle_requested = pyqtSignal()
+    import_bundle_requested = pyqtSignal()
+    song_title_edited = pyqtSignal(str)
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
@@ -39,6 +52,12 @@ class ToolbarManager(QObject):
         self.remove_button: Optional[QPushButton] = None
         self.song_counter_label: Optional[QLabel] = None
         self.menu_button: Optional[QToolButton] = None
+        # Show section widgets
+        self.show_name_label: Optional[QLabel] = None
+        self.autosave_status_label: Optional[QLabel] = None
+        # Setlist widgets
+        self.song_title_edit = None
+        self.linked_chip: Optional[QLabel] = None
 
         self.logger.info("Toolbar manager initialized")
     
@@ -55,9 +74,21 @@ class ToolbarManager(QObject):
         container_layout.setContentsMargins(10, 10, 10, 10)
         container_layout.setSpacing(15)
         
+        # Show Section (far left - fixed width project controls)
+        show_section = self._create_show_section()
+        container_layout.addWidget(show_section, 0)
+
         # Files Section (left - expandable to fill left space)
         files_section = self._create_files_section()
         container_layout.addWidget(files_section, 1)  # stretch factor 1 = expandable
+
+        # Export Section (interop MIDI + portable bundle)
+        export_section = self._create_export_section()
+        container_layout.addWidget(export_section, 0)
+
+        # Versions Section (right of files - snapshot/history controls)
+        versions_section = self._create_versions_section()
+        container_layout.addWidget(versions_section, 0)
 
         # Menu Section (far right - fixed width hamburger button)
         menu_section = self._create_menu_section()
@@ -69,6 +100,131 @@ class ToolbarManager(QObject):
         self.logger.info("Main toolbar created")
         return self.toolbar
     
+    def _create_show_section(self) -> QFrame:
+        """Create the show-project section: New/Open/Save/Save as… plus the
+        show name and the live autosave state."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.Shape.StyledPanel)
+        section.setObjectName("ToolbarSection")
+
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(10, 5, 10, 5)
+
+        buttons_layout = QHBoxLayout()
+        for text, tooltip, signal in (
+                ("New", "Create a new show project", self.new_show_requested),
+                ("Open", "Open a show folder", self.open_show_requested),
+                ("Save", "Save the show now (autosave already runs)", self.save_show_requested),
+                ("Save as…", "Duplicate the show under a new name", self.save_show_as_requested)):
+            button = QPushButton(text)
+            button.setFixedHeight(30)
+            button.setObjectName("LoadButton")
+            button.setToolTip(tooltip)
+            button.clicked.connect(signal.emit)
+            buttons_layout.addWidget(button)
+        layout.addLayout(buttons_layout)
+
+        info_layout = QHBoxLayout()
+        info_layout.setSpacing(8)
+        self.show_name_label = QLabel("No show")
+        self.show_name_label.setFixedHeight(20)
+        self.show_name_label.setObjectName("FileLabel")
+        info_layout.addWidget(self.show_name_label)
+        self.autosave_status_label = QLabel("")
+        self.autosave_status_label.setFixedHeight(20)
+        self.autosave_status_label.setObjectName("FileLabel")
+        info_layout.addWidget(self.autosave_status_label)
+        info_layout.addStretch(1)
+        layout.addLayout(info_layout)
+
+        self.logger.debug("Show section created")
+        return section
+
+    def _create_export_section(self) -> QFrame:
+        """Create the export section: interop MIDI copy + portable bundle."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.Shape.StyledPanel)
+        section.setObjectName("ToolbarSection")
+
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(10, 5, 10, 5)
+
+        buttons_layout = QHBoxLayout()
+        self.export_midi_button = QPushButton("Export MIDI…")
+        self.export_midi_button.setFixedHeight(30)
+        self.export_midi_button.setObjectName("ExportButton")
+        self.export_midi_button.setToolTip(
+            "Standard-MIDI interchange copy of the current song (the show "
+            "itself autosaves)")
+        self.export_midi_button.clicked.connect(self.export_midi_requested.emit)
+        self.export_midi_button.setEnabled(False)  # Disabled by default
+        buttons_layout.addWidget(self.export_midi_button)
+
+        export_bundle_btn = QPushButton("Export bundle…")
+        export_bundle_btn.setFixedHeight(30)
+        export_bundle_btn.setObjectName("ExportButton")
+        export_bundle_btn.setToolTip(
+            "One portable .showpack with audio, MIDI, patch and fixtures")
+        export_bundle_btn.clicked.connect(self.export_bundle_requested.emit)
+        buttons_layout.addWidget(export_bundle_btn)
+        layout.addLayout(buttons_layout)
+
+        label = QLabel("EXPORT · portable .showpack, all songs")
+        label.setFixedHeight(20)
+        label.setObjectName("FileLabel")
+        layout.addWidget(label)
+
+        self.logger.debug("Export section created")
+        return section
+
+    def _create_versions_section(self) -> QFrame:
+        """Create the versions section: manual pinned snapshot + history."""
+        section = QFrame()
+        section.setFrameStyle(QFrame.Shape.StyledPanel)
+        section.setObjectName("ToolbarSection")
+
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(10, 5, 10, 5)
+
+        buttons_layout = QHBoxLayout()
+        for text, tooltip, signal in (
+                ("📌 Snapshot…", "Take a named, never-pruned snapshot",
+                 self.snapshot_requested),
+                ("History…", "Browse and restore show snapshots",
+                 self.history_requested)):
+            button = QPushButton(text)
+            button.setFixedHeight(30)
+            button.setObjectName("LoadButton")
+            button.setToolTip(tooltip)
+            button.clicked.connect(signal.emit)
+            buttons_layout.addWidget(button)
+        layout.addLayout(buttons_layout)
+
+        label = QLabel("VERSIONS")
+        label.setFixedHeight(20)
+        label.setObjectName("FileLabel")
+        layout.addWidget(label)
+
+        self.logger.debug("Versions section created")
+        return section
+
+    def set_show_name(self, name: str) -> None:
+        """Update the show-name display in the SHOW section."""
+        if self.show_name_label:
+            self.show_name_label.setText(f"{name}.show" if name else "No show")
+
+    def set_autosave_state(self, state: str) -> None:
+        """Reflect the ShowManager autosave state ('saved'|'pending'|'error')."""
+        if not self.autosave_status_label:
+            return
+        text, color = {
+            "saved": ("● All changes saved", "#4caf50"),
+            "pending": ("● Editing · autosave armed", "#e2a04a"),
+            "error": ("⚠ Save error — check logs", "#e24a4a"),
+        }.get(state, ("", ""))
+        self.autosave_status_label.setText(text)
+        self.autosave_status_label.setStyleSheet(f"color: {color};" if color else "")
+
     def _create_files_section(self) -> QFrame:
         """Create the files loading section."""
         section = QFrame()
@@ -143,17 +299,21 @@ class ToolbarManager(QObject):
         new_midi_btn.clicked.connect(self.new_midi_track_requested.emit)
         buttons_layout.addWidget(new_midi_btn)
 
-        # Export MIDI button
-        self.export_midi_button = QPushButton("Export MIDI")
-        self.export_midi_button.setMinimumWidth(120)
-        self.export_midi_button.setFixedHeight(30)
-        self.export_midi_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.export_midi_button.setObjectName("ExportButton")
-        self.export_midi_button.clicked.connect(self.export_midi_requested.emit)
-        self.export_midi_button.setEnabled(False)  # Disabled by default
-        buttons_layout.addWidget(self.export_midi_button)
-        
         layout.addLayout(buttons_layout)
+
+        # Setlist row: editable song title + derived audio/MIDI "linked" chip.
+        title_layout = QHBoxLayout()
+        self.song_title_edit = QLineEdit()
+        self.song_title_edit.setPlaceholderText("Song title")
+        self.song_title_edit.setFixedHeight(24)
+        self.song_title_edit.editingFinished.connect(
+            lambda: self.song_title_edited.emit(self.song_title_edit.text()))
+        title_layout.addWidget(self.song_title_edit, 1)
+        self.linked_chip = QLabel("")
+        self.linked_chip.setFixedHeight(24)
+        self.linked_chip.setObjectName("FileLabel")
+        title_layout.addWidget(self.linked_chip, 0)
+        layout.addLayout(title_layout)
         
         # File path labels container
         file_paths_layout = QVBoxLayout()
@@ -204,6 +364,9 @@ class ToolbarManager(QObject):
         button.setFont(font)
 
         menu = QMenu(button)
+        import_action = menu.addAction("Import show bundle…")
+        import_action.triggered.connect(self.import_bundle_requested.emit)
+        menu.addSeparator()
         settings_action = menu.addAction("Settings…")
         settings_action.triggered.connect(self.settings_requested.emit)
         about_action = menu.addAction("About TupperDMX")
@@ -244,6 +407,23 @@ class ToolbarManager(QObject):
             else:
                 self.midi_file_label.setToolTip("")
             self.logger.debug(f"MIDI file display updated: {display_name}")
+
+    def update_song_info(self, title: str, status: str) -> None:
+        """Refresh the setlist row: editable title + the derived media chip
+        ('linked' = audio and MIDI both present and resolvable)."""
+        if self.song_title_edit is not None and not self.song_title_edit.hasFocus():
+            self.song_title_edit.setText(title or "")
+        if self.linked_chip is None:
+            return
+        text, color = {
+            "linked": ("🎵+🥁 linked", "#4caf50"),
+            "audio_only": ("🎵 audio only", "#888888"),
+            "no_audio": ("no audio", "#888888"),
+            "missing_audio": ("⚠ audio missing", "#e24a4a"),
+            "missing_midi": ("⚠ MIDI missing", "#e24a4a"),
+        }.get(status, ("", ""))
+        self.linked_chip.setText(text)
+        self.linked_chip.setStyleSheet(f"color: {color};" if color else "")
 
     def set_export_midi_enabled(self, enabled: bool) -> None:
         """Enable or disable the export MIDI button."""
