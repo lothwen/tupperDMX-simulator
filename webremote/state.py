@@ -71,8 +71,11 @@ def compute_sections(part_markers: List[Tuple[float, str, str]],
 
 
 def _song_title(song) -> str:
-    """Display title for a SongConfig-like object: audio basename (sans
-    extension), falling back to the MIDI basename."""
+    """Display title for a SongConfig-like object: the show-manifest title
+    when set, else the audio basename (sans extension), else the MIDI's."""
+    title = getattr(song, "title", "")
+    if title:
+        return title
     path = getattr(song, "audio", None) or getattr(song, "midi", None)
     if not path:
         return "Untitled"

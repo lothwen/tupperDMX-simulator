@@ -222,6 +222,35 @@ def test_build_state_snapshot():
             "controller blackout toggle propagates into the snapshot")
 
 
+def test_show_provides_cues_and_name():
+    """With an open show (window.show_manager.show), the cue set and the
+    show_name come from the show; config cues only serve showless windows."""
+    print("test_show_provides_cues_and_name")
+    import types
+    from core.config import WebCueConfig
+
+    manager, config, window = _make_manager()
+    show = types.SimpleNamespace(
+        name="Directo Billares 2026",
+        cues=[WebCueConfig("Solo", "#ffffff", [[1, 24, 100]])])
+    window.show_manager = types.SimpleNamespace(show=show)
+
+    state = manager._build_state()
+    _assert(state["show_name"] == "Directo Billares 2026",
+            "show_name comes from the open show")
+    _assert(len(state["cues"]) == 1 and state["cues"][0]["label"] == "Solo",
+            "cues come from the open show, not config")
+
+    manager._execute({"action": "cue", "index": 0})
+    _assert(window.calls[-1] == ("preview", [(1, 24, 100)]),
+            "cue actions fire the show's cue messages")
+
+    window.show_manager = types.SimpleNamespace(show=None)
+    state = manager._build_state()
+    _assert(state["show_name"] is None and len(state["cues"]) == 6,
+            "no open show -> config cues and null show_name")
+
+
 def test_no_worker_is_safe():
     print("test_no_worker_is_safe")
     manager, _, window = _make_manager()
@@ -239,6 +268,7 @@ def main():
     test_cue_sends_config_messages()
     test_blackout_and_panic()
     test_build_state_snapshot()
+    test_show_provides_cues_and_name()
     test_no_worker_is_safe()
     print("\nALL TESTS PASSED")
 

@@ -1,20 +1,24 @@
 # ABOUTME: MainWindow — the central orchestrator wiring managers, UI components
 # ABOUTME: and playback state together. The thin entry point lives in main.py.
 import os
+from copy import deepcopy
 from dataclasses import asdict
 
 import mido
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
-                             QStyle, QTabWidget, QDialog)
+                             QStyle, QTabWidget, QDialog, QInputDialog)
 from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
 
 from core import note_layout
-from core.config import Config, userprefs_path
+from core.config import Config, shipped_fixtures, userprefs_path
 from core.io_routing import midi_routing_from_io
+from core.paths import default_shows_dir
+from core.show import store as show_store
+from core.show.model import ShowError
 from timeline import Timeline
 from dmx import DMXManager
 from midi import MidiManager
@@ -28,6 +32,7 @@ from ui.fixture_designer import StageEditToolbar, FixtureInspector
 from ui.media_controller import MediaController
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
+from ui.show_controller import ShowManager
 from ui.stage_controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
@@ -35,10 +40,17 @@ from webremote.manager import WebRemoteManager
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, show=None):
         super().__init__()
         self.config = config
         self.logger = get_logger("ui.main")
+
+        # The open show project (attach FIRST: it aliases config.playlist /
+        # config.fixtures onto the show's objects, and the managers below
+        # capture config.fixtures in their constructors).
+        self.show_manager = ShowManager(config, self)
+        if show is not None:
+            self.show_manager.attach(show)
 
         # Playlist navigation + per-song load orchestration. Created early
         # (only needs the window ref) so toolbar signal wiring can target it.
@@ -59,6 +71,9 @@ class MainWindow(QMainWindow):
         self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
         self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)
+        # Timeline edits arm the show autosave (song loads are gated by the
+        # manager's begin/end_song_load, wrapped around apply_song_config).
+        self.midi_manager.data_changed.connect(self.show_manager.on_midi_data_changed)
         
         # Initialize UI components
         self._setup_ui_components()
@@ -85,13 +100,22 @@ class MainWindow(QMainWindow):
         self._last_ui_sig = self._patch_ui_signature()
         self._last_dmx_sig = self._patch_dmx_signature()
 
+        # The BPM is canonical in the .mid (set_tempo): manual changes arm the
+        # autosave too. Connected before the initial song load, which is gated
+        # by begin/end_song_load like any other load.
+        self.timeline_toolbar.bpm_changed.connect(self.show_manager.on_bpm_changed)
+
         # Load current song from playlist
         current_song = self.config.get_current_song()
         if current_song:
             self.playlist_controller.apply_song_config(current_song)
         else:
             # Create empty MIDI track if no songs in playlist
-            self.midi_manager.create_empty_track()
+            self.show_manager.begin_song_load()
+            try:
+                self.midi_manager.create_empty_track()
+            finally:
+                self.show_manager.end_song_load()
             self.timeline.refresh_from_manager()
             self.toolbar_manager.update_midi_file_display("")
             self.toolbar_manager.update_audio_file_display("")
@@ -161,6 +185,18 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
+        # Show project signals
+        self.toolbar_manager.new_show_requested.connect(self.new_show_dialog)
+        self.toolbar_manager.open_show_requested.connect(self.open_show_dialog)
+        self.toolbar_manager.save_show_requested.connect(self.save_show_now)
+        self.toolbar_manager.save_show_as_requested.connect(self.save_show_as_dialog)
+        self.toolbar_manager.snapshot_requested.connect(self.take_snapshot_dialog)
+        self.toolbar_manager.history_requested.connect(self.show_history_dialog)
+        self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
+        self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
+        self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
+        self.show_manager.autosave_state_changed.connect(
+            self.toolbar_manager.set_autosave_state)
         # Transport signals now originate from the timeline toolbar.
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
@@ -178,6 +214,9 @@ class MainWindow(QMainWindow):
         # Create and add toolbar
         toolbar = self.toolbar_manager.create_toolbar(self)
         self.addToolBar(toolbar)
+        show = self.show_manager.show
+        self.toolbar_manager.set_show_name(show.name if show else "")
+        self.toolbar_manager.set_autosave_state("saved")
 
         # Create main content splitter (stage | sidebar); added to the vertical
         # splitter below so the timeline section can be resized against it.
@@ -665,7 +704,6 @@ class MainWindow(QMainWindow):
         timeline tracks, refresh the clip library + DMX monitor, and hot-swap the
         running software DMX engine — each gated by a cheap signature so stage
         drag-moves (and, for the engine, renames) don't cause needless churn."""
-        self.config.mark_patch_dirty()
         self.save_config()
 
         ui_sig = self._patch_ui_signature()
@@ -681,6 +719,187 @@ class MainWindow(QMainWindow):
         if controller is not None and dmx_sig != self._last_dmx_sig:
             self._last_dmx_sig = dmx_sig
             controller.repatch(self.config.fixtures)
+
+    # ------------------------------------------------------------------
+    # Show project operations
+    # ------------------------------------------------------------------
+    def reload_from_show(self):
+        """Rebuild every view from the (re)attached show: patch-dependent UI,
+        the current song, counters, title and the web-remote snapshot. Reuses
+        the exact propagation path of _on_patch_changed, unconditionally."""
+        self._last_ui_sig = self._patch_ui_signature()
+        self._last_dmx_sig = self._patch_dmx_signature()
+        self.midi_manager.update_fixtures(self.config.fixtures)
+        self.timeline.rebuild_for_patch(self.config.fixtures)
+        self.clip_library.refresh_configuration(self.config)
+        self.dmx_display.refresh_configuration(self.config)
+        controller = getattr(self, "software_controller", None)
+        if controller is not None:
+            controller.repatch(self.config.fixtures)
+
+        current_song = self.config.get_current_song()
+        if current_song:
+            self.playlist_controller.apply_song_config(current_song)
+        else:
+            self.show_manager.begin_song_load()
+            try:
+                self.midi_manager.create_empty_track()
+            finally:
+                self.show_manager.end_song_load()
+            self.timeline.refresh_from_manager()
+            self.toolbar_manager.update_midi_file_display("")
+            self.toolbar_manager.update_audio_file_display("")
+            self.timeline.set_files(None)
+
+        self.playlist_controller.update_song_counter()
+        show = self.show_manager.show
+        self.toolbar_manager.set_show_name(show.name if show else "")
+        self.toolbar_manager.set_autosave_state("saved")
+        self.update_window_title()
+        webremote = getattr(self, "webremote_manager", None)
+        if webremote is not None:
+            webremote._publish_full()
+
+    def new_show_dialog(self):
+        """Create a new show project (seeded with the default patch and this
+        machine's default cues) and open it."""
+        name, ok = QInputDialog.getText(self, "New show", "Show name:")
+        if not ok or not name.strip():
+            return
+        parent = QFileDialog.getExistingDirectory(
+            self, "Choose where to create the show", str(default_shows_dir()))
+        if not parent:
+            return
+        self.stop_playback()
+        try:
+            show = show_store.create_show(
+                parent, name.strip(),
+                fixtures=shipped_fixtures(),
+                cues=deepcopy(self.config.webremote.cues))
+            self.show_manager.open_show(show.root)
+        except ShowError as e:
+            ErrorDialogManager.show_validation_error(
+                self, "New show", str(e), "a name that doesn't exist there yet")
+
+    def open_show_dialog(self):
+        """Open an existing show folder."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Open show (a .show folder)", str(default_shows_dir()))
+        if not path:
+            return
+        if not show_store.is_show_dir(path):
+            ErrorDialogManager.show_validation_error(
+                self, "Open show", path, "a folder containing show.json")
+            return
+        self.stop_playback()
+        try:
+            self.show_manager.open_show(path)
+        except ShowError as e:
+            ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def save_show_now(self):
+        """Manual Save: a forced flush (autosave already covers the rest)."""
+        self.show_manager.flush("manual")
+
+    def save_show_as_dialog(self):
+        """Duplicate the show (without its versions/ history) and open the copy."""
+        show = self.show_manager.show
+        if show is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Save show as", "New show name:", text=show.name)
+        if not ok or not name.strip():
+            return
+        parent = QFileDialog.getExistingDirectory(
+            self, "Choose where to save the copy", str(show.root.parent))
+        if not parent:
+            return
+        self.stop_playback()
+        self.show_manager.flush("save-as")
+        try:
+            dest = show_store.duplicate_show(show, parent, name.strip())
+            self.show_manager.open_show(dest)
+        except ShowError as e:
+            ErrorDialogManager.show_validation_error(
+                self, "Save show as", str(e), "a name that doesn't exist there yet")
+
+    def export_bundle_dialog(self):
+        """Export the whole show as one portable .showpack (collect & save)."""
+        show = self.show_manager.show
+        if show is None:
+            return
+        from core.show import bundle
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export show bundle", f"{show.name}{bundle.BUNDLE_SUFFIX}",
+            f"Show bundles (*{bundle.BUNDLE_SUFFIX})")
+        if not path:
+            return
+        if not path.endswith(bundle.BUNDLE_SUFFIX):
+            path += bundle.BUNDLE_SUFFIX
+        self.show_manager.flush("export-bundle")
+        try:
+            warnings = bundle.export_bundle(show, path)
+        except Exception as e:
+            ErrorDialogManager.show_media_file_error(self, path, f"Export failed: {e}")
+            return
+        message = f"Show bundle exported to:\n{path}"
+        if warnings:
+            message += "\n\nWarnings:\n" + "\n".join(warnings)
+        QMessageBox.information(self, "Export bundle", message)
+
+    def import_bundle_dialog(self):
+        """Import a .showpack: pick the file, pick where to unpack, open it."""
+        from core.show import bundle
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import show bundle", str(default_shows_dir()),
+            f"Show bundles (*{bundle.BUNDLE_SUFFIX});;All files (*)")
+        if not path:
+            return
+        dest = QFileDialog.getExistingDirectory(
+            self, "Choose where to unpack the show", str(default_shows_dir()))
+        if not dest:
+            return
+        self.stop_playback()
+        try:
+            root = bundle.import_bundle(path, dest)
+            self.show_manager.open_show(root)
+        except ShowError as e:
+            ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def on_song_title_edited(self, title: str):
+        """Persist an edited song title (feeds the setlist + web remote)."""
+        song = self.config.get_current_song()
+        if song is None or song.title == title.strip():
+            return
+        song.title = title.strip()
+        self.save_config()
+        webremote = getattr(self, "webremote_manager", None)
+        if webremote is not None:
+            webremote._publish_full()
+
+    def take_snapshot_dialog(self):
+        """Take a named, pinned (never-pruned) snapshot of the show."""
+        show = self.show_manager.show
+        if show is None:
+            return
+        name, ok = QInputDialog.getText(self, "Snapshot", "Snapshot name:")
+        if not ok or not name.strip():
+            return
+        self.show_manager.flush("snapshot")  # capture the very latest edits
+        try:
+            from core.show import versions
+            versions.take_snapshot(show, pinned=True, name=name.strip())
+        except Exception as e:
+            ErrorDialogManager.show_validation_error(
+                self, "Snapshot", str(e), "a writable show folder")
+
+    def show_history_dialog(self):
+        """Browse/restore the show's snapshot history."""
+        if self.show_manager.show is None:
+            return
+        self.show_manager.flush("history")
+        from ui.versions_dialog import VersionsDialog
+        VersionsDialog(self.show_manager, self).exec()
 
     def on_audio_volume_changed(self, value):
         """Handle audio volume changes from timeline."""
@@ -814,14 +1033,24 @@ class MainWindow(QMainWindow):
                     self.save_config()
                     
                 elif file_type == 'midi':
-                    # Update current song's MIDI path
-                    self.config.update_current_song(midi=path)
+                    # Save pending edits of the current MIDI, then copy the
+                    # picked file into the show's midis/ — the show owns its
+                    # sequences; the user's original stays untouched.
+                    self.show_manager.flush("load-midi")
+                    owned = self.show_manager.import_midi_copy(path)
+                    load_path = owned or path
+                    self.config.update_current_song(midi=load_path)
                     self.save_config()
-                    
+
                     # Load MIDI file via MidiManager and update display
-                    if self.midi_manager.load_from_file(path):
+                    self.show_manager.begin_song_load()
+                    try:
+                        loaded = self.midi_manager.load_from_file(load_path)
+                    finally:
+                        self.show_manager.end_song_load()
+                    if loaded:
                         self.timeline.refresh_from_manager(detect_bpm=True)
-                        self.toolbar_manager.update_midi_file_display(path)
+                        self.toolbar_manager.update_midi_file_display(load_path)
                         self.toolbar_manager.set_export_midi_enabled(True)
                     else:
                         ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
@@ -877,8 +1106,11 @@ class MainWindow(QMainWindow):
                 if not path.lower().endswith('.mid'):
                     path += '.mid'
                 
-                # Export via MidiManager
-                if self.midi_manager.export_to_file(path, self.timeline_toolbar.get_bpm()):
+                # Export via MidiManager — interop: a clean standard-MIDI
+                # copy without the tdmx1 authoring metas (saving the show is
+                # the autosave's job, not this button's).
+                if self.midi_manager.export_to_file(path, self.timeline_toolbar.get_bpm(),
+                                                    interop=True):
                     self.logger.info(f"MIDI file exported successfully to: {path}")
                     QMessageBox.information(self, "Export Success", f"MIDI file exported to:\n{path}")
                 else:
@@ -892,7 +1124,9 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_media_file_error(self, path, f"Export failed: {str(e)}")
 
     def save_config(self):
-        """Save configuration with error handling."""
+        """Save configuration with error handling. Single persistence funnel:
+        machine prefs go to userprefs.json, and the show manifest is saved iff
+        its content changed (so prefs-only call sites don't rewrite it)."""
         prefs_file = str(userprefs_path())
         try:
             if not self.config.save():
@@ -900,6 +1134,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Failed to save configuration: {e}")
             ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
+        self.show_manager.notify_changed()
 
     def start_playback(self):
         """Start media playback using media controller."""
@@ -927,8 +1162,11 @@ class MainWindow(QMainWindow):
             self.audio_controller.start_metronome(time_seconds)
 
     def update_window_title(self):
-        """Update window title with loaded file names."""
+        """Update window title with the open show and loaded file names."""
         title = "TupperDMX Simulator"
+        show = self.show_manager.show
+        if show is not None:
+            title += f" — {show.name}.show"
         current_song = self.config.get_current_song()
         if current_song and current_song.audio:
             file_name = os.path.basename(current_song.audio)
@@ -947,7 +1185,14 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle application close event."""
         self.logger.info("Application closing - cleaning up resources")
-        
+
+        # Flush the show FIRST (pending timeline edits + manifest), while the
+        # midi manager is still fully alive.
+        try:
+            self.show_manager.flush("close")
+        except Exception as e:
+            self.logger.error(f"Error flushing show on close: {e}")
+
         # Remove global event filter
         QApplication.instance().removeEventFilter(self)
         
