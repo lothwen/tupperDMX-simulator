@@ -234,7 +234,7 @@ QToolBar {
 QFrame#ToolbarSection {
     background-color: #363636;
     border: 1px solid #555;
-    border-radius: 8px;
+    border-radius: 4px;
     margin: 2px;
 }
 
@@ -266,7 +266,7 @@ QPushButton#LoadButton {
     border: 1px solid #2c2c2c;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -286,7 +286,7 @@ QPushButton#ImportButton {
     border: 1px solid #262626;
     border-top: 1px solid #454545;
     border-radius: 6px;
-    padding: 8px 18px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -306,7 +306,7 @@ QPushButton#NewButton {
     border: 1px solid #2b4f26;
     border-top: 1px solid #5d9a4f;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -324,7 +324,7 @@ QPushButton#ExportButton {
     border: 1px solid #2c2c2c;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -351,7 +351,7 @@ QPushButton#ExportBundleButton {
     border: 1px solid #6d5330;
     border-top: 1px solid #a07a41;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -1283,7 +1283,7 @@ QPushButton#TrackLockButton:checked:hover {
 /* General Widget Styling */
 QWidget {
     color: #dcdcdc;
-    font-family: "Helvetica Neue";
+    font-family: "Noto Sans", "Noto Color Emoji";
 }
 
 QLabel {
