@@ -10,6 +10,7 @@ Run with:
 
 import os
 import sys
+from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -38,10 +39,13 @@ def _manager():
 def test_versions_populate_and_counts():
     print("test_versions_populate_and_counts")
     manager = _manager()
+    # Timestamps are dated "today" so the picker renders bare clock times
+    # (the toolbar prefixes MM-DD only for snapshots from other days).
+    today = datetime.now().strftime("%Y-%m-%d")
     infos = [
-        VersionInfo("2026-07-12T14-32-07", "2026-07-12T14-32-07", False, ""),
-        VersionInfo("2026-07-12T14-31-00", "2026-07-12T14-31-00", False, ""),
-        VersionInfo("2026-07-12T09-00-00", "2026-07-12T09-00-00", True, "before gig"),
+        VersionInfo(f"{today}T14-32-07", f"{today}T14-32-07", False, ""),
+        VersionInfo(f"{today}T14-31-00", f"{today}T14-31-00", False, ""),
+        VersionInfo(f"{today}T09-00-00", f"{today}T09-00-00", True, "before gig"),
     ]
     manager.set_versions(infos)
 
@@ -51,7 +55,7 @@ def test_versions_populate_and_counts():
             "autosave label is time-stamped")
     _assert(manager.versions_combo.itemText(2) == "📌 before gig · 09:00:00",
             "pinned label carries its name")
-    _assert(manager.versions_combo.itemData(0) == "2026-07-12T14-32-07",
+    _assert(manager.versions_combo.itemData(0) == f"{today}T14-32-07",
             "item data is the version_id")
     _assert(manager.versions_stats_label.text() == "2 autosaves · 1 pinned",
             "counts split autosaves and pinned")
