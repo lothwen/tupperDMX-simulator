@@ -26,6 +26,11 @@ def asset_path(*parts: str) -> str:
     return os.path.join(bundle_dir(), "assets", *parts)
 
 
+def default_shows_dir() -> Path:
+    """Default parent directory for show projects (~/Documents/TupperDMX)."""
+    return Path(platformdirs.user_documents_dir()) / "TupperDMX"
+
+
 def userprefs_dir() -> Path:
     """Platform-conventional directory for writable user data.
 

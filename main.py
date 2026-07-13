@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication
 
 from core.config import Config, userprefs_path
 from core.paths import asset_path
+from core.show.migrate import open_or_create_startup_show
 from tupperlogger import setup_logging, get_logger
 from ui.main_window import MainWindow
 
@@ -62,7 +63,12 @@ def main():
     logger.debug(f"Logging level: {config.logging.level}")
 
     try:
-        main_window = MainWindow(config)
+        # Resolve the show project this machine had open, migrating the legacy
+        # userprefs playlist/patch into a default show on first launch.
+        show = open_or_create_startup_show(config)
+        logger.info(f"Show: {show.root}")
+
+        main_window = MainWindow(config, show)
         main_window.show()
 
         logger.info("Application started successfully")

@@ -356,9 +356,10 @@ class FadeEngine:
             m['fade_out'] = new_out
 
     # --- UI setters ----------------------------------------------------------
-    # set_event_* are UI-only (no MIDI rewrite — single events don't generate
-    # fade ramps), so they only notify. set_scene_* regenerate the ramp and
-    # commit a full rebuild.
+    # set_event_* don't generate fade ramps (single events fade in the render
+    # engine), but they COMMIT so the value reaches the file's tdmx1 sidecar
+    # meta — clip fades persist now. set_scene_* additionally regenerate the
+    # ramp notes.
 
     def set_event_fade_in(self, event_id: str, seconds: float) -> bool:
         doc = self._doc
@@ -371,7 +372,7 @@ class FadeEngine:
         if abs(clamped - evt.get('fade_in', 0.0)) < 1e-6:
             return False
         evt['fade_in'] = clamped
-        self._notify_changed()
+        self._commit()
         return True
 
     def set_event_fade_out(self, event_id: str, seconds: float) -> bool:
@@ -385,7 +386,7 @@ class FadeEngine:
         if abs(clamped - evt.get('fade_out', 0.0)) < 1e-6:
             return False
         evt['fade_out'] = clamped
-        self._notify_changed()
+        self._commit()
         return True
 
     def set_scene_fade_in(self, group_id: str, seconds: float) -> bool:
