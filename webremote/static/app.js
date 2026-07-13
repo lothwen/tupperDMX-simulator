@@ -98,6 +98,8 @@
   function onState(s) {
     state = s;
     pos = { t: s.position, wall: performance.now(), playing: s.playing };
+    $("show-name").textContent = s.show_name || "—";
+    $("show-name").classList.toggle("placeholder-text", !s.show_name);
     renderSetlist(s);
     renderNowPlaying(s);
     renderCues(s.cues);
