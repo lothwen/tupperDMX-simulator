@@ -8,7 +8,7 @@ from tupperlogger import get_logger
 from core.io_routing import MidiRouting
 from .worker import MidiWorker, MidiConnectionStatus
 from .document import MidiDocument
-from .codec import MidiCodec
+from .codec import MidiCodec, SIDECAR_MATCH_TOLERANCE
 from .fade_engine import FadeEngine
 from .clip_editor import ClipEditor
 from .scene_editor import SceneEditor
@@ -267,6 +267,7 @@ class MidiManager(QObject):
         self.midi_data.tracks.append(mido.MidiTrack())
         self.midi_events.clear()
         self.midi_notes.clear()
+        self._doc.sidecar_meta = []
         self.current_filename = None
         # No persisted setup notes -> clear any attached controller's auto state
         # so a MIDI-less song doesn't inherit the previous song's auto flags.
@@ -310,12 +311,64 @@ class MidiManager(QObject):
         # Attach detected fade runs to the matching scene groups.
         self._fades.attach_runs_to_groups(fade_runs)
 
+        # Re-apply authoring metadata persisted as tdmx1 sidecar metas —
+        # corrections over the heuristics above, which stay canonical for
+        # legacy files without metas.
+        self._apply_sidecar_meta()
+
+    def _apply_sidecar_meta(self) -> None:
+        """Pin stable scene group ids + custom names, and restore per-clip
+        fades (which have no note representation in the file). Scene fade
+        durations stay ramp-derived — the ramps are what actually plays."""
+        for meta in self._doc.sidecar_meta:
+            at = meta.get("at")
+            if not isinstance(at, (int, float)):
+                continue
+            if meta.get("t") == "scene":
+                self._apply_scene_meta(meta, float(at))
+            elif meta.get("t") == "clip":
+                self._apply_clip_meta(meta, float(at))
+
+    def _apply_scene_meta(self, meta: Dict[str, Any], at: float) -> None:
+        ch = meta.get("ch")
+        heuristic_gid = next(
+            (e["group_id"] for e in self._doc.midi_events
+             if e.get("group_id") and e.get("channel") == ch
+             and abs(e["time"] - at) < SIDECAR_MATCH_TOLERANCE),
+            None)
+        if heuristic_gid is None:
+            return  # externally edited / moved — heuristics stay in charge
+        gid = str(meta.get("gid") or heuristic_gid)
+        name = meta.get("name")
+        for e in self._doc.midi_events:
+            if e.get("group_id") == heuristic_gid:
+                e["group_id"] = gid
+                if isinstance(name, str) and name:
+                    e["scene_name"] = name
+        for n in self._doc.midi_notes:
+            if n.get("parent_group_id") == heuristic_gid:
+                n["parent_group_id"] = gid
+
+    def _apply_clip_meta(self, meta: Dict[str, Any], at: float) -> None:
+        note = meta.get("note")
+        ch = meta.get("ch")
+        for e in self._doc.midi_events:
+            if (not e.get("group_id") and e.get("note") == note
+                    and e.get("channel") == ch
+                    and abs(e["time"] - at) < SIDECAR_MATCH_TOLERANCE):
+                e["fade_in"] = max(0.0, float(meta.get("fi", 0.0) or 0.0))
+                e["fade_out"] = max(0.0, float(meta.get("fo", 0.0) or 0.0))
+                return
+
     def _rebuild_midi_data(self) -> None:
         self._codec.rebuild(self._doc)
 
-    def export_to_file(self, file_path: str, bpm: Optional[int] = None) -> bool:
-        """Export current MIDI data to file (delegates to MidiCodec)."""
-        return self._codec.export(self._doc, file_path, bpm)
+    def export_to_file(self, file_path: str, bpm: Optional[int] = None,
+                       interop: bool = False) -> bool:
+        """Export current MIDI data to file (delegates to MidiCodec).
+        interop=True writes a clean standard-MIDI copy without the tdmx1
+        authoring metas (the Export MIDI… interchange path)."""
+        return self._codec.export(self._doc, file_path, bpm, interop=interop)
 
     # --- public fade setters (delegated to FadeEngine) ---------------------
 

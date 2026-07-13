@@ -56,6 +56,7 @@ data_files = [
     ("assets", "assets"),
     ("config.json", "."),
     ("fixtures", "fixtures"),
+    ("webremote/static", "webremote/static"),
 ]
 
 # Hidden imports for PyQt6 and other dependencies

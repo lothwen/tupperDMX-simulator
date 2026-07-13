@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>TupperDMX Remote</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="topbar-left">
+    <div class="live-row"><span class="live-dot"></span><span class="kicker">REMOTE · LIVE</span></div>
+    <div id="show-name" class="placeholder-text">—</div>
+  </div>
+  <div class="topbar-center">
+    <div id="top-clock" class="clock">00:00<span class="clock-ms">.000</span></div>
+    <div id="top-song" class="kicker">— / — · —</div>
+  </div>
+  <div class="topbar-right">
+    <span id="top-bpm" class="chip">— BPM</span>
+    <button id="btn-blackout" class="btn-top">BLACKOUT</button>
+    <button id="btn-setlist" class="btn-icon" aria-label="Open setlist">
+      <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+    </button>
+    <button id="btn-panic" class="btn-top btn-panic"><span id="panic-fill"></span><span class="panic-label">PANIC</span></button>
+  </div>
+</header>
+
+<div id="layout">
+
+  <aside id="setlist-panel">
+    <div class="panel-header"><span class="kicker">SETLIST</span><span id="setlist-count" class="dim">— tracks</span></div>
+    <ul id="setlist"></ul>
+  </aside>
+
+  <main id="now-panel">
+    <div class="panel-header">
+      <span class="kicker">NOW PLAYING</span>
+      <span id="now-index" class="mono dim">— / —</span>
+      <span id="sync-pill" class="pill pill-off"><span class="pill-dot"></span>DISCONNECTED</span>
+    </div>
+    <h1 id="song-title">—</h1>
+    <div id="chips" class="chip-row">
+      <span id="chip-index" class="chip">— / —</span>
+      <span class="chip placeholder">KEY · —</span>
+      <span id="chip-bpm" class="chip">— BPM</span>
+      <span class="chip">4/4</span>
+    </div>
+
+    <div id="section-card" class="card section-card">
+      <span class="kicker">CURRENT SECTION</span>
+      <span id="section-name" class="section-name">—</span>
+      <span id="section-count" class="dim"></span>
+      <span id="section-remaining" class="dim"></span>
+      <div id="section-dots">
+        <span class="beat-dot" data-beat="1"></span>
+        <span class="beat-dot" data-beat="2"></span>
+        <span class="beat-dot" data-beat="3"></span>
+        <span class="beat-dot" data-beat="4"></span>
+      </div>
+    </div>
+
+    <div id="beat-card" class="card">
+      <div>
+        <div id="bar-beat" class="mono">BAR — · BEAT —/4</div>
+        <div class="dim small">Visual metronome</div>
+      </div>
+      <div id="beat-dots">
+        <span class="beat-dot" data-beat="1"></span>
+        <span class="beat-dot" data-beat="2"></span>
+        <span class="beat-dot" data-beat="3"></span>
+        <span class="beat-dot" data-beat="4"></span>
+      </div>
+    </div>
+  </main>
+
+  <section id="wave-panel">
+    <div class="panel-header">
+      <span class="kicker">WAVEFORM · SECTIONS</span>
+      <span class="mono dim"><span id="wave-elapsed">--:--</span> / <span id="wave-total">--:--</span></span>
+    </div>
+    <div id="section-strip"></div>
+    <div id="wave-wrap">
+      <canvas id="waveform"></canvas>
+      <div id="playhead"></div>
+    </div>
+  </section>
+
+  <div id="next-card" class="card next-card">
+    <span class="kicker">UP NEXT</span>
+    <div class="next-row">
+      <span id="next-title" class="next-title">—</span>
+      <span class="pill placeholder">COUNT-IN · — BARS</span>
+    </div>
+    <div id="next-meta" class="dim small"></div>
+  </div>
+
+  <aside id="right-panel">
+    <div class="card placeholder-card placeholder">
+      <div class="panel-header"><span class="kicker">AUTO COUNT-IN</span><span class="fake-toggle"></span></div>
+      <div class="stepper-row"><span>Count-in bars</span>
+        <span class="stepper"><button>−</button><b>2</b><button>+</button></span>
+      </div>
+      <span class="soon-tag">COMING SOON</span>
+    </div>
+
+    <div class="card" id="cues-card">
+      <div class="panel-header"><span class="kicker">LIGHT CUES</span><span class="chip small">MANUAL · GO</span></div>
+      <div id="cue-grid"></div>
+    </div>
+  </aside>
+
+  <div id="meters-scroll" class="placeholder">
+    <div class="meter-box"><span class="kicker">CLICK</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
+    <div class="meter-box"><span class="kicker">BACKING</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+  </div>
+
+</div>
+
+<div id="drawer-backdrop"></div>
+
+<footer id="transport-bar">
+  <div id="transport">
+    <div class="transport-left">
+      <div id="transport-clock" class="clock">00:00<span class="clock-ms">.000</span></div>
+      <div class="kicker">REMAINING <span id="transport-remaining">--:--</span></div>
+    </div>
+    <div id="seekbar"><div id="seekbar-fill"></div><div id="seekbar-knob"></div></div>
+    <div class="transport-center">
+      <button id="btn-prev" class="btn-transport" aria-label="Previous">
+        <svg viewBox="0 0 24 24"><path d="M6 5h3v14H6zM20 5v14L9 12z"/></svg>
+      </button>
+      <button id="btn-stop" class="btn-transport btn-stop" aria-label="Stop">
+        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      </button>
+      <button id="btn-play" class="btn-transport btn-play" aria-label="Play/Pause">
+        <svg id="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        <svg id="icon-pause" viewBox="0 0 24 24" class="hidden"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+      </button>
+      <button id="btn-next" class="btn-transport" aria-label="Next">
+        <svg viewBox="0 0 24 24"><path d="M15 5h3v14h-3zM4 5v14l11-7z"/></svg>
+      </button>
+    </div>
+    <div class="transport-right placeholder">
+      <div class="meter-row"><span class="kicker">CLICK</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
+      <div class="meter-row"><span class="kicker">BACKING</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+    </div>
+  </div>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

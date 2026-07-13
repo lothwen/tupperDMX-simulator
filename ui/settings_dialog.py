@@ -15,6 +15,7 @@ from core.config import Config, IOConfig
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
 from ui.io_flow_widget import IOFlowWidget
+from webremote.state import lan_ip
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -118,6 +119,7 @@ class SettingsDialog(QDialog):
         left.addWidget(self._build_sequencer_card())
         left.addWidget(self._build_controller_card())
         left.addWidget(self._build_stage_card())
+        left.addWidget(self._build_webremote_card())
         left.addWidget(self._build_logging_card())
         left.addStretch(1)
         columns.addLayout(left, 11)
@@ -337,6 +339,35 @@ class SettingsDialog(QDialog):
         body.addLayout(usb_row)
         return card
 
+    def _build_webremote_card(self) -> QFrame:
+        self.webremote_toggle = _ToggleSwitch()
+        self.webremote_toggle.setChecked(self.config.webremote.enabled)
+        card, body = self._make_card(None, "WEB REMOTE", "tablet control",
+                                     header_extra=self.webremote_toggle)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Port:"))
+        self.webremote_port_spin = QSpinBox()
+        self.webremote_port_spin.setRange(1024, 65535)
+        self.webremote_port_spin.setValue(self.config.webremote.port)
+        row.addWidget(self.webremote_port_spin)
+        self.webremote_url_label = QLabel()
+        self.webremote_url_label.setObjectName("SettingsDimLabel")
+        row.addWidget(self.webremote_url_label, 1)
+        body.addLayout(row)
+
+        self.webremote_toggle.toggled.connect(self._update_webremote_url)
+        self.webremote_port_spin.valueChanged.connect(self._update_webremote_url)
+        self._update_webremote_url()
+        return card
+
+    def _update_webremote_url(self, *_) -> None:
+        if self.webremote_toggle.isChecked():
+            self.webremote_url_label.setText(
+                f"http://{lan_ip()}:{self.webremote_port_spin.value()}")
+        else:
+            self.webremote_url_label.setText("Disabled — no server runs.")
+
     def _build_logging_card(self) -> QFrame:
         card, body = self._make_card(None, "LOGGING", None)
 
@@ -542,4 +573,6 @@ class SettingsDialog(QDialog):
         self.config.artnet.universe = self.universe_spin.value()
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
+        self.config.webremote.enabled = self.webremote_toggle.isChecked()
+        self.config.webremote.port = self.webremote_port_spin.value()
         self.accept()

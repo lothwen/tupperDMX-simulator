@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 import json
 import os
+import uuid
 from pathlib import Path
 
 from core.fixture_library import load_fixture_defs
@@ -70,6 +71,14 @@ class SongConfig:
     midi: Optional[str] = None
     audio: Optional[str] = None  # Primary key - audio file path uniquely identifies a song
     offset: float = 0.0
+    # Show-model metadata (Fase 3). id is a stable uuid assigned by the show
+    # layer (so identity survives file renames); cache holds derived
+    # {duration, bpm, audio_mtime} values, never hand-edited.
+    id: str = ""
+    title: str = ""
+    key: str = ""                                       # musical key, e.g. "Am"
+    precount: bool = True                               # count-in click; off = segue from previous song
+    cache: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -131,6 +140,39 @@ class LoggingConfig:
 
 
 @dataclass
+class WebCueConfig:
+    """One web-remote lighting cue: a labelled button that fires MIDI messages
+    through the configured MIDI outputs (same path as clip-library preview)."""
+    label: str
+    color: str = "#888888"                # hex swatch shown on the web button
+    messages: List[List[int]] = field(default_factory=list)  # [channel, note, velocity]
+
+
+def default_webremote_cues() -> List["WebCueConfig"]:
+    """Shipped cue set, built from existing controller verbs (color macros
+    72-75, ledbar bank-select 36+n / scene-load 24+n, blackout-all 51) against
+    the default patch channels (0 = ledbar, 1/2 = blinders)."""
+    all_fx = [0, 1, 2]
+    return [
+        WebCueConfig("Warm", "#ffb86b", [[c, 73, 127] for c in all_fx]),       # ORANGE macro
+        WebCueConfig("Cool Blue", "#7cc4ff", [[c, 74, 127] for c in all_fx]),  # CYAN macro
+        WebCueConfig("Strobe", "#e6e6e6", [[0, 40, 0], [0, 24, 100]]),         # STROBES bank + scene 0
+        WebCueConfig("Full flash", "#ffffff", [[c, 72, 127] for c in all_fx]), # WHITE macro
+        WebCueConfig("Magenta", "#ff5bd1", [[c, 75, 127] for c in all_fx]),    # PINK macro
+        WebCueConfig("Blackout", "#666666", [[0, 51, 0]]),                     # global toggle
+    ]
+
+
+@dataclass
+class WebRemoteConfig:
+    """Embedded web-remote server (tablet UI). Off by default; the page is
+    served on the LAN without auth, so enabling is an explicit choice."""
+    enabled: bool = False
+    port: int = 8765
+    cues: List[WebCueConfig] = field(default_factory=default_webremote_cues)
+
+
+@dataclass
 class Config:
     window: WindowConfig = field(default_factory=WindowConfig)
     artnet: ArtNetConfig = field(default_factory=ArtNetConfig)
@@ -139,21 +181,10 @@ class Config:
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     io: IOConfig = field(default_factory=IOConfig)
-
-    def __post_init__(self):
-        # Fixture-patch persistence state (not serialized fields):
-        #   _patch_from_prefs - userprefs.json already owns the patch (override
-        #                       the shipped seed and keep persisting it).
-        #   _patch_dirty      - the patch was edited this session (the scenario
-        #                       designer calls mark_patch_dirty()).
-        # save() writes the fixtures patch to userprefs.json only when either is
-        # set, so a default install keeps reading the shipped config.json seed.
-        self._patch_from_prefs = False
-        self._patch_dirty = False
-
-    def mark_patch_dirty(self) -> None:
-        """Flag the fixture patch as edited so save() persists it to userprefs.json."""
-        self._patch_dirty = True
+    webremote: WebRemoteConfig = field(default_factory=WebRemoteConfig)
+    # Show-project pointers (machine-level: which show this machine had open).
+    last_show_path: Optional[str] = None
+    recent_shows: List[str] = field(default_factory=list)
 
     def next_free_channel(self) -> int:
         """Lowest non-negative MIDI channel not used by any patched fixture.
@@ -211,12 +242,14 @@ class Config:
 
     @classmethod
     def _apply_userprefs(cls, config: "Config", data: Dict[str, Any]) -> None:
-        """Populate user-editable sections from userprefs.json data."""
-        # A fixtures key in userprefs means the user has taken ownership of the
-        # patch: it overrides the shipped seed, and save() keeps persisting it.
+        """Populate user-editable sections from userprefs.json data.
+
+        The playlist and fixtures sections are legacy (pre-show): they are
+        still PARSED here — they are the source the one-time show migration
+        adopts — but save() no longer writes them; the open show's manifest
+        owns them now."""
         if "fixtures" in data:
             config.fixtures = cls._parse_fixtures(data["fixtures"])
-            config._patch_from_prefs = True
 
         if "window" in data:
             window_data = data["window"]
@@ -245,7 +278,13 @@ class Config:
                 songs.append(SongConfig(
                     midi=cls._validate_file_path(song_data.get("midi")),
                     audio=cls._validate_file_path(song_data.get("audio")),
-                    offset=cls._validate_float(song_data.get("offset", 0.0), -3600.0, 3600.0)
+                    offset=cls._validate_float(song_data.get("offset", 0.0), -3600.0, 3600.0),
+                    id=str(song_data.get("id") or ""),
+                    title=str(song_data.get("title", "")),
+                    key=str(song_data.get("key", "")),
+                    precount=bool(song_data.get("precount", True)),
+                    cache=(song_data["cache"]
+                           if isinstance(song_data.get("cache"), dict) else {}),
                 ))
             config.playlist = PlaylistConfig(
                 songs=songs,
@@ -294,6 +333,20 @@ class Config:
             # drops the legacy keys.
             config.io = cls._migrate_legacy_io(data, config.artnet.ip)
 
+        config.last_show_path = cls._validate_optional_str(data.get("last_show_path"))
+        recents = data.get("recent_shows")
+        if isinstance(recents, list):
+            config.recent_shows = [s for s in recents if isinstance(s, str) and s]
+
+        if "webremote" in data:
+            web_data = data["webremote"]
+            config.webremote = WebRemoteConfig(
+                enabled=bool(web_data.get("enabled", False)),
+                port=cls._validate_int(web_data.get("port", 8765), 1024, 65535),
+                cues=(cls._parse_web_cues(web_data["cues"])
+                      if "cues" in web_data else default_webremote_cues()),
+            )
+
     @staticmethod
     def _migrate_legacy_io(data: Dict[str, Any], artnet_ip: str) -> "IOConfig":
         """Map the pre-io implicit selectors (last_midi_port / last_dmx_source +
@@ -320,6 +373,43 @@ class Config:
             # Art-Net + localhost == the old loopback simulation == defaults.
 
         return io
+
+    @staticmethod
+    def _parse_web_cues(cues_data: Any) -> List[WebCueConfig]:
+        """Parse the webremote cue list. Entries without a label and malformed
+        messages are dropped; channel/note/velocity are clamped to MIDI ranges."""
+        cues: List[WebCueConfig] = []
+
+        if not isinstance(cues_data, list):
+            return cues
+
+        for entry in cues_data:
+            if not isinstance(entry, dict):
+                continue
+            label = entry.get("label")
+            if not isinstance(label, str) or not label:
+                continue
+
+            messages: List[List[int]] = []
+            raw_messages = entry.get("messages", [])
+            if isinstance(raw_messages, list):
+                for msg in raw_messages:
+                    if not isinstance(msg, (list, tuple)) or len(msg) != 3:
+                        continue
+                    messages.append([
+                        Config._validate_int(msg[0], 0, 15),
+                        Config._validate_int(msg[1], 0, 127),
+                        Config._validate_int(msg[2], 0, 127),
+                    ])
+
+            color = entry.get("color")
+            cues.append(WebCueConfig(
+                label=label,
+                color=color if isinstance(color, str) and color else "#888888",
+                messages=messages,
+            ))
+
+        return cues
 
     @staticmethod
     def _validate_optional_str(value: Any) -> Optional[str]:
@@ -446,11 +536,9 @@ class Config:
         read-only at runtime.
         """
         try:
-            data = self._userprefs_to_dict()
-            path = userprefs_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Local import: core.show modules import from core.config.
+            from core.show.store import atomic_write_json
+            atomic_write_json(userprefs_path(), self._userprefs_to_dict())
             return True
         except Exception as e:
             print(f"Error saving userprefs: {e}")
@@ -460,21 +548,18 @@ class Config:
         """Convert user-editable sections to a dictionary for JSON serialization."""
         data: Dict[str, Any] = {}
 
+        # Machine-level prefs only: the playlist and the fixture patch belong
+        # to the open show's manifest (show.json) and are deliberately not
+        # written here — legacy playlist/fixtures keys are read once by the
+        # show migration and dropped on the next save.
         data["window"] = asdict(self.window)
         data["artnet"] = asdict(self.artnet)
-        data["playlist"] = {
-            "songs": [asdict(song) for song in self.playlist.songs],
-            "current_song_index": self.playlist.current_song_index
-        }
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
         data["io"] = asdict(self.io)
-
-        # The fixture patch is normally seeded read-only from config.json. Once
-        # the user edits it (designer) or already owns it in prefs, persist it
-        # here so userprefs.json overrides the seed on the next load.
-        if self._patch_dirty or self._patch_from_prefs:
-            data["fixtures"] = [asdict(fixture) for fixture in self.fixtures]
+        data["webremote"] = asdict(self.webremote)
+        data["last_show_path"] = self.last_show_path
+        data["recent_shows"] = list(self.recent_shows)
 
         return data
 
@@ -507,7 +592,8 @@ class Config:
         song = SongConfig(
             audio=self._validate_file_path(audio),
             midi=self._validate_file_path(midi) if midi else None,
-            offset=self._validate_float(offset, -3600.0, 3600.0)
+            offset=self._validate_float(offset, -3600.0, 3600.0),
+            id=str(uuid.uuid4()),
         )
         self.playlist.songs.append(song)
         return len(self.playlist.songs) - 1

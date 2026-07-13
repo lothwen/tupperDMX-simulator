@@ -31,7 +31,8 @@ supports a `--sync` flag that way).
 PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed on pause/resume),
 mido/python-rtmidi (MIDI), custom asyncio Art-Net UDP receiver, librosa (BPM
 detection), pyserial (USB DMX via the stock VCP/ftdi_sio drivers),
-platformdirs (user-config paths).
+platformdirs (user-config paths), aiohttp (embedded web-remote server),
+mutagen (setlist duration probes).
 
 ## Architecture Overview
 
@@ -40,7 +41,26 @@ platformdirs (user-config paths).
 - **`ui/main_window.py` — `MainWindow`**: Central orchestrator. Coordinates
   UI/managers, syncs playback state across media/metronome/timeline, persists
   config. `main.py` (repo root) is just the thin launcher (QApplication +
-  theme + `Config.load()` + logging).
+  theme + `Config.load()` + `open_or_create_startup_show()` + logging).
+- **`core/show/` + `ui/show_controller.py` — the Show project layer**: a show
+  is a **folder** `Name.show/` (`show.json` manifest + owned `midis/` +
+  `audio/` for imported bundles + show-local `fixtures/` defs + `versions/`
+  snapshots). The Qt-free package holds `model.py` (`Show`, `ShowError`,
+  `song_status()`), `manifest.py` (dict ↔ `Show`; owned midis stored relative,
+  referenced audio absolute, missing paths PRESERVED for relinking),
+  `store.py` (atomic JSON, create/load/save/duplicate, `allocate_midi_path`;
+  loading a show activates its fixture-defs layer), `migrate.py` (startup
+  chain last→recents→create; one-time legacy-userprefs migration),
+  `versions.py` (snapshots: show.json+midis, retention 25 unpinned, pinned
+  named ones never pruned, undoable restore), `relink.py` (basename search),
+  `bundle.py` (`.showpack` zip: collect & save audio + non-shipped defs).
+  `ShowManager` (Qt, owned by `MainWindow`, attach FIRST in `__init__`)
+  **aliases** `config.playlist`/`config.fixtures` onto the show's objects so
+  every existing reader mutates the show in place; persistence funnels through
+  `MainWindow.save_config()` → `notify_changed()` (manifest saved iff its
+  serialized content changed) and `flush()` (debounced ~3 s autosave of the
+  active song's `.mid`, forced on song switch / close / manual Save; opening
+  snapshot + ≤1 automatic snapshot per 5 min of writes).
 - **`ui/media_controller.py` — `MediaController`**: MP3 playback + MIDI sync.
   Owns timeline position; key methods `start_playback`, `play_pause_playback`,
   `stop_playback`, `seek_to_position`.
@@ -69,8 +89,9 @@ platformdirs (user-config paths).
   `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
 - **`core/fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
   (channels with semantic role + flags, render hint, plus scene `banks`/`chases`)
-  loaded from `fixtures/*.json` (shipped `fixtures/` + writable
-  `userprefs_dir()/fixtures/`, user overrides by name; memoized). Every type —
+  loaded from `fixtures/*.json` in three layers — shipped `fixtures/`, writable
+  `userprefs_dir()/fixtures/`, and the open show's `fixtures/`
+  (`set_show_fixtures_dir()`); later layers override by name; memoized. Every type —
   including the built-in `ledbar`/`blinder` — is a library def;
   `software_controller.build_fixture_types()` builds the whole `FIXTURE_TYPES`
   registry from it (no Python singletons), and
@@ -90,33 +111,83 @@ platformdirs (user-config paths).
   `StageFrameBridge`); each type's scene banks/chases live in its
   `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
   upgraded by `scripts/migrate_midi_v2.py`.)
+- **`webremote/`**: Embedded tablet remote (Settings ▸ WEB REMOTE, off by
+  default; plain HTTP on the stage LAN, no auth). `WebRemoteWorker`
+  (`server.py`) runs an aiohttp HTTP+WS app on its own asyncio loop in a
+  QThread (ArtNetWorker pattern); `WebRemoteManager` (`manager.py`, owned by
+  `MainWindow`) subscribes to existing signals, publishes full-state snapshots
+  plus 10 Hz `pos` / per-beat `beat` events, and executes inbound commands on
+  the Qt thread — transport via MainWindow/PlaylistController, cues/blackout/
+  panic via `_preview_clip` (so `config.io` routing applies). Blackout is a
+  toggle: panic stops playback and sends note 51 only when
+  `blackout_all_state` is off. Qt-free logic in `state.py` (snapshot schema,
+  section spans, mtime-cached duration/BPM probes), `commands.py` (action
+  whitelist/parse) and `peaks.py` (waveform bins for the canvas). The
+  no-build page lives in `webremote/static/` and is responsive: a CSS-grid
+  (`grid-template-areas`) reflows the same blocks into a 3-column tablet
+  layout, a portrait-tablet rail layout, and a single-column phone layout
+  (≤600px) where the body scrolls under a sticky header + fixed transport,
+  the setlist becomes a "+"-triggered drawer, and a slim seek bar replaces
+  waveform-tap. Phase-3/4 widgets (count-in, click/backing meters, key,
+  show name) are inert `placeholder` elements.
 
-### Configuration (`core/config.py`)
+### Configuration & persistence (`core/config.py` + `core/show/`)
 
-Storage splits across two files:
-- **`config.json`** (shipped, read-only): `fixtures` (a *seed* patch) +
-  `midi_note_map`, bundled via PyInstaller, resolved at runtime by
+Storage splits across three places:
+- **`config.json`** (shipped, read-only): `fixtures` (the *seed* patch for
+  brand-new shows), bundled via PyInstaller, resolved at runtime by
   `shipped_config_path()` (`_MEIPASS`).
-- **`userprefs.json`** (user-writable): everything else (`window`, `artnet`
-  — the controller's Art-Net *output* target — `playlist`, `metronome`,
-  `volume`, `logging`, and `io` — the explicit I/O routing, `IOConfig`),
-  resolved by `userprefs_path()` via `platformdirs`
-  (e.g. `~/.config/tupperDMX/` on Linux; macOS/Windows app-data equivalents).
-  Legacy `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`
-  (`Config._migrate_legacy_io`) and are dropped on the next save.
+- **`userprefs.json`** (user-writable, MACHINE-level only): `window`, `artnet`
+  — the controller's Art-Net *output* target — `volume`, `logging`, `io` — the
+  explicit I/O routing, `IOConfig` — `webremote` (server enable/port + the
+  default cue set that seeds NEW shows) and `last_show_path`/`recent_shows`.
+  Resolved by `userprefs_path()` via `platformdirs` (e.g. `~/.config/tupperDMX/`
+  on Linux). Written atomically (temp + `os.replace`). Legacy
+  `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`; legacy
+  `playlist`/`fixtures` keys are still *parsed* (they're the source the
+  one-time show migration adopts) but never written again.
+- **`<Name>.show/show.json`** (the SHOW manifest, per project): the setlist
+  (`songs` with `id`/`title`/`key`/`precount`/`offset`/paths + a derived
+  `cache` of duration/bpm), `current_song_index`, the fixture **patch**
+  (`fixtures`) and `webremote_cues`. Owned `.mid` files live in `midis/` and
+  are written by the autosave; audio is *referenced in place* (absolute path)
+  unless it arrived inside a bundle. The `.mid` stays the canonical sequence
+  format — authoring extras plain MIDI can't carry (stable scene `group_id`,
+  custom `scene_name`, per-clip fades) ride inside it as `tdmx1:{json}` text
+  metas (`midi/codec.py`; "Export MIDI…" writes an `interop=True` copy
+  without them).
 
-`Config.load()` reads both; `Config.save()` writes only `userprefs.json`
-(created eagerly with defaults on first launch). The fixture **patch** is seeded
-read-only from `config.json`, but once the scenario designer edits it
-(`mark_patch_dirty()`) — or `userprefs.json` already carries a `fixtures` key —
-`save()` persists `fixtures` into `userprefs.json`, which then *overrides* the
-shipped seed on the next load. A default install that never edits the patch keeps
-reading the shipped seed (so shipped-config updates still reach it).
+`Config.load()` reads shipped+prefs; the startup show is resolved by
+`core/show/migrate.open_or_create_startup_show()` (first launch converts the
+legacy prefs playlist/patch into `~/Documents/TupperDMX/Untitled.show/`,
+copying the `.mid`s in and leaving originals untouched). After
+`ShowManager.attach()`, `config.playlist`/`config.fixtures` ARE the show's
+objects, so all pre-show code paths keep working unchanged.
 
 ### UI Architecture
 
-- `ToolbarManager` (`ui/toolbar_manager.py`): file loading/export, playlist
-  nav (prev/next/remove + counter), and the ☰ menu (Settings…, About).
+- `ToolbarManager` (`ui/toolbar_manager.py`): PROJECT · SHOW section
+  (header with live autosave state; + New/📂 Open/💾 Save/Save as…/Import
+  bundle buttons; footer with show name + setlist/patch stats), SETLIST
+  section (header "N songs"; a row of prev / an editable song-selector
+  QComboBox — a "05/11" counter badge + the full setlist; activated() picks a
+  song via `song_selected`, edit+Enter renames via `song_title_edited` / next /
+  remove 🗑; footer BPM / offset / derived "linked" media chip), SONG FILES
+  section (audio + MIDI path displays with Load buttons and the ▷ Track new-MIDI
+  action), EXPORT section (header + two stacked buttons: interop ⤓ Export MIDI…
+  and the amber-accented 📦 Export bundle — the ▾ is a decorative cue, single
+  click exports the full .showpack), VERSIONS section (header; a snapshot-picker
+  QComboBox — newest first, autosave "● Autosave · time" vs pinned
+  "📌 name · time" — + a Restore button emitting
+  `restore_version_requested(version_id)` → `MainWindow.restore_version_from_toolbar`
+  which confirms then rolls back; footer 📌 Snapshot action + "N autosaves ·
+  M pinned" counts, fed by `set_versions(list_versions(show))`), and the ☰ menu
+  (Settings…, About). `PlaylistController.update_song_counter()` is the central
+  setlist refresh (counter + combobox `set_setlist` + nav + show stats);
+  `MainWindow._refresh_versions_ui` repopulates the picker on
+  `ShowManager.versions_changed` (emitted whenever a snapshot is created:
+  open/attach, autosave `_maybe_snapshot`, restore) plus after a manual
+  snapshot and at startup.
 - `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
   **Input / Output** page. Left: three numbered routing cards editing `config.io`
   (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
@@ -203,9 +274,12 @@ interpolates present↔future DMX to avoid blackout artifacts.
 - `main.py` (repo root, the only root source file) — thin entry point; the
   window itself lives in `ui/main_window.py`.
 - `core/` — Qt-free shared domain layer (no eager re-exports; import
-  submodules directly): `config.py` (dataclass config, two-file split — see
-  Configuration), `paths.py` (single source of `bundle_dir()`/`asset_path()`/
-  `userprefs_dir()`, dev vs. PyInstaller `_MEIPASS`), `fixture_library.py`
+  submodules directly): `config.py` (dataclass config — see Configuration &
+  persistence), `show/` (the show-project package: `model.py`, `manifest.py`,
+  `store.py`, `migrate.py`, `versions.py`, `relink.py`, `bundle.py`),
+  `paths.py` (single source of `bundle_dir()`/`asset_path()`/
+  `userprefs_dir()`/`default_shows_dir()`, dev vs. PyInstaller `_MEIPASS`),
+  `fixture_library.py`
   (data-driven fixture-type library: `FixtureDef`, JSON loaders, role/flag
   maps, plus the per-type presentation colours `GROUP_COLORS`/
   `color_for_type()`), `note_layout.py` (note → label/colour lookup),
@@ -219,6 +293,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   the `DesignableFixture` mixin — design-mode move/select + drag-release
   position write-back), `fixture_designer.py` (scenario-designer panel + add
   dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
+  `show_controller.py` (`ShowManager`: aliasing, autosave, open/restore;
+  snapshot restore is driven from the toolbar's VERSIONS picker),
   `settings_dialog.py` (incl. the Input/Output section), `io_flow_widget.py`,
   `error_dialogs.py`, `about_dialog.py`.
 - `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
@@ -235,6 +311,11 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
   from the `ledbar` fixture def's banks). Scene banks/chases live in the
   `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
+- `webremote/` — `server.py` (`WebRemoteWorker`: aiohttp HTTP+WS in a
+  QThread), `manager.py` (`WebRemoteManager`: Qt bridge — worker lifecycle,
+  snapshots, command execution), Qt-free `state.py` / `commands.py` /
+  `peaks.py`, and `static/` (the shipped tablet page: `index.html`,
+  `style.css`, `app.js`; bundled via build.spec).
 - `timeline/` — `manager.py` (coordinator, one `MidiEventsTrack` per fixture
   filter), `tracks/` (`base.py`, `ruler.py`, `waveform.py`, `midi_events.py`),
   `widgets/` (`tooltip.py`, `content_view.py`, `midi_event_edit.py`,
@@ -262,7 +343,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
 tail -f logs/tupperDMX_$(date +%Y%m%d).log
 
 # Reset user prefs: delete userprefs.json from the platformdirs path above
-# (shipped config.json is read-only and stays put)
+# (shipped config.json is read-only and stays put). Show data is NOT in
+# prefs — each show is a self-contained <Name>.show/ folder (default under
+# ~/Documents/TupperDMX/), with its own versions/ snapshot history.
 
 # Enumerate MIDI outputs
 python -c "import mido; print(mido.get_output_names())"

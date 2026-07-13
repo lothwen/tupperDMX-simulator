@@ -6,7 +6,8 @@ apply a tempo, and export to disk. No scene-group / fade reconstruction lives
 here — that orchestration stays on MidiManager, which calls parse_into() first.
 """
 
-from typing import Optional
+from typing import List, Optional
+import json
 import os
 import tempfile
 import shutil
@@ -16,6 +17,17 @@ import mido
 
 from tupperlogger import get_logger
 from .constants import VALUE_BEARING_NOTES
+
+# Authoring metadata that plain MIDI can't carry (stable scene group ids,
+# custom scene names, per-clip fades) rides inside the same .mid as text meta
+# events with this prefix + a compact JSON payload. Standard MIDI consumers
+# ignore text metas, so the file stays a valid interchange .mid; the version
+# is implicit in the prefix. Payload times ("at") are absolute SECONDS —
+# tempo-independent, so apply_tempo's tick rescaling never desyncs them.
+SIDECAR_PREFIX = "tdmx1:"
+# Parsed event times are tick-quantized (and re-quantized on tempo changes),
+# so payload-to-event matching tolerates a few milliseconds of drift.
+SIDECAR_MATCH_TOLERANCE = 0.02
 
 
 class MidiCodec:
@@ -39,11 +51,22 @@ class MidiCodec:
 
         doc.midi_events.clear()
         doc.midi_notes.clear()
+        doc.sidecar_meta = []
 
         # Parse for MIDI events (using note map)
         current_time = 0
         for msg in doc.midi_data:
             current_time += msg.time
+            if msg.is_meta and msg.type == 'text' \
+                    and msg.text.startswith(SIDECAR_PREFIX):
+                try:
+                    payload = json.loads(msg.text[len(SIDECAR_PREFIX):])
+                except ValueError as e:
+                    self.logger.warning(f"Skipping malformed sidecar meta: {e}")
+                    continue
+                if isinstance(payload, dict):
+                    doc.sidecar_meta.append(payload)
+                continue
             if msg.type != 'note_on':
                 continue
             # Value-bearing notes (channel sets / scene loaders) carry their
@@ -111,13 +134,19 @@ class MidiCodec:
             track = mido.MidiTrack()
             new_mid.tracks.append(track)
 
-            # Add tempo and meta messages from original
+            # Add tempo and meta messages from original. Stale sidecar metas
+            # are dropped here and regenerated below from the CURRENT edit
+            # state — regeneration, never accumulation.
             tempo_microseconds = 500000  # Default tempo (120 BPM)
             for msg in doc.midi_data.merged_track:
                 if msg.is_meta:
+                    if msg.type == 'text' and msg.text.startswith(SIDECAR_PREFIX):
+                        continue
                     if msg.type == 'set_tempo':
                         tempo_microseconds = msg.tempo
                     track.append(msg.copy())
+            for meta in self._generate_sidecar(doc):
+                track.append(meta)
 
             # Build all MIDI events from notes data
             all_events = []
@@ -177,6 +206,75 @@ class MidiCodec:
         except Exception as e:
             self.logger.error(f"Error rebuilding MIDI data: {e}")
 
+    def _generate_sidecar(self, doc) -> List[mido.MetaMessage]:
+        """Fresh tdmx1 text metas from the current edit state, all at delta 0
+        (payload times are absolute seconds, so placement doesn't matter).
+
+        One meta per scene group (stable gid + custom name + fade values) and
+        one per ungrouped clip that carries a fade (clips have no ramp-note
+        representation — without this the fade dies on reload)."""
+        metas: List[mido.MetaMessage] = []
+
+        def _text(payload: dict) -> mido.MetaMessage:
+            return mido.MetaMessage(
+                'text',
+                text=SIDECAR_PREFIX + json.dumps(
+                    payload, separators=(",", ":"), sort_keys=True),
+                time=0)
+
+        seen_groups = {}
+        for e in doc.midi_events:
+            gid = e.get('group_id')
+            if gid and (gid not in seen_groups
+                        or e['time'] < seen_groups[gid]['time']):
+                seen_groups[gid] = e
+        for gid, rep in sorted(seen_groups.items(), key=lambda kv: kv[1]['time']):
+            metas.append(_text({
+                "t": "scene",
+                "at": round(rep['time'], 6),
+                "ch": rep.get('channel') or 0,
+                "gid": gid,
+                "name": rep.get('scene_name') or "",
+                "fi": round(rep.get('fade_in', 0.0), 6),
+                "fo": round(rep.get('fade_out', 0.0), 6),
+            }))
+
+        for e in doc.midi_events:
+            if e.get('group_id'):
+                continue
+            fi = e.get('fade_in', 0.0)
+            fo = e.get('fade_out', 0.0)
+            if fi <= 0.0 and fo <= 0.0:
+                continue
+            metas.append(_text({
+                "t": "clip",
+                "at": round(e['time'], 6),
+                "ch": e.get('channel') or 0,
+                "note": int(e['note']),
+                "fi": round(fi, 6),
+                "fo": round(fo, 6),
+            }))
+        return metas
+
+    def _strip_sidecar_copy(self, midi_data: mido.MidiFile) -> mido.MidiFile:
+        """A copy of midi_data without tdmx1 metas (the clean interop export).
+        Dropped metas donate their delta time to the next message so note
+        timing is untouched."""
+        out = mido.MidiFile(type=midi_data.type,
+                            ticks_per_beat=midi_data.ticks_per_beat)
+        for track in midi_data.tracks:
+            clean = mido.MidiTrack()
+            carry = 0
+            for msg in track:
+                if (msg.is_meta and msg.type == 'text'
+                        and msg.text.startswith(SIDECAR_PREFIX)):
+                    carry += msg.time
+                    continue
+                clean.append(msg.copy(time=msg.time + carry))
+                carry = 0
+            out.tracks.append(clean)
+        return out
+
     def apply_tempo(self, doc, bpm: int) -> None:
         """Write bpm as a set_tempo meta message in doc.midi_data.
 
@@ -220,11 +318,14 @@ class MidiCodec:
                 0, mido.MetaMessage('set_tempo', tempo=new_tempo, time=0)
             )
 
-    def export(self, doc, file_path: str, bpm: Optional[int] = None) -> bool:
+    def export(self, doc, file_path: str, bpm: Optional[int] = None,
+               interop: bool = False) -> bool:
         """Export doc.midi_data to file using a safe temporary-file approach.
 
         If bpm is provided, the session tempo is written into the file as a
-        set_tempo meta message before saving.
+        set_tempo meta message before saving. With interop=True a clean copy
+        without tdmx1 sidecar metas is written (standard-MIDI interchange);
+        doc.midi_data itself is not modified by the stripping.
         """
         if not doc.midi_data:
             self.logger.error("No MIDI data to export")
@@ -232,6 +333,9 @@ class MidiCodec:
 
         if bpm is not None:
             self.apply_tempo(doc, bpm)
+
+        out_data = self._strip_sidecar_copy(doc.midi_data) if interop \
+            else doc.midi_data
 
         # Create temporary file in the same directory as target
         target_dir = os.path.dirname(os.path.abspath(file_path))
@@ -243,7 +347,7 @@ class MidiCodec:
             os.close(temp_fd)  # Close file descriptor, we'll use the path
 
             # Export MIDI data to temporary file first
-            doc.midi_data.save(temp_path)
+            out_data.save(temp_path)
             self.logger.debug(f"MIDI data written to temporary file: {temp_path}")
 
             # Verify the temporary file was created and has content

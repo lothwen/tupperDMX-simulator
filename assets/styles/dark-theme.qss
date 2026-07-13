@@ -234,7 +234,7 @@ QToolBar {
 QFrame#ToolbarSection {
     background-color: #363636;
     border: 1px solid #555;
-    border-radius: 8px;
+    border-radius: 4px;
     margin: 2px;
 }
 
@@ -266,7 +266,7 @@ QPushButton#LoadButton {
     border: 1px solid #2c2c2c;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -279,6 +279,26 @@ QPushButton#LoadButton:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #404040, stop:1 #3a3a3a);
 }
 
+/* Import Bundle Button (darker, flat — visually distinct from siblings) */
+QPushButton#ImportButton {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #262626;
+    border-top: 1px solid #454545;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#ImportButton:hover {
+    background-color: #383838;
+}
+
+QPushButton#ImportButton:pressed {
+    background-color: #2a2a2a;
+}
+
 /* New Button */
 QPushButton#NewButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #48803f, stop:1 #3c6e35);
@@ -286,7 +306,7 @@ QPushButton#NewButton {
     border: 1px solid #2b4f26;
     border-top: 1px solid #5d9a4f;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -304,7 +324,7 @@ QPushButton#ExportButton {
     border: 1px solid #2c2c2c;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
-    padding: 8px 16px;
+    padding: 8px;
     font-size: 14px;
     font-weight: bold;
 }
@@ -322,6 +342,27 @@ QPushButton#ExportButton:disabled {
     color: #666;
     border-color: #444;
     border-top-color: #444;
+}
+
+/* Export Bundle Button (amber-accented primary export) */
+QPushButton#ExportBundleButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a3f31, stop:1 #3d3327);
+    color: #f4e9db;
+    border: 1px solid #6d5330;
+    border-top: 1px solid #a07a41;
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#ExportBundleButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #574a38, stop:1 #473b2c);
+    border-top-color: #c1954f;
+}
+
+QPushButton#ExportBundleButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3327, stop:1 #322a20);
 }
 
 /* Playlist Navigation Buttons */
@@ -395,16 +436,6 @@ QToolButton#MenuButton::menu-indicator {
     height: 0;
 }
 
-/* Song Counter Label */
-QLabel#SongCounter {
-    background-color: #1a1a1a;
-    color: #aaa;
-    border: 1px solid #444;
-    border-radius: 4px;
-    font-size: 14px;
-    font-weight: bold;
-}
-
 /* File Labels */
 QLabel#FileLabel {
     background-color: #2b2b2b;
@@ -413,6 +444,143 @@ QLabel#FileLabel {
     border-radius: 4px;
     padding: 2px 12px;
     font-size: 11px;
+}
+
+/* SHOW section: header, autosave state, show name and footer stats */
+QLabel#ShowSectionTitle {
+    background: transparent;
+    color: #9a9a9a;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QLabel#AutosaveStatus {
+    background: transparent;
+    font-size: 11px;
+}
+
+QLabel#ShowNameLabel {
+    background: transparent;
+    color: #f0f0f0;
+    font-size: 14px;
+}
+
+QLabel#ShowStatsLabel {
+    background: transparent;
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* SETLIST section: unified song selector (counter badge + combobox) */
+QFrame#SetlistSelector {
+    background-color: #1e1e1e;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+}
+
+QLabel#SetlistCounter {
+    background-color: #2d4a63;
+    color: #cfe4f5;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QComboBox#SetlistCombo {
+    background: transparent;
+    border: none;
+    color: #f0f0f0;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 2px 4px;
+}
+
+QComboBox#SetlistCombo QLineEdit {
+    background: transparent;
+    border: none;
+    color: #f0f0f0;
+    font-weight: bold;
+}
+
+QComboBox#SetlistCombo::drop-down {
+    border: none;
+    width: 18px;
+}
+
+QComboBox#SetlistCombo QAbstractItemView {
+    background-color: #262626;
+    border: 1px solid #4a4a4a;
+    color: #e6e6e6;
+    selection-background-color: #2d4a63;
+    outline: none;
+}
+
+/* SETLIST footer: BPM / offset / linked chip */
+QLabel#BpmLabel {
+    background: transparent;
+    color: #6fce7f;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QLabel#OffsetLabel {
+    background: transparent;
+    color: #8a8a8a;
+    font-size: 11px;
+}
+
+QLabel#LinkedChip {
+    background: transparent;
+    font-size: 11px;
+}
+
+/* SONG FILES: leading file-type icon */
+QLabel#FileTypeIcon {
+    background: transparent;
+    font-size: 13px;
+}
+
+/* VERSIONS section: snapshot picker, History link and Snapshot action */
+QComboBox#VersionsCombo {
+    background-color: #1e1e1e;
+    border: 1px solid #4a4a4a;
+    border-radius: 6px;
+    color: #e6e6e6;
+    font-size: 12px;
+    padding: 2px 8px;
+}
+
+QComboBox#VersionsCombo::drop-down {
+    border: none;
+    width: 18px;
+}
+
+QComboBox#VersionsCombo QAbstractItemView {
+    background-color: #262626;
+    border: 1px solid #4a4a4a;
+    color: #e6e6e6;
+    selection-background-color: #2d4a63;
+    outline: none;
+}
+
+QPushButton#SnapshotButton {
+    background-color: #2f2f2f;
+    color: #d7d7d7;
+    border: 1px solid #3a4a5a;
+    border-radius: 5px;
+    padding: 2px 12px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QPushButton#SnapshotButton:hover {
+    background-color: #384555;
+    border-color: #4a6076;
+}
+
+QPushButton#SnapshotButton:pressed {
+    background-color: #2a2a2a;
 }
 
 /* Transport Buttons */
@@ -1115,7 +1283,7 @@ QPushButton#TrackLockButton:checked:hover {
 /* General Widget Styling */
 QWidget {
     color: #dcdcdc;
-    font-family: "Helvetica Neue";
+    font-family: "Noto Sans", "Noto Color Emoji";
 }
 
 QLabel {

@@ -83,8 +83,6 @@ def test_userprefs_roundtrip():
     with tempfile.TemporaryDirectory() as tmp:
         shipped, prefs = _patch_paths(tmp)
         shipped.write_text(json.dumps(SHIPPED))
-        audio = Path(tmp) / "song.mp3"
-        audio.write_bytes(b"x")  # add_song validates the path exists
 
         cfg = Config.load()
         cfg.artnet.ip = "10.0.0.9"
@@ -100,7 +98,6 @@ def test_userprefs_roundtrip():
         cfg.io.dmx_to_artnet = True
         cfg.io.stage_source = "usb"
         cfg.io.stage_usb_device = "FTDI:FT232R:A1B2C3"
-        cfg.add_song(audio=str(audio), offset=1.5)
         _assert(cfg.save() is True, "save() reported success")
 
         cfg2 = Config.load()
@@ -118,9 +115,10 @@ def test_userprefs_roundtrip():
         _assert(cfg2.io.stage_source == "usb"
                 and cfg2.io.stage_usb_device == "FTDI:FT232R:A1B2C3",
                 "io stage input round-tripped")
-        _assert(len(cfg2.playlist.songs) == 1, "playlist song round-tripped")
-        _assert(cfg2.playlist.songs[0].audio == str(audio), "song audio path round-tripped")
-        _assert(abs(cfg2.playlist.songs[0].offset - 1.5) < 1e-9, "song offset round-tripped")
+
+        # The playlist belongs to the show manifest now.
+        data = json.loads(prefs.read_text())
+        _assert("playlist" not in data, "userprefs no longer carries the playlist")
 
 
 def test_io_migration_from_legacy_keys():
@@ -192,8 +190,9 @@ def test_save_writes_only_userprefs():
         _assert(shipped.read_text() == shipped_before,
                 "save() leaves the shipped config.json untouched")
         data = json.loads(prefs.read_text())
-        _assert("fixtures" not in data and "midi_note_map" not in data,
-                "userprefs.json carries no read-only shipped sections")
+        _assert("fixtures" not in data and "midi_note_map" not in data
+                and "playlist" not in data,
+                "userprefs.json carries no shipped/show-owned sections")
         _assert("artnet" in data and "volume" in data and "logging" in data,
                 "userprefs.json carries the user-editable sections")
 
@@ -255,52 +254,46 @@ def test_fixtures_parse_with_type():
                 "blinder uses 8 channels from dmx_start")
 
 
-def test_patch_persistence_roundtrip():
-    print("test_patch_persistence_roundtrip")
+def test_legacy_prefs_sections_parse_but_are_not_saved():
+    """Pre-show userprefs still carry playlist/fixtures. They must PARSE (the
+    one-time show migration adopts them) but the next save() drops them —
+    show.json owns them now."""
+    print("test_legacy_prefs_sections_parse_but_are_not_saved")
     with tempfile.TemporaryDirectory() as tmp:
         shipped, prefs = _patch_paths(tmp)
         shipped.write_text(json.dumps(SHIPPED))
+        audio = Path(tmp) / "cancion.mp3"
+        audio.write_bytes(b"x")
+        prefs.write_text(json.dumps({
+            "playlist": {
+                "songs": [{"audio": str(audio), "offset": 1.5,
+                           "id": "abc-123", "title": "El Acantilado",
+                           "key": "Am", "precount": False,
+                           "cache": {"duration": 245.2, "bpm": 142}}],
+                "current_song_index": 0,
+            },
+            "fixtures": [
+                {"type": "blinder", "dmx_start": 65, "name": "Front Left",
+                 "channel": 5, "x": 5, "y": 6},
+            ],
+        }))
 
         cfg = Config.load()
-        _assert(len(cfg.fixtures) == 2, "patch seeded from shipped config.json")
+        song = cfg.playlist.songs[0]
+        _assert(song.audio == str(audio) and abs(song.offset - 1.5) < 1e-9,
+                "legacy playlist song parsed")
+        _assert(song.id == "abc-123" and song.title == "El Acantilado"
+                and song.key == "Am" and song.precount is False
+                and song.cache.get("bpm") == 142,
+                "legacy song metadata parsed (migration source)")
+        _assert(len(cfg.fixtures) == 1 and cfg.fixtures[0].name == "Front Left"
+                and cfg.fixtures[0].channel == 5,
+                "legacy prefs fixtures override the shipped seed for parsing")
 
-        # Edit the patch the way the scenario designer does: mutate + mark dirty.
-        cfg.fixtures.append(FixtureInstance(type="blinder", dmx_start=65, x=5, y=6))
-        cfg.mark_patch_dirty()
         cfg.save()
-
         data = json.loads(prefs.read_text())
-        _assert("fixtures" in data, "edited patch is written to userprefs.json")
-        _assert(len(data["fixtures"]) == 3, "all fixtures serialized")
-
-        cfg2 = Config.load()
-        _assert(len(cfg2.fixtures) == 3, "patch round-trips from userprefs (overrides seed)")
-        _assert(cfg2.fixtures[2].type == "blinder" and cfg2.fixtures[2].dmx_start == 65,
-                "added fixture round-tripped")
-
-        # Once prefs owns the patch, a later plain save keeps persisting it.
-        cfg2.save()
-        data2 = json.loads(prefs.read_text())
-        _assert(len(data2["fixtures"]) == 3, "userprefs keeps owning the patch")
-
-
-def test_fixture_name_roundtrips():
-    print("test_fixture_name_roundtrips")
-    with tempfile.TemporaryDirectory() as tmp:
-        shipped, prefs = _patch_paths(tmp)
-        shipped.write_text(json.dumps(SHIPPED))
-
-        cfg = Config.load()
-        # Shipped entries omit "name", so it defaults to "" (backward compatible).
-        _assert(all(f.name == "" for f in cfg.fixtures),
-                "fixtures without a name default to empty string")
-
-        cfg.fixtures[0].name = "Front Left"
-        cfg.mark_patch_dirty()
-        cfg.save()
-
-        cfg2 = Config.load()
-        _assert(cfg2.fixtures[0].name == "Front Left", "fixture alias round-trips")
+        _assert("playlist" not in data and "fixtures" not in data,
+                "save() drops the legacy show-owned sections")
 
 
 def test_unknown_fixture_type_skipped():
@@ -346,23 +339,67 @@ def test_explicit_and_missing_channels_dont_collide():
         _assert(len(set(chans)) == 3, "no duplicate channels assigned")
 
 
-def test_channel_roundtrips():
-    print("test_channel_roundtrips")
+def test_add_song_assigns_stable_id():
+    print("test_add_song_assigns_stable_id")
     with tempfile.TemporaryDirectory() as tmp:
         shipped, prefs = _patch_paths(tmp)
         shipped.write_text(json.dumps(SHIPPED))
+        audio = Path(tmp) / "song.mp3"
+        audio.write_bytes(b"x")
+
         cfg = Config.load()
-        cfg.fixtures[0].channel = 5
-        cfg.fixtures[1].channel = 2
-        cfg.mark_patch_dirty()
+        cfg.add_song(audio=str(audio), offset=0.5)
+        song = cfg.playlist.songs[0]
+        _assert(bool(song.id), "add_song assigns a stable uuid")
+        _assert(song.title == "" and song.key == ""
+                and song.precount is True and song.cache == {},
+                "other song metadata defaults are innocuous")
+
+
+def test_show_pointers_roundtrip():
+    print("test_show_pointers_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        _assert(cfg.last_show_path is None and cfg.recent_shows == [],
+                "show pointers default to empty")
+        cfg.last_show_path = "/shows/Gira.show"
+        cfg.recent_shows = ["/shows/Gira.show", "/shows/Vieja.show"]
         cfg.save()
 
-        data = json.loads(prefs.read_text())
-        _assert([f["channel"] for f in data["fixtures"]] == [5, 2],
-                "explicit channels are serialized")
         cfg2 = Config.load()
-        _assert([f.channel for f in cfg2.fixtures] == [5, 2],
-                "explicit channels round-trip from userprefs")
+        _assert(cfg2.last_show_path == "/shows/Gira.show", "last_show_path round-tripped")
+        _assert(cfg2.recent_shows == ["/shows/Gira.show", "/shows/Vieja.show"],
+                "recent_shows round-tripped")
+
+        # Malformed entries are dropped, not crashed on.
+        prefs.write_text(json.dumps({"last_show_path": 42, "recent_shows": ["/a", 7, ""]}))
+        cfg3 = Config.load()
+        _assert(cfg3.last_show_path is None, "non-string last_show_path becomes None")
+        _assert(cfg3.recent_shows == ["/a"], "non-string recent entries dropped")
+
+
+def test_save_is_atomic():
+    """save() writes via temp file + os.replace: no .tmp leftovers and the
+    previous userprefs.json survives a failed serialization."""
+    print("test_save_is_atomic")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        cfg.save()
+        leftovers = [p for p in prefs.parent.iterdir() if p.suffix == ".tmp"]
+        _assert(leftovers == [], "no temp files left next to userprefs.json")
+
+        before = prefs.read_text()
+        cfg.recent_shows = [object()]  # unserializable -> json.dump raises
+        _assert(cfg.save() is False, "failed save reports False")
+        _assert(prefs.read_text() == before, "failed save leaves the old file intact")
+        leftovers = [p for p in prefs.parent.iterdir() if p.suffix == ".tmp"]
+        _assert(leftovers == [], "failed save cleans up its temp file")
 
 
 def test_next_free_channel():
@@ -386,12 +423,13 @@ def main():
     test_validation_clamps_out_of_range()
     test_corrupted_userprefs_falls_back()
     test_fixtures_parse_with_type()
-    test_patch_persistence_roundtrip()
-    test_fixture_name_roundtrips()
+    test_legacy_prefs_sections_parse_but_are_not_saved()
     test_unknown_fixture_type_skipped()
     test_channel_auto_assigned_in_list_order()
     test_explicit_and_missing_channels_dont_collide()
-    test_channel_roundtrips()
+    test_add_song_assigns_stable_id()
+    test_show_pointers_roundtrip()
+    test_save_is_atomic()
     test_next_free_channel()
     print("\nALL TESTS PASSED")
 
