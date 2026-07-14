@@ -1,6 +1,7 @@
 # ABOUTME: MainWindow — the central orchestrator wiring managers, UI components
 # ABOUTME: and playback state together. The thin entry point lives in main.py.
 import os
+import threading
 from copy import deepcopy
 from dataclasses import asdict
 
@@ -11,8 +12,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QStyle, QTabWidget, QDialog, QInputDialog)
 from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
-                          QAbstractAnimation, QEasingCurve)
+                          QAbstractAnimation, QEasingCurve, pyqtSignal)
 
+from audio import tts
+from audio.engine import AudioEngine
+from audio.mixer import BUS_VOICE
 from core import note_layout
 from core.config import Config, shipped_fixtures, userprefs_path
 from core.io_routing import midi_routing_from_io
@@ -36,14 +40,20 @@ from ui.show_controller import ShowManager
 from ui.stage_controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
+from ui.voice_cues_dialog import VoiceCuesDialog
 from webremote.manager import WebRemoteManager
 
 
 class MainWindow(QMainWindow):
+    # Rendered voice cues arriving from the TTS worker thread (song_id, list of
+    # (time_sec, samples)); queued back onto the Qt thread before installing.
+    _voice_cues_rendered = pyqtSignal(str, object)
+
     def __init__(self, config: Config, show=None):
         super().__init__()
         self.config = config
         self.logger = get_logger("ui.main")
+        self._voice_cues_rendered.connect(self._on_voice_cues_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
         # config.fixtures onto the show's objects, and the managers below
@@ -158,18 +168,31 @@ class MainWindow(QMainWindow):
         pause_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause)
         stop_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop)
         
-        # Initialize UI components
-        self.media_controller = MediaController(self.midi_manager, self.config.volume.audio)
+        # Initialize UI components. One AudioEngine feeds every audio path
+        # (backing + click + voice buses) through the configured output device
+        # and channel routing.
+        self.audio_engine = AudioEngine(self)
+        self.audio_engine.set_output_device(self.config.audio.output_device)
+        self.audio_engine.set_routing(self.config.audio.routing)
+        self.audio_engine.set_bus_volume(BUS_VOICE, self.config.volume.voice)
+
+        # Spoken count-in numbers, pre-rendered off-thread (None until ready).
+        self._count_words = None
+        self._refresh_count_words()
+
+        self.media_controller = MediaController(
+            self.midi_manager, self.audio_engine, self.config.volume.audio)
         self.media_controller.playback_state_changed.connect(self._on_playback_state_changed)
         self.media_controller.position_changed.connect(self._on_position_changed)
         self.media_controller.error_occurred.connect(self._on_media_error)
-        
+
         self.dmx_display = DMXDisplayWidget(self.config)
         self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
         self.clip_library = ClipLibraryWidget(self.config)
         self.clip_library.preview_requested.connect(self._preview_clip)
 
-        self.audio_controller = AudioController(self.config.volume.metronome)
+        self.audio_controller = AudioController(
+            self.audio_engine, self.config.volume.metronome)
         self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
         
@@ -195,6 +218,8 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
         self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
+        self.toolbar_manager.song_key_edited.connect(self.on_song_key_edited)
+        self.toolbar_manager.song_precount_toggled.connect(self.on_song_precount_toggled)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
         self.show_manager.versions_changed.connect(self._refresh_versions_ui)
@@ -243,6 +268,7 @@ class MainWindow(QMainWindow):
             midi_manager=self.midi_manager,
             initial_metronome_volume=self.config.volume.metronome,
             initial_audio_volume=self.config.volume.audio,
+            initial_voice_volume=self.config.volume.voice,
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
             fixtures=self.config.fixtures,
@@ -254,6 +280,8 @@ class MainWindow(QMainWindow):
         self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
         self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
+        self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
+        self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
@@ -266,6 +294,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.ruler_mode_changed.connect(self.timeline.set_ruler_mode)
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
+        self.timeline_toolbar.voice_cues_requested.connect(self.show_voice_cues_dialog)
 
         # Bundle the timeline toolbar + tracks into one resizable section.
         timeline_section = QWidget()
@@ -434,8 +463,9 @@ class MainWindow(QMainWindow):
         
         was_running = self.audio_controller.is_metronome_running()
         current_position = self.media_controller.get_current_position() if was_running else 0.0
-        
+
         self.audio_controller.set_bpm(value)
+        self.media_controller.set_bpm(value)
         self.timeline.set_bpm(value)
         self.toolbar_manager.set_song_bpm(value)
 
@@ -445,9 +475,35 @@ class MainWindow(QMainWindow):
             self.audio_controller.start_metronome(current_position)
 
     def _on_metronome_beat(self, beat_number):
-        """Handle metronome beat events."""
-        # Update any UI that needs to respond to beats
-        pass
+        """During the LAST count-in bar, speak the beat number on the voice bus
+        so the musician hears the song coming ("uno, dos, tres, cuatro")."""
+        if not self.media_controller.is_counting_in():
+            return
+        if not self.config.audio.count_in_voice or not self._count_words:
+            return
+        # Which count-in beat is this? Derived from the position, not the beat
+        # counter, so timer jitter around t=0 can never speak into the song.
+        beat_len = 60.0 / max(1, self.audio_controller.bpm)
+        beats_remaining = round(-self.media_controller.get_current_position() / beat_len)
+        if 1 <= beats_remaining <= 4:
+            self.audio_engine.play_voice(self._count_words[4 - beats_remaining])
+
+    def _refresh_count_words(self):
+        """Pre-render the spoken count-in numbers in the background (cache-first;
+        never synthesized during playback)."""
+        if not self.config.audio.count_in_voice:
+            self._count_words = None
+            return
+        voice = self.config.audio.tts_voice
+
+        def work():
+            words = tts.render_count_words(voice)
+            self._count_words = words  # atomic rebind; read on the Qt thread
+            if words is None:
+                self.logger.info(
+                    f"Spoken count-in unavailable (voice '{voice}' not ready)")
+
+        threading.Thread(target=work, daemon=True, name="tts-count-words").start()
     
     def _on_audio_error(self, error_message, error_type):
         """Handle audio system errors."""
@@ -461,10 +517,11 @@ class MainWindow(QMainWindow):
 
         was_running = self.audio_controller.is_metronome_running()
         current_position = self.media_controller.get_current_position() if was_running else 0.0
-        
+
         self.audio_controller.set_bpm(value)
+        self.media_controller.set_bpm(value)
         self.timeline.set_bpm(value)
-        
+
         # Restart metronome with new BPM if it was running
         if was_running:
             self.audio_controller.stop_metronome()
@@ -482,8 +539,13 @@ class MainWindow(QMainWindow):
             self.audio_controller.stop_metronome()
     
     def _on_position_changed(self, position_seconds):
-        """Handle position changes from media controller."""
-        self.timeline.update_playhead(position_seconds)
+        """Handle position changes from media controller. Negative time is the
+        count-in: the playhead waits at 0 and the display counts down."""
+        self.timeline.update_playhead(max(0.0, position_seconds))
+        if position_seconds < 0:
+            self.timeline_toolbar.update_time_display(
+                f"COUNT-IN −{-position_seconds:04.1f}")
+            return
         # Update toolbar time display
         minutes = int(position_seconds // 60)
         seconds = position_seconds % 60
@@ -642,8 +704,9 @@ class MainWindow(QMainWindow):
         old_io = asdict(self.config.io)
         old_artnet = asdict(self.config.artnet)
         old_webremote = asdict(self.config.webremote)
+        old_audio = asdict(self.config.audio)
 
-        dialog = SettingsDialog(self.config, self)
+        dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -655,8 +718,20 @@ class MainWindow(QMainWindow):
         if asdict(self.config.webremote) != old_webremote:
             self.webremote_manager.apply_config()
 
+        if asdict(self.config.audio) != old_audio:
+            self._apply_audio_config()
+
         self.save_config()
         self.logger.info("Settings updated")
+
+    def _apply_audio_config(self):
+        """Apply config.audio to the live engine + count-in wiring."""
+        self.audio_engine.set_output_device(self.config.audio.output_device)
+        self.audio_engine.set_routing(self.config.audio.routing)
+        song = self.config.get_current_song()
+        self.media_controller.set_count_in(
+            song.precount if song else False, self.config.audio.count_in_bars)
+        self._refresh_count_words()
 
     def show_about_dialog(self):
         """Show the About dialog with build provenance."""
@@ -886,6 +961,87 @@ class MainWindow(QMainWindow):
         if webremote is not None:
             webremote._publish_full()
 
+    def show_voice_cues_dialog(self):
+        """Open the per-song voice-cue editor (timeline toolbar 🗣 Cues)."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        dialog = VoiceCuesDialog(song.voice_cues, self,
+                                 audio_engine=self.audio_engine,
+                                 tts_voice=self.config.audio.tts_voice)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        song.voice_cues = dialog.cues()
+        self.save_config()
+        self._apply_voice_cues(song)
+
+    def _apply_voice_cues(self, song):
+        """Refresh the ruler markers and (re-)render the song's cues to PCM in
+        the background; the rendered clips install via _voice_cues_rendered."""
+        cues = list(song.voice_cues)
+        self.timeline.set_voice_cues([(c.time, c.text) for c in cues])
+        self.media_controller.set_voice_cues([])  # drop stale clips meanwhile
+        if not cues:
+            return
+        voice = self.config.audio.tts_voice
+        song_id = song.id
+
+        def work():
+            rendered = []
+            for cue in cues:
+                samples = tts.render(cue.text, voice)
+                if samples is not None:
+                    rendered.append((cue.time, samples))
+            self._voice_cues_rendered.emit(song_id, rendered)
+
+        threading.Thread(target=work, daemon=True, name="tts-cues").start()
+
+    def _on_voice_cues_rendered(self, song_id, rendered):
+        """Install rendered cue clips — only if the song is still current."""
+        song = self.config.get_current_song()
+        if song is not None and song.id == song_id:
+            self.media_controller.set_voice_cues(rendered)
+            if len(rendered) < len(song.voice_cues):
+                self.logger.info(
+                    f"{len(song.voice_cues) - len(rendered)} voice cue(s) not "
+                    "rendered (TTS voice not ready)")
+
+    def on_song_key_edited(self, key: str):
+        """Persist the current song's musical key (TONO chip / web remote)."""
+        song = self.config.get_current_song()
+        if song is None or song.key == key:
+            return
+        song.key = key
+        self.save_config()
+        webremote = getattr(self, "webremote_manager", None)
+        if webremote is not None:
+            webremote._publish_full()
+
+    def on_song_precount_toggled(self, enabled: bool):
+        """Persist the current song's count-in flag and apply it live
+        (triggered by the toolbar chip or the web remote)."""
+        song = self.config.get_current_song()
+        if song is None or song.precount == bool(enabled):
+            return
+        song.precount = bool(enabled)
+        self.media_controller.set_count_in(enabled, self.config.audio.count_in_bars)
+        self.toolbar_manager.set_song_precount(song.precount)
+        self.save_config()
+        webremote = getattr(self, "webremote_manager", None)
+        if webremote is not None:
+            webremote._publish_full()
+
+    def set_count_in_bars(self, bars: int):
+        """Set the global count-in length (Settings ▸ AUDIO / web remote)."""
+        bars = max(1, min(8, int(bars)))
+        if bars == self.config.audio.count_in_bars:
+            return
+        self.config.audio.count_in_bars = bars
+        song = self.config.get_current_song()
+        self.media_controller.set_count_in(
+            song.precount if song else False, bars)
+        self.save_config()
+
     def take_snapshot_dialog(self):
         """Take a named, pinned (never-pruned) snapshot of the show."""
         show = self.show_manager.show
@@ -943,6 +1099,17 @@ class MainWindow(QMainWindow):
     def on_audio_mute_toggled(self, muted):
         """Handle audio mute toggle from timeline."""
         self.media_controller.set_audio_muted(muted)
+
+    def on_voice_volume_changed(self, value):
+        """Handle voice (TTS guide) volume changes from timeline."""
+        volume = float(value) / 100.0
+        self.audio_engine.set_bus_volume(BUS_VOICE, volume)
+        self.config.update_volume(voice=volume)
+        self.save_config()
+
+    def on_voice_mute_toggled(self, muted):
+        """Handle voice mute toggle from the timeline header's VOICE row."""
+        self.audio_engine.set_bus_muted(BUS_VOICE, muted)
 
     def on_track_heights_changed(self, waveform_height, midi_events_height):
         """Persist track heights when the user finishes resizing."""
@@ -1234,6 +1401,7 @@ class MainWindow(QMainWindow):
             ("webremote_manager", self.webremote_manager.cleanup),
             ("media_controller", self.media_controller.cleanup),
             ("audio_controller", self.audio_controller.cleanup),
+            ("audio_engine", self.audio_engine.cleanup),
             ("dmx_manager", self.dmx_manager.cleanup),
             ("midi_manager", self.midi_manager.cleanup),
         ):

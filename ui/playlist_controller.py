@@ -92,9 +92,16 @@ class PlaylistController:
             w.timeline.refresh_from_manager()
             w.toolbar_manager.update_midi_file_display("")
 
+        # Count-in: per-song on/off + machine-level bar count
+        w.media_controller.set_count_in(song.precount, w.config.audio.count_in_bars)
+
+        # Voice cues: ruler markers now, rendered PCM installs asynchronously
+        w._apply_voice_cues(song)
+
         w.toolbar_manager.update_song_info(
             song.title, song_status(song),
-            bpm=w.timeline_toolbar.get_bpm(), offset=song.offset)
+            bpm=w.timeline_toolbar.get_bpm(), offset=song.offset,
+            key=song.key, precount=song.precount)
         w.update_window_title()
 
     # ------------------------------------------------------------------
@@ -283,6 +290,8 @@ class PlaylistController:
             w.toolbar_manager.update_audio_file_display("")
             w.toolbar_manager.update_song_info("", "")
             w.timeline.set_files(None)
+            w.timeline.set_voice_cues([])
+            w.media_controller.set_voice_cues([])
 
         self.update_song_counter()
         w.update_window_title()

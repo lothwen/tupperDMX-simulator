@@ -133,6 +133,10 @@ class WebRemoteManager(QObject):
             w.stop_playback()
             if not self._blackout_state():
                 w._preview_clip([(0, 51, 0)])
+        elif action == "set_precount":
+            w.on_song_precount_toggled(bool(cmd.get("on")))
+        elif action == "set_countin_bars":
+            w.set_count_in_bars(cmd.get("bars", 2))
         # Immediate feedback: every command ends with a fresh snapshot.
         self._publish_full()
 
@@ -169,12 +173,15 @@ class WebRemoteManager(QObject):
         blackout = self._blackout_state()
         self._last_blackout = blackout
         show = self._open_show()
+        song = self.config.get_current_song()
         return remote_state.build_state(
             playing=w.media_controller.get_playback_state(),
             position=w.media_controller.get_current_position(),
             duration=duration,
             bpm=w.timeline_toolbar.get_bpm(),
             blackout=blackout,
+            countin={"enabled": bool(song.precount) if song else False,
+                     "bars": self.config.audio.count_in_bars},
             setlist=remote_state.build_setlist(
                 self.config.playlist.songs,
                 self.config.playlist.current_song_index),
@@ -198,7 +205,16 @@ class WebRemoteManager(QObject):
         pos = self.window.media_controller.get_current_position()
         if playing or pos != self._last_pos:
             self._last_pos = pos
-            self.worker.publish_event({"type": "pos", "t": pos, "playing": playing})
+            event = {"type": "pos", "t": pos, "playing": playing}
+            # Real click/backing bus levels for the remote's meters.
+            engine = getattr(self.window, "audio_engine", None)
+            if engine is not None:
+                levels = engine.levels()
+                event["levels"] = {
+                    "click": round(levels.get("click", 0.0), 3),
+                    "backing": round(levels.get("backing", 0.0), 3),
+                }
+            self.worker.publish_event(event)
         # The blackout toggle can flip outside our commands (timeline note-51
         # events, desktop clip previews) — poll it so the web button tracks.
         if self._blackout_state() != self._last_blackout:

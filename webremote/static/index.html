@@ -43,7 +43,7 @@
     <h1 id="song-title">—</h1>
     <div id="chips" class="chip-row">
       <span id="chip-index" class="chip">— / —</span>
-      <span class="chip placeholder">KEY · —</span>
+      <span id="chip-key" class="chip">KEY · —</span>
       <span id="chip-bpm" class="chip">— BPM</span>
       <span class="chip">4/4</span>
     </div>
@@ -91,18 +91,17 @@
     <span class="kicker">UP NEXT</span>
     <div class="next-row">
       <span id="next-title" class="next-title">—</span>
-      <span class="pill placeholder">COUNT-IN · — BARS</span>
+      <span id="next-countin" class="pill">COUNT-IN · — BARS</span>
     </div>
     <div id="next-meta" class="dim small"></div>
   </div>
 
   <aside id="right-panel">
-    <div class="card placeholder-card placeholder">
-      <div class="panel-header"><span class="kicker">AUTO COUNT-IN</span><span class="fake-toggle"></span></div>
+    <div class="card placeholder-card" id="countin-card">
+      <div class="panel-header"><span class="kicker">AUTO COUNT-IN</span><button id="countin-toggle" class="toggle" aria-label="Count-in for this song"></button></div>
       <div class="stepper-row"><span>Count-in bars</span>
-        <span class="stepper"><button>−</button><b>2</b><button>+</button></span>
+        <span class="stepper"><button id="countin-minus" aria-label="Fewer bars">−</button><b id="countin-bars">—</b><button id="countin-plus" aria-label="More bars">+</button></span>
       </div>
-      <span class="soon-tag">COMING SOON</span>
     </div>
 
     <div class="card" id="cues-card">
@@ -111,9 +110,9 @@
     </div>
   </aside>
 
-  <div id="meters-scroll" class="placeholder">
-    <div class="meter-box"><span class="kicker">CLICK</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
-    <div class="meter-box"><span class="kicker">BACKING</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+  <div id="meters-scroll">
+    <div class="meter-box"><span class="kicker">CLICK</span><span class="meter" data-meter="click"><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
+    <div class="meter-box"><span class="kicker">BACKING</span><span class="meter" data-meter="backing"><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
   </div>
 
 </div>
@@ -142,9 +141,9 @@
         <svg viewBox="0 0 24 24"><path d="M15 5h3v14h-3zM4 5v14l11-7z"/></svg>
       </button>
     </div>
-    <div class="transport-right placeholder">
-      <div class="meter-row"><span class="kicker">CLICK</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
-      <div class="meter-row"><span class="kicker">BACKING</span><span class="meter"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+    <div class="transport-right">
+      <div class="meter-row"><span class="kicker">CLICK</span><span class="meter" data-meter="click"><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
+      <div class="meter-row"><span class="kicker">BACKING</span><span class="meter" data-meter="backing"><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
     </div>
   </div>
 </footer>

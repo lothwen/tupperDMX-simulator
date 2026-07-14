@@ -48,6 +48,7 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "offset": song.offset,
             "key": song.key,
             "precount": song.precount,
+            "voice_cues": [asdict(c) for c in song.voice_cues],
             "cache": dict(song.cache),
         })
     return {
@@ -87,6 +88,7 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             title=str(entry.get("title", "")),
             key=str(entry.get("key", "")),
             precount=bool(entry.get("precount", True)),
+            voice_cues=Config._parse_voice_cues(entry.get("voice_cues")),
             cache=entry["cache"] if isinstance(entry.get("cache"), dict) else {},
         ))
 
