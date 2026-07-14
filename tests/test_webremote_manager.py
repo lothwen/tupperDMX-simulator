@@ -118,6 +118,12 @@ class FakeWindow:
     def _preview_clip(self, messages):
         self.calls.append(("preview", messages))
 
+    def on_song_precount_toggled(self, enabled):
+        self.calls.append(("precount", enabled))
+
+    def set_count_in_bars(self, bars):
+        self.calls.append(("countin_bars", bars))
+
 
 def _make_manager():
     """Manager over fakes; no worker started, so publishing is a no-op."""
@@ -186,6 +192,15 @@ def test_blackout_and_panic():
             "panic with blackout already active does not un-toggle it")
 
 
+def test_countin_commands():
+    print("test_countin_commands")
+    manager, config, window = _make_manager()
+    manager._execute({"action": "set_precount", "on": False})
+    manager._execute({"action": "set_countin_bars", "bars": 4})
+    _assert(window.calls == [("precount", False), ("countin_bars", 4)],
+            "count-in commands map to the window's precount/bars API")
+
+
 def test_build_state_snapshot():
     print("test_build_state_snapshot")
     manager, config, window = _make_manager()
@@ -216,6 +231,13 @@ def test_build_state_snapshot():
     _assert("messages" not in state["cues"][0],
             "cue MIDI payloads never leave the server")
     _assert(state["blackout"] is False, "blackout state read from controller")
+    _assert(state["countin"] == {"enabled": True, "bars": 2},
+            "countin reflects the current song's precount + global bars")
+
+    config.playlist.songs[0].precount = False
+    config.audio.count_in_bars = 4
+    _assert(manager._build_state()["countin"] == {"enabled": False, "bars": 4},
+            "countin follows song precount and config bars")
 
     window.software_controller.blackout_all_state = True
     _assert(manager._build_state()["blackout"] is True,
@@ -267,6 +289,7 @@ def main():
     test_seek_clamps_to_duration()
     test_cue_sends_config_messages()
     test_blackout_and_panic()
+    test_countin_commands()
     test_build_state_snapshot()
     test_show_provides_cues_and_name()
     test_no_worker_is_safe()

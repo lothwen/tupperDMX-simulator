@@ -29,6 +29,7 @@ class TimelineToolbar(QWidget):
     ruler_mode_changed = pyqtSignal(str)  # "bars" | "time"
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
+    voice_cues_requested = pyqtSignal()  # open the per-song voice-cue editor
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
     ZOOM_MIN = 20
@@ -140,6 +141,15 @@ class TimelineToolbar(QWidget):
         seg_wrap = QWidget()
         seg_wrap.setLayout(seg)
         row.addWidget(seg_wrap)
+
+        row.addWidget(self._separator())
+
+        cues_btn = QPushButton("🗣 Cues")
+        cues_btn.setObjectName("TTToolButton")
+        cues_btn.setToolTip("Voice cues: spoken guide messages for this song "
+                            "(played on the click/voice channel)")
+        cues_btn.clicked.connect(self.voice_cues_requested.emit)
+        row.addWidget(cues_btn)
 
         return zone
 

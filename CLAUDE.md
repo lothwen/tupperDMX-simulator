@@ -28,11 +28,15 @@ standalone via its `main()` — `uv run python tests/test_clip_ops.py` prints
 supports a `--sync` flag that way).
 
 ### Key Dependencies
-PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed on pause/resume),
-mido/python-rtmidi (MIDI), custom asyncio Art-Net UDP receiver, librosa (BPM
-detection), pyserial (USB DMX via the stock VCP/ftdi_sio drivers),
-platformdirs (user-config paths), aiohttp (embedded web-remote server),
-mutagen (setlist duration probes).
+PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed QMediaPlayer on
+pause/resume; playback no longer uses QMediaPlayer, but QAudioSink/QAudioDecoder
+still ride the same Qt Multimedia stack), mido/python-rtmidi (MIDI), custom
+asyncio Art-Net UDP receiver, librosa (BPM detection), pyserial (USB DMX via
+the stock VCP/ftdi_sio drivers), platformdirs (user-config paths), aiohttp
+(embedded web-remote server), mutagen (setlist duration probes),
+piper-tts + onnxruntime (offline TTS for voice cues + spoken count-in; voice
+models ~60 MB download on demand into `userprefs_dir()/tts_voices/`, never
+bundled).
 
 ## Architecture Overview
 
@@ -61,12 +65,38 @@ mutagen (setlist duration probes).
   serialized content changed) and `flush()` (debounced ~3 s autosave of the
   active song's `.mid`, forced on song switch / close / manual Save; opening
   snapshot + ≤1 automatic snapshot per 5 min of writes).
-- **`ui/media_controller.py` — `MediaController`**: MP3 playback + MIDI sync.
-  Owns timeline position; key methods `start_playback`, `play_pause_playback`,
-  `stop_playback`, `seek_to_position`.
-- **`ui/audio_controller.py` — `AudioController`**: Drift-free metronome via
-  QAudioSink. `start_metronome(timeline_position_sec)` aligns beats to
-  timeline; high pitch on downbeat (1), low on 2/3/4.
+- **`audio/` — the audio engine (Fase 4 live player)**: ONE stereo QAudioSink
+  feeds every audio path. Qt-free `mixer.py` (`Mixer`: backing/click/voice
+  buses, per-bus volume/mute/RMS, one-shot clips, and the L/R **routing
+  modes** — `stereo` | `split_backing_left` | `split_backing_right`, split =
+  backing downmixed mono on one channel, click+voice on the other);
+  `engine.py` (`AudioEngine`: **push-mode** sink on the configured output
+  device — a 15 ms Qt-thread timer tops up the ~120 ms buffer; push on
+  purpose: a Python pull-QIODevice deadlocks/aborts inside QAudioSink.stop(),
+  the audio thread blocking on the GIL — Float32 w/ Int16 fallback,
+  end-of-backing watchdog);
+  `decode.py` (async QAudioDecoder → int16 (n,2)@44100, whole song in RAM);
+  `tts.py` (piper render + WAV cache keyed sha1(voice|text) in
+  `userprefs_dir()/tts_cache/`; count-in words per voice language;
+  **nothing synthesizes during playback — cache-first always**, and every
+  path degrades gracefully to None when piper/voice is missing).
+- **`ui/media_controller.py` — `MediaController`**: backing playback + MIDI
+  sync through the engine. Owns timeline position (the `time.time()` master
+  clock; engine slaved with 150 ms drift resync, audio waits while
+  `t − offset < 0`); key methods `start_playback`, `play_pause_playback`,
+  `stop_playback`, `seek_to_position`. **Count-in = negative timeline time**:
+  with `song.precount` on, `start_playback` begins at `-(bars×4 beats)`
+  (`set_count_in(enabled, bars)` + `set_bpm`); audio/MIDI/lights wait for
+  t ≥ 0; pause during count-in resets to 0, seeking cancels it. Also fires
+  the song's **voice cues** (`set_voice_cues([(t, samples)])`, pointer reset
+  on stop/seek) onto the voice bus.
+- **`ui/audio_controller.py` — `AudioController`**: Drift-free metronome
+  scheduler. `start_metronome(timeline_position_sec)` aligns beats to
+  timeline (floor-based math, so negative count-in positions number
+  correctly toward beat 1 at t=0); beeps play via `engine.trigger_click` —
+  high pitch on downbeat (1), low on 2/3/4. MainWindow speaks the count-in
+  numbers ("uno dos tres cuatro", pre-rendered per voice) on the beats of
+  the LAST count-in bar when `config.audio.count_in_voice` is on.
 - **`dmx/` — `DMXManager`**: I/O coordinator driven by `config.io` via
   `apply_io()`: owns the software `DMXController`'s lifecycle (emits
   `software_controller_changed`), builds its DMX output *sinks*
@@ -128,8 +158,12 @@ mutagen (setlist duration probes).
   layout, a portrait-tablet rail layout, and a single-column phone layout
   (≤600px) where the body scrolls under a sticky header + fixed transport,
   the setlist becomes a "+"-triggered drawer, and a slim seek bar replaces
-  waveform-tap. Phase-3/4 widgets (count-in, click/backing meters, key,
-  show name) are inert `placeholder` elements.
+  waveform-tap. The Fase-4 widgets are live: KEY chip (per-song `key`),
+  UP NEXT count-in pill (next song's precount / "SEGUE"), the AUTO COUNT-IN
+  card (toggle = current song `precount`, stepper = global bars → WS commands
+  `set_precount` / `set_countin_bars`), CLICK/BACKING meters fed by real bus
+  RMS (`levels` on the 10 Hz `pos` event), and a countdown treatment while
+  `position < 0` (count-in).
 
 ### Configuration & persistence (`core/config.py` + `core/show/`)
 
@@ -138,16 +172,20 @@ Storage splits across three places:
   brand-new shows), bundled via PyInstaller, resolved at runtime by
   `shipped_config_path()` (`_MEIPASS`).
 - **`userprefs.json`** (user-writable, MACHINE-level only): `window`, `artnet`
-  — the controller's Art-Net *output* target — `volume`, `logging`, `io` — the
-  explicit I/O routing, `IOConfig` — `webremote` (server enable/port + the
-  default cue set that seeds NEW shows) and `last_show_path`/`recent_shows`.
+  — the controller's Art-Net *output* target — `volume` (audio/metronome/voice
+  buses), `logging`, `io` — the explicit I/O routing, `IOConfig` — `audio`
+  (`AudioConfig`: output device id, click/voice channel routing mode, global
+  `count_in_bars`, `count_in_voice`, `tts_voice`), `webremote` (server
+  enable/port + the default cue set that seeds NEW shows) and
+  `last_show_path`/`recent_shows`.
   Resolved by `userprefs_path()` via `platformdirs` (e.g. `~/.config/tupperDMX/`
   on Linux). Written atomically (temp + `os.replace`). Legacy
   `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`; legacy
   `playlist`/`fixtures` keys are still *parsed* (they're the source the
   one-time show migration adopts) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest, per project): the setlist
-  (`songs` with `id`/`title`/`key`/`precount`/`offset`/paths + a derived
+  (`songs` with `id`/`title`/`key`/`precount`/`voice_cues` — the per-song
+  spoken-guide list `[{time, text}]` — /`offset`/paths + a derived
   `cache` of duration/bpm), `current_song_index`, the fixture **patch**
   (`fixtures`) and `webremote_cues`. Owned `.mid` files live in `midis/` and
   are written by the autosave; audio is *referenced in place* (absolute path)
@@ -172,7 +210,9 @@ objects, so all pre-show code paths keep working unchanged.
   section (header "N songs"; a row of prev / an editable song-selector
   QComboBox — a "05/11" counter badge + the full setlist; activated() picks a
   song via `song_selected`, edit+Enter renames via `song_title_edited` / next /
-  remove 🗑; footer BPM / offset / derived "linked" media chip), SONG FILES
+  remove 🗑; footer BPM / offset / derived "linked" media chip + per-song KEY
+  line-edit (`song_key_edited`) and 🔔 count-in toggle
+  (`song_precount_toggled`)), SONG FILES
   section (audio + MIDI path displays with Load buttons and the ▷ Track new-MIDI
   action), EXPORT section (header + two stacked buttons: interop ⤓ Export MIDI…
   and the amber-accented 📦 Export bundle — the ▾ is a decorative cue, single
@@ -189,7 +229,11 @@ objects, so all pre-show code paths keep working unchanged.
   open/attach, autosave `_maybe_snapshot`, restore) plus after a manual
   snapshot and at startup.
 - `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
-  **Input / Output** page. Left: three numbered routing cards editing `config.io`
+  **Input / Output** page. An **AUDIO card** (between WEB REMOTE and Logging)
+  edits `config.audio`: output-device combo (QMediaDevices), the
+  stereo/split routing selector, count-in bars + spoken-count toggle, and the
+  TTS voice picker with Download (background thread) and Test buttons.
+  Left: three numbered routing cards editing `config.io`
   (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
   `_ToggleSwitch` for `controller_enabled` greys the body — + DMX output checkboxes
   incl. the Art-Net target fields, ③ stage input radios) plus quick-mode presets
@@ -201,7 +245,11 @@ objects, so all pre-show code paths keep working unchanged.
   ②/③) edit the one shared `ArtNetConfig.universe` and mirror each other.
 - `Timeline` (`timeline/manager.py`): waveform, beat detection, seeking, and
   clip-style MIDI editing — one `MidiEventsTrack` per fixture filter
-  (`ledbar`, `blinder`).
+  (`ledbar`, `blinder`). Header panel has MASTER / CLICK / VOICE volume rows
+  (each → its engine bus); the ruler draws 🗣 voice-cue markers
+  (`set_voice_cues`), display-only — editing lives in the timeline toolbar's
+  🗣 Cues button → `ui/voice_cues_dialog.py` (per-song table editor with
+  TTS preview).
 - `ClipLibraryWidget` (`ui/clip_library.py`): right sidebar tabs ("Library",
   "DMX Channels"). `QToolBox` with one section per fixture (from
   `config.midi_note_map`) plus one per LED scene bank (from the `ledbar` def's
@@ -287,6 +335,12 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
   signal-flow graph state), `buildinfo.py` (build metadata accessor).
 - `fixtures/` (repo root) — shipped fixture-type definitions (`*.json`).
+- `audio/` — the audio engine package (no eager re-exports): `mixer.py`
+  (Qt-free three-bus stereo mixer + routing modes + beep synthesis),
+  `engine.py` (`AudioEngine`: the push-mode QAudioSink bridge on the
+  configured output device), `decode.py` (async QAudioDecoder → PCM),
+  `tts.py` (piper voices/download, sha1-keyed WAV render cache, count-in
+  words).
 - `ui/` — `main_window.py` (`MainWindow`), `media_controller.py`,
   `audio_controller.py`, `stage_controller.py`, `stage_fixtures.py` (Qt render
   objects: bespoke `LedBar`/`Blinder`, the data-driven `GenericFixture`, and
@@ -295,7 +349,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
   `show_controller.py` (`ShowManager`: aliasing, autosave, open/restore;
   snapshot restore is driven from the toolbar's VERSIONS picker),
-  `settings_dialog.py` (incl. the Input/Output section), `io_flow_widget.py`,
+  `settings_dialog.py` (incl. the Input/Output section + AUDIO card),
+  `io_flow_widget.py`, `voice_cues_dialog.py` (per-song spoken-cue editor),
   `error_dialogs.py`, `about_dialog.py`.
 - `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
   stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure

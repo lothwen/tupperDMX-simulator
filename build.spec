@@ -59,6 +59,10 @@ data_files = [
     ("webremote/static", "webremote/static"),
 ]
 
+# piper needs its espeak-ng-data phoneme tables next to the module.
+from PyInstaller.utils.hooks import collect_data_files
+data_files += collect_data_files("piper")
+
 # Hidden imports for PyQt6 and other dependencies
 hidden_imports = [
     # Core Python modules
@@ -103,6 +107,12 @@ hidden_imports = [
     "matplotlib",
     "numpy",
     "scipy",
+
+    # TTS (voice models are downloaded at runtime into the userprefs dir,
+    # never bundled; piper ships its espeak-ng phoneme data as package data —
+    # collected via collect_data_files below)
+    "piper",
+    "onnxruntime",
 
     # Build metadata
     "core.buildinfo",

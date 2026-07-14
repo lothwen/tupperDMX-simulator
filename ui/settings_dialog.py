@@ -2,14 +2,20 @@
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
 # ABOUTME: the menu; two-column Input/Output page with a live signal-flow graph.
 
+import threading
+
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
-                             QSizePolicy)
-from PyQt6.QtCore import Qt, QVariantAnimation, QEasingCurve, QRectF, QPointF
+                             QSizePolicy, QPushButton)
+from PyQt6.QtCore import (Qt, QVariantAnimation, QEasingCurve, QRectF, QPointF,
+                          pyqtSignal)
 from PyQt6.QtGui import QPainter, QColor, QBrush
+from PyQt6.QtMultimedia import QMediaDevices
 
+from audio import tts
+from audio.engine import device_id_str
 from core import io_routing
 from core.config import Config, IOConfig
 from midi.worker import MidiWorker
@@ -92,12 +98,16 @@ class SettingsDialog(QDialog):
 
     Pure config editor: on accept it validates the inputs and writes them back
     into the provided Config object. Applying the changes live and persisting
-    them (Config.save) is the caller's responsibility.
+    them (Config.save) is the caller's responsibility. The optional
+    ``audio_engine`` is only used by the AUDIO card's "Test voice" button.
     """
 
-    def __init__(self, config: Config, parent=None):
+    _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
+
+    def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
         self.config = config
+        self.audio_engine = audio_engine
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumSize(880, 640)
@@ -120,6 +130,7 @@ class SettingsDialog(QDialog):
         left.addWidget(self._build_controller_card())
         left.addWidget(self._build_stage_card())
         left.addWidget(self._build_webremote_card())
+        left.addWidget(self._build_audio_card())
         left.addWidget(self._build_logging_card())
         left.addStretch(1)
         columns.addLayout(left, 11)
@@ -368,6 +379,136 @@ class SettingsDialog(QDialog):
         else:
             self.webremote_url_label.setText("Disabled — no server runs.")
 
+    def _build_audio_card(self) -> QFrame:
+        """AUDIO card (Fase 4 live player): output device, click/voice channel
+        routing, count-in length and the TTS voice."""
+        card, body = self._make_card(None, "AUDIO", "output · click & voice")
+
+        dev_row = QHBoxLayout()
+        dev_row.addWidget(QLabel("Output:"))
+        self.audio_device_combo = QComboBox()
+        self.audio_device_combo.addItem("System default", "")
+        for device in QMediaDevices.audioOutputs():
+            self.audio_device_combo.addItem(device.description(),
+                                            device_id_str(device))
+        current = self.config.audio.output_device
+        idx = self.audio_device_combo.findData(current)
+        if idx < 0:  # persisted device currently absent — keep, don't lose it
+            self.audio_device_combo.addItem(f"{current} (not connected)", current)
+            idx = self.audio_device_combo.count() - 1
+        self.audio_device_combo.setCurrentIndex(idx)
+        dev_row.addWidget(self.audio_device_combo, 1)
+        body.addLayout(dev_row)
+
+        routing_row = QHBoxLayout()
+        routing_row.addWidget(QLabel("Routing:"))
+        self.audio_routing_combo = QComboBox()
+        for label, value in (
+            ("Stereo — everything on both channels", "stereo"),
+            ("Split — backing LEFT · click+voice RIGHT", "split_backing_left"),
+            ("Split — backing RIGHT · click+voice LEFT", "split_backing_right"),
+        ):
+            self.audio_routing_combo.addItem(label, value)
+        idx = self.audio_routing_combo.findData(self.config.audio.routing)
+        self.audio_routing_combo.setCurrentIndex(max(0, idx))
+        routing_row.addWidget(self.audio_routing_combo, 1)
+        body.addLayout(routing_row)
+
+        countin_row = QHBoxLayout()
+        countin_row.addWidget(QLabel("Count-in:"))
+        self.count_in_bars_spin = QSpinBox()
+        self.count_in_bars_spin.setRange(1, 8)
+        self.count_in_bars_spin.setValue(self.config.audio.count_in_bars)
+        self.count_in_bars_spin.setSuffix(" bars")
+        countin_row.addWidget(self.count_in_bars_spin)
+        self.count_in_voice_check = QCheckBox("Speak the last bar")
+        self.count_in_voice_check.setChecked(self.config.audio.count_in_voice)
+        countin_row.addWidget(self.count_in_voice_check)
+        hint = QLabel("Per-song on/off: SETLIST toolbar")
+        hint.setObjectName("SettingsDimLabel")
+        countin_row.addWidget(hint, 1)
+        body.addLayout(countin_row)
+
+        voice_row = QHBoxLayout()
+        voice_row.addWidget(QLabel("Voice:"))
+        self.tts_voice_combo = QComboBox()
+        for voice in tts.VOICES:
+            self.tts_voice_combo.addItem(tts.voice_label(voice), voice)
+        idx = self.tts_voice_combo.findData(self.config.audio.tts_voice)
+        if idx < 0:
+            self.tts_voice_combo.addItem(self.config.audio.tts_voice,
+                                         self.config.audio.tts_voice)
+            idx = self.tts_voice_combo.count() - 1
+        self.tts_voice_combo.setCurrentIndex(idx)
+        self.tts_voice_combo.currentIndexChanged.connect(self._update_voice_status)
+        voice_row.addWidget(self.tts_voice_combo, 1)
+        self.voice_download_button = QPushButton("Download")
+        self.voice_download_button.clicked.connect(self._on_download_voice)
+        voice_row.addWidget(self.voice_download_button)
+        self.voice_test_button = QPushButton("Test")
+        self.voice_test_button.clicked.connect(self._on_test_voice)
+        voice_row.addWidget(self.voice_test_button)
+        body.addLayout(voice_row)
+
+        self.voice_status_label = QLabel()
+        self.voice_status_label.setObjectName("SettingsDimLabel")
+        body.addWidget(self.voice_status_label)
+
+        self._voice_download_done.connect(self._on_voice_download_done)
+        self._update_voice_status()
+        return card
+
+    def _selected_voice(self) -> str:
+        return self.tts_voice_combo.currentData() or tts.DEFAULT_VOICE
+
+    def _update_voice_status(self, *_) -> None:
+        voice = self._selected_voice()
+        if not tts.is_available():
+            self.voice_status_label.setText(
+                "TTS engine (piper) not installed — voice features disabled.")
+            self.voice_download_button.setEnabled(False)
+            self.voice_test_button.setEnabled(False)
+            return
+        installed = tts.is_voice_installed(voice)
+        self.voice_download_button.setEnabled(not installed)
+        self.voice_test_button.setEnabled(installed and self.audio_engine is not None)
+        self.voice_status_label.setText(
+            "Voice installed." if installed
+            else "Voice not downloaded yet (~60 MB, one time).")
+
+    def _on_download_voice(self) -> None:
+        voice = self._selected_voice()
+        self.voice_download_button.setEnabled(False)
+        self.voice_status_label.setText(f"Downloading {voice}…")
+
+        def work():
+            try:
+                tts.download_voice(voice)
+                self._voice_download_done.emit(voice, "")
+            except Exception as e:
+                self._voice_download_done.emit(voice, str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_voice_download_done(self, voice: str, error: str) -> None:
+        if error:
+            self.voice_status_label.setText(f"Download failed: {error}")
+            self.voice_download_button.setEnabled(True)
+            return
+        self._update_voice_status()
+
+    def _on_test_voice(self) -> None:
+        """Render a short phrase (cache-first) and play it on the voice bus."""
+        if self.audio_engine is None:
+            return
+        voice = self._selected_voice()
+        words = tts.count_words_for_voice(voice)
+        samples = tts.render(", ".join(words), voice)
+        if samples is None:
+            self.voice_status_label.setText("Could not render the test phrase.")
+            return
+        self.audio_engine.play_voice(samples)
+
     def _build_logging_card(self) -> QFrame:
         card, body = self._make_card(None, "LOGGING", None)
 
@@ -575,4 +716,9 @@ class SettingsDialog(QDialog):
         self.config.logging.level = self.log_level_combo.currentText()
         self.config.webremote.enabled = self.webremote_toggle.isChecked()
         self.config.webremote.port = self.webremote_port_spin.value()
+        self.config.audio.output_device = self.audio_device_combo.currentData() or ""
+        self.config.audio.routing = self.audio_routing_combo.currentData()
+        self.config.audio.count_in_bars = self.count_in_bars_spin.value()
+        self.config.audio.count_in_voice = self.count_in_voice_check.isChecked()
+        self.config.audio.tts_voice = self._selected_voice()
         self.accept()
