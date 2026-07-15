@@ -182,6 +182,10 @@ una capa fina.
 **Mejoras que la habilitan**
 - Modo headless real (la app hoy asume GUI; correr en SBC sin pantalla necesita separar
   núcleo de UI — algo que las fases anteriores ya empujan).
+  ✅ *Hecho (2026-07): núcleo separado en `app/` (`AppCore` compartido por
+  MainWindow y headless) y `main.py --headless` arranca controlador + I/O +
+  reproducción + show + web remote sin GUI. Pendiente: validar audio/piper en
+  el SBC real.*
 - Botón de **pánico/blackout** accesible (seguridad en directo) — útil ya, encaja aquí.
 
 ---

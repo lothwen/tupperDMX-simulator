@@ -92,7 +92,7 @@ class FakeMidiManager:
 
 
 def _make_controller(tmp):
-    from ui.media_controller import MediaController
+    from app.media_controller import MediaController
     engine = FakeEngine()
     controller = MediaController(FakeMidiManager(), engine)
     audio_path = os.path.join(tmp, "song.mp3")
@@ -165,7 +165,7 @@ def test_seek_cancels_count_in():
 
 def test_metronome_beat_numbering_at_negative_positions():
     print("test_metronome_beat_numbering_at_negative_positions")
-    from ui.audio_controller import AudioController
+    from app.audio_controller import AudioController
     engine = FakeEngine()
     audio = AudioController(engine)
     audio.set_bpm(120)  # beat = 0.5 s

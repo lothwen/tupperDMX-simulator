@@ -1,25 +1,23 @@
-# ABOUTME: PlaylistController — playlist navigation + per-song load orchestration.
-# ABOUTME: Extracted from MainWindow; drives media/timeline/midi/toolbar per song.
+# ABOUTME: PlaylistController — the widget half of the playlist: timeline/
+# ABOUTME: toolbar refresh per song load, missing-media relink dialogs, and
+# ABOUTME: navigation delegation to app.playlist.PlaylistCore.
 
 import os
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-from core.config import SongConfig
 from core.show.model import song_status
 from core.show.relink import find_by_basename
 from tupperlogger import get_logger
 
 
 class PlaylistController:
-    """Playlist navigation and applying a song's config to the app.
+    """The UI layer over PlaylistCore (window.playlist_core).
 
-    Orchestrates the MainWindow's collaborators (media / timeline / midi /
-    toolbar) whenever the current song changes. Holds a back-reference to the
-    window for its shared services (config plus stop_playback / save_config /
-    update_window_title), which it reaches lazily so construction order with
-    the window's components doesn't matter.
+    Subscribes to the core's signals to refresh the timeline/toolbar per
+    song, owns the missing-media recovery dialogs, and forwards navigation
+    so existing call sites (toolbar buttons, web remote) keep working.
     """
 
     def __init__(self, window):
@@ -29,84 +27,108 @@ class PlaylistController:
         # together, so it seeds the auto-relink search for the other songs.
         self._last_relink_dir = None
 
+        core = window.playlist_core
+        core.song_loaded.connect(self._on_song_loaded)
+        core.audio_missing.connect(self._on_audio_missing)
+        core.setlist_changed.connect(self.update_song_counter)
+
+    # ------------------------------------------------------------------
+    # Delegation (toolbar buttons, web remote, MainWindow call sites)
+    # ------------------------------------------------------------------
     def apply_song_config(self, song):
-        """Apply song configuration to all components.
+        self.window.playlist_core.load_song(song)
 
-        Wrapped in begin/end_song_load so the data_changed/bpm_changed bursts
-        that loading emits never arm the show autosave — callers that switch
-        songs flush pending edits BEFORE moving the playlist index."""
+    def next_song(self):
+        self.window.playlist_core.next_song()
+
+    def prev_song(self):
+        self.window.playlist_core.prev_song()
+
+    def go_to_song(self, index):
+        self.window.playlist_core.go_to_song(index)
+
+    def remove_current_song(self):
+        """Confirm with the user, then remove the current song via the core."""
         w = self.window
-        if not isinstance(song, SongConfig):
+        if len(w.config.playlist.songs) == 0:
             return
-        w.show_manager.begin_song_load()
-        try:
-            self._apply_song_config(song)
-        finally:
-            w.show_manager.end_song_load()
 
-    def _apply_song_config(self, song):
+        # Get current song info for confirmation message
+        current_song = w.config.get_current_song()
+        song_name = (os.path.basename(current_song.audio)
+                     if current_song and current_song.audio else "this song")
+
+        reply = QMessageBox.question(
+            w,
+            "Remove Song",
+            f"Are you sure you want to remove '{song_name}' from the playlist?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        w.playlist_core.remove_current_song()
+
+    # ------------------------------------------------------------------
+    # Widget refresh on song load (PlaylistCore.song_loaded)
+    # ------------------------------------------------------------------
+    def _on_song_loaded(self, song, midi_ok):
+        """Reflect a (re)loaded song — or the empty state — on the widgets."""
         w = self.window
 
-        # Apply audio file
+        if song is None:
+            # No songs left / empty playlist
+            w.timeline.refresh_from_manager()
+            w.toolbar_manager.update_midi_file_display("")
+            w.toolbar_manager.update_audio_file_display("")
+            w.toolbar_manager.update_song_info("", "")
+            w.timeline.set_files(None)
+            w.timeline.set_voice_cues([])
+            w.update_window_title()
+            return
+
+        # Audio: waveform + path display (missing media keeps its path — the
+        # core already emitted audio_missing for the recovery flow).
         if song.audio and not os.path.exists(song.audio):
-            # Missing media: keep the path (it's the relink key), surface the
-            # state, and try to recover once the event loop breathes.
             w.toolbar_manager.update_audio_file_display(
                 f"⚠ Missing audio: {song.audio}")
             w.timeline.set_files(None)
-            QTimer.singleShot(0, lambda s=song: self._offer_relink(s))
         elif song.audio:
-            w.media_controller.set_files(song.audio)
             w.timeline.set_files(song.audio)
             w.toolbar_manager.update_audio_file_display(song.audio)
-
-            # Apply saved audio offset
-            if song.offset != 0.0:
-                w.media_controller.set_audio_offset(song.offset)
-                # Use QTimer to ensure waveform is drawn before setting offset
-                QTimer.singleShot(
-                    100,
-                    lambda offset=song.offset: w.timeline.set_waveform_offset(offset),
-                )
-                self.logger.info(f"Applied saved audio offset: {song.offset:.3f}s")
-            else:
-                w.media_controller.set_audio_offset(0.0)
-                QTimer.singleShot(100, lambda: w.timeline.set_waveform_offset(0.0))
+            # Use QTimer to ensure waveform is drawn before setting offset
+            QTimer.singleShot(
+                100,
+                lambda offset=song.offset: w.timeline.set_waveform_offset(offset),
+            )
         else:
             w.toolbar_manager.update_audio_file_display("")
 
-        # Load MIDI file via MidiManager
-        if song.midi:
-            if w.midi_manager.load_from_file(song.midi):
-                w.timeline.refresh_from_manager(detect_bpm=True)
-                w.toolbar_manager.set_export_midi_enabled(True)
-                w.toolbar_manager.update_midi_file_display(song.midi)
-            else:
-                self.logger.error(f"Failed to load MIDI file: {song.midi}")
-                w.midi_manager.create_empty_track()
-                w.timeline.refresh_from_manager()
-                w.toolbar_manager.update_midi_file_display("")
+        # Voice cues: ruler markers (the PCM render rides the core)
+        w.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+
+        # MIDI: redraw tracks (BPM detection already ran in the core)
+        w.timeline.refresh_from_manager()
+        if midi_ok:
+            w.toolbar_manager.set_export_midi_enabled(True)
+            w.toolbar_manager.update_midi_file_display(song.midi)
         else:
-            # Create empty MIDI track if no MIDI file
-            w.midi_manager.create_empty_track()
-            w.timeline.refresh_from_manager()
             w.toolbar_manager.update_midi_file_display("")
-
-        # Count-in: per-song on/off + machine-level bar count
-        w.media_controller.set_count_in(song.precount, w.config.audio.count_in_bars)
-
-        # Voice cues: ruler markers now, rendered PCM installs asynchronously
-        w._apply_voice_cues(song)
 
         w.toolbar_manager.update_song_info(
             song.title, song_status(song),
-            bpm=w.timeline_toolbar.get_bpm(), offset=song.offset,
+            bpm=w.bpm_state.get_bpm(), offset=song.offset,
             key=song.key, precount=song.precount)
         w.update_window_title()
 
     # ------------------------------------------------------------------
     # Missing-media recovery
     # ------------------------------------------------------------------
+    def _on_audio_missing(self, song):
+        # Try to recover once the event loop breathes.
+        QTimer.singleShot(0, lambda s=song: self._offer_relink(s))
+
     def _relink_roots(self):
         """Known-good folders to search a moved file in: the last manual
         relink dir, the show's audio/ and every folder that still holds some
@@ -164,9 +186,12 @@ class PlaylistController:
         w.save_config()
         self.logger.info(
             f"Relinked audio {'automatically ' if auto else ''}to: {path}")
-        self.apply_song_config(song)
+        w.playlist_core.load_song(song)
         w.update_window_title()
 
+    # ------------------------------------------------------------------
+    # Toolbar setlist state
+    # ------------------------------------------------------------------
     def update_song_counter(self):
         """Refresh the toolbar's setlist state: counter, nav buttons, the
         song-selector combobox and the show stats."""
@@ -181,121 +206,3 @@ class PlaylistController:
         w.toolbar_manager.set_setlist([s.title for s in songs], index)
         w.toolbar_manager.set_navigation_enabled(has_prev, has_next)
         w.toolbar_manager.update_show_stats()
-
-    def next_song(self):
-        """Switch to the next song in the playlist."""
-        w = self.window
-        total = len(w.config.playlist.songs)
-        current = w.config.playlist.current_song_index
-        if current < total - 1:
-            # Stop playback and save pending edits before switching
-            w.stop_playback()
-            w.show_manager.flush("song-switch")
-
-            w.config.set_current_song_index(current + 1)
-            song = w.config.get_current_song()
-            if song:
-                self.apply_song_config(song)
-            self.update_song_counter()
-            w.save_config()
-            self.logger.info(f"Switched to song {current + 2}/{total}")
-
-    def prev_song(self):
-        """Switch to the previous song in the playlist."""
-        w = self.window
-        current = w.config.playlist.current_song_index
-        if current > 0:
-            # Stop playback and save pending edits before switching
-            w.stop_playback()
-            w.show_manager.flush("song-switch")
-
-            w.config.set_current_song_index(current - 1)
-            song = w.config.get_current_song()
-            if song:
-                self.apply_song_config(song)
-            self.update_song_counter()
-            w.save_config()
-            total = len(w.config.playlist.songs)
-            self.logger.info(f"Switched to song {current}/{total}")
-
-    def go_to_song(self, index):
-        """Switch to a specific song by playlist index (e.g. tapping the web
-        remote's setlist). No-op if the index is out of range or already
-        current, so re-tapping the playing song never interrupts it."""
-        w = self.window
-        total = len(w.config.playlist.songs)
-        current = w.config.playlist.current_song_index
-        if not (0 <= index < total) or index == current:
-            return
-
-        # Stop playback and save pending edits before switching
-        w.stop_playback()
-        w.show_manager.flush("song-switch")
-
-        w.config.set_current_song_index(index)
-        song = w.config.get_current_song()
-        if song:
-            self.apply_song_config(song)
-        self.update_song_counter()
-        w.save_config()
-        self.logger.info(f"Switched to song {index + 1}/{total}")
-
-    def remove_current_song(self):
-        """Remove the current song from the playlist."""
-        w = self.window
-        current = w.config.playlist.current_song_index
-        total = len(w.config.playlist.songs)
-
-        if total == 0:
-            return
-
-        # Get current song info for confirmation message
-        current_song = w.config.get_current_song()
-        song_name = (os.path.basename(current_song.audio)
-                     if current_song and current_song.audio else "this song")
-
-        # Show confirmation dialog
-        reply = QMessageBox.question(
-            w,
-            "Remove Song",
-            f"Are you sure you want to remove '{song_name}' from the playlist?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        # Stop playback and save pending edits before removing (the entry —
-        # and its owned .mid — stays on disk; only the setlist forgets it)
-        w.stop_playback()
-        w.show_manager.flush("song-remove")
-
-        w.config.remove_song(current)
-        w.save_config()
-
-        # Load the new current song (or show empty state)
-        song = w.config.get_current_song()
-        if song:
-            self.apply_song_config(song)
-        else:
-            # No songs left - show empty state
-            w.show_manager.begin_song_load()
-            try:
-                w.midi_manager.create_empty_track()
-            finally:
-                w.show_manager.end_song_load()
-            w.timeline.refresh_from_manager()
-            w.toolbar_manager.update_midi_file_display("")
-            w.toolbar_manager.update_audio_file_display("")
-            w.toolbar_manager.update_song_info("", "")
-            w.timeline.set_files(None)
-            w.timeline.set_voice_cues([])
-            w.media_controller.set_voice_cues([])
-
-        self.update_song_counter()
-        w.update_window_title()
-        self.logger.info(
-            f"Removed song from playlist. "
-            f"{len(w.config.playlist.songs)} songs remaining."
-        )

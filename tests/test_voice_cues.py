@@ -83,7 +83,7 @@ def test_manifest_roundtrip():
 
 def test_cue_firing():
     print("test_cue_firing")
-    from ui.media_controller import MediaController
+    from app.media_controller import MediaController
     engine = FakeEngine()
     controller = MediaController(FakeMidiManager(), engine)
 

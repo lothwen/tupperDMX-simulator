@@ -66,7 +66,7 @@ class FakeMidiManager:
         return event.get("note") in SONG_PART_NOTES
 
 
-class FakeTimelineToolbar:
+class FakeBpmState:
     bpm_changed = FakeSignal()
 
     def get_bpm(self):
@@ -101,7 +101,7 @@ class FakeWindow:
         self.calls = []
         self.media_controller = FakeMediaController()
         self.midi_manager = FakeMidiManager()
-        self.timeline_toolbar = FakeTimelineToolbar()
+        self.bpm_state = FakeBpmState()
         self.audio_controller = FakeAudioController()
         self.playlist_controller = FakePlaylistController(self)
         self.software_controller = FakeController()
@@ -115,7 +115,7 @@ class FakeWindow:
     def seek_playback(self, t):
         self.calls.append(("seek", t))
 
-    def _preview_clip(self, messages):
+    def preview_clip(self, messages):
         self.calls.append(("preview", messages))
 
     def on_song_precount_toggled(self, enabled):
@@ -166,7 +166,7 @@ def test_cue_sends_config_messages():
     manager._execute({"action": "cue", "index": 0})
     expected = [tuple(m) for m in config.webremote.cues[0].messages]
     _assert(window.calls == [("preview", expected)],
-            "cue fires its config messages through _preview_clip")
+            "cue fires its config messages through preview_clip")
 
     window.calls.clear()
     manager._execute({"action": "cue", "index": 99})
@@ -217,7 +217,7 @@ def test_build_state_snapshot():
     state = manager._build_state()
     _assert(state["playing"] is True and state["position"] == 12.0,
             "playback state comes from the media controller")
-    _assert(state["bpm"] == 128, "bpm comes from the timeline toolbar")
+    _assert(state["bpm"] == 128, "bpm comes from the BpmState holder")
     _assert(state["duration"] == 100.0,
             "unreadable audio falls back to midi song_end_time")
     _assert([s["name"] for s in state["sections"]] == ["INTRO", "VERSE"],

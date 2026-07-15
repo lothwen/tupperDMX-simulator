@@ -1,5 +1,5 @@
 """
-Characterization test: show autosave (ui/show_controller.py flush pipeline).
+Characterization test: show autosave (app/show_manager.py flush pipeline).
 
 Drives a real MidiManager (as the production wiring does) against a temp show:
 edits mark the .mid dirty and arm the debounce timer; flush() materializes
@@ -32,7 +32,7 @@ from core import fixture_library, note_layout
 from core.config import Config, SongConfig
 from core.show import store
 from midi.manager import MidiManager
-from ui.show_controller import AUTOSAVE_DEBOUNCE_MS, ShowManager
+from app.show_manager import AUTOSAVE_DEBOUNCE_MS, ShowManager
 from webremote.state import probe_bpm
 
 
@@ -57,7 +57,7 @@ PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
 BLINDER_CLIP = 26  # standalone blinder verb; never scene-clustered
 
 
-class FakeTimelineToolbar:
+class FakeBpmState:
     def __init__(self):
         self.bpm = 128
 
@@ -89,7 +89,7 @@ class FakePlaylistController:
 class FakeWindow:
     def __init__(self, midi_manager):
         self.midi_manager = midi_manager
-        self.timeline_toolbar = FakeTimelineToolbar()
+        self.bpm_state = FakeBpmState()
         self.media_controller = FakeMediaController()
         self.toolbar_manager = FakeToolbarManager()
         self.playlist_controller = FakePlaylistController()
@@ -103,6 +103,10 @@ def _make(tmp, *, with_song=True):
     mm = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
     window = FakeWindow(mm)
     manager = ShowManager(config, window)
+    # Mirror MainWindow's wiring: the materialized .mid path reaches the
+    # toolbar through the midi_path_allocated signal.
+    manager.midi_path_allocated.connect(
+        window.toolbar_manager.update_midi_file_display)
     if with_song:
         audio = Path(tmp) / "guia.mp3"
         audio.write_bytes(b"a")
@@ -199,7 +203,7 @@ def test_bpm_change_reexports_set_tempo():
         song = show.playlist.songs[0]
         _assert(probe_bpm(song.midi) == 128, "initial export carries the session BPM")
 
-        window.timeline_toolbar.bpm = 142
+        window.bpm_state.bpm = 142
         manager.on_bpm_changed(142)
         manager.flush("test")
         _assert(probe_bpm(song.midi) == 142,

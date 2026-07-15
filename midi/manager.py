@@ -223,6 +223,16 @@ class MidiManager(QObject):
     def song_end_time(self) -> float:
         return self._doc.song_end_time()
 
+    def detect_bpm(self) -> Optional[int]:
+        """BPM from the loaded file's first set_tempo meta, or None when the
+        file carries no tempo (the manually-set BPM then stays in effect)."""
+        if not self.midi_data:
+            return None
+        for msg in self.midi_data:
+            if msg.is_meta and msg.type == 'set_tempo':
+                return round(mido.tempo2bpm(msg.tempo))
+        return None
+
     def is_blackout(self, event: Dict[str, Any]) -> bool:
         return self._doc.is_blackout(event)
 

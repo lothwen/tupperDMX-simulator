@@ -1,5 +1,5 @@
 """
-Characterization test: ShowManager (ui/show_controller.py) — the Qt-side
+Characterization test: ShowManager (app/show_manager.py) — the Qt-side
 coordinator of the open show.
 
 Covers attach() aliasing (config.playlist/config.fixtures ARE the show's
@@ -30,7 +30,7 @@ from core import config as config_module, fixture_library
 from core.config import Config, FixtureInstance, SongConfig, WebCueConfig
 from core.show import store
 from core.show.model import ShowError
-from ui.show_controller import ShowManager
+from app.show_manager import ShowManager
 
 
 @pytest.fixture(autouse=True)

@@ -33,7 +33,7 @@ class MediaController(QObject):
     def __init__(self, midi_manager: MidiManager, engine: AudioEngine,
                  audio_volume: float = 0.5):
         super().__init__()
-        self.logger = get_logger("ui.media")
+        self.logger = get_logger("app.media")
         self.midi_manager = midi_manager
         self.engine = engine
 

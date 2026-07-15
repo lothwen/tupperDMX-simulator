@@ -1,6 +1,4 @@
-from .media_controller import MediaController
 from .dmx_display import DMXDisplayWidget
-from .audio_controller import AudioController
 from .stage_controller import StageController, StageView
 from .toolbar_manager import ToolbarManager
 from .timeline_toolbar import TimelineToolbar
@@ -12,9 +10,7 @@ from .playlist_controller import PlaylistController
 from .fixture_designer import StageEditToolbar, FixtureInspector
 
 __all__ = [
-    'MediaController',
     'DMXDisplayWidget',
-    'AudioController',
     'StageController',
     'StageView',
     'ToolbarManager',

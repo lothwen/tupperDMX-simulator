@@ -24,7 +24,7 @@ class AudioController(QObject):
 
     def __init__(self, engine: AudioEngine, initial_volume: float = 0.5):
         super().__init__()
-        self.logger = get_logger("ui.audio")
+        self.logger = get_logger("app.audio")
         self.engine = engine
 
         # Metronome state
