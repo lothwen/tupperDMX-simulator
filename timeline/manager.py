@@ -6,7 +6,6 @@ Coordinates multiple timeline tracks and provides the main timeline interface.
 
 import os
 import math
-import mido
 import copy
 from typing import Optional, List, Dict, Any
 
@@ -876,15 +875,11 @@ class Timeline(QWidget):
 
     def _detect_bpm_from_data(self) -> None:
         """Detect BPM from MIDI data structure."""
-        if not self.midi_manager or not self.midi_manager.midi_data:
+        if not self.midi_manager:
             return
-            
-        # Look for tempo meta messages
-        for msg in self.midi_manager.midi_data:
-            if msg.is_meta and msg.type == 'set_tempo':
-                tempo = mido.tempo2bpm(msg.tempo)
-                self.bpm_detected.emit(round(tempo))
-                return
+        bpm = self.midi_manager.detect_bpm()
+        if bpm is not None:
+            self.bpm_detected.emit(bpm)
 
     def set_bpm(self, bpm):
         """Update BPM and redraw ruler and time grid to match new tempo."""

@@ -40,11 +40,13 @@ class ShowManager(QObject):
     show_changed = pyqtSignal()
     autosave_state_changed = pyqtSignal(str)  # "saved" | "pending" | "error"
     versions_changed = pyqtSignal()           # the snapshot list gained/lost an entry
+    midi_path_allocated = pyqtSignal(str)     # a song got its owned .mid on first save
+    setlist_changed = pyqtSignal()            # flush created an untitled song
 
-    def __init__(self, config, window=None):
+    def __init__(self, config, core=None):
         super().__init__()
         self.config = config
-        self.window = window
+        self.core = core
         self.logger = get_logger("show.manager")
         self.show: Optional[Show] = None
         self._last_manifest_json: Optional[str] = None
@@ -86,8 +88,8 @@ class ShowManager(QObject):
         versions.restore(self.show, version_id)
         show = store.load_show(self.show.root)
         self.attach(show)
-        if self.window is not None:
-            self.window.reload_from_show()
+        if self.core is not None:
+            self.core.reload_from_show()
         self.logger.info(f"Restored version {version_id}")
         return show
 
@@ -106,8 +108,8 @@ class ShowManager(QObject):
         self.attach(show)
         remember_show(self.config, show.root)
         self.config.save()
-        if self.window is not None:
-            self.window.reload_from_show()
+        if self.core is not None:
+            self.core.reload_from_show()
         self.logger.info(f"Opened show: {show.root}")
         return show
 
@@ -137,7 +139,7 @@ class ShowManager(QObject):
     def _on_autosave_timeout(self) -> None:
         # Don't export mid-performance: retry after the next debounce window
         # (a pause/stop lands within one interval).
-        mc = getattr(self.window, "media_controller", None)
+        mc = getattr(self.core, "media_controller", None)
         if mc is not None and mc.get_playback_state():
             self._autosave_timer.start()
             return
@@ -212,9 +214,9 @@ class ShowManager(QObject):
         """Export the in-memory MIDI document onto the current song's owned
         .mid (allocating midis/<slug>.mid on first save). Returns True when a
         file was written."""
-        if not self._midi_dirty or self.window is None:
+        if not self._midi_dirty or self.core is None:
             return False
-        mm = self.window.midi_manager
+        mm = self.core.midi_manager
         if mm.midi_data is None:
             self._midi_dirty = False
             return False
@@ -233,11 +235,9 @@ class ShowManager(QObject):
                 self._midi_dirty = False
                 return False
             song.midi = store.allocate_midi_path(self.show, song.title or "song")
-            toolbar = getattr(self.window, "toolbar_manager", None)
-            if toolbar is not None:
-                toolbar.update_midi_file_display(song.midi)
+            self.midi_path_allocated.emit(song.midi)
 
-        bpm = self.window.timeline_toolbar.get_bpm()
+        bpm = self.core.bpm_state.get_bpm()
         if not mm.export_to_file(song.midi, bpm):
             raise RuntimeError(f"export_to_file('{song.midi}') returned False")
         self._update_song_cache(song, bpm)
@@ -248,9 +248,7 @@ class ShowManager(QObject):
         song = SongConfig(id=str(uuid.uuid4()), title="Untitled")
         self.config.playlist.songs.append(song)
         self.config.playlist.current_song_index = len(self.config.playlist.songs) - 1
-        controller = getattr(self.window, "playlist_controller", None)
-        if controller is not None:
-            controller.update_song_counter()
+        self.setlist_changed.emit()
         return song
 
     def _update_song_cache(self, song: SongConfig, bpm: int) -> None:
