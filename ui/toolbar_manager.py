@@ -32,7 +32,6 @@ class ToolbarManager(QObject):
     import_bundle_requested = pyqtSignal()
     song_title_edited = pyqtSignal(str)
     song_key_edited = pyqtSignal(str)        # current song's musical key (TONO)
-    song_precount_toggled = pyqtSignal(bool)  # current song's count-in on/off
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
@@ -70,7 +69,6 @@ class ToolbarManager(QObject):
         self.offset_label: Optional[QLabel] = None
         self.linked_chip: Optional[QLabel] = None
         self.key_edit: Optional[QLineEdit] = None
-        self.precount_button: Optional[QPushButton] = None
         # Versions widgets
         self.versions_combo: Optional[QComboBox] = None
         self.restore_button: Optional[QPushButton] = None
@@ -475,7 +473,8 @@ class ToolbarManager(QObject):
         self.linked_chip.setObjectName("LinkedChip")
         footer_layout.addWidget(self.linked_chip)
         footer_layout.addStretch(1)
-        # Per-song live-player fields (Fase 4): musical key + count-in toggle.
+        # Per-song live-player field (Fase 4): musical key. (The count-in
+        # toggle lives on the timeline toolbar, next to the BPM spinbox.)
         self.key_edit = QLineEdit()
         self.key_edit.setObjectName("SongKeyEdit")
         self.key_edit.setPlaceholderText("key")
@@ -485,13 +484,6 @@ class ToolbarManager(QObject):
         self.key_edit.editingFinished.connect(
             lambda: self.song_key_edited.emit(self.key_edit.text().strip()))
         footer_layout.addWidget(self.key_edit)
-        self.precount_button = QPushButton("🔔 count-in")
-        self.precount_button.setObjectName("PrecountChip")
-        self.precount_button.setCheckable(True)
-        self.precount_button.setToolTip(
-            "Play a count-in before this song (off = segue from the previous one)")
-        self.precount_button.toggled.connect(self.song_precount_toggled.emit)
-        footer_layout.addWidget(self.precount_button)
         layout.addLayout(footer_layout)
 
         self.logger.debug("Setlist section created")
@@ -643,12 +635,11 @@ class ToolbarManager(QObject):
     def update_song_info(self, title: str, status: str,
                          bpm: Optional[int] = None,
                          offset: float = 0.0,
-                         key: str = "",
-                         precount: bool = True) -> None:
+                         key: str = "") -> None:
         """Refresh the SETLIST footer for the current song: BPM, audio offset,
         the derived media chip ('linked' = audio and MIDI both present and
-        resolvable), the musical key and the count-in toggle. The title itself
-        lives in the setlist combobox."""
+        resolvable) and the musical key. The title itself lives in the setlist
+        combobox."""
         if self.bpm_label is not None:
             self.bpm_label.setText(f"{int(bpm)} BPM" if bpm else "")
         if self.offset_label is not None:
@@ -659,11 +650,6 @@ class ToolbarManager(QObject):
             self.key_edit.setText(key)
             self.key_edit.setEnabled(bool(title))
             self.key_edit.blockSignals(False)
-        if self.precount_button is not None:
-            self.precount_button.blockSignals(True)
-            self.precount_button.setChecked(bool(precount))
-            self.precount_button.setEnabled(bool(title))
-            self.precount_button.blockSignals(False)
         if self.linked_chip is None:
             return
         text, color = {
@@ -675,14 +661,6 @@ class ToolbarManager(QObject):
         }.get(status, ("", ""))
         self.linked_chip.setText(text)
         self.linked_chip.setStyleSheet(f"color: {color};" if color else "")
-
-    def set_song_precount(self, enabled: bool) -> None:
-        """Reflect a precount change driven elsewhere (e.g. the web remote)
-        without re-emitting song_precount_toggled."""
-        if self.precount_button is not None:
-            self.precount_button.blockSignals(True)
-            self.precount_button.setChecked(bool(enabled))
-            self.precount_button.blockSignals(False)
 
     def set_song_bpm(self, bpm: int) -> None:
         """Live-update the SETLIST footer BPM (e.g. on manual tempo change)."""

@@ -1,6 +1,6 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
-# ABOUTME: the menu; two-column Input/Output page with a live signal-flow graph.
+# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Logging).
 
 import threading
 
@@ -8,89 +8,23 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
-                             QSizePolicy, QPushButton)
-from PyQt6.QtCore import (Qt, QVariantAnimation, QEasingCurve, QRectF, QPointF,
-                          pyqtSignal)
-from PyQt6.QtGui import QPainter, QColor, QBrush
+                             QSizePolicy, QPushButton, QListWidget,
+                             QStackedWidget)
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtMultimedia import QMediaDevices
 
 from audio import tts
 from audio.engine import device_id_str
-from core import io_routing
+from core import buildinfo, io_routing
 from core.config import Config, IOConfig
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
 from ui.io_flow_widget import IOFlowWidget
+from ui.toggle_switch import ToggleSwitch
 from webremote.state import lan_ip
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-
-
-class _ToggleSwitch(QCheckBox):
-    """An iOS-style sliding toggle. Stays a QCheckBox so isChecked()/setChecked()
-    and the ``toggled`` signal work exactly like a checkbox; only the painting
-    and the click target change. The knob animation is driven from the state
-    hooks rather than the ``toggled`` signal: checkStateSet() covers programmatic
-    setChecked() (incl. under blockSignals()), and nextCheckState() covers user
-    clicks — a click routes through QAbstractButton::click(), which suppresses
-    checkStateSet() (blockRefresh), so without the latter hook the knob would
-    never move on click."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(44, 24)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pos = 1.0 if self.isChecked() else 0.0
-        self._anim = QVariantAnimation(self)
-        self._anim.setDuration(120)
-        self._anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        self._anim.valueChanged.connect(self._on_anim)
-
-    def _on_anim(self, value):
-        self._pos = float(value)
-        self.update()
-
-    def _animate_to_checked(self):
-        target = 1.0 if self.isChecked() else 0.0
-        self._anim.stop()
-        self._anim.setStartValue(self._pos)
-        self._anim.setEndValue(target)
-        self._anim.start()
-
-    def checkStateSet(self):
-        super().checkStateSet()
-        self._animate_to_checked()
-
-    def nextCheckState(self):
-        super().nextCheckState()
-        self._animate_to_checked()
-
-    def hitButton(self, pos):
-        return self.rect().contains(pos)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        enabled = self.isEnabled()
-
-        r = QRectF(1, 1, self.width() - 2, self.height() - 2)
-        if self.isChecked():
-            track = QColor("#2f6db0")
-        else:
-            track = QColor("#555555")
-        if not enabled:
-            track = track.darker(160)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(track))
-        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
-
-        d = r.height() - 4
-        x = r.left() + 2 + self._pos * (r.width() - d - 4)
-        knob = QColor("#f0f0f0") if enabled else QColor("#999999")
-        p.setBrush(QBrush(knob))
-        p.drawEllipse(QPointF(x + d / 2, r.center().y()), d / 2, d / 2)
-        p.end()
 
 
 class SettingsDialog(QDialog):
@@ -99,10 +33,13 @@ class SettingsDialog(QDialog):
     Pure config editor: on accept it validates the inputs and writes them back
     into the provided Config object. Applying the changes live and persisting
     them (Config.save) is the caller's responsibility. The optional
-    ``audio_engine`` is only used by the AUDIO card's "Test voice" button.
+    ``audio_engine`` is only used by the Audio page's "Test voice" button.
     """
 
     _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
+
+    _PAGES = (("⇄", "Input / Output"), ("🖥", "Web Remote"),
+              ("🔊", "Audio"), ("📋", "Logging"))
 
     def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
@@ -110,14 +47,98 @@ class SettingsDialog(QDialog):
         self.audio_engine = audio_engine
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.setMinimumSize(880, 640)
+        self.setMinimumSize(1000, 640)
 
-        layout = QVBoxLayout(self)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_sidebar())
+
+        right = QVBoxLayout()
+        right.setContentsMargins(16, 14, 16, 14)
+        right.setSpacing(12)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._build_io_page())
+        self.pages.addWidget(self._build_webremote_page())
+        self.pages.addWidget(self._build_audio_page())
+        self.pages.addWidget(self._build_logging_page())
+        right.addWidget(self.pages, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        right.addWidget(buttons)
+        root.addLayout(right, 1)
+
+        self.sidebar_list.setCurrentRow(0)  # also sets the window title
+        self._widgets_from_io(config.io)
+        self._on_io_changed()
+
+    # --- sidebar & pages --------------------------------------------------------
+
+    def _build_sidebar(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("SettingsSidebar")
+        frame.setFixedWidth(185)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(8, 10, 8, 10)
+        layout.setSpacing(8)
+
+        self.sidebar_list = QListWidget()
+        self.sidebar_list.setObjectName("SettingsSidebarList")
+        self.sidebar_list.setFrameShape(QFrame.Shape.NoFrame)
+        for icon, name in self._PAGES:
+            self.sidebar_list.addItem(f"{icon}  {name}")
+        self.sidebar_list.currentRowChanged.connect(self._on_page_selected)
+        layout.addWidget(self.sidebar_list, 1)
+
+        # Dev `git describe` tags are long (v1.0-56-gabc-dirty); show only the
+        # release component and keep the full tag on hover.
+        version = QLabel(f"TupperDMX · {buildinfo.GIT_TAG.split('-')[0]}")
+        version.setObjectName("SettingsVersionLabel")
+        version.setToolTip(buildinfo.GIT_TAG)
+        layout.addWidget(version)
+        return frame
+
+    def _on_page_selected(self, row: int) -> None:
+        self.pages.setCurrentIndex(row)
+        self.setWindowTitle(f"Settings — {self._PAGES[row][1]}")
+
+    def _make_page(self, title, subtitle=None):
+        """Settings page with a heading row + hairline separator. Returns
+        (page, layout) for the caller to fill."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        title = QLabel("Input / Output")
-        title.setObjectName("SettingsSectionTitle")
-        layout.addWidget(title)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        title_label = QLabel(title)
+        title_label.setObjectName("SettingsSectionTitle")
+        header.addWidget(title_label)
+        if subtitle:
+            sub_label = QLabel(subtitle)
+            sub_label.setObjectName("SettingsDimLabel")
+            header.addWidget(sub_label)
+        header.addStretch(1)
+        layout.addLayout(header)
+
+        line = QFrame()
+        line.setObjectName("SettingsHairline")
+        line.setFixedHeight(1)
+        layout.addWidget(line)
+        return page, layout
+
+    def _build_io_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
         layout.addLayout(self._build_preset_row())
 
@@ -129,25 +150,12 @@ class SettingsDialog(QDialog):
         left.addWidget(self._build_sequencer_card())
         left.addWidget(self._build_controller_card())
         left.addWidget(self._build_stage_card())
-        left.addWidget(self._build_webremote_card())
-        left.addWidget(self._build_audio_card())
-        left.addWidget(self._build_logging_card())
         left.addStretch(1)
         columns.addLayout(left, 11)
 
         columns.addWidget(self._build_flow_panel(), 9)
         layout.addLayout(columns, 1)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._widgets_from_io(config.io)
-        self._on_io_changed()
+        return page
 
     # --- card factory ---------------------------------------------------------
 
@@ -241,7 +249,7 @@ class SettingsDialog(QDialog):
         self.controller_state_label = QLabel("Enabled")
         self.controller_state_label.setObjectName("SettingsToggleLabel")
         hx.addWidget(self.controller_state_label)
-        self.controller_toggle = _ToggleSwitch()
+        self.controller_toggle = ToggleSwitch()
         self.controller_toggle.toggled.connect(self._on_io_changed)
         hx.addWidget(self.controller_toggle)
 
@@ -350,11 +358,15 @@ class SettingsDialog(QDialog):
         body.addLayout(usb_row)
         return card
 
-    def _build_webremote_card(self) -> QFrame:
-        self.webremote_toggle = _ToggleSwitch()
+    def _build_webremote_page(self) -> QWidget:
+        page, layout = self._make_page("Web Remote")
+
+        self.webremote_toggle = ToggleSwitch()
         self.webremote_toggle.setChecked(self.config.webremote.enabled)
-        card, body = self._make_card(None, "WEB REMOTE", "tablet control",
-                                     header_extra=self.webremote_toggle)
+        card, _body = self._make_card(None, "TABLET CONTROL",
+                                      "Serves a web panel on the local network.",
+                                      header_extra=self.webremote_toggle)
+        layout.addWidget(card)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Port:"))
@@ -363,14 +375,20 @@ class SettingsDialog(QDialog):
         self.webremote_port_spin.setValue(self.config.webremote.port)
         row.addWidget(self.webremote_port_spin)
         self.webremote_url_label = QLabel()
-        self.webremote_url_label.setObjectName("SettingsDimLabel")
+        self.webremote_url_label.setObjectName("SettingsLinkLabel")
         row.addWidget(self.webremote_url_label, 1)
-        body.addLayout(row)
+        layout.addLayout(row)
+
+        hint = QLabel("Open this address on a tablet connected to the "
+                      "same Wi-Fi network.")
+        hint.setObjectName("SettingsDimLabel")
+        layout.addWidget(hint)
+        layout.addStretch(1)
 
         self.webremote_toggle.toggled.connect(self._update_webremote_url)
         self.webremote_port_spin.valueChanged.connect(self._update_webremote_url)
         self._update_webremote_url()
-        return card
+        return page
 
     def _update_webremote_url(self, *_) -> None:
         if self.webremote_toggle.isChecked():
@@ -379,13 +397,15 @@ class SettingsDialog(QDialog):
         else:
             self.webremote_url_label.setText("Disabled — no server runs.")
 
-    def _build_audio_card(self) -> QFrame:
-        """AUDIO card (Fase 4 live player): output device, click/voice channel
+    def _build_audio_page(self) -> QWidget:
+        """Audio page (Fase 4 live player): output device, click/voice channel
         routing, count-in length and the TTS voice."""
-        card, body = self._make_card(None, "AUDIO", "output · click & voice")
+        page, layout = self._make_page("Audio", "output · click & voice")
 
-        dev_row = QHBoxLayout()
-        dev_row.addWidget(QLabel("Output:"))
+        form = QFormLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
         self.audio_device_combo = QComboBox()
         self.audio_device_combo.addItem("System default", "")
         for device in QMediaDevices.audioOutputs():
@@ -397,11 +417,8 @@ class SettingsDialog(QDialog):
             self.audio_device_combo.addItem(f"{current} (not connected)", current)
             idx = self.audio_device_combo.count() - 1
         self.audio_device_combo.setCurrentIndex(idx)
-        dev_row.addWidget(self.audio_device_combo, 1)
-        body.addLayout(dev_row)
+        form.addRow("Output:", self.audio_device_combo)
 
-        routing_row = QHBoxLayout()
-        routing_row.addWidget(QLabel("Routing:"))
         self.audio_routing_combo = QComboBox()
         for label, value in (
             ("Stereo — everything on both channels", "stereo"),
@@ -411,11 +428,9 @@ class SettingsDialog(QDialog):
             self.audio_routing_combo.addItem(label, value)
         idx = self.audio_routing_combo.findData(self.config.audio.routing)
         self.audio_routing_combo.setCurrentIndex(max(0, idx))
-        routing_row.addWidget(self.audio_routing_combo, 1)
-        body.addLayout(routing_row)
+        form.addRow("Routing:", self.audio_routing_combo)
 
         countin_row = QHBoxLayout()
-        countin_row.addWidget(QLabel("Count-in:"))
         self.count_in_bars_spin = QSpinBox()
         self.count_in_bars_spin.setRange(1, 8)
         self.count_in_bars_spin.setValue(self.config.audio.count_in_bars)
@@ -427,10 +442,9 @@ class SettingsDialog(QDialog):
         hint = QLabel("Per-song on/off: SETLIST toolbar")
         hint.setObjectName("SettingsDimLabel")
         countin_row.addWidget(hint, 1)
-        body.addLayout(countin_row)
+        form.addRow("Count-in:", countin_row)
 
         voice_row = QHBoxLayout()
-        voice_row.addWidget(QLabel("Voice:"))
         self.tts_voice_combo = QComboBox()
         for voice in tts.VOICES:
             self.tts_voice_combo.addItem(tts.voice_label(voice), voice)
@@ -448,15 +462,18 @@ class SettingsDialog(QDialog):
         self.voice_test_button = QPushButton("Test")
         self.voice_test_button.clicked.connect(self._on_test_voice)
         voice_row.addWidget(self.voice_test_button)
-        body.addLayout(voice_row)
+        form.addRow("Voice:", voice_row)
+
+        layout.addLayout(form)
 
         self.voice_status_label = QLabel()
         self.voice_status_label.setObjectName("SettingsDimLabel")
-        body.addWidget(self.voice_status_label)
+        layout.addWidget(self.voice_status_label)
+        layout.addStretch(1)
 
         self._voice_download_done.connect(self._on_voice_download_done)
         self._update_voice_status()
-        return card
+        return page
 
     def _selected_voice(self) -> str:
         return self.tts_voice_combo.currentData() or tts.DEFAULT_VOICE
@@ -509,8 +526,8 @@ class SettingsDialog(QDialog):
             return
         self.audio_engine.play_voice(samples)
 
-    def _build_logging_card(self) -> QFrame:
-        card, body = self._make_card(None, "LOGGING", None)
+    def _build_logging_page(self) -> QWidget:
+        page, layout = self._make_page("Logging")
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Level:"))
@@ -519,12 +536,14 @@ class SettingsDialog(QDialog):
         current = (self.config.logging.level
                    if self.config.logging.level in LOG_LEVELS else "INFO")
         self.log_level_combo.setCurrentText(current)
-        row.addWidget(self.log_level_combo)
-        hint = QLabel("Applies on next launch.")
+        row.addWidget(self.log_level_combo, 1)
+        layout.addLayout(row)
+
+        hint = QLabel("Level changes apply on the next launch.")
         hint.setObjectName("SettingsDimLabel")
-        row.addWidget(hint, 1)
-        body.addLayout(row)
-        return card
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
 
     def _build_flow_panel(self) -> QFrame:
         panel = QFrame()

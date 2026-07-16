@@ -1456,7 +1456,8 @@ QFrame#TTSeparator {
     margin: 4px 4px;
 }
 
-QLabel#TTRowsLabel {
+QLabel#TTRowsLabel,
+QLabel#TTCountInLabel {
     color: #aaa;
     padding: 0 2px;
 }
@@ -1629,4 +1630,55 @@ QLabel#IOValidationLabel[state="warn"] {
 
 QLabel#IOValidationLabel[state="error"] {
     color: #e05252;
+}
+
+/* ============================================================
+   Settings dialog — sidebar navigation + per-page chrome
+   Left rail with the page list and the version footer; each
+   page opens with a heading row over a 1px hairline.
+   ============================================================ */
+QFrame#SettingsSidebar {
+    background-color: #1f1f1f;
+    border-right: 1px solid #3a3a3a;
+}
+
+QListWidget#SettingsSidebarList {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 12px;
+}
+
+QListWidget#SettingsSidebarList::item {
+    color: #cfcfcf;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+}
+
+QListWidget#SettingsSidebarList::item:hover {
+    background-color: #2e2e2e;
+}
+
+QListWidget#SettingsSidebarList::item:selected {
+    background-color: #79cdf0;
+    color: #082230;
+}
+
+QLabel#SettingsVersionLabel {
+    color: #6a6a6a;
+    font-size: 10px;
+    padding-left: 4px;
+}
+
+QFrame#SettingsHairline {
+    background-color: #3a3a3a;
+    border: none;
+}
+
+/* Web-remote URL readout next to the port spinbox. */
+QLabel#SettingsLinkLabel {
+    color: #79cdf0;
+    font-family: monospace;
+    font-size: 12px;
 }

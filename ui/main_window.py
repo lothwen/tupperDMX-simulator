@@ -172,10 +172,6 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
         self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
         self.toolbar_manager.song_key_edited.connect(self.on_song_key_edited)
-        self.toolbar_manager.song_precount_toggled.connect(
-            self.app_core.on_song_precount_toggled)
-        self.app_core.precount_changed.connect(
-            self.toolbar_manager.set_song_precount)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
         self.show_manager.versions_changed.connect(self._refresh_versions_ui)
@@ -187,6 +183,10 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
         self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
+        self.timeline_toolbar.song_precount_toggled.connect(
+            self.app_core.on_song_precount_toggled)
+        self.app_core.precount_changed.connect(
+            self.timeline_toolbar.set_song_precount)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)

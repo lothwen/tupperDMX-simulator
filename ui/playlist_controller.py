@@ -83,6 +83,7 @@ class PlaylistController:
             w.toolbar_manager.update_midi_file_display("")
             w.toolbar_manager.update_audio_file_display("")
             w.toolbar_manager.update_song_info("", "")
+            w.timeline_toolbar.set_song_precount(False, has_song=False)
             w.timeline.set_files(None)
             w.timeline.set_voice_cues([])
             w.update_window_title()
@@ -119,7 +120,9 @@ class PlaylistController:
         w.toolbar_manager.update_song_info(
             song.title, song_status(song),
             bpm=w.bpm_state.get_bpm(), offset=song.offset,
-            key=song.key, precount=song.precount)
+            key=song.key)
+        w.timeline_toolbar.set_song_precount(
+            song.precount, has_song=bool(song.title))
         w.update_window_title()
 
     # ------------------------------------------------------------------
