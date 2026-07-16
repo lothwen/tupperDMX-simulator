@@ -101,7 +101,7 @@ jobs:
         import subprocess
         from pathlib import Path
         
-        png_icon = Path("assets/icons/metronome_icon.png")
+        png_icon = Path("assets/icons/TupperDMX-icon.png")
         if not png_icon.exists():
             print("PNG icon not found, skipping")
             sys.exit(0)

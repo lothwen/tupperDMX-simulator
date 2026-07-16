@@ -183,7 +183,7 @@ make build
 - Enable UPX compression (may cause issues)
 
 **Icon Issues:**
-- Ensure PNG icon exists at `assets/icons/metronome_icon.png`
+- Ensure PNG icon exists at `assets/icons/TupperDMX-icon.png`
 - Install Pillow for Windows ICO conversion: `uv add pillow`
 - macOS requires `sips` command (built-in)
 

@@ -31,9 +31,15 @@ def _setup_logging(config):
 
 
 def run_gui(argv):
+    from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication(argv)
+    # Wayland matches a window to its taskbar icon via the app_id (derived from
+    # the desktop-file name), not the Qt window icon; this must match the
+    # installed tupperdmx.desktop basename.
+    app.setDesktopFileName("tupperdmx")
+    app.setWindowIcon(QIcon(asset_path("icons", "TupperDMX-icon.png")))
 
     # Load and apply dark theme
     qss_path = asset_path("styles", "dark-theme.qss")
