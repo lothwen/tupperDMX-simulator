@@ -1682,3 +1682,114 @@ QLabel#SettingsLinkLabel {
     font-family: monospace;
     font-size: 12px;
 }
+
+/* ============================================================
+   About dialog (ui/about_dialog.py)
+   Hero (icon + title + version pill) over a BUILD metadata
+   card and a © / Changelog / Website footer.
+   ============================================================ */
+QDialog#AboutDialog {
+    background-color: #262626;
+}
+
+QWidget#aboutHero {
+    background-color: #262626;
+}
+
+QWidget#aboutBuild {
+    background-color: #1f1f1f;
+    border-top: 1px solid #333333;
+    border-bottom: 1px solid #333333;
+}
+
+QWidget#aboutFooter {
+    background-color: #262626;
+}
+
+QLabel#aboutTitle {
+    color: #f2f2f2;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+QLabel#aboutTagline {
+    color: #9a9a9a;
+    font-size: 13px;
+}
+
+QLabel#aboutPill {
+    border: 1px solid #3d3d3d;
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+    background-color: #202020;
+}
+
+QLabel#aboutSectionHeader {
+    color: #767676;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+
+QLabel#aboutRowLabel {
+    color: #8f8f8f;
+    font-size: 12px;
+}
+
+QLabel#aboutRowValue {
+    color: #dcdcdc;
+    font-size: 12px;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+QPushButton#aboutCopy {
+    background-color: #333333;
+    border: 1px solid #444444;
+    border-radius: 5px;
+    padding: 2px 10px;
+    color: #d0d0d0;
+    font-size: 11px;
+}
+
+QPushButton#aboutCopy:hover {
+    background-color: #3d3d3d;
+}
+
+QPushButton#aboutCopy:pressed {
+    background-color: #2c2c2c;
+}
+
+QLabel#aboutCopyright {
+    color: #7a7a7a;
+    font-size: 12px;
+}
+
+QPushButton#aboutLink {
+    background: transparent;
+    border: none;
+    color: #9a9a9a;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+QPushButton#aboutLink:hover {
+    color: #e0e0e0;
+}
+
+QPushButton#aboutWebsite {
+    background-color: #333333;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #e6e6e6;
+    font-size: 12px;
+}
+
+QPushButton#aboutWebsite:hover {
+    background-color: #3d3d3d;
+}
+
+QPushButton#aboutWebsite:pressed {
+    background-color: #2c2c2c;
+}

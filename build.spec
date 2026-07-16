@@ -33,6 +33,7 @@ def _generate_buildinfo() -> None:
 
     commit = git("rev-parse", "--short", "HEAD") or "unknown"
     tag = git("describe", "--tags", "--always", "--dirty") or "unknown"
+    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "unknown"
     build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     output = project_root / "_buildinfo.py"
@@ -41,7 +42,8 @@ def _generate_buildinfo() -> None:
         "# ABOUTME: Captures git metadata so the frozen app can show its provenance.\n"
         f"BUILD_DATE = {build_date!r}\n"
         f"GIT_COMMIT = {commit!r}\n"
-        f"GIT_TAG = {tag!r}\n",
+        f"GIT_TAG = {tag!r}\n"
+        f"GIT_BRANCH = {branch!r}\n",
         encoding="utf-8",
     )
 
