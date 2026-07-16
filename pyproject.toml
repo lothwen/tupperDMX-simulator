@@ -31,7 +31,7 @@ tupperdmx = "main:main"
 name = "TupperDMX-Simulator"
 entry-points = ["main.py"]
 console = false
-icon = "assets/icons/metronome_icon.png"
+icon = "assets/icons/TupperDMX-icon.png"
 
 [dependency-groups]
 dev = [

@@ -133,15 +133,15 @@ excludes = [
 
 # Platform-specific configurations
 if sys.platform == "win32":
-    icon_file = "assets/icons/metronome_icon.ico"
+    icon_file = "assets/icons/TupperDMX-icon.ico"
     console = False
     windowed = True
 elif sys.platform == "darwin":
-    icon_file = "assets/icons/metronome_icon.icns" 
+    icon_file = "assets/icons/TupperDMX-icon.icns"
     console = False
     windowed = True
 else:  # Linux
-    icon_file = "assets/icons/metronome_icon.png"
+    icon_file = "assets/icons/TupperDMX-icon.png"
     console = False
     windowed = True
 
