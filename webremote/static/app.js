@@ -205,6 +205,7 @@
     var indexText = pad2(current + 1) + " / " + pad2(total);
     $("song-title").textContent = song ? song.title : "—";
     $("chip-index").textContent = indexText;
+    $("now-index").textContent = song ? indexText : "— / —";
     $("chip-key").textContent = "KEY · " + (song && song.key ? song.key : "—");
     $("chip-bpm").textContent = s.bpm + " BPM";
     $("top-bpm").textContent = s.bpm + " BPM";

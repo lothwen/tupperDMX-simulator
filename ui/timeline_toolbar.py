@@ -6,6 +6,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
 from tupperlogger import get_logger
+from ui.toggle_switch import ToggleSwitch
 
 
 class TimelineToolbar(QWidget):
@@ -21,6 +22,7 @@ class TimelineToolbar(QWidget):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     bpm_changed = pyqtSignal(int)  # new_bpm
+    song_precount_toggled = pyqtSignal(bool)  # current song's count-in on/off
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
@@ -58,6 +60,7 @@ class TimelineToolbar(QWidget):
         self.play_pause_button: Optional[QPushButton] = None
         self.time_display: Optional[QLabel] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
+        self.precount_toggle: Optional[ToggleSwitch] = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
@@ -198,6 +201,20 @@ class TimelineToolbar(QWidget):
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         row.addWidget(self.bpm_spinbox)
 
+        # Count-in toggle (moved here from the top toolbar's SETLIST footer):
+        # per-song precount flag, shown as an iOS-style switch.
+        precount_tooltip = ("Play a count-in before this song "
+                            "(off = segue from the previous one)")
+        precount_label = QLabel("🔔 Count-in")
+        precount_label.setObjectName("TTCountInLabel")
+        precount_label.setToolTip(precount_tooltip)
+        row.addWidget(precount_label)
+
+        self.precount_toggle = ToggleSwitch()
+        self.precount_toggle.setToolTip(precount_tooltip)
+        self.precount_toggle.toggled.connect(self.song_precount_toggled.emit)
+        row.addWidget(self.precount_toggle)
+
         return zone
 
     def _build_right_zone(self) -> QWidget:
@@ -292,6 +309,19 @@ class TimelineToolbar(QWidget):
         if self.bpm_spinbox:
             return self.bpm_spinbox.value()
         return 120
+
+    def set_song_precount(self, enabled: bool,
+                          has_song: Optional[bool] = None) -> None:
+        """Reflect a precount change driven elsewhere (song load, the web
+        remote) without re-emitting song_precount_toggled. Pass ``has_song``
+        to also enable/disable the toggle (no song = greyed out)."""
+        if self.precount_toggle is None:
+            return
+        self.precount_toggle.blockSignals(True)
+        self.precount_toggle.setChecked(bool(enabled))
+        if has_song is not None:
+            self.precount_toggle.setEnabled(bool(has_song))
+        self.precount_toggle.blockSignals(False)
 
     def set_zoom_value(self, factor: float) -> None:
         """Move the zoom slider to reflect a zoom change driven elsewhere

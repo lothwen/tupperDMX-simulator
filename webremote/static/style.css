@@ -92,7 +92,7 @@ button {
   border-bottom: 1px solid var(--border);
   gap: 16px;
 }
-.live-row { display: flex; align-items: center; gap: 7px; }
+.live-row { display: flex; align-items: center; gap: 7px; margin-bottom: 8px;}
 .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .topbar-center { text-align: center; }
 .clock { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
@@ -240,7 +240,7 @@ body.offline .live-dot { background: var(--red); box-shadow: none; }
 
 /* Live iOS-style toggle (AUTO COUNT-IN) */
 .toggle {
-  width: 40px; height: 22px; border-radius: 999px; background: #2a3542;
+  width: 40px; height: 22px; min-height: 0; border-radius: 999px; background: #2a3542;
   position: relative; border: none; padding: 0; cursor: pointer;
 }
 .toggle::after {
