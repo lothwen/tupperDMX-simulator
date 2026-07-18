@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QDoubleSpinBox,
 from audio import tts
 from core.config import VoiceCueConfig
 from tupperlogger import get_logger
+from ui import icons
 
 
 class VoiceCuesDialog(QDialog):
@@ -47,13 +48,16 @@ class VoiceCuesDialog(QDialog):
         layout.addWidget(self.table, 1)
 
         buttons_row = QHBoxLayout()
-        add_button = QPushButton("＋ Add")
+        add_button = QPushButton("Add")
+        add_button.setIcon(icons.icon("plus"))
         add_button.clicked.connect(lambda: self._add_row())
         buttons_row.addWidget(add_button)
-        remove_button = QPushButton("－ Remove")
+        remove_button = QPushButton("Remove")
+        remove_button.setIcon(icons.icon("minus"))
         remove_button.clicked.connect(self._remove_selected)
         buttons_row.addWidget(remove_button)
-        self.preview_button = QPushButton("▶ Preview")
+        self.preview_button = QPushButton("Preview")
+        self.preview_button.setIcon(icons.icon("play"))
         self.preview_button.setToolTip("Render the selected cue and play it "
                                        "on the voice bus")
         self.preview_button.clicked.connect(self._preview_selected)
@@ -67,7 +71,8 @@ class VoiceCuesDialog(QDialog):
 
         if not tts.is_available() or not tts.is_voice_installed(tts_voice):
             self.status_label.setText(
-                "⚠ TTS voice not ready (Settings ▸ AUDIO) — cues stay silent.")
+                f'{icons.img_tag("warning", "#e2a04a", 11)} '
+                "TTS voice not ready (Settings ▸ AUDIO) — cues stay silent.")
 
         dialog_buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -127,7 +132,8 @@ class VoiceCuesDialog(QDialog):
             self.unsetCursor()
         if samples is None:
             self.status_label.setText(
-                "⚠ Could not render — voice not ready (Settings ▸ AUDIO).")
+                f'{icons.img_tag("warning", "#e2a04a", 11)} '
+                "Could not render — voice not ready (Settings ▸ AUDIO).")
             return
         self.status_label.setText("")
         if self.audio_engine is not None:

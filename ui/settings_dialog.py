@@ -2,6 +2,7 @@
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
 # ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Logging).
 
+import html
 import threading
 
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
@@ -9,8 +10,8 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
                              QSizePolicy, QPushButton, QListWidget,
-                             QStackedWidget)
-from PyQt6.QtCore import Qt, pyqtSignal
+                             QListWidgetItem, QStackedWidget)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
 from PyQt6.QtMultimedia import QMediaDevices
 
 from audio import tts
@@ -19,6 +20,7 @@ from core import buildinfo, io_routing
 from core.config import Config, IOConfig
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
+from ui import icons
 from ui.io_flow_widget import IOFlowWidget
 from ui.toggle_switch import ToggleSwitch
 from webremote.state import lan_ip
@@ -38,8 +40,8 @@ class SettingsDialog(QDialog):
 
     _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
 
-    _PAGES = (("⇄", "Input / Output"), ("🖥", "Web Remote"),
-              ("🔊", "Audio"), ("📋", "Logging"))
+    _PAGES = (("swap", "Input / Output"), ("monitor", "Web Remote"),
+              ("volume", "Audio"), ("list-view", "Logging"))
 
     def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
@@ -91,8 +93,11 @@ class SettingsDialog(QDialog):
         self.sidebar_list = QListWidget()
         self.sidebar_list.setObjectName("SettingsSidebarList")
         self.sidebar_list.setFrameShape(QFrame.Shape.NoFrame)
-        for icon, name in self._PAGES:
-            self.sidebar_list.addItem(f"{icon}  {name}")
+        self.sidebar_list.setIconSize(QSize(15, 15))
+        for icon_name, name in self._PAGES:
+            self.sidebar_list.addItem(QListWidgetItem(
+                icons.icon(icon_name, "#cfcfcf", selected_color="#082230"),
+                name))
         self.sidebar_list.currentRowChanged.connect(self._on_page_selected)
         layout.addWidget(self.sidebar_list, 1)
 
@@ -687,13 +692,19 @@ class SettingsDialog(QDialog):
 
         # Validation strip
         errors, warnings = io_routing.validate(io)
+        error_tag = icons.img_tag("warning", "#e24a4a", 11)
+        warn_tag = icons.img_tag("warning", "#e2a04a", 11)
         if errors:
-            lines = [f"⛔ {e}" for e in errors] + [f"⚠ {w}" for w in warnings]
-            text, state = "\n".join(lines), "error"
+            lines = ([f"{error_tag} {html.escape(e)}" for e in errors]
+                     + [f"{warn_tag} {html.escape(w)}" for w in warnings])
+            text, state = "<br>".join(lines), "error"
         elif warnings:
-            text, state = "\n".join(f"⚠ {w}" for w in warnings), "warn"
+            text, state = "<br>".join(
+                f"{warn_tag} {html.escape(w)}" for w in warnings), "warn"
         else:
-            text, state = "✓ Routing valid — no conflicts.", "ok"
+            text = (f'{icons.img_tag("check", "#4caf50", 11)} '
+                    "Routing valid — no conflicts.")
+            state = "ok"
         self.validation_label.setText(text)
         self.validation_label.setProperty("state", state)
         self.validation_label.style().unpolish(self.validation_label)

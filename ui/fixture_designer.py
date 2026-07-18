@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 
 from tupperlogger import get_logger
 from core.config import known_fixture_types
+from ui import icons
 
 
 def _suggest_free_dmx_start(stage_controller) -> int:
@@ -156,7 +157,8 @@ class FixtureInspector(QWidget):
         title.setObjectName("InspectorTitle")
         header.addWidget(title)
         header.addStretch(1)
-        close_button = QPushButton("✕")
+        close_button = QPushButton()
+        close_button.setIcon(icons.icon("close", "#aaaaaa"))
         close_button.setObjectName("InspectorClose")
         close_button.setFixedSize(22, 22)
         close_button.setCursor(Qt.CursorShape.PointingHandCursor)

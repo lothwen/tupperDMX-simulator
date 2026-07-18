@@ -1,9 +1,9 @@
 """
 Characterization test: the toolbar's SONG FILES cards (ui/toolbar_manager.py).
 
-Covers the three per-file cards (MIDI / BACKING TRACK / GUIDE): the 🗁 load
-buttons and dashed empty-state actions firing load_file_requested, the ▷
-new-track and ✕ guide-clear header actions, the path-well/empty-action swap
+Covers the three per-file cards (MIDI / BACKING TRACK / GUIDE): the load
+buttons and dashed empty-state actions firing load_file_requested, the
+new-track and guide-clear header actions, the path-well/empty-action swap
 on the update_*_display methods, and the right-anchored path well (overflow
 clips on the left so the filename end stays visible) with its full-path
 tooltip.
@@ -40,11 +40,12 @@ def _card(toolbar, kind):
     raise AssertionError(f"no '{kind}' file card on the toolbar")
 
 
-def _card_button(card, text):
+def _card_button(card, tooltip_part):
+    """Card header actions are icon-only QToolButtons — find by tooltip."""
     for button in card.findChildren(QToolButton):
-        if button.text() == text:
+        if tooltip_part in button.toolTip():
             return button
-    raise AssertionError(f"no '{text}' button on the card")
+    raise AssertionError(f"no '{tooltip_part}' button on the card")
 
 
 def test_load_buttons_fire_signals():
@@ -58,14 +59,16 @@ def test_load_buttons_fire_signals():
 
     for kind, file_type in (("midi", "midi"), ("backing", "audio"),
                             ("guide", "guide")):
-        _card_button(_card(toolbar, kind), "🗁").click()
+        _card_button(_card(toolbar, kind), "Load ").click()
         _assert(fired[-1] == file_type,
-                f"the {kind} card's 🗁 button requests a '{file_type}' load")
+                f"the {kind} card's load button requests a '{file_type}' load")
 
-    _card_button(_card(toolbar, "midi"), "▷").click()
-    _assert(fired[-1] == "new_track", "▷ requests a new MIDI track")
-    _card_button(_card(toolbar, "guide"), "✕").click()
-    _assert(fired[-1] == "clear_guide", "✕ requests the guide clear")
+    _card_button(_card(toolbar, "midi"), "new empty MIDI").click()
+    _assert(fired[-1] == "new_track",
+            "the new-track action requests a new MIDI track")
+    _card_button(_card(toolbar, "guide"), "Clear guide").click()
+    _assert(fired[-1] == "clear_guide",
+            "the clear action requests the guide clear")
 
 
 def test_empty_state_actions_fire_signals():

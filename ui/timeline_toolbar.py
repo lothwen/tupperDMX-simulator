@@ -3,10 +3,11 @@ from typing import Optional
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox,
                              QComboBox, QSlider, QButtonGroup, QFrame, QSizePolicy)
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
 from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
+from ui import icons
 from ui.toggle_switch import ToggleSwitch
 
 
@@ -109,7 +110,9 @@ class TimelineToolbar(QWidget):
 
         row.addWidget(self._separator())
 
-        snap_btn = QPushButton("🧲 Snap")
+        snap_btn = QPushButton("Snap")
+        snap_btn.setIcon(icons.icon("magnet", "#e0e0e0"))
+        snap_btn.setIconSize(QSize(14, 14))
         snap_btn.setObjectName("TTSnap")
         snap_btn.setCheckable(True)
         snap_btn.setChecked(True)
@@ -151,7 +154,9 @@ class TimelineToolbar(QWidget):
 
         row.addWidget(self._separator())
 
-        cues_btn = QPushButton("🗣 Cues")
+        cues_btn = QPushButton("Cues")
+        cues_btn.setIcon(icons.icon("speech", "#e0e0e0"))
+        cues_btn.setIconSize(QSize(14, 14))
         cues_btn.setObjectName("TTToolButton")
         cues_btn.setToolTip("Voice cues: spoken guide messages for this song "
                             "(played on the click/voice channel)")
@@ -192,7 +197,8 @@ class TimelineToolbar(QWidget):
         # BPM cluster: decorative tempo glyph + spinbox. (Metronome mute now
         # lives solely on the timeline header's CLICK row, so this is a
         # non-interactive label.)
-        tempo_glyph = QLabel("♩")
+        tempo_glyph = QLabel()
+        tempo_glyph.setPixmap(icons.pixmap("note", 18, "#cfcfcf"))
         tempo_glyph.setObjectName("MetronomeButton")
         tempo_glyph.setFixedSize(32, 32)
         tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -209,7 +215,8 @@ class TimelineToolbar(QWidget):
         # per-song precount flag, shown as an iOS-style switch.
         precount_tooltip = ("Play a count-in before this song "
                             "(off = segue from the previous one)")
-        precount_label = QLabel("🔔 Count-in")
+        precount_label = QLabel(
+            f'{icons.img_tag("bell", "#aaaaaa", 12)} Count-in')
         precount_label.setObjectName("TTCountInLabel")
         precount_label.setToolTip(precount_tooltip)
         row.addWidget(precount_label)

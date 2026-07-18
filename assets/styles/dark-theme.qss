@@ -191,7 +191,7 @@ QTableWidget {
     background-color: #2B2B2B;
     color: white;
     gridline-color: #444444;
-    border: 1px solid #444444;
+    border: 1px solid #1f1f1f;
     alternate-background-color: #333333;
     selection-background-color: #3a5a67;
 }
@@ -309,9 +309,9 @@ QToolButton#ExportSplitButton::menu-button {
 }
 
 QToolButton#ExportSplitButton::menu-arrow {
-    image: url('assets/icons/dropdown-arrow.png');
-    width: 10px;
-    height: 10px;
+    image: url('assets/icons/chevron-down.svg');
+    width: 20px;
+    height: 20px;
 }
 
 /* Playlist Navigation Buttons */
@@ -412,8 +412,8 @@ QLabel#ShowStatsLabel {
 
 /* SETLIST section: unified song selector (counter badge + combobox) */
 QFrame#SetlistSelector {
-    background-color: #1e1e1e;
-    border: 1px solid #4a4a4a;
+    background-color: #202020;
+    border: 1px solid #161616;
     border-radius: 6px;
 }
 
@@ -421,9 +421,10 @@ QLabel#SetlistCounter {
     background-color: #2d4a63;
     color: #cfe4f5;
     border-radius: 4px;
-    padding: 2px 6px;
+    padding: 0px 6px;
+    margin: 6px 0px;
     font-size: 11px;
-    font-weight: bold;
+    font-family: ui-monospace,monospace;
 }
 
 QComboBox#SetlistCombo {
@@ -448,8 +449,8 @@ QComboBox#SetlistCombo::drop-down {
 }
 
 QComboBox#SetlistCombo QAbstractItemView {
-    background-color: #262626;
-    border: 1px solid #4a4a4a;
+    background-color: #202020;
+    border: 1px solid #161616;
     color: #e6e6e6;
     selection-background-color: #2d4a63;
     outline: none;
@@ -533,8 +534,8 @@ QPushButton#FileCardAction:pressed { background-color: #262626; }
 
 /* VERSIONS section: snapshot picker, History link and Snapshot action */
 QComboBox#VersionsCombo {
-    background-color: #1e1e1e;
-    border: 1px solid #4a4a4a;
+    background-color: #262626;
+    border: 1px solid #161616;
     border-radius: 6px;
     color: #e6e6e6;
     font-size: 12px;
@@ -658,16 +659,16 @@ QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
 }
 
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
-    image: url('assets/icons/up-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-up.svg');
+    width: 14px;
+    height: 14px;
     color: white;
 }
 
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
-    image: url('assets/icons/dropdown-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-down.svg');
+    width: 14px;
+    height: 14px;
     color: white;
 }
 
@@ -744,9 +745,9 @@ QRadioButton::indicator:checked:disabled {
 
 /* ComboBoxes */
 QComboBox {
-    background-color: #2b2b2b;
+    background-color: #262626;
     color: white;
-    border: 1px solid #3f3f3f;
+    border: 1px solid #161616;
     border-radius: 5px;
     padding: 5px 10px;
     font-size: 12px;
@@ -768,9 +769,9 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
-    image: url('assets/icons/dropdown-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-down.svg');
+    width: 14px;
+    height: 14px;
 }
 
 QComboBox QAbstractItemView {
@@ -985,14 +986,14 @@ QWidget#ClipPillBar {
 }
 
 QFrame#ClipPill {
-    background-color: #383838;
-    border: 1px solid #444;
-    border-radius: 6px;
+    background-color: #2e2e2e;
+    border: 1px solid #1f1f1f;
+    border-radius: 5px;
 }
 
 QFrame#ClipPill:hover {
     background-color: #4a4a4a;
-    border-color: #666;
+    border-color: #1f1f1f;
 }
 
 QFrame#ClipPill[selected="true"] {
@@ -1282,16 +1283,17 @@ QLabel {
 
 /* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar */
 QPushButton#EditStageButton {
-    background-color: rgba(40, 40, 40, 200);
-    color: white;
-    border: 1px solid rgba(255, 255, 255, 80);
+    background: rgba(26,28,32,.82);
+    color: #cfe9f5;
+    border: 1px solid #707070;
     border-radius: 6px;
     padding: 6px 14px;
     font-weight: bold;
+    font-size: 13px;
 }
 
 QPushButton#EditStageButton:hover {
-    background-color: rgba(70, 70, 70, 220);
+    background-color: rgba(30, 30, 30, 220);
     border-color: rgba(255, 255, 255, 140);
 }
 
@@ -1494,8 +1496,8 @@ QWidget#TimelineToolbar QPushButton#TTSnap {
 
 QWidget#TimelineToolbar QPushButton#TTSnap:checked {
     color: white;
-    background-color: #43c556;
-    border: 1px solid #3ba84a;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3f78b5, stop:1 #34659c);
+    border: 1px solid #274b73;
     font-weight: bold;
 }
 
