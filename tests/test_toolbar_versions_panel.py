@@ -51,10 +51,13 @@ def test_versions_populate_and_counts():
 
     _assert(manager.versions_combo.count() == 3, "every snapshot is listed")
     _assert(manager.versions_combo.currentIndex() == 0, "newest is selected")
-    _assert(manager.versions_combo.itemText(0) == "● Autosave · 14:32:07",
+    _assert(manager.versions_combo.itemText(0) == "Autosave · 14:32:07",
             "autosave label is time-stamped")
-    _assert(manager.versions_combo.itemText(2) == "📌 before gig · 09:00:00",
+    _assert(manager.versions_combo.itemText(2) == "before gig · 09:00:00",
             "pinned label carries its name")
+    _assert(not manager.versions_combo.itemIcon(0).isNull()
+            and not manager.versions_combo.itemIcon(2).isNull(),
+            "the pinned/autosave distinction rides the item icons")
     _assert(manager.versions_combo.itemData(0) == f"{today}T14-32-07",
             "item data is the version_id")
     _assert(manager.versions_stats_label.text() == "2 autosaves · 1 pinned",

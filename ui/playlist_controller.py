@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from core.show.model import song_status
 from core.show.relink import find_by_basename
 from tupperlogger import get_logger
+from ui import icons
 
 
 class PlaylistController:
@@ -101,7 +102,8 @@ class PlaylistController:
         # core resolved while loading the song.
         if song.audio and not os.path.exists(song.audio):
             w.toolbar_manager.update_audio_file_display(
-                f"⚠ Missing audio: {song.audio}")
+                f'{icons.img_tag("warning", "#e24a4a", 11)} '
+                f"Missing audio: {song.audio}")
             w.timeline.set_files(None)
         else:
             w.toolbar_manager.update_audio_file_display(song.audio or "")
@@ -153,7 +155,8 @@ class PlaylistController:
                 w.media_controller.set_guide(song.guide, song.guide_offset)
             else:
                 w.toolbar_manager.update_guide_file_display(
-                    f"⚠ Missing guide: {song.guide}")
+                    f'{icons.img_tag("warning", "#e24a4a", 11)} '
+                    f"Missing guide: {song.guide}")
                 return
         w.toolbar_manager.update_guide_file_display(song.guide or "")
 

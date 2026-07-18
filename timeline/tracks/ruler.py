@@ -6,13 +6,15 @@ Displays time markers, bar numbers, and beat subdivisions.
 
 import math
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem
+from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsLineItem,
+                             QGraphicsTextItem, QGraphicsPixmapItem)
 from PyQt6.QtGui import QColor, QBrush, QPen
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGraphicsItem
 
 from .base import BaseTrack
 from tupperlogger import get_logger
+from ui import icons
 
 
 class RulerTrack(BaseTrack):
@@ -146,9 +148,9 @@ class RulerTrack(BaseTrack):
                 self.time_text_items.append((sec, label))
 
     def _draw_voice_cue_markers(self):
-        """Draw the song's voice cues (Fase 4 TTS guide) as speech glyphs on
-        the ruler. Display-only markers — editing lives in the toolbar's
-        🗣 Cues dialog; the tooltip carries the spoken text."""
+        """Draw the song's voice cues (Fase 4 TTS guide) as speech-bubble
+        markers on the ruler. Display-only markers — editing lives in the
+        toolbar's Cues dialog; the tooltip carries the spoken text."""
         cues = getattr(self.timeline_manager, "voice_cues", [])
         pps = self.timeline_manager.PIXELS_PER_SECOND
         for cue_time, cue_text in cues:
@@ -159,15 +161,15 @@ class RulerTrack(BaseTrack):
             pen.setCosmetic(True)
             pen.setWidth(2)
             tick.setPen(pen)
-            tick.setToolTip(f"🗣 {cue_text}")
+            tick.setToolTip(f"Voice cue: {cue_text}")
             self.content_scene.addItem(tick)
             self.items.append(tick)
 
-            glyph = QGraphicsTextItem("🗣")
+            glyph = QGraphicsPixmapItem(
+                icons.pixmap("speech", 13, "#ba82f0"))
             glyph.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-            glyph.setDefaultTextColor(QColor(186, 130, 240))
-            glyph.setPos(cue_x + 1, -4)
-            glyph.setToolTip(f"🗣 {cue_text}")
+            glyph.setPos(cue_x + 2, 2)
+            glyph.setToolTip(f"Voice cue: {cue_text}")
             self.content_scene.addItem(glyph)
             self.items.append(glyph)
 

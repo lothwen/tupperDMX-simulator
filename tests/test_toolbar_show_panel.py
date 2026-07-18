@@ -47,10 +47,10 @@ def test_show_buttons_fire_signals():
     manager.save_show_as_requested.connect(lambda: fired.append("save_as"))
     manager.import_bundle_requested.connect(lambda: fired.append("import"))
 
-    for text in ("+ New", "📂 Open", "💾 Save", "Save as…"):
+    for text in ("New", "Open", "Save", "Save as…"):
         _button(toolbar, text).click()
     more = next(b for b in toolbar.findChildren(QToolButton)
-                if b.text() == "…")
+                if b.toolTip() == "More show actions")
     import_action = next(a for a in more.menu().actions()
                          if a.text() == "Import bundle…")
     import_action.trigger()

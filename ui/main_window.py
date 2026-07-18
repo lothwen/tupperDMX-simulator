@@ -22,6 +22,7 @@ from core.show import store as show_store
 from core.show.model import ShowError
 from timeline import Timeline
 from tupperlogger import get_logger
+from ui import icons
 from ui.about_dialog import AboutDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
@@ -316,7 +317,8 @@ class MainWindow(QMainWindow):
 
         # Stage scenario designer: an "Edit stage" button pinned to the stage
         # image's top-right corner, swapped for a top-left toolbar while editing.
-        self.edit_stage_button = QPushButton("✎  Edit stage")
+        self.edit_stage_button = QPushButton("Edit stage")
+        self.edit_stage_button.setIcon(icons.icon("pencil", "#ffffff"))
         self.edit_stage_button.setObjectName("EditStageButton")
         self.edit_stage_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_stage_button.clicked.connect(self.enter_edit_mode)
@@ -403,10 +405,10 @@ class MainWindow(QMainWindow):
     def _update_dmx_toggle_button(self) -> None:
         """Refresh the toggle button glyph and tooltip based on current state."""
         if self._dmx_panel_collapsed:
-            self.dmx_toggle_button.setText("◀")  # ◀
+            self.dmx_toggle_button.setIcon(icons.icon("chevron-left", "#ffffff"))
             self.dmx_toggle_button.setToolTip("Show DMX panel")
         else:
-            self.dmx_toggle_button.setText("▶")  # ▶
+            self.dmx_toggle_button.setIcon(icons.icon("chevron-right", "#ffffff"))
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def on_waveform_offset_changed(self, offset_sec):

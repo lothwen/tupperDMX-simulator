@@ -5,8 +5,9 @@ from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
                              QFrame, QHBoxLayout, QPushButton, QLineEdit,
                              QVBoxLayout, QToolButton, QMenu, QComboBox)
 from PyQt6.QtGui import QAction, QFont
-from PyQt6.QtCore import QObject, pyqtSignal, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
+from ui import icons
 from tupperlogger import get_logger
 from core.config import Config
 from webremote.state import probe_duration
@@ -149,19 +150,23 @@ class ToolbarManager(QObject):
         layout.addLayout(header_layout)
 
         buttons_layout = QHBoxLayout()
-        for text, tooltip, signal in (
-                ("+ New", "Create a new show project", self.new_show_requested),
-                ("📂 Open", "Open a show folder", self.open_show_requested),
-                ("💾 Save", "Save the show now (autosave already runs)", self.save_show_requested),
-                ("Save as…", "Duplicate the show under a new name", self.save_show_as_requested)):
+        for icon_name, text, tooltip, signal in (
+                ("plus", "New", "Create a new show project", self.new_show_requested),
+                ("folder-open", "Open", "Open a show folder", self.open_show_requested),
+                ("save", "Save", "Save the show now (autosave already runs)", self.save_show_requested),
+                (None, "Save as…", "Duplicate the show under a new name", self.save_show_as_requested)):
             button = QPushButton(text)
+            if icon_name:
+                button.setIcon(icons.icon(icon_name, "#e6e6e6"))
+                button.setIconSize(QSize(14, 14))
             button.setFixedHeight(30)
             button.setObjectName("LoadButton")
             button.setToolTip(tooltip)
             button.clicked.connect(signal.emit)
             buttons_layout.addWidget(button)
         more_button = QToolButton()
-        more_button.setText("…")
+        more_button.setIcon(icons.icon("more", "#e6e6e6"))
+        more_button.setIconSize(QSize(16, 16))
         more_button.setFixedSize(34, 30)
         more_button.setObjectName("MenuButton")
         more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -175,7 +180,11 @@ class ToolbarManager(QObject):
 
         buttons_layout.addSpacing(22)
         export_button = QToolButton()
-        export_button.setText("⤓  Export")
+        export_button.setText("Export")
+        export_button.setIcon(icons.icon("download", "#eaf4fb"))
+        export_button.setIconSize(QSize(14, 14))
+        export_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         export_button.setFixedHeight(30)
         # The styled ▾ segment + padding aren't in Qt's size hint — reserve
         # room so the label doesn't elide.
@@ -188,13 +197,15 @@ class ToolbarManager(QObject):
             "also offers a standard-MIDI copy of the current song")
         export_menu = QMenu(export_button)
         export_menu.setToolTipsVisible(True)
-        self.export_midi_action = export_menu.addAction("⤓  Export MIDI…")
+        self.export_midi_action = export_menu.addAction(
+            icons.icon("download"), "Export MIDI…")
         self.export_midi_action.setToolTip(
             "Standard-MIDI interchange copy of the current song (the show "
             "itself autosaves)")
         self.export_midi_action.triggered.connect(self.export_midi_requested.emit)
         self.export_midi_action.setEnabled(False)  # Disabled by default
-        bundle_action = export_menu.addAction("📦  Export bundle")
+        bundle_action = export_menu.addAction(
+            icons.icon("package"), "Export bundle")
         bundle_action.setToolTip(
             "One portable .showpack with audio, MIDI, patch and fixtures "
             "(all songs)")
@@ -263,7 +274,9 @@ class ToolbarManager(QObject):
 
         footer_layout = QHBoxLayout()
         footer_layout.setSpacing(8)
-        snapshot_button = QPushButton("📌 Snapshot")
+        snapshot_button = QPushButton("Snapshot")
+        snapshot_button.setIcon(icons.icon("pin", "#d7d7d7"))
+        snapshot_button.setIconSize(QSize(13, 13))
         snapshot_button.setFixedHeight(26)
         snapshot_button.setObjectName("SnapshotButton")
         snapshot_button.setToolTip("Take a named, never-pruned snapshot")
@@ -329,7 +342,9 @@ class ToolbarManager(QObject):
                     pinned += 1
                 else:
                     autosaves += 1
-                self.versions_combo.addItem(self._version_label(info), info.version_id)
+                self.versions_combo.addItem(self._version_icon(info),
+                                            self._version_label(info),
+                                            info.version_id)
         finally:
             self.versions_combo.blockSignals(False)
         if infos:
@@ -341,13 +356,21 @@ class ToolbarManager(QObject):
                 f"{autosaves} autosave{'s' if autosaves != 1 else ''}"
                 f" · {pinned} pinned")
 
+    @staticmethod
+    def _version_icon(info):
+        """Combobox icon for a snapshot: amber pin when pinned, dim save
+        glyph for autosaves."""
+        if info.pinned:
+            return icons.icon("pin", "#e2a04a")
+        return icons.icon("save", "#8a8a8a")
+
     def _version_label(self, info) -> str:
-        """Combobox label for a snapshot: '📌 name · time' when pinned, else
-        '● Autosave · time'."""
+        """Combobox label for a snapshot: 'name · time' when pinned, else
+        'Autosave · time' (the icon carries the pinned/auto distinction)."""
         when = self._format_version_time(info.timestamp)
         if info.pinned:
-            return f"📌 {info.name} · {when}" if info.name else f"📌 {when}"
-        return f"● Autosave · {when}"
+            return f"{info.name} · {when}" if info.name else when
+        return f"Autosave · {when}"
 
     @staticmethod
     def _format_version_time(timestamp: str) -> str:
@@ -368,7 +391,8 @@ class ToolbarManager(QObject):
         text, color = {
             "saved": ("● All changes saved", "#4caf50"),
             "pending": ("● Editing · autosave in 3s", "#e2a04a"),
-            "error": ("⚠ Save error — check logs", "#e24a4a"),
+            "error": (f'{icons.img_tag("warning", "#e24a4a", 11)} '
+                      "Save error — check logs", "#e24a4a"),
         }.get(state, ("", ""))
         self.autosave_status_label.setText(text)
         self.autosave_status_label.setStyleSheet(f"color: {color};" if color else "")
@@ -401,8 +425,10 @@ class ToolbarManager(QObject):
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(6)
 
-        self.prev_button = QPushButton("⏮")
-        self.prev_button.setFixedSize(30, 30)
+        self.prev_button = QPushButton()
+        self.prev_button.setIcon(icons.icon("prev", "#e6e6e6"))
+        self.prev_button.setIconSize(QSize(15, 15))
+        self.prev_button.setFixedSize(35, 28)
         self.prev_button.setObjectName("NavButton")
         self.prev_button.setToolTip("Previous song")
         self.prev_button.clicked.connect(self.prev_song_requested.emit)
@@ -437,16 +463,20 @@ class ToolbarManager(QObject):
         selector_layout.addWidget(self.song_combo, 1)
         controls_layout.addWidget(selector, 1)
 
-        self.next_button = QPushButton("⏭")
-        self.next_button.setFixedSize(30, 30)
+        self.next_button = QPushButton()
+        self.next_button.setIcon(icons.icon("next", "#e6e6e6"))
+        self.next_button.setIconSize(QSize(15, 15))
+        self.next_button.setFixedSize(35, 28)
         self.next_button.setObjectName("NavButton")
         self.next_button.setToolTip("Next song")
         self.next_button.clicked.connect(self.next_song_requested.emit)
         self.next_button.setEnabled(False)
         controls_layout.addWidget(self.next_button)
 
-        self.remove_button = QPushButton("🗑")
-        self.remove_button.setFixedSize(30, 30)
+        self.remove_button = QPushButton()
+        self.remove_button.setIcon(icons.icon("trash", "#d98a8a"))
+        self.remove_button.setIconSize(QSize(15, 15))
+        self.remove_button.setFixedSize(28, 30)
         self.remove_button.setObjectName("RemoveButton")
         self.remove_button.setToolTip("Remove current song from playlist")
         self.remove_button.clicked.connect(self.remove_song_requested.emit)
@@ -513,13 +543,13 @@ class ToolbarManager(QObject):
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(8)
 
-        # MIDI card (+ the ▷ new-track header action)
+        # MIDI card (+ the new-track header action)
         new_track_button = self._card_button(
-            "▷", "Start a new empty MIDI track for this song")
+            "plus", "Start a new empty MIDI track for this song")
         new_track_button.clicked.connect(self.new_midi_track_requested.emit)
         card, self.midi_file_label, self.midi_empty_button = \
             self._create_file_card(
-                "midi", "🎹", "MIDI", 'midi',
+                "midi", "piano", "MIDI", 'midi',
                 "Load a MIDI file for this song", "+ Load MIDI",
                 extras=(new_track_button,))
         cards_layout.addWidget(card, 1)
@@ -528,18 +558,18 @@ class ToolbarManager(QObject):
         # headless).
         card, self.audio_file_label, self.audio_empty_button = \
             self._create_file_card(
-                "backing", "🎵", "BACKING TRACK", 'audio',
+                "backing", "music", "BACKING TRACK", 'audio',
                 "Load the backing track for this song", "+ Load backing")
         cards_layout.addWidget(card, 1)
 
         # GUIDE card (+ the ✕ clear header action, shown while loaded) —
         # the optional full-mix design reference.
-        self.guide_clear_button = self._card_button("✕", "Clear guide track")
+        self.guide_clear_button = self._card_button("close", "Clear guide track")
         self.guide_clear_button.clicked.connect(self.guide_clear_requested.emit)
         self.guide_clear_button.setVisible(False)
         card, self.guide_file_label, self.guide_empty_button = \
             self._create_file_card(
-                "guide", "🎧", "GUIDE", 'guide',
+                "guide", "headphones", "GUIDE", 'guide',
                 "Load a full-mix guide track (design reference)",
                 "+ Load guide", extras=(self.guide_clear_button,))
         cards_layout.addWidget(card, 1)
@@ -550,20 +580,25 @@ class ToolbarManager(QObject):
         return section
 
     @staticmethod
-    def _card_button(text: str, tooltip: str) -> QToolButton:
+    def _card_button(icon_name: str, tooltip: str) -> QToolButton:
         """A small square header action for a SONG FILES card."""
         button = QToolButton()
-        button.setText(text)
+        button.setIcon(icons.icon(icon_name, "#b5b5b5"))
+        button.setIconSize(QSize(12, 12))
         button.setFixedSize(24, 22)
         button.setObjectName("FileCardButton")
         button.setToolTip(tooltip)
         return button
 
-    def _create_file_card(self, kind: str, icon: str, title: str,
+    # Card accent colours, mirroring the FileCardTitle[kind=…] QSS rules.
+    _CARD_ACCENTS = {"midi": "#c9c356", "backing": "#6fce7f",
+                     "guide": "#5da9e8"}
+
+    def _create_file_card(self, kind: str, icon_name: str, title: str,
                           file_type: str, load_tooltip: str, empty_text: str,
                           extras: tuple = ()):
         """One SONG FILES card: icon + accent-coloured title + optional extra
-        header actions + the 🗁 load button, over a path well / dashed
+        header actions + the load button, over a path well / dashed
         empty-state action pair (one visible at a time; empty at build).
         Returns (card, path_label, empty_button); the accent rides the
         `kind` QSS dynamic property."""
@@ -577,7 +612,9 @@ class ToolbarManager(QObject):
 
         header = QHBoxLayout()
         header.setSpacing(5)
-        icon_label = QLabel(icon)
+        icon_label = QLabel()
+        icon_label.setPixmap(icons.pixmap(
+            icon_name, 13, self._CARD_ACCENTS.get(kind, icons.DEFAULT_COLOR)))
         icon_label.setObjectName("FileCardIcon")
         header.addWidget(icon_label)
         title_label = QLabel(title)
@@ -590,7 +627,7 @@ class ToolbarManager(QObject):
         header.addStretch(1)
         for extra in extras:
             header.addWidget(extra)
-        load_button = self._card_button("🗁", load_tooltip)
+        load_button = self._card_button("folder-open", load_tooltip)
         load_button.clicked.connect(
             lambda: self.load_file_requested.emit(file_type))
         header.addWidget(load_button)
@@ -637,14 +674,12 @@ class ToolbarManager(QObject):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         button = QToolButton()
-        button.setText("☰")  # U+2630 TRIGRAM FOR HEAVEN — three horizontal bars
+        button.setIcon(icons.icon("menu", "#e6e6e6"))
+        button.setIconSize(QSize(20, 20))
         button.setObjectName("MenuButton")
         button.setFixedSize(36, 36)
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         button.setToolTip("Menu")
-        font = button.font()
-        font.setPointSize(font.pointSize() + 4)
-        button.setFont(font)
 
         menu = QMenu(button)
         settings_action = menu.addAction("Settings…")
@@ -715,11 +750,16 @@ class ToolbarManager(QObject):
         if self.linked_chip is None:
             return
         text, color = {
-            "linked": ("🎵+🥁 linked", "#4caf50"),
-            "audio_only": ("🎵 audio only", "#888888"),
+            "linked": (f'{icons.img_tag("music", "#4caf50", 11)}+'
+                       f'{icons.img_tag("piano", "#4caf50", 11)} linked',
+                       "#4caf50"),
+            "audio_only": (f'{icons.img_tag("music", "#888888", 11)} '
+                           "audio only", "#888888"),
             "no_audio": ("no audio", "#888888"),
-            "missing_audio": ("⚠ audio missing", "#e24a4a"),
-            "missing_midi": ("⚠ MIDI missing", "#e24a4a"),
+            "missing_audio": (f'{icons.img_tag("warning", "#e24a4a", 11)} '
+                              "audio missing", "#e24a4a"),
+            "missing_midi": (f'{icons.img_tag("warning", "#e24a4a", 11)} '
+                             "MIDI missing", "#e24a4a"),
         }.get(status, ("", ""))
         self.linked_chip.setText(text)
         self.linked_chip.setStyleSheet(f"color: {color};" if color else "")

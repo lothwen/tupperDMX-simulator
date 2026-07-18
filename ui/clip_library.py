@@ -19,6 +19,7 @@ from core.fixture_library import (FixtureDef, load_fixture_defs,
                              ROLE_RED, ROLE_GREEN, ROLE_BLUE)
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
+from ui import icons
 
 
 # Custom MIME type carries a JSON payload {"note": int, "velocity": int}.
@@ -391,10 +392,11 @@ class ClipLibraryWidget(QWidget):
         # Grid / list view toggles — static visuals only (no behaviour yet).
         self._view_group = QButtonGroup(self)
         self._view_group.setExclusive(True)
-        for idx, glyph in enumerate(("▦", "☰")):
+        for idx, icon_name in enumerate(("grid-view", "list-view")):
             btn = QToolButton()
             btn.setObjectName("ClipViewToggle")
-            btn.setText(glyph)
+            btn.setIcon(icons.icon(icon_name, "#aaaaaa", on_color="#cfe9f5"))
+            btn.setIconSize(QSize(13, 13))
             btn.setCheckable(True)
             btn.setChecked(idx == 0)
             self._view_group.addButton(btn)
@@ -413,7 +415,8 @@ class ClipLibraryWidget(QWidget):
         layout.addWidget(self.group_header, 1)
 
         # Sort control — static visual only (no behaviour yet).
-        self.sort_label = QLabel("Name ▾")
+        self.sort_label = QLabel(
+            f'Name {icons.img_tag("chevron-down", "#888888", 10)}')
         self.sort_label.setObjectName("ClipSortLabel")
         layout.addWidget(self.sort_label)
         return row
@@ -609,7 +612,7 @@ class ClipLibraryWidget(QWidget):
             self.pill_flow.addWidget(pill)
             self._pills.append(pill)
         # Inert "+ New" tile, matching the mockup.
-        self.pill_flow.addWidget(ClipPill(-1, "＋ New", None, 0, is_new=True))
+        self.pill_flow.addWidget(ClipPill(-1, "+ New", None, 0, is_new=True))
 
     def _select_group(self, index: int) -> None:
         if not (0 <= index < len(self._groups)):
