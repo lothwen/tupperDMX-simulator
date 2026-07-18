@@ -242,21 +242,26 @@ objects, so all pre-show code paths keep working unchanged.
 
 ### UI Architecture
 
-- `ToolbarManager` (`ui/toolbar_manager.py`): PROJECT · SHOW section
-  (header with live autosave state; + New/📂 Open/💾 Save/Save as…/Import
-  bundle buttons; footer with show name + setlist/patch stats), SETLIST
+- `ToolbarManager` (`ui/toolbar_manager.py`): SHOW section
+  (header; + New/📂 Open/💾 Save/Save as… buttons,
+  a "…" overflow menu with Import bundle…, and the blue split ⤓ Export
+  QToolButton — main click exports the full .showpack, the ▾ menu offers
+  interop Export MIDI… (`export_midi_action`, gated by
+  `set_export_midi_enabled`) and Export bundle; footer with show name +
+  setlist/patch stats), SETLIST
   section (header "N songs"; a row of prev / an editable song-selector
   QComboBox — a "05/11" counter badge + the full setlist; activated() picks a
   song via `song_selected`, edit+Enter renames via `song_title_edited` / next /
   remove 🗑; footer BPM / offset / derived "linked" media chip + per-song KEY
   line-edit (`song_key_edited`) and 🔔 count-in toggle
   (`song_precount_toggled`)), SONG FILES
-  section (audio + 🎧 guide + MIDI rows: path displays with Load buttons, the
-  ✕ guide clear (`guide_clear_requested` → `MainWindow.clear_guide_track`)
-  and the ▷ Track new-MIDI
-  action), EXPORT section (header + two stacked buttons: interop ⤓ Export MIDI…
-  and the amber-accented 📦 Export bundle — the ▾ is a decorative cue, single
-  click exports the full .showpack), VERSIONS section (header; a snapshot-picker
+  section (header with the live autosave chip — the ~3 s .mid debounce;
+  three accent-coloured cards 🎹 MIDI / 🎵 BACKING TRACK / 🎧 GUIDE, each a
+  🗁 load button over a right-anchored path well (overflow clips on the
+  left, keeping the filename end visible) that swaps for a dashed
+  "+ Load …" action while empty, plus the ▷ new-MIDI and ✕ guide-clear
+  (`guide_clear_requested` → `MainWindow.clear_guide_track`) header
+  actions), VERSIONS section (header; a snapshot-picker
   QComboBox — newest first, autosave "● Autosave · time" vs pinned
   "📌 name · time" — + a Restore button emitting
   `restore_version_requested(version_id)` → `MainWindow.restore_version_from_toolbar`
