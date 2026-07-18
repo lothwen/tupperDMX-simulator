@@ -356,6 +356,35 @@ def test_add_song_assigns_stable_id():
                 "other song metadata defaults are innocuous")
 
 
+def test_update_current_song_guide():
+    print("test_update_current_song_guide")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        audio = Path(tmp) / "backing.mp3"
+        audio.write_bytes(b"x")
+        guide = Path(tmp) / "mezcla.mp3"
+        guide.write_bytes(b"x")
+
+        cfg = Config.load()
+        cfg.add_song(audio=str(audio))
+        song = cfg.playlist.songs[0]
+        _assert(song.guide is None and song.guide_offset == 0.0,
+                "new songs default to no guide")
+
+        cfg.update_current_song(guide=str(guide), guide_offset=0.75)
+        _assert(song.guide == str(guide), "update_current_song sets the guide")
+        _assert(abs(song.guide_offset - 0.75) < 1e-9,
+                "update_current_song sets the guide offset")
+
+        cfg.update_current_song(guide_offset=99999.0)
+        _assert(song.guide_offset == 3600.0, "guide offset is clamped")
+        _assert(song.guide == str(guide), "omitted guide kwarg leaves it alone")
+
+        cfg.update_current_song(guide="")
+        _assert(song.guide is None, "empty-string guide clears it")
+
+
 def test_show_pointers_roundtrip():
     print("test_show_pointers_roundtrip")
     with tempfile.TemporaryDirectory() as tmp:
@@ -402,6 +431,54 @@ def test_save_is_atomic():
         _assert(leftovers == [], "failed save cleans up its temp file")
 
 
+def test_audio_config_roundtrip():
+    print("test_audio_config_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        _assert(cfg.audio.routing == "stereo", "default routing is stereo")
+        _assert(cfg.audio.count_in_bars == 2, "default count-in is 2 bars")
+        _assert(cfg.audio.count_in_voice is True, "spoken count-in defaults on")
+        _assert(cfg.audio.output_device == "", "default output device is system default")
+        _assert(abs(cfg.volume.voice - 0.8) < 1e-9, "default voice volume")
+
+        cfg.audio.output_device = "alsa_output.pci-0000"
+        cfg.audio.routing = "split_backing_left"
+        cfg.audio.count_in_bars = 4
+        cfg.audio.count_in_voice = False
+        cfg.audio.tts_voice = "en_US-lessac-medium"
+        cfg.volume.voice = 0.4
+        cfg.save()
+
+        cfg2 = Config.load()
+        _assert(cfg2.audio.output_device == "alsa_output.pci-0000",
+                "output device round-tripped")
+        _assert(cfg2.audio.routing == "split_backing_left", "routing round-tripped")
+        _assert(cfg2.audio.count_in_bars == 4, "count-in bars round-tripped")
+        _assert(cfg2.audio.count_in_voice is False, "count-in voice round-tripped")
+        _assert(cfg2.audio.tts_voice == "en_US-lessac-medium", "tts voice round-tripped")
+        _assert(abs(cfg2.volume.voice - 0.4) < 1e-9, "voice volume round-tripped")
+
+
+def test_audio_config_validation():
+    print("test_audio_config_validation")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        prefs.write_text(json.dumps({
+            "audio": {"routing": "bogus", "count_in_bars": 99, "tts_voice": ""},
+            "volume": {"voice": 7.0},
+        }))
+        cfg = Config.load()
+        _assert(cfg.audio.routing == "stereo", "invalid routing falls back to stereo")
+        _assert(cfg.audio.count_in_bars == 8, "count-in bars clamped to max")
+        _assert(cfg.audio.tts_voice == "es_ES-davefx-medium",
+                "empty tts voice falls back to the default")
+        _assert(cfg.volume.voice == 1.0, "voice volume clamped to 1.0")
+
+
 def test_next_free_channel():
     print("test_next_free_channel")
     cfg = Config()
@@ -428,8 +505,11 @@ def main():
     test_channel_auto_assigned_in_list_order()
     test_explicit_and_missing_channels_dont_collide()
     test_add_song_assigns_stable_id()
+    test_update_current_song_guide()
     test_show_pointers_roundtrip()
     test_save_is_atomic()
+    test_audio_config_roundtrip()
+    test_audio_config_validation()
     test_next_free_channel()
     print("\nALL TESTS PASSED")
 

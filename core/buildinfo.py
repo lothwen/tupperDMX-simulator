@@ -11,13 +11,17 @@ from typing import Optional, Tuple
 _DEV_PLACEHOLDER = "dev"
 
 
-def _try_generated() -> Optional[Tuple[str, str, str]]:
+def _try_generated() -> Optional[Tuple[str, str, str, str]]:
     """Return values baked in at PyInstaller build time, if available."""
     try:
         from _buildinfo import BUILD_DATE, GIT_COMMIT, GIT_TAG  # type: ignore
     except Exception:
         return None
-    return BUILD_DATE, GIT_COMMIT, GIT_TAG
+    try:
+        from _buildinfo import GIT_BRANCH  # type: ignore
+    except Exception:
+        GIT_BRANCH = _DEV_PLACEHOLDER  # older _buildinfo.py without the field
+    return BUILD_DATE, GIT_COMMIT, GIT_TAG, GIT_BRANCH
 
 
 def _git(*args: str) -> Optional[str]:
@@ -38,13 +42,14 @@ def _git(*args: str) -> Optional[str]:
     return value or None
 
 
-def _from_live_git() -> Tuple[str, str, str]:
+def _from_live_git() -> Tuple[str, str, str, str]:
     """Best-effort metadata for development runs from a working tree."""
     commit = _git("rev-parse", "--short", "HEAD") or _DEV_PLACEHOLDER
     tag = _git("describe", "--tags", "--always", "--dirty") or _DEV_PLACEHOLDER
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD") or _DEV_PLACEHOLDER
     iso_date = _git("show", "-s", "--format=%cI", "HEAD")
     build_date = iso_date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return build_date, commit, tag
+    return build_date, commit, tag, branch
 
 
 _resolved = _try_generated() or _from_live_git()
@@ -52,3 +57,4 @@ _resolved = _try_generated() or _from_live_git()
 BUILD_DATE: str = _resolved[0]
 GIT_COMMIT: str = _resolved[1]
 GIT_TAG: str = _resolved[2]
+GIT_BRANCH: str = _resolved[3]

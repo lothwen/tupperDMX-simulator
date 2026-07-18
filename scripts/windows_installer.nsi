@@ -20,8 +20,8 @@ RequestExecutionLevel admin
 
 ; Modern UI settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\assets\icons\metronome_icon.ico"
-!define MUI_UNICON "..\assets\icons\metronome_icon.ico"
+!define MUI_ICON "..\assets\icons\TupperDMX-icon.ico"
+!define MUI_UNICON "..\assets\icons\TupperDMX-icon.ico"
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME

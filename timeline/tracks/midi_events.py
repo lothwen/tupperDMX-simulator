@@ -21,8 +21,10 @@ from PyQt6.QtWidgets import (QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget,
                              QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout)
 from PyQt6.QtGui import (QColor, QBrush, QPen, QLinearGradient, QPainter,
-                         QPolygonF)
-from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF
+                         QPolygonF, QIcon)
+from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF, QSize
+
+from ui import icons
 
 from .base import BaseTrack
 from .clip_geometry import (
@@ -959,22 +961,18 @@ class AutoSceneClip(QGraphicsObject):
         painter.drawRect(rect)
 
 
-# Header toggle-bar glyphs (plain UTF characters; styled via the app stylesheet
-# by objectName). The lock swaps open<->closed with its state; the eye keeps one
-# glyph and signals "muted" via its checked (amber) background. The chevron
-# points down when expanded and right when the track is collapsed.
-_GRIP_GLYPH = "⠿"
-_CHEVRON_GLYPH = "▾"
-_CHEVRON_COLLAPSED_GLYPH = "▸"
-_EYE_GLYPH = "👁"
-_LOCK_OPEN_GLYPH = "🔓"
-_LOCK_CLOSED_GLYPH = "🔒"
-
-
-def _header_button(glyph: str, object_name: str, tooltip: str,
+# Header toggle-bar buttons (SVG icons via ui.icons; frames styled via the app
+# stylesheet by objectName). The lock swaps open<->closed through its icon's
+# On state; the eye keeps one glyph and signals "muted" via its checked (amber)
+# background. The chevron points down when expanded and right when collapsed.
+def _header_button(object_name: str, tooltip: str, *, text: str = "",
+                   icon: Optional[QIcon] = None,
                    checkable: bool = False) -> QPushButton:
-    """A 22px header button showing a single UTF glyph, styled by the app QSS."""
-    btn = QPushButton(glyph)
+    """A 22px header button showing an icon (or short text), styled by QSS."""
+    btn = QPushButton(text)
+    if icon is not None:
+        btn.setIcon(icon)
+        btn.setIconSize(QSize(13, 13))
     btn.setObjectName(object_name)
     btn.setFixedSize(22, 22)
     btn.setToolTip(tooltip)
@@ -1015,11 +1013,15 @@ class TrackHeaderWidget(QWidget):
         root.setContentsMargins(8, 4, 6, 4)
         root.setSpacing(4)
 
-        self.grip = _header_button(_GRIP_GLYPH, "TrackGrip",
-                                   "Drag to reorder (coming soon)")
+        self.grip = _header_button("TrackGrip",
+                                   "Drag to reorder (coming soon)",
+                                   icon=icons.icon("drag", "#8a8a8a"))
         self.grip.setEnabled(False)
-        self.chevron = _header_button(_CHEVRON_GLYPH, "TrackChevron",
-                                      "Collapse track", checkable=True)
+        # Checked (collapsed) swaps the icon to the right-pointing chevron.
+        self.chevron = _header_button("TrackChevron",
+                                      "Collapse track", checkable=True,
+                                      icon=icons.icon("chevron-down", "#8a8a8a",
+                                                      on_name="chevron-right"))
         self.chevron.toggled.connect(self._on_chevron_toggled)
         root.addWidget(self.grip)
         root.addWidget(self.chevron)
@@ -1057,21 +1059,25 @@ class TrackHeaderWidget(QWidget):
         text_col.addStretch(1)
         root.addLayout(text_col, 1)
 
-        self.eye_btn = _header_button(_EYE_GLYPH, "TrackEyeButton",
+        self.eye_btn = _header_button("TrackEyeButton",
                                       "Hide / mute this track's MIDI output",
+                                      icon=icons.icon("eye"),
                                       checkable=True)
         self.eye_btn.toggled.connect(self.eye_toggled.emit)
 
-        self.lock_btn = _header_button(_LOCK_OPEN_GLYPH, "TrackLockButton",
+        # Checked (locked) swaps to the closed padlock, dark for contrast on
+        # the gold fill.
+        self.lock_btn = _header_button("TrackLockButton",
                                        "Lock this track (no move, resize or new clips)",
+                                       icon=icons.icon("unlock",
+                                                       on_name="lock",
+                                                       on_color="#1d1d1d"),
                                        checkable=True)
         self.lock_btn.toggled.connect(self.lock_toggled.emit)
-        self.lock_btn.toggled.connect(
-            lambda on: self.lock_btn.setText(
-                _LOCK_CLOSED_GLYPH if on else _LOCK_OPEN_GLYPH))
 
-        self.auto_btn = _header_button("A", "AutoModeButton",
+        self.auto_btn = _header_button("AutoModeButton",
                                        "Follow the song-part program (auto)",
+                                       text="A",
                                        checkable=True)
         self.auto_btn.toggled.connect(self.auto_toggled.emit)
 
@@ -1088,16 +1094,13 @@ class TrackHeaderWidget(QWidget):
             btn.blockSignals(True)
             btn.setChecked(val)
             btn.blockSignals(False)
-        # The lock glyph swap rides the toggled signal, which is blocked above.
-        self.lock_btn.setText(_LOCK_CLOSED_GLYPH if lock else _LOCK_OPEN_GLYPH)
         self.auto_btn.setEnabled(auto_enabled)
 
     def _on_chevron_toggled(self, collapsed: bool):
-        """Hide the MIDI/DMX address row and flip the chevron glyph, then let
-        the owning track restack the timeline to the new (collapsed) height."""
+        """Hide the MIDI/DMX address row (the checked chevron icon flips to
+        point right by itself), then let the owning track restack the timeline
+        to the new (collapsed) height."""
         self.info_label.setVisible(not collapsed)
-        self.chevron.setText(
-            _CHEVRON_COLLAPSED_GLYPH if collapsed else _CHEVRON_GLYPH)
         self.collapse_toggled.emit(collapsed)
 
     def set_collapsed(self, collapsed: bool):
@@ -1108,8 +1111,6 @@ class TrackHeaderWidget(QWidget):
         self.chevron.setChecked(collapsed)
         self.chevron.blockSignals(False)
         self.info_label.setVisible(not collapsed)
-        self.chevron.setText(
-            _CHEVRON_COLLAPSED_GLYPH if collapsed else _CHEVRON_GLYPH)
 
 
 class MidiEventsTrack(BaseTrack):

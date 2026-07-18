@@ -38,20 +38,24 @@
   }
 
   function fmtClock(t) {
-    t = Math.max(0, t || 0);
+    // Negative time = the count-in running down toward the song start.
+    var neg = (t || 0) < 0;
+    t = Math.abs(t || 0);
     var ms = Math.floor((t % 1) * 1000);
     var s = Math.floor(t);
-    return pad2(Math.floor(s / 60)) + ":" + pad2(s % 60) +
+    return (neg ? "−" : "") + pad2(Math.floor(s / 60)) + ":" + pad2(s % 60) +
       '<span class="clock-ms">.' + String(ms).padStart(3, "0") + "</span>";
   }
 
   function sectionLabel(name) { return SECTION_NAMES[name] || name; }
 
   function currentTime() {
+    // May be negative while the count-in runs (the countdown to beat 1).
     var t = pos.t;
     if (pos.playing) t += (performance.now() - pos.wall) / 1000;
     if (state && state.duration) t = Math.min(t, state.duration);
-    return Math.max(0, t);
+    if (!pos.playing) t = Math.max(0, t);
+    return t;
   }
 
   function send(cmd) {
@@ -104,6 +108,7 @@
     renderNowPlaying(s);
     renderCues(s.cues);
     renderSectionStrip(s);
+    renderCountin(s);
     $("btn-blackout").classList.toggle("active", !!s.blackout);
     updatePlayIcon(s.playing);
     if (s.setlist.current !== waveSong) {
@@ -119,6 +124,7 @@
   function onPos(msg) {
     pos = { t: msg.t, wall: performance.now(), playing: msg.playing };
     updatePlayIcon(msg.playing);
+    renderMeters(msg.levels);
   }
 
   function onBeat(msg) {
@@ -199,7 +205,8 @@
     var indexText = pad2(current + 1) + " / " + pad2(total);
     $("song-title").textContent = song ? song.title : "—";
     $("chip-index").textContent = indexText;
-    $("now-index").textContent = indexText;
+    $("now-index").textContent = song ? indexText : "— / —";
+    $("chip-key").textContent = "KEY · " + (song && song.key ? song.key : "—");
     $("chip-bpm").textContent = s.bpm + " BPM";
     $("top-bpm").textContent = s.bpm + " BPM";
     $("top-song").textContent = song
@@ -210,6 +217,28 @@
     var next = songs[current + 1];
     $("next-title").textContent = next ? next.title : "— (end of setlist)";
     $("next-meta").textContent = next ? songMeta(next) : "";
+    var bars = s.countin ? s.countin.bars : null;
+    $("next-countin").textContent = !next ? "—"
+      : next.precount ? "COUNT-IN · " + bars + " BARS" : "SEGUE";
+  }
+
+  function renderCountin(s) {
+    var countin = s.countin || { enabled: false, bars: null };
+    $("countin-toggle").classList.toggle("on", !!countin.enabled);
+    $("countin-bars").textContent = countin.bars != null ? countin.bars : "—";
+  }
+
+  function renderMeters(levels) {
+    ["click", "backing"].forEach(function (bus) {
+      var level = levels && levels[bus] ? levels[bus] : 0;
+      // RMS → lit segments; sqrt lifts quiet material into the visible range.
+      var lit = Math.min(8, Math.round(Math.sqrt(Math.min(1, level * 1.6)) * 8));
+      document.querySelectorAll('[data-meter="' + bus + '"]').forEach(function (meter) {
+        for (var i = 0; i < meter.children.length; i++) {
+          meter.children[i].classList.toggle("off", i >= lit);
+        }
+      });
+    });
   }
 
   function renderCues(cues) {
@@ -309,17 +338,19 @@
 
   function tick() {
     var t = currentTime();
+    var counting = t < 0;
+    document.body.classList.toggle("counting-in", counting);
     var clock = fmtClock(t);
     $("top-clock").innerHTML = clock;
     $("transport-clock").innerHTML = clock;
-    $("wave-elapsed").textContent = fmtDur(t);
+    $("wave-elapsed").textContent = fmtDur(Math.max(0, t));
 
     if (state) {
       var dur = state.duration;
-      $("transport-remaining").textContent = dur ? fmtDur(dur - t) : "--:--";
+      $("transport-remaining").textContent = dur ? fmtDur(dur - Math.max(0, t)) : "--:--";
 
       if (dur) {
-        var f = Math.min(1, t / dur);
+        var f = Math.min(1, Math.max(0, t) / dur);
         $("playhead").style.left = (f * 100) + "%";
         if (!seeking) paintSeek(f);
         // Repaint the played/unplayed split at most a few times per second.
@@ -327,12 +358,19 @@
         if (frac !== lastDrawnFrac) { lastDrawnFrac = frac; drawWaveform(); }
       }
 
-      renderSection(t);
-
-      var beatDur = 60 / (state.bpm || 120);
-      var bar = Math.floor(t / (state.beats_per_bar * beatDur)) + 1;
-      $("bar-beat").textContent =
-        "BAR " + bar + " · BEAT " + (beat || "—") + "/" + state.beats_per_bar;
+      if (counting) {
+        $("section-name").textContent = "COUNT-IN";
+        $("section-count").textContent = "";
+        $("section-remaining").textContent = (-t).toFixed(1) + "s to start";
+        $("bar-beat").textContent =
+          "COUNT-IN · BEAT " + (beat || "—") + "/" + state.beats_per_bar;
+      } else {
+        renderSection(t);
+        var beatDur = 60 / (state.bpm || 120);
+        var bar = Math.floor(t / (state.beats_per_bar * beatDur)) + 1;
+        $("bar-beat").textContent =
+          "BAR " + bar + " · BEAT " + (beat || "—") + "/" + state.beats_per_bar;
+      }
     }
     requestAnimationFrame(tick);
   }
@@ -369,6 +407,21 @@
   $("btn-prev").addEventListener("click", function () { send({ action: "prev" }); });
   $("btn-next").addEventListener("click", function () { send({ action: "next" }); });
   $("btn-blackout").addEventListener("click", function () { send({ action: "blackout" }); });
+
+  // AUTO COUNT-IN card: toggle = current song's precount, stepper = global bars.
+  $("countin-toggle").addEventListener("click", function () {
+    if (state && state.countin) send({ action: "set_precount", on: !state.countin.enabled });
+  });
+  $("countin-minus").addEventListener("click", function () {
+    if (state && state.countin && state.countin.bars > 1) {
+      send({ action: "set_countin_bars", bars: state.countin.bars - 1 });
+    }
+  });
+  $("countin-plus").addEventListener("click", function () {
+    if (state && state.countin && state.countin.bars < 8) {
+      send({ action: "set_countin_bars", bars: state.countin.bars + 1 });
+    }
+  });
 
   // PANIC requires a 600 ms hold so a stray tap can't kill the show.
   (function () {

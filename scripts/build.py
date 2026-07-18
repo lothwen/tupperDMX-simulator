@@ -41,7 +41,7 @@ class Builder:
     def create_icons(self):
         """Create platform-specific icon files from PNG"""
         print("Creating platform-specific icons...")
-        png_icon = self.project_root / "assets" / "icons" / "metronome_icon.png"
+        png_icon = self.project_root / "assets" / "icons" / "TupperDMX-icon.png"
         
         if not png_icon.exists():
             print("PNG icon not found, skipping icon creation")

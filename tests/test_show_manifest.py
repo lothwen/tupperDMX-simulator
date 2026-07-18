@@ -135,6 +135,42 @@ def test_song_metadata_defaults_and_id():
                 "current_song_index is clamped to the setlist")
 
 
+def test_guide_track_roundtrip():
+    print("test_guide_track_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "Gira.show"
+        (root / model.AUDIO_DIR).mkdir(parents=True)
+        inside_guide = root / model.AUDIO_DIR / "mezcla.mp3"
+        inside_guide.write_bytes(b"g")
+        outside_guide = Path(tmp) / "estudio" / "mezcla.mp3"
+        outside_guide.parent.mkdir()
+        outside_guide.write_bytes(b"g")
+
+        show = _empty_show(root)
+        show.playlist.songs = [
+            SongConfig(audio="/x/backing.mp3", guide=str(outside_guide),
+                       guide_offset=0.75, id="s1"),
+            SongConfig(audio="/x/backing2.mp3", guide=str(inside_guide), id="s2"),
+        ]
+        data = show_to_manifest(show)
+        _assert(data["songs"][0]["guide"] == str(outside_guide),
+                "referenced-in-place guide serializes absolute")
+        _assert(data["songs"][1]["guide"] == "audio/mezcla.mp3",
+                "in-show guide serializes relative")
+
+        loaded = show_from_manifest(root, data)
+        s0, s1 = loaded.playlist.songs
+        _assert(s0.guide == str(outside_guide) and abs(s0.guide_offset - 0.75) < 1e-9,
+                "guide path + guide_offset roundtrip")
+        _assert(s1.guide == str(inside_guide),
+                "relative guide resolves to absolute against the root")
+
+        legacy = show_from_manifest(root, {"format_version": 1, "songs": [{}]})
+        song = legacy.playlist.songs[0]
+        _assert(song.guide is None and song.guide_offset == 0.0,
+                "manifests without guide keys default to None/0.0")
+
+
 def test_show_name_fallback():
     print("test_show_name_fallback")
     root = Path("/tmp/Directo Billares 2026.show")
@@ -193,6 +229,7 @@ def main():
     test_song_path_portability()
     test_missing_media_paths_are_preserved()
     test_song_metadata_defaults_and_id()
+    test_guide_track_roundtrip()
     test_show_name_fallback()
     test_fixtures_and_cues_reuse_config_parsers()
     test_song_status_matrix()

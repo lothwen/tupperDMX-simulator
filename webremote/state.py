@@ -92,6 +92,8 @@ def build_setlist(songs: list, current_index: int) -> dict:
                 "title": _song_title(song),
                 "duration": probe_duration(getattr(song, "audio", None)),
                 "bpm": probe_bpm(getattr(song, "midi", None)),
+                "key": getattr(song, "key", "") or None,
+                "precount": bool(getattr(song, "precount", True)),
             }
             for i, song in enumerate(songs)
         ],
@@ -101,8 +103,12 @@ def build_setlist(songs: list, current_index: int) -> dict:
 def build_state(*, playing: bool, position: float, duration: Optional[float],
                 bpm: int, blackout: bool, setlist: dict,
                 sections: List[dict], cues: List[dict],
-                show_name: Optional[str] = None) -> dict:
-    """Assemble the full 'state' WS message (the schema's single source)."""
+                show_name: Optional[str] = None,
+                countin: Optional[dict] = None) -> dict:
+    """Assemble the full 'state' WS message (the schema's single source).
+    ``position`` may be negative while the count-in runs (clients render it
+    as a countdown); ``countin`` = {'enabled': current song's precount,
+    'bars': the global count-in length}."""
     return {
         "type": "state",
         "show_name": show_name,
@@ -112,6 +118,8 @@ def build_state(*, playing: bool, position: float, duration: Optional[float],
         "bpm": int(bpm),
         "beats_per_bar": 4,
         "blackout": bool(blackout),
+        "countin": countin if countin is not None
+        else {"enabled": False, "bars": 2},
         "setlist": setlist,
         "sections": sections,
         "cues": cues,

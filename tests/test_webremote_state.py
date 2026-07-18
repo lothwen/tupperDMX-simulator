@@ -85,6 +85,16 @@ def test_build_setlist():
             "unreadable files probe to None (client renders '—')")
     _assert([s["index"] for s in setlist["songs"]] == [0, 1, 2],
             "songs carry their setlist index")
+    _assert(all(s["key"] is None and s["precount"] is True
+                for s in setlist["songs"]),
+            "songs without metadata expose null key and default precount")
+
+    keyed = FakeSong(audio="/no/such/dir/Marea.mp3")
+    keyed.key = "Am"
+    keyed.precount = False
+    entry = build_setlist([keyed], 0)["songs"][0]
+    _assert(entry["key"] == "Am" and entry["precount"] is False,
+            "per-song key and precount serialize into the setlist")
 
 
 def test_probes_missing_files():
@@ -104,14 +114,25 @@ def test_build_state_schema():
         sections=[], cues=[{"index": 0, "label": "Warm", "color": "#fff"}])
 
     expected_keys = {"type", "show_name", "playing", "position", "duration",
-                     "bpm", "beats_per_bar", "blackout", "setlist",
+                     "bpm", "beats_per_bar", "blackout", "countin", "setlist",
                      "sections", "cues"}
     _assert(set(state) == expected_keys, "state message has the frozen schema keys")
     _assert(state["type"] == "state", "type tag is 'state'")
     _assert(state["show_name"] is None, "show name is a Phase-3 placeholder (null)")
     _assert(state["beats_per_bar"] == 4, "beats_per_bar is constant 4 this phase")
+    _assert(state["countin"] == {"enabled": False, "bars": 2},
+            "countin defaults to disabled / 2 bars when not provided")
     _assert(state["bpm"] == 142 and state["position"] == 12.5,
             "values pass through")
+
+    state = build_state(
+        playing=True, position=-3.2, duration=200.0, bpm=142, blackout=False,
+        setlist={"current": 0, "songs": []}, sections=[], cues=[],
+        countin={"enabled": True, "bars": 4})
+    _assert(state["countin"] == {"enabled": True, "bars": 4},
+            "countin block passes through")
+    _assert(state["position"] == -3.2,
+            "negative position (count-in countdown) passes through")
 
     state = build_state(playing=False, position=0.0, duration=None, bpm=120,
                         blackout=True, setlist={"current": 0, "songs": []},

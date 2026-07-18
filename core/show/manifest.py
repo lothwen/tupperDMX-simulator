@@ -46,8 +46,11 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "audio": _portable(song.audio, show.root),
             "midi": _portable(song.midi, show.root),
             "offset": song.offset,
+            "guide": _portable(song.guide, show.root),
+            "guide_offset": song.guide_offset,
             "key": song.key,
             "precount": song.precount,
+            "voice_cues": [asdict(c) for c in song.voice_cues],
             "cache": dict(song.cache),
         })
     return {
@@ -83,10 +86,14 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             midi=_resolved(entry.get("midi"), root),
             audio=_resolved(entry.get("audio"), root),
             offset=Config._validate_float(entry.get("offset", 0.0), -3600.0, 3600.0),
+            guide=_resolved(entry.get("guide"), root),
+            guide_offset=Config._validate_float(
+                entry.get("guide_offset", 0.0), -3600.0, 3600.0),
             id=str(entry.get("id") or uuid.uuid4()),
             title=str(entry.get("title", "")),
             key=str(entry.get("key", "")),
             precount=bool(entry.get("precount", True)),
+            voice_cues=Config._parse_voice_cues(entry.get("voice_cues")),
             cache=entry["cache"] if isinstance(entry.get("cache"), dict) else {},
         ))
 
