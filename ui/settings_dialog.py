@@ -381,6 +381,10 @@ class SettingsDialog(QDialog):
         row.addWidget(self.webremote_port_spin)
         self.webremote_url_label = QLabel()
         self.webremote_url_label.setObjectName("SettingsLinkLabel")
+        self.webremote_url_label.setOpenExternalLinks(True)
+        self.webremote_url_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self.webremote_url_label.linkHovered.connect(self._on_webremote_link_hover)
         row.addWidget(self.webremote_url_label, 1)
         layout.addLayout(row)
 
@@ -397,10 +401,28 @@ class SettingsDialog(QDialog):
 
     def _update_webremote_url(self, *_) -> None:
         if self.webremote_toggle.isChecked():
-            self.webremote_url_label.setText(
-                f"http://{lan_ip()}:{self.webremote_port_spin.value()}")
+            self._webremote_url = f"http://{lan_ip()}:{self.webremote_port_spin.value()}"
+            self._render_webremote_link(False)
         else:
+            self._webremote_url = ""
             self.webremote_url_label.setText("Disabled — no server runs.")
+
+    def _render_webremote_link(self, hover: bool) -> None:
+        if not self._webremote_url:
+            return
+        deco = "underline" if hover else "none"
+        url = self._webremote_url
+        self.webremote_url_label.setText(
+            f'<a href="{url}" style="color:#79cdf0; '
+            f'text-decoration:{deco};">{url}</a>')
+
+    def _on_webremote_link_hover(self, link: str) -> None:
+        # setText resets the label's auto link cursor, so re-apply it here.
+        self._render_webremote_link(bool(link))
+        if link:
+            self.webremote_url_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.webremote_url_label.unsetCursor()
 
     def _build_audio_page(self) -> QWidget:
         """Audio page (Fase 4 live player): output device, click/voice channel
