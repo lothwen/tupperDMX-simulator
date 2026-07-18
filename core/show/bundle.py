@@ -83,13 +83,24 @@ def _collect(song_dicts_and_paths, subdir: str, warnings: List[str],
 
 def export_bundle(show: Show, dest_zip, *, include_history: bool = False) -> List[str]:
     """Write the whole show as one portable zip. Returns human-readable
-    warnings (files that could not be bundled)."""
+    warnings (files that could not be bundled).
+
+    ALL song audio travels: referenced backings and guides are collected
+    into audio/, and files already living in the show's audio/ (post-import
+    bundles) ship wholesale like midis/ — their filenames are reserved so a
+    collected external can't collide."""
     warnings: List[str] = []
     data = show_to_manifest(show)
     songs = list(zip(data["songs"], show.playlist.songs))
 
+    owned_audio_names = ({p.name for p in show.audio_dir.rglob("*") if p.is_file()}
+                         if show.audio_dir.is_dir() else set())
     audio_map = _collect(
-        [(d, "audio", s.audio) for d, s in songs], AUDIO_DIR, warnings)
+        [(d, "audio", s.audio) for d, s in songs], AUDIO_DIR, warnings,
+        taken=owned_audio_names)
+    guide_map = _collect(
+        [(d, "guide", s.guide) for d, s in songs], AUDIO_DIR, warnings,
+        taken=owned_audio_names | {os.path.basename(a) for a in audio_map.values()})
     # Post-migration midis live inside the show; stray absolute ones (hand-
     # edited manifests) are collected the same way so the bundle stays whole
     # (owned filenames are reserved so a stray twin can't collide).
@@ -102,12 +113,14 @@ def export_bundle(show: Show, dest_zip, *, include_history: bool = False) -> Lis
     dest_zip = Path(dest_zip)
     with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(MANIFEST_NAME, json.dumps(data, indent=2))
-        if show.midis_dir.is_dir():
-            for path in sorted(show.midis_dir.rglob("*")):
-                if path.is_file():
-                    zf.write(path, f"{MIDIS_DIR}/"
-                                   f"{path.relative_to(show.midis_dir).as_posix()}")
-        for src, arc in {**audio_map, **midi_map}.items():
+        for owned_dir, subdir in ((show.midis_dir, MIDIS_DIR),
+                                  (show.audio_dir, AUDIO_DIR)):
+            if owned_dir.is_dir():
+                for path in sorted(owned_dir.rglob("*")):
+                    if path.is_file():
+                        zf.write(path, f"{subdir}/"
+                                       f"{path.relative_to(owned_dir).as_posix()}")
+        for src, arc in {**audio_map, **guide_map, **midi_map}.items():
             zf.write(src, arc)
         for _name, path in used_nonshipped_defs(show).items():
             zf.write(path, f"{FIXTURES_DIR}/{path.name}")

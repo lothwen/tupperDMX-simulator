@@ -82,29 +82,40 @@ class PlaylistController:
             w.timeline.refresh_from_manager()
             w.toolbar_manager.update_midi_file_display("")
             w.toolbar_manager.update_audio_file_display("")
+            w.toolbar_manager.update_guide_file_display("")
             w.toolbar_manager.update_song_info("", "")
             w.timeline_toolbar.set_song_precount(False, has_song=False)
+            w.timeline_toolbar.set_monitor_state(w.media_controller.monitor, False)
             w.timeline.set_files(None)
             w.timeline.set_voice_cues([])
             w.update_window_title()
             return
 
+        # Guide row: display + one-shot silent relink (no dialog — the
+        # interactive recovery flow stays backing-only).
+        self._refresh_guide_display(song)
+
         # Audio: waveform + path display (missing media keeps its path — the
-        # core already emitted audio_missing for the recovery flow).
+        # core already emitted audio_missing for the recovery flow). The
+        # waveform draws the MONITORED track (backing or guide), which the
+        # core resolved while loading the song.
         if song.audio and not os.path.exists(song.audio):
             w.toolbar_manager.update_audio_file_display(
                 f"⚠ Missing audio: {song.audio}")
             w.timeline.set_files(None)
-        elif song.audio:
-            w.timeline.set_files(song.audio)
-            w.toolbar_manager.update_audio_file_display(song.audio)
-            # Use QTimer to ensure waveform is drawn before setting offset
-            QTimer.singleShot(
-                100,
-                lambda offset=song.offset: w.timeline.set_waveform_offset(offset),
-            )
         else:
-            w.toolbar_manager.update_audio_file_display("")
+            w.toolbar_manager.update_audio_file_display(song.audio or "")
+            active = w.media_controller.active_file()
+            if active:
+                w.timeline.set_files(active)
+                # Use QTimer to ensure waveform is drawn before setting offset
+                QTimer.singleShot(
+                    100,
+                    lambda offset=w.media_controller.active_offset():
+                        w.timeline.set_waveform_offset(offset),
+                )
+            else:
+                w.timeline.set_files(None)
 
         # Voice cues: ruler markers (the PCM render rides the core)
         w.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
@@ -123,7 +134,28 @@ class PlaylistController:
             key=song.key)
         w.timeline_toolbar.set_song_precount(
             song.precount, has_song=bool(song.title))
+        w.timeline_toolbar.set_monitor_state(
+            w.media_controller.monitor,
+            bool(song.guide and os.path.exists(song.guide)))
         w.update_window_title()
+
+    def _refresh_guide_display(self, song):
+        """Guide-row state; a moved guide relinks silently when its basename
+        shows up in exactly one known-good root."""
+        w = self.window
+        if song.guide and not os.path.exists(song.guide):
+            candidates = find_by_basename(os.path.basename(song.guide),
+                                          self._relink_roots())
+            if len(candidates) == 1:
+                song.guide = candidates[0]
+                w.save_config()
+                self.logger.info(f"Relinked guide automatically to: {candidates[0]}")
+                w.media_controller.set_guide(song.guide, song.guide_offset)
+            else:
+                w.toolbar_manager.update_guide_file_display(
+                    f"⚠ Missing guide: {song.guide}")
+                return
+        w.toolbar_manager.update_guide_file_display(song.guide or "")
 
     # ------------------------------------------------------------------
     # Missing-media recovery

@@ -80,6 +80,11 @@ class SongConfig:
     midi: Optional[str] = None
     audio: Optional[str] = None  # Primary key - audio file path uniquely identifies a song
     offset: float = 0.0
+    # Guide track: optional full-mix reference for designing lights (the
+    # backing in `audio` stays the live master). Editor-only monitoring;
+    # live surfaces never play it.
+    guide: Optional[str] = None
+    guide_offset: float = 0.0
     # Show-model metadata (Fase 3). id is a stable uuid assigned by the show
     # layer (so identity survives file renames); cache holds derived
     # {duration, bpm, audio_mtime} values, never hand-edited.
@@ -679,14 +684,20 @@ class Config:
             return True
         return False
 
-    def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None) -> None:
-        """Update the current song's MIDI or offset."""
+    def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None,
+                            guide: Optional[str] = None,
+                            guide_offset: Optional[float] = None) -> None:
+        """Update the current song's MIDI, offsets or guide track ("" clears)."""
         song = self.get_current_song()
         if song:
             if midi is not None:
                 song.midi = self._validate_file_path(midi) if midi else None
             if offset is not None:
                 song.offset = self._validate_float(offset, -3600.0, 3600.0)
+            if guide is not None:
+                song.guide = self._validate_file_path(guide) if guide else None
+            if guide_offset is not None:
+                song.guide_offset = self._validate_float(guide_offset, -3600.0, 3600.0)
 
     def update_volume(self, metronome: Optional[float] = None, audio: Optional[float] = None,
                       voice: Optional[float] = None) -> None:

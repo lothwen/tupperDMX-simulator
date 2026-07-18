@@ -1524,6 +1524,14 @@ QWidget#TimelineToolbar QPushButton#TTSegment:checked {
     font-weight: bold;
 }
 
+/* GUIDE monitor: amber when active (matches the Export-bundle accent) so
+   "not the live signal" is unmistakable */
+QWidget#TimelineToolbar QPushButton#TTSegment[monitor="guide"]:checked {
+    color: #f8e7c8;
+    background-color: #6d5330;
+    border-color: #c1954f;
+}
+
 /* Round only the outer corners of the segmented control */
 QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
     border-top-left-radius: 5px;

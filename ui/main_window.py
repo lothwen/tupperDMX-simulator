@@ -13,6 +13,7 @@ from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
 
 from app.core import AppCore
+from app.media_controller import MONITOR_GUIDE
 from audio.mixer import BUS_VOICE
 from core.config import Config, shipped_fixtures
 from core.io_routing import midi_routing_from_io
@@ -159,6 +160,7 @@ class MainWindow(QMainWindow):
     def _connect_toolbar_signals(self):
         """Connect toolbar manager signals to appropriate handlers."""
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
+        self.toolbar_manager.guide_clear_requested.connect(self.clear_guide_track)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
         # Show project signals
@@ -187,6 +189,10 @@ class MainWindow(QMainWindow):
             self.app_core.on_song_precount_toggled)
         self.app_core.precount_changed.connect(
             self.timeline_toolbar.set_song_precount)
+        # Editor monitor (backing | guide): toggle → controller → waveform.
+        self.timeline_toolbar.monitor_changed.connect(
+            self.media_controller.set_monitor)
+        self.media_controller.monitor_changed.connect(self._on_monitor_changed)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
@@ -404,10 +410,32 @@ class MainWindow(QMainWindow):
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def on_waveform_offset_changed(self, offset_sec):
-        """Handle waveform offset changes from timeline."""
-        self.media_controller.set_audio_offset(offset_sec)
-        self.config.update_current_song(offset=offset_sec)
+        """Handle waveform offset changes from timeline: the drag edits the
+        offset of whichever track is being monitored."""
+        mc = self.media_controller
+        if mc.monitor == MONITOR_GUIDE and mc.guide_file:
+            mc.set_guide_offset(offset_sec)
+            self.config.update_current_song(guide_offset=offset_sec)
+        else:
+            mc.set_audio_offset(offset_sec)
+            self.config.update_current_song(offset=offset_sec)
         self.save_config()
+
+    def _on_monitor_changed(self, monitor):
+        """Editor monitor switched: redraw the waveform for the monitored
+        track and refresh the toggle state."""
+        mc = self.media_controller
+        active = mc.active_file()
+        if active and os.path.exists(active):
+            self.timeline.set_files(active)
+            # Use QTimer to ensure waveform is drawn before setting offset
+            QTimer.singleShot(
+                100, lambda: self.timeline.set_waveform_offset(mc.active_offset()))
+        else:
+            self.timeline.set_files(None)
+        song = self.config.get_current_song()
+        has_guide = bool(song and song.guide and os.path.exists(song.guide))
+        self.timeline_toolbar.set_monitor_state(monitor, has_guide)
     
     def bpm_changed(self, value):
         """Handle BPM changes from toolbar."""
@@ -935,6 +963,9 @@ class MainWindow(QMainWindow):
         elif file_type == 'audio':
             title = "Select Audio file"
             filt = "Audio files (*.mp3 *.wav);;MP3 files (*.mp3);;WAV files (*.wav);;All files (*)"
+        elif file_type == 'guide':
+            title = "Select Guide track (full mix)"
+            filt = "Audio files (*.mp3 *.wav);;MP3 files (*.mp3);;WAV files (*.wav);;All files (*)"
         else:
             title = f"Select {file_type.upper()} file"
             filt = "All files (*)"
@@ -976,6 +1007,23 @@ class MainWindow(QMainWindow):
                     self.playlist_controller.update_song_counter()
                     self.save_config()
                     
+                elif file_type == 'guide':
+                    # Guide track: attaches to the CURRENT song (never creates
+                    # or switches one — the backing stays the song identity).
+                    file_ext = path.lower().split('.')[-1]
+                    if file_ext not in ['mp3', 'wav']:
+                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
+                        return
+                    song = self.config.get_current_song()
+                    if song is None:
+                        ErrorDialogManager.show_media_file_error(self, path, "No song selected — load a backing track first.")
+                        return
+                    self.config.update_current_song(guide=path)
+                    self.save_config()
+                    # Full reload keeps engine/waveform/toolbar consistent
+                    self.playlist_controller.apply_song_config(song)
+                    self.logger.info(f"Guide track set: {path}")
+
                 elif file_type == 'midi':
                     # Save pending edits of the current MIDI, then copy the
                     # picked file into the show's midis/ — the show owns its
@@ -1006,6 +1054,16 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_file_permission_error(self, path, "read")
             except Exception as e:
                 ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def clear_guide_track(self):
+        """Remove the current song's guide track (the file stays on disk)."""
+        song = self.config.get_current_song()
+        if song is None or not song.guide:
+            return
+        self.config.update_current_song(guide="", guide_offset=0.0)
+        self.save_config()
+        self.playlist_controller.apply_song_config(song)
+        self.logger.info("Cleared guide track")
 
     def create_new_midi_track(self):
         """Handle creating a new empty MIDI track."""

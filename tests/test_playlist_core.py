@@ -72,6 +72,9 @@ class FakeMediaController:
     def set_files(self, audio):
         self.log.append(("set_files", audio))
 
+    def set_guide(self, path, offset_sec=0.0):
+        self.log.append(("set_guide", path, offset_sec))
+
     def set_audio_offset(self, offset):
         self.log.append(("set_audio_offset", offset))
 

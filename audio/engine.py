@@ -173,6 +173,8 @@ class AudioEngine(QObject):
         if path == self._loaded_path and self.mixer.has_backing():
             self.backing_loaded.emit(path)
             return
+        if path == self._loading_path:
+            return  # same decode already in flight; restarting it can abort it
         self._loading_path = path
         self.mixer.set_backing(None)
         self._loaded_path = None

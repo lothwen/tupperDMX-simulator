@@ -16,7 +16,8 @@ class ToolbarManager(QObject):
     """Manages the main application toolbar with media controls and configuration options."""
 
     # Signals
-    load_file_requested = pyqtSignal(str)  # file_type ('midi' or 'audio')
+    load_file_requested = pyqtSignal(str)  # file_type ('midi', 'audio' or 'guide')
+    guide_clear_requested = pyqtSignal()  # remove the current song's guide track
     new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
     # Show project signals
@@ -50,6 +51,8 @@ class ToolbarManager(QObject):
         self.toolbar: Optional[QToolBar] = None
         self.export_midi_button: Optional[QPushButton] = None
         self.audio_file_label: Optional[QLabel] = None
+        self.guide_file_label: Optional[QLabel] = None
+        self.guide_clear_button: Optional[QPushButton] = None
         self.midi_file_label: Optional[QLabel] = None
         # Playlist navigation widgets
         self.prev_button: Optional[QPushButton] = None
@@ -533,6 +536,36 @@ class ToolbarManager(QObject):
         audio_row.addWidget(load_audio_btn)
         layout.addLayout(audio_row)
 
+        # Guide row: 🎧 icon + path + Load guide + clear. The guide is the
+        # optional full-mix design reference; the audio row above stays the
+        # live master (song identity, web remote, headless).
+        guide_row = QHBoxLayout()
+        guide_row.setSpacing(6)
+        guide_icon = QLabel("🎧")
+        guide_icon.setObjectName("FileTypeIcon")
+        guide_row.addWidget(guide_icon)
+        self.guide_file_label = QLabel("No guide track")
+        self.guide_file_label.setFixedHeight(28)
+        self.guide_file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.guide_file_label.setWordWrap(False)
+        self.guide_file_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.guide_file_label.setObjectName("FileLabel")
+        guide_row.addWidget(self.guide_file_label, 1)
+        load_guide_btn = QPushButton("Load guide")
+        load_guide_btn.setMinimumWidth(110)
+        load_guide_btn.setFixedHeight(28)
+        load_guide_btn.setObjectName("LoadButton")
+        load_guide_btn.clicked.connect(lambda: self.load_file_requested.emit('guide'))
+        guide_row.addWidget(load_guide_btn)
+        self.guide_clear_button = QPushButton("✕")
+        self.guide_clear_button.setFixedSize(28, 28)
+        self.guide_clear_button.setObjectName("LoadButton")
+        self.guide_clear_button.setToolTip("Clear guide track")
+        self.guide_clear_button.setEnabled(False)
+        self.guide_clear_button.clicked.connect(self.guide_clear_requested.emit)
+        guide_row.addWidget(self.guide_clear_button)
+        layout.addLayout(guide_row)
+
         # MIDI row: 🎹 icon + path + Load MIDI + New track
         midi_row = QHBoxLayout()
         midi_row.setSpacing(6)
@@ -616,6 +649,19 @@ class ToolbarManager(QObject):
                 self.audio_file_label.setToolTip("")
             self.logger.debug(f"Audio file display updated: {display_name}")
             
+    def update_guide_file_display(self, filename: str) -> None:
+        """Update the guide track display (empty = no guide)."""
+        if hasattr(self, 'guide_file_label') and self.guide_file_label:
+            display_name = filename if filename else "No guide track"
+            self.guide_file_label.setText(display_name)
+            if filename and len(filename) > 50:
+                self.guide_file_label.setToolTip(filename)
+            else:
+                self.guide_file_label.setToolTip("")
+            if self.guide_clear_button:
+                self.guide_clear_button.setEnabled(bool(filename))
+            self.logger.debug(f"Guide file display updated: {display_name}")
+
     def update_midi_file_display(self, filename: str) -> None:
         """Update the MIDI file display."""
         if hasattr(self, 'midi_file_label') and self.midi_file_label:

@@ -11,6 +11,12 @@ from tupperlogger import get_logger
 from core.io_routing import MidiRouting
 from midi import MidiManager
 
+# Editor monitor: which track feeds the engine's backing bus. Session-only
+# state — defaults to the backing every launch and is never persisted, so
+# headless/web-remote/live use can never inherit a guide monitor.
+MONITOR_BACKING = "backing"
+MONITOR_GUIDE = "guide"
+
 
 class MediaController(QObject):
     """Handles media playback control (backing audio + MIDI synchronization).
@@ -29,6 +35,7 @@ class MediaController(QObject):
     position_changed = pyqtSignal(float)  # current time in seconds
     media_loaded = pyqtSignal()
     error_occurred = pyqtSignal(str, str)  # error message, file_path
+    monitor_changed = pyqtSignal(str)  # MONITOR_BACKING | MONITOR_GUIDE
 
     def __init__(self, midi_manager: MidiManager, engine: AudioEngine,
                  audio_volume: float = 0.5):
@@ -55,8 +62,12 @@ class MediaController(QObject):
         self._voice_cues: List[Tuple[float, np.ndarray]] = []
         self._next_cue_index = 0
 
-        # Current files
+        # Current files. The guide is the song's optional full-mix reference;
+        # the monitor picks which of the two the engine decodes and plays.
         self.audio_file: Optional[str] = None
+        self.guide_file: Optional[str] = None
+        self.guide_offset_sec = 0.0
+        self.monitor = MONITOR_BACKING
         # Where playback sends MIDI; set from config.io by MainWindow.
         self.midi_routing = MidiRouting(to_controller=False, port=None)
 
@@ -85,19 +96,61 @@ class MediaController(QObject):
                     return
 
                 self.logger.info(f"Audio file set: {audio_file}")
-                # Decode the audio file into the engine (async)
-                self.engine.load_backing(audio_file)
+                # Decode the monitored track into the engine (async)
+                self._load_active()
 
             except Exception as e:
                 self.logger.error(f"Error setting audio file: {e}")
                 self.error_occurred.emit(str(e), audio_file)
                 return
         else:
-            self.engine.unload_backing()
+            self._load_active()
 
         # MIDI files are now handled by MidiManager
         if midi_file:
             self.logger.info(f"MIDI file should be loaded via MidiManager.load_from_file(): {midi_file}")
+
+    def set_guide(self, path: Optional[str], offset_sec: float = 0.0) -> None:
+        """Set the song's guide track (full-mix design reference); None clears.
+        Reloads the engine only while the guide is being monitored."""
+        self.guide_file = path
+        self.guide_offset_sec = float(offset_sec)
+        if self.monitor == MONITOR_GUIDE:
+            self._load_active()
+
+    def set_guide_offset(self, offset_sec: float) -> None:
+        """Set the guide's offset relative to the timeline."""
+        self.guide_offset_sec = float(offset_sec)
+
+    def set_monitor(self, which: str) -> None:
+        """Select which track the editor hears (backing | guide). Session-only
+        state; live surfaces never call this."""
+        if which not in (MONITOR_BACKING, MONITOR_GUIDE) or which == self.monitor:
+            return
+        self.monitor = which
+        self.logger.info(f"Monitor: {which}")
+        self._load_active()
+        self.monitor_changed.emit(which)
+
+    def active_file(self) -> Optional[str]:
+        """The monitored track: the guide when selected and set, else the
+        backing (a missing guide silently falls back)."""
+        if self.monitor == MONITOR_GUIDE and self.guide_file:
+            return self.guide_file
+        return self.audio_file
+
+    def active_offset(self) -> float:
+        """Timeline offset of the monitored track."""
+        if self.monitor == MONITOR_GUIDE and self.guide_file:
+            return self.guide_offset_sec
+        return self.audio_offset_sec
+
+    def _load_active(self) -> None:
+        active = self.active_file()
+        if active:
+            self.engine.load_backing(active)
+        else:
+            self.engine.unload_backing()
 
     def set_midi_routing(self, routing: MidiRouting) -> None:
         """Set the MIDI output routing (controller and/or external port)."""
@@ -160,8 +213,8 @@ class MediaController(QObject):
     def start_playback(self) -> bool:
         """Start media playback from the beginning (through the count-in when
         the song has one)."""
-        if not self.audio_file:
-            self.logger.warning("Cannot start playback: no MP3 file loaded")
+        if not self.active_file():
+            self.logger.warning("Cannot start playback: no audio file loaded")
             return False
 
         self.logger.info("Starting fresh media playback")
@@ -185,9 +238,9 @@ class MediaController(QObject):
             if not midi_started:
                 self.logger.warning("Failed to start MIDI playback, continuing with audio only")
 
-        # Ensure the backing is (being) loaded and reset its position
+        # Ensure the monitored track is (being) loaded and reset its position
         if not self.engine.is_backing_loaded():
-            self.engine.load_backing(self.audio_file)
+            self.engine.load_backing(self.active_file())
         self.engine.set_backing_position(0)
         self._reset_cue_pointer(self.current_timeline_time)
 
@@ -202,8 +255,8 @@ class MediaController(QObject):
 
     def play_pause_playback(self) -> None:
         """Toggle play/pause state."""
-        if not self.audio_file:
-            self.logger.warning("Cannot play/pause: no MP3 file loaded")
+        if not self.active_file():
+            self.logger.warning("Cannot play/pause: no audio file loaded")
             return
 
         if self.is_playing:
@@ -240,7 +293,7 @@ class MediaController(QObject):
             return
 
         # If no media loaded yet, can't resume
-        if not self.audio_file or not self.engine.is_backing_loaded():
+        if not self.active_file() or not self.engine.is_backing_loaded():
             self.logger.warning("Cannot resume: no media loaded")
             return
 
@@ -271,7 +324,7 @@ class MediaController(QObject):
             self.logger.debug(f"Seeking MIDI to {self.current_timeline_time:.2f}s")
 
         # Set backing position
-        audio_time_sec = max(0, self.current_timeline_time - self.audio_offset_sec)
+        audio_time_sec = max(0, self.current_timeline_time - self.active_offset())
         self.engine.set_backing_position(audio_time_sec)
         self._reset_cue_pointer(self.current_timeline_time)
 
@@ -336,7 +389,7 @@ class MediaController(QObject):
 
     def _on_backing_loaded(self, path: str) -> None:
         """Backing decode finished (the engine's async load)."""
-        if path == self.audio_file:
+        if path == self.active_file():
             self.logger.debug("Media loaded successfully")
             self.media_loaded.emit()
 
@@ -348,7 +401,7 @@ class MediaController(QObject):
     def _on_backing_failed(self, error_string: str, path: str) -> None:
         """Handle backing decode errors."""
         self.logger.error(f"Audio engine error: {error_string}")
-        self.error_occurred.emit(error_string, path or self.audio_file or "Unknown file")
+        self.error_occurred.emit(error_string, path or self.active_file() or "Unknown file")
 
     def _on_playback_tick(self) -> None:
         """Update playback position and synchronize media."""
@@ -372,7 +425,7 @@ class MediaController(QObject):
 
     def _sync_audio_playback(self) -> None:
         """Synchronize audio playback with timeline."""
-        audio_time_sec = self.current_timeline_time - self.audio_offset_sec
+        audio_time_sec = self.current_timeline_time - self.active_offset()
 
         if audio_time_sec < 0:
             # Audio should not be playing yet (count-in or positive offset)
