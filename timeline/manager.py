@@ -6,7 +6,6 @@ Coordinates multiple timeline tracks and provides the main timeline interface.
 
 import os
 import math
-import mido
 import copy
 from typing import Optional, List, Dict, Any
 
@@ -42,6 +41,8 @@ class Timeline(QWidget):
     metronome_mute_toggled = pyqtSignal(bool)
     audio_volume_changed = pyqtSignal(int)
     audio_mute_toggled = pyqtSignal(bool)
+    voice_volume_changed = pyqtSignal(int)
+    voice_mute_toggled = pyqtSignal(bool)
     midi_data_changed = pyqtSignal()  # Emitted when MIDI data is modified
     track_heights_changed = pyqtSignal(int, int)  # waveform_height, midi_events_height (on commit)
     zoom_changed = pyqtSignal(float)  # current horizontal zoom factor (m11)
@@ -56,7 +57,7 @@ class Timeline(QWidget):
     PIXELS_PER_SECOND = 20
 
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
-                 initial_audio_volume=0.5,
+                 initial_audio_volume=0.5, initial_voice_volume=0.8,
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
                  fixtures=None, parent=None):
         super().__init__(parent)
@@ -72,6 +73,7 @@ class Timeline(QWidget):
         self._group_count = 0
 
         self.bpm = 120
+        self.voice_cues = []  # current song's [(time_sec, text)] for the ruler
         self.ruler_mode = "bars"  # "bars" | "time"
         self.beat_division = 4  # ruler/grid lines per bar in Bars mode (1, 4 or 8)
         self.snap_enabled = True  # snap clip drags to the grid + neighbour edges
@@ -131,7 +133,8 @@ class Timeline(QWidget):
         self.logger = get_logger("timeline.manager")
 
         # Create control widgets
-        self._create_control_widgets(initial_metronome_volume, initial_audio_volume)
+        self._create_control_widgets(initial_metronome_volume, initial_audio_volume,
+                                     initial_voice_volume)
         
         # Initialize UI
         self.init_ui()
@@ -144,9 +147,11 @@ class Timeline(QWidget):
         # Initialize tracks
         self._init_tracks()
         
-    def _create_control_widgets(self, initial_metronome_volume, initial_audio_volume):
+    def _create_control_widgets(self, initial_metronome_volume, initial_audio_volume,
+                                initial_voice_volume=0.8):
         """Build the combined header panel: a "TRACKS" title + fixture/group
-        counter over MASTER (audio) and METRO (metronome) volume rows."""
+        counter over MASTER (audio), CLICK (metronome) and VOICE (TTS guide)
+        volume rows."""
         # MASTER = audio output volume, drawn with a green→orange level gradient.
         self.audio_volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.audio_volume_slider.setObjectName("MasterVolumeSlider")
@@ -188,6 +193,26 @@ class Timeline(QWidget):
         self._metro_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                           | Qt.AlignmentFlag.AlignVCenter)
 
+        # VOICE = TTS guide bus (voice cues + spoken count-in).
+        self.voice_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.voice_volume_slider.setObjectName("MetroVolumeSlider")
+        self.voice_volume_slider.setRange(0, 100)
+        self.voice_volume_slider.setValue(int(initial_voice_volume * 100))
+        self.voice_volume_slider.valueChanged.connect(self.voice_volume_changed.emit)
+        self.voice_volume_slider.valueChanged.connect(self._update_voice_db)
+
+        self.voice_mute_button = QPushButton("M")
+        self.voice_mute_button.setObjectName("MetronomeMuteButton")
+        self.voice_mute_button.setCheckable(True)
+        self.voice_mute_button.setFixedSize(18, 18)
+        self.voice_mute_button.toggled.connect(self.on_voice_mute_toggled)
+
+        self._voice_db_label = QLabel()
+        self._voice_db_label.setObjectName("VolumeDbLabel")
+        self._voice_db_label.setFixedWidth(36)
+        self._voice_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+
         # "TRACKS" title row with the live fixture / placeholder group counter.
         tracks_title = QLabel("TRACKS")
         tracks_title.setObjectName("TracksTitle")
@@ -214,10 +239,13 @@ class Timeline(QWidget):
                                          self.audio_volume_slider, self._audio_db_label))
         panel.addLayout(self._volume_row("CLICK", self.metronome_mute_button,
                                          self.metronome_volume_slider, self._metro_db_label))
+        panel.addLayout(self._volume_row("VOICE", self.voice_mute_button,
+                                         self.voice_volume_slider, self._voice_db_label))
         panel.addStretch(1)
 
         self._update_audio_db(self.audio_volume_slider.value())
         self._update_metro_db(self.metronome_volume_slider.value())
+        self._update_voice_db(self.voice_volume_slider.value())
         self._update_track_counts()
 
     def _volume_row(self, label_text, mute_button, slider, db_label) -> QHBoxLayout:
@@ -248,6 +276,9 @@ class Timeline(QWidget):
 
     def _update_metro_db(self, value: int) -> None:
         self._metro_db_label.setText(self._format_db(value))
+
+    def _update_voice_db(self, value: int) -> None:
+        self._voice_db_label.setText(self._format_db(value))
 
     def _update_track_counts(self) -> None:
         """Refresh the TRACKS counter (live fixtures · placeholder groups)."""
@@ -844,15 +875,11 @@ class Timeline(QWidget):
 
     def _detect_bpm_from_data(self) -> None:
         """Detect BPM from MIDI data structure."""
-        if not self.midi_manager or not self.midi_manager.midi_data:
+        if not self.midi_manager:
             return
-            
-        # Look for tempo meta messages
-        for msg in self.midi_manager.midi_data:
-            if msg.is_meta and msg.type == 'set_tempo':
-                tempo = mido.tempo2bpm(msg.tempo)
-                self.bpm_detected.emit(round(tempo))
-                return
+        bpm = self.midi_manager.detect_bpm()
+        if bpm is not None:
+            self.bpm_detected.emit(bpm)
 
     def set_bpm(self, bpm):
         """Update BPM and redraw ruler and time grid to match new tempo."""
@@ -861,6 +888,12 @@ class Timeline(QWidget):
             self.ruler_track.redraw()
             self.draw_time_grid()
             self.logger.info(f"Timeline BPM updated to {bpm}")
+
+    def set_voice_cues(self, cues):
+        """Install the current song's voice cues [(time_sec, text)] and redraw
+        their markers on the ruler."""
+        self.voice_cues = list(cues or [])
+        self.ruler_track.redraw()
 
     def set_ruler_mode(self, mode):
         """Switch the ruler between musical bars and mm:ss clock time."""
@@ -996,6 +1029,9 @@ class Timeline(QWidget):
 
     def on_audio_mute_toggled(self, checked):
         self.audio_mute_toggled.emit(checked)
+
+    def on_voice_mute_toggled(self, checked):
+        self.voice_mute_toggled.emit(checked)
 
     # MIDI event management methods (event-id based)
     def _find_cached_event(self, event_id: str):

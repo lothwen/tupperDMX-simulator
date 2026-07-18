@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 ACTIONS = frozenset({
     "play_pause", "stop", "next", "prev", "seek", "cue", "select_song",
-    "blackout", "panic",
+    "blackout", "panic", "set_precount", "set_countin_bars",
 })
 
 
@@ -43,5 +43,17 @@ def parse_command(raw: Any) -> Optional[dict]:
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             return None
         cmd["index"] = index
+
+    if action == "set_precount":
+        on = raw.get("on")
+        if not isinstance(on, bool):
+            return None
+        cmd["on"] = on
+
+    if action == "set_countin_bars":
+        bars = raw.get("bars")
+        if isinstance(bars, bool) or not isinstance(bars, int) or bars < 1:
+            return None
+        cmd["bars"] = bars  # upper clamp happens at execution time
 
     return cmd

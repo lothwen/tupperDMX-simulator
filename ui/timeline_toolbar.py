@@ -3,9 +3,12 @@ from typing import Optional
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox,
                              QComboBox, QSlider, QButtonGroup, QFrame, QSizePolicy)
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
+from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
+from ui import icons
+from ui.toggle_switch import ToggleSwitch
 
 
 class TimelineToolbar(QWidget):
@@ -21,6 +24,7 @@ class TimelineToolbar(QWidget):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     bpm_changed = pyqtSignal(int)  # new_bpm
+    song_precount_toggled = pyqtSignal(bool)  # current song's count-in on/off
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
@@ -29,6 +33,8 @@ class TimelineToolbar(QWidget):
     ruler_mode_changed = pyqtSignal(str)  # "bars" | "time"
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
+    voice_cues_requested = pyqtSignal()  # open the per-song voice-cue editor
+    monitor_changed = pyqtSignal(str)  # editor monitor: MONITOR_BACKING | MONITOR_GUIDE
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
     ZOOM_MIN = 20
@@ -57,6 +63,9 @@ class TimelineToolbar(QWidget):
         self.play_pause_button: Optional[QPushButton] = None
         self.time_display: Optional[QLabel] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
+        self.precount_toggle: Optional[ToggleSwitch] = None
+        self.monitor_backing_btn: Optional[QPushButton] = None
+        self.monitor_guide_btn: Optional[QPushButton] = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
@@ -101,7 +110,9 @@ class TimelineToolbar(QWidget):
 
         row.addWidget(self._separator())
 
-        snap_btn = QPushButton("🧲 Snap")
+        snap_btn = QPushButton("Snap")
+        snap_btn.setIcon(icons.icon("magnet", "#e0e0e0"))
+        snap_btn.setIconSize(QSize(14, 14))
         snap_btn.setObjectName("TTSnap")
         snap_btn.setCheckable(True)
         snap_btn.setChecked(True)
@@ -141,6 +152,17 @@ class TimelineToolbar(QWidget):
         seg_wrap.setLayout(seg)
         row.addWidget(seg_wrap)
 
+        row.addWidget(self._separator())
+
+        cues_btn = QPushButton("Cues")
+        cues_btn.setIcon(icons.icon("speech", "#e0e0e0"))
+        cues_btn.setIconSize(QSize(14, 14))
+        cues_btn.setObjectName("TTToolButton")
+        cues_btn.setToolTip("Voice cues: spoken guide messages for this song "
+                            "(played on the click/voice channel)")
+        cues_btn.clicked.connect(self.voice_cues_requested.emit)
+        row.addWidget(cues_btn)
+
         return zone
 
     def _build_center_zone(self) -> QWidget:
@@ -175,7 +197,8 @@ class TimelineToolbar(QWidget):
         # BPM cluster: decorative tempo glyph + spinbox. (Metronome mute now
         # lives solely on the timeline header's CLICK row, so this is a
         # non-interactive label.)
-        tempo_glyph = QLabel("♩")
+        tempo_glyph = QLabel()
+        tempo_glyph.setPixmap(icons.pixmap("note", 18, "#cfcfcf"))
         tempo_glyph.setObjectName("MetronomeButton")
         tempo_glyph.setFixedSize(32, 32)
         tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -188,7 +211,69 @@ class TimelineToolbar(QWidget):
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         row.addWidget(self.bpm_spinbox)
 
+        # Count-in toggle (moved here from the top toolbar's SETLIST footer):
+        # per-song precount flag, shown as an iOS-style switch.
+        precount_tooltip = ("Play a count-in before this song "
+                            "(off = segue from the previous one)")
+        precount_label = QLabel(
+            f'{icons.img_tag("bell", "#aaaaaa", 12)} Count-in')
+        precount_label.setObjectName("TTCountInLabel")
+        precount_label.setToolTip(precount_tooltip)
+        row.addWidget(precount_label)
+
+        self.precount_toggle = ToggleSwitch()
+        self.precount_toggle.setToolTip(precount_tooltip)
+        self.precount_toggle.toggled.connect(self.song_precount_toggled.emit)
+        row.addWidget(self.precount_toggle)
+
+        row.addWidget(self._separator())
+
+        # Editor monitor: which track you HEAR (and see as the waveform).
+        # BACKING = the live master; GUIDE = the song's full-mix reference.
+        # Session-only — live surfaces always play the backing.
+        self.monitor_backing_btn = QPushButton("BACKING")
+        self.monitor_backing_btn.setObjectName("TTSegment")
+        self.monitor_backing_btn.setProperty("seg", "left")
+        self.monitor_backing_btn.setCheckable(True)
+        self.monitor_backing_btn.setChecked(True)
+        self.monitor_backing_btn.setToolTip("Monitor the backing track (the live master)")
+        self.monitor_guide_btn = QPushButton("GUIDE")
+        self.monitor_guide_btn.setObjectName("TTSegment")
+        self.monitor_guide_btn.setProperty("seg", "right")
+        self.monitor_guide_btn.setProperty("monitor", "guide")
+        self.monitor_guide_btn.setCheckable(True)
+        self.monitor_guide_btn.setEnabled(False)
+        self.monitor_guide_btn.setToolTip(
+            "Monitor the guide track (full-mix design reference; never played live)")
+        monitor_group = QButtonGroup(self)
+        monitor_group.setExclusive(True)
+        monitor_group.addButton(self.monitor_backing_btn)
+        monitor_group.addButton(self.monitor_guide_btn)
+        self.monitor_backing_btn.clicked.connect(
+            lambda: self.monitor_changed.emit(MONITOR_BACKING))
+        self.monitor_guide_btn.clicked.connect(
+            lambda: self.monitor_changed.emit(MONITOR_GUIDE))
+        seg = QHBoxLayout()
+        seg.setContentsMargins(0, 0, 0, 0)
+        seg.setSpacing(0)
+        seg.addWidget(self.monitor_backing_btn)
+        seg.addWidget(self.monitor_guide_btn)
+        seg_wrap = QWidget()
+        seg_wrap.setLayout(seg)
+        row.addWidget(seg_wrap)
+
         return zone
+
+    def set_monitor_state(self, monitor: str, has_guide: bool) -> None:
+        """Reflect the editor monitor + guide availability. When the monitor
+        is GUIDE but the song has no guide, BACKING shows checked (that IS
+        what's audible — the controller falls back)."""
+        if self.monitor_backing_btn is None or self.monitor_guide_btn is None:
+            return
+        self.monitor_guide_btn.setEnabled(has_guide)
+        guide_on = monitor == MONITOR_GUIDE and has_guide
+        self.monitor_backing_btn.setChecked(not guide_on)
+        self.monitor_guide_btn.setChecked(guide_on)
 
     def _build_right_zone(self) -> QWidget:
         """View controls — Rows preset (S collapses all, M/L set height) + wired
@@ -282,6 +367,19 @@ class TimelineToolbar(QWidget):
         if self.bpm_spinbox:
             return self.bpm_spinbox.value()
         return 120
+
+    def set_song_precount(self, enabled: bool,
+                          has_song: Optional[bool] = None) -> None:
+        """Reflect a precount change driven elsewhere (song load, the web
+        remote) without re-emitting song_precount_toggled. Pass ``has_song``
+        to also enable/disable the toggle (no song = greyed out)."""
+        if self.precount_toggle is None:
+            return
+        self.precount_toggle.blockSignals(True)
+        self.precount_toggle.setChecked(bool(enabled))
+        if has_song is not None:
+            self.precount_toggle.setEnabled(bool(has_song))
+        self.precount_toggle.blockSignals(False)
 
     def set_zoom_value(self, factor: float) -> None:
         """Move the zoom slider to reflect a zoom change driven elsewhere

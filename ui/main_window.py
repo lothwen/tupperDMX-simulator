@@ -1,10 +1,9 @@
-# ABOUTME: MainWindow — the central orchestrator wiring managers, UI components
-# ABOUTME: and playback state together. The thin entry point lives in main.py.
+# ABOUTME: MainWindow — the desktop view over app.core.AppCore: builds the
+# ABOUTME: widget tree and wires the widget halves of the core's signals. The
+# ABOUTME: thin entry point lives in main.py.
 import os
 from copy import deepcopy
 from dataclasses import asdict
-
-import mido
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
@@ -13,30 +12,28 @@ from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
 
-from core import note_layout
-from core.config import Config, shipped_fixtures, userprefs_path
+from app.core import AppCore
+from app.media_controller import MONITOR_GUIDE
+from audio.mixer import BUS_VOICE
+from core.config import Config, shipped_fixtures
 from core.io_routing import midi_routing_from_io
 from core.paths import default_shows_dir
 from core.show import store as show_store
 from core.show.model import ShowError
 from timeline import Timeline
-from dmx import DMXManager
-from midi import MidiManager
 from tupperlogger import get_logger
+from ui import icons
 from ui.about_dialog import AboutDialog
-from ui.audio_controller import AudioController
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
 from ui.fixture_designer import StageEditToolbar, FixtureInspector
-from ui.media_controller import MediaController
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
-from ui.show_controller import ShowManager
 from ui.stage_controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
-from webremote.manager import WebRemoteManager
+from ui.voice_cues_dialog import VoiceCuesDialog
 
 
 class MainWindow(QMainWindow):
@@ -45,92 +42,71 @@ class MainWindow(QMainWindow):
         self.config = config
         self.logger = get_logger("ui.main")
 
-        # The open show project (attach FIRST: it aliases config.playlist /
-        # config.fixtures onto the show's objects, and the managers below
-        # capture config.fixtures in their constructors).
-        self.show_manager = ShowManager(config, self)
-        if show is not None:
-            self.show_manager.attach(show)
+        # The shared application core owns and wires every widget-free
+        # collaborator (show, audio engine, playback, MIDI, DMX, playlist,
+        # web remote) — headless mode runs the same object without a window.
+        # The aliases below keep the existing widget-wiring call sites
+        # unchanged: the window is a view over the core.
+        core = self.app_core = AppCore(config, show)
+        self.show_manager = core.show_manager
+        self.bpm_state = core.bpm_state
+        self.audio_engine = core.audio_engine
+        self.dmx_manager = core.dmx_manager
+        self.midi_manager = core.midi_manager
+        self.media_controller = core.media_controller
+        self.audio_controller = core.audio_controller
+        self.playlist_core = core.playlist_controller
+        self.webremote_manager = core.webremote_manager
 
-        # Playlist navigation + per-song load orchestration. Created early
-        # (only needs the window ref) so toolbar signal wiring can target it.
-        self.playlist_controller = PlaylistController(self)
-
-        # Initialize managers
-        self.dmx_manager = DMXManager(self.config)
+        # Widget halves of the core's signals (the core already handled the
+        # logic half before these fire).
+        core.software_controller_changed.connect(self._on_software_controller_ui)
+        core.patch_reloaded.connect(self._on_patch_reloaded)
+        core.show_reloaded.connect(self._on_show_reloaded)
+        core.config_save_failed.connect(self._on_config_save_failed)
         self.dmx_manager.dmx_data_received.connect(self.update_dmx)
-        self.dmx_manager.connection_status_changed.connect(self.on_dmx_status_changed)
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
-        self.dmx_manager.software_controller_changed.connect(self.on_software_controller_changed)
-        
-        # The note layout is data-driven (note_layout mirrors the controller's
-        # handle_note_on); build_note_map() materialises the standalone-clip
-        # notes for the renderer/codec, per-fixture verbs resolve on demand.
-        self.midi_manager = MidiManager(note_layout.build_note_map(),
-                                        fixtures=self.config.fixtures)
-        self.midi_manager.connection_status_changed.connect(self.on_midi_status_changed)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
         self.midi_manager.data_changed.connect(self.on_midi_data_changed_from_manager)
-        # Timeline edits arm the show autosave (song loads are gated by the
-        # manager's begin/end_song_load, wrapped around apply_song_config).
-        self.midi_manager.data_changed.connect(self.show_manager.on_midi_data_changed)
-        
+
+        # Playlist UI layer: widget refresh + relink dialogs over the core's
+        # PlaylistCore (aliased as playlist_core above).
+        self.playlist_controller = PlaylistController(self)
+
         # Initialize UI components
         self._setup_ui_components()
-        
+
         # Window setup
         self.update_window_title()
         self.setMinimumSize(1200, 800)
         self.setGeometry(100, 100, self.config.window.width, self.config.window.height)
-         
+
         # Setup main layout
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove all margins
         self.main_layout.setSpacing(0)  # Remove spacing between widgets
-        
+
         # Create UI
         self.setup_ui()
 
-        # Live-patch baselines: the running software controller (None until a
-        # localhost Art-Net worker spawns one) and the last-applied patch
-        # signatures, so _on_patch_changed only propagates real changes.
-        self.software_controller = None
+        # Live-patch baselines: the last-applied patch signatures, so
+        # _on_patch_changed only propagates real changes.
         self._last_ui_sig = self._patch_ui_signature()
         self._last_dmx_sig = self._patch_dmx_signature()
 
-        # The BPM is canonical in the .mid (set_tempo): manual changes arm the
-        # autosave too. Connected before the initial song load, which is gated
-        # by begin/end_song_load like any other load.
-        self.timeline_toolbar.bpm_changed.connect(self.show_manager.on_bpm_changed)
+        # Widget fan-out of BPM changes (the metronome/count-in half already
+        # rides bpm_state inside the core). Connected before the initial song
+        # load, which is gated by begin/end_song_load like any other load.
+        self.bpm_state.bpm_changed.connect(self._on_bpm_state_changed)
 
-        # Load current song from playlist
-        current_song = self.config.get_current_song()
-        if current_song:
-            self.playlist_controller.apply_song_config(current_song)
-        else:
-            # Create empty MIDI track if no songs in playlist
-            self.show_manager.begin_song_load()
-            try:
-                self.midi_manager.create_empty_track()
-            finally:
-                self.show_manager.end_song_load()
-            self.timeline.refresh_from_manager()
-            self.toolbar_manager.update_midi_file_display("")
-            self.toolbar_manager.update_audio_file_display("")
+        # Bring the core up: current song (or empty state), persisted I/O
+        # routing, web remote.
+        self.app_core.start()
 
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
-        
-        # Apply the persisted I/O routing (MIDI destinations, controller
-        # lifecycle + DMX sinks, stage input).
-        self._apply_io_config()
-
-        # Embedded web remote (tablet UI); only serves when config enables it.
-        self.webremote_manager = WebRemoteManager(self.config, self)
-        self.webremote_manager.apply_config()
-
 
         # Install global event filter for spacebar handling
         QApplication.instance().installEventFilter(self)
@@ -151,28 +127,30 @@ class MainWindow(QMainWindow):
         if not self.midi_manager.redo():
             self.logger.debug("Nothing to redo")
 
+    @property
+    def software_controller(self):
+        """The running software DMX controller (owned by the core)."""
+        return self.app_core.software_controller
+
     def _setup_ui_components(self):
-        """Initialize all UI component managers."""
+        """Initialize all UI component managers and connect the widget-facing
+        halves of the core controllers' signals."""
         # Get icons
         play_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         pause_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause)
         stop_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop)
-        
-        # Initialize UI components
-        self.media_controller = MediaController(self.midi_manager, self.config.volume.audio)
+
         self.media_controller.playback_state_changed.connect(self._on_playback_state_changed)
         self.media_controller.position_changed.connect(self._on_position_changed)
         self.media_controller.error_occurred.connect(self._on_media_error)
-        
+
         self.dmx_display = DMXDisplayWidget(self.config)
         self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
         self.clip_library = ClipLibraryWidget(self.config)
-        self.clip_library.preview_requested.connect(self._preview_clip)
+        self.clip_library.preview_requested.connect(self.app_core.preview_clip)
 
-        self.audio_controller = AudioController(self.config.volume.metronome)
-        self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
-        
+
         self.stage_controller = StageController(self.config)
 
         self.toolbar_manager = ToolbarManager(self.config)
@@ -183,6 +161,7 @@ class MainWindow(QMainWindow):
     def _connect_toolbar_signals(self):
         """Connect toolbar manager signals to appropriate handlers."""
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
+        self.toolbar_manager.guide_clear_requested.connect(self.clear_guide_track)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
         # Show project signals
@@ -195,13 +174,26 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
         self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
+        self.toolbar_manager.song_key_edited.connect(self.on_song_key_edited)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
         self.show_manager.versions_changed.connect(self._refresh_versions_ui)
+        self.show_manager.midi_path_allocated.connect(
+            self.toolbar_manager.update_midi_file_display)
+        self.show_manager.setlist_changed.connect(
+            self.playlist_controller.update_song_counter)
         # Transport signals now originate from the timeline toolbar.
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
         self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
+        self.timeline_toolbar.song_precount_toggled.connect(
+            self.app_core.on_song_precount_toggled)
+        self.app_core.precount_changed.connect(
+            self.timeline_toolbar.set_song_precount)
+        # Editor monitor (backing | guide): toggle → controller → waveform.
+        self.timeline_toolbar.monitor_changed.connect(
+            self.media_controller.set_monitor)
+        self.media_controller.monitor_changed.connect(self._on_monitor_changed)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
@@ -243,6 +235,7 @@ class MainWindow(QMainWindow):
             midi_manager=self.midi_manager,
             initial_metronome_volume=self.config.volume.metronome,
             initial_audio_volume=self.config.volume.audio,
+            initial_voice_volume=self.config.volume.voice,
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
             fixtures=self.config.fixtures,
@@ -254,6 +247,8 @@ class MainWindow(QMainWindow):
         self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
         self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
         self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
+        self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
+        self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
@@ -266,6 +261,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.ruler_mode_changed.connect(self.timeline.set_ruler_mode)
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
+        self.timeline_toolbar.voice_cues_requested.connect(self.show_voice_cues_dialog)
 
         # Bundle the timeline toolbar + tracks into one resizable section.
         timeline_section = QWidget()
@@ -321,7 +317,8 @@ class MainWindow(QMainWindow):
 
         # Stage scenario designer: an "Edit stage" button pinned to the stage
         # image's top-right corner, swapped for a top-left toolbar while editing.
-        self.edit_stage_button = QPushButton("✎  Edit stage")
+        self.edit_stage_button = QPushButton("Edit stage")
+        self.edit_stage_button.setIcon(icons.icon("pencil", "#ffffff"))
         self.edit_stage_button.setObjectName("EditStageButton")
         self.edit_stage_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_stage_button.clicked.connect(self.enter_edit_mode)
@@ -408,17 +405,39 @@ class MainWindow(QMainWindow):
     def _update_dmx_toggle_button(self) -> None:
         """Refresh the toggle button glyph and tooltip based on current state."""
         if self._dmx_panel_collapsed:
-            self.dmx_toggle_button.setText("◀")  # ◀
+            self.dmx_toggle_button.setIcon(icons.icon("chevron-left", "#ffffff"))
             self.dmx_toggle_button.setToolTip("Show DMX panel")
         else:
-            self.dmx_toggle_button.setText("▶")  # ▶
+            self.dmx_toggle_button.setIcon(icons.icon("chevron-right", "#ffffff"))
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def on_waveform_offset_changed(self, offset_sec):
-        """Handle waveform offset changes from timeline."""
-        self.media_controller.set_audio_offset(offset_sec)
-        self.config.update_current_song(offset=offset_sec)
+        """Handle waveform offset changes from timeline: the drag edits the
+        offset of whichever track is being monitored."""
+        mc = self.media_controller
+        if mc.monitor == MONITOR_GUIDE and mc.guide_file:
+            mc.set_guide_offset(offset_sec)
+            self.config.update_current_song(guide_offset=offset_sec)
+        else:
+            mc.set_audio_offset(offset_sec)
+            self.config.update_current_song(offset=offset_sec)
         self.save_config()
+
+    def _on_monitor_changed(self, monitor):
+        """Editor monitor switched: redraw the waveform for the monitored
+        track and refresh the toggle state."""
+        mc = self.media_controller
+        active = mc.active_file()
+        if active and os.path.exists(active):
+            self.timeline.set_files(active)
+            # Use QTimer to ensure waveform is drawn before setting offset
+            QTimer.singleShot(
+                100, lambda: self.timeline.set_waveform_offset(mc.active_offset()))
+        else:
+            self.timeline.set_files(None)
+        song = self.config.get_current_song()
+        has_guide = bool(song and song.guide and os.path.exists(song.guide))
+        self.timeline_toolbar.set_monitor_state(monitor, has_guide)
     
     def bpm_changed(self, value):
         """Handle BPM changes from toolbar."""
@@ -431,44 +450,23 @@ class MainWindow(QMainWindow):
             value = max(40, min(300, value))
             self.timeline_toolbar.set_bpm(value)
             return
-        
-        was_running = self.audio_controller.is_metronome_running()
-        current_position = self.media_controller.get_current_position() if was_running else 0.0
-        
-        self.audio_controller.set_bpm(value)
+        self.bpm_state.set_bpm(value)
+
+    def _on_bpm_state_changed(self, value):
+        """Widget half of a BPM change (metronome/count-in ride bpm_state in
+        the core): ruler, toolbar chip, spinbox view sync. BpmState dedupes,
+        so the spinbox echo can't loop."""
         self.timeline.set_bpm(value)
         self.toolbar_manager.set_song_bpm(value)
+        self.timeline_toolbar.set_bpm(value)
 
-        # Restart metronome with new BPM if it was running
-        if was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(current_position)
-
-    def _on_metronome_beat(self, beat_number):
-        """Handle metronome beat events."""
-        # Update any UI that needs to respond to beats
-        pass
-    
     def _on_audio_error(self, error_message, error_type):
-        """Handle audio system errors."""
-        self.logger.error(f"Audio error ({error_type}): {error_message}")
+        """Handle audio system errors (the core already logged them)."""
         ErrorDialogManager.show_audio_hardware_error(self, error_message, error_type)
 
     def on_bpm_detected_from_timeline(self, value):
         """Handle BPM detection from timeline analysis."""
-        self.timeline_toolbar.set_bpm(value)
-        self.toolbar_manager.set_song_bpm(value)
-
-        was_running = self.audio_controller.is_metronome_running()
-        current_position = self.media_controller.get_current_position() if was_running else 0.0
-        
-        self.audio_controller.set_bpm(value)
-        self.timeline.set_bpm(value)
-        
-        # Restart metronome with new BPM if it was running
-        if was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(current_position)
+        self.bpm_state.set_bpm(value)
     
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
@@ -482,8 +480,13 @@ class MainWindow(QMainWindow):
             self.audio_controller.stop_metronome()
     
     def _on_position_changed(self, position_seconds):
-        """Handle position changes from media controller."""
-        self.timeline.update_playhead(position_seconds)
+        """Handle position changes from media controller. Negative time is the
+        count-in: the playhead waits at 0 and the display counts down."""
+        self.timeline.update_playhead(max(0.0, position_seconds))
+        if position_seconds < 0:
+            self.timeline_toolbar.update_time_display(
+                f"COUNT-IN −{-position_seconds:04.1f}")
+            return
         # Update toolbar time display
         minutes = int(position_seconds // 60)
         seconds = position_seconds % 60
@@ -491,9 +494,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.update_time_display(time_str)
     
     def _on_media_error(self, error_message, file_path=None):
-        """Handle media errors from media controller."""
-        self.logger.error(f"Media error: {error_message}")
-        
+        """Handle media errors from media controller (the core logged them)."""
         # Show user-friendly error dialog
         if file_path:
             ErrorDialogManager.show_media_file_error(self, file_path, error_message)
@@ -501,114 +502,32 @@ class MainWindow(QMainWindow):
             # Generic media error
             ErrorDialogManager.show_media_file_error(self, "Unknown file", error_message)
 
-    def _apply_io_config(self):
-        """Apply config.io end to end: MIDI routing + controller/sinks/stage."""
-        self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
-        self.dmx_manager.apply_io(self.config.io)
-
-    def on_dmx_status_changed(self, source, status):
-        """Handle DMX connection status changes."""
-        self.logger.info(f"DMX {source} status: {status}")
-    
     def on_dmx_error(self, source, error):
-        """Handle DMX errors."""
-        self.logger.error(f"DMX {source} error: {error}")
-        
-        # Show user-friendly error dialog with retry option
+        """Handle DMX errors (the core logged them) with a retry dialog."""
         if ErrorDialogManager.show_dmx_connection_error(self, source, error):
             # User wants to retry: re-apply the stage-input leg from config.io
             self.dmx_manager.restart_stage_input()
-    
-    def on_midi_status_changed(self, port_name, status):
-        """Handle MIDI connection status changes."""
-        self.logger.info(f"MIDI {port_name} status: {status}")
-    
+
     def on_midi_error(self, port_name, error):
-        """Handle MIDI errors."""
-        self.logger.error(f"MIDI {port_name} error: {error}")
-        
-        # Show user-friendly error dialog with retry option
+        """Handle MIDI errors (the core logged them) with a retry dialog."""
         if ErrorDialogManager.show_midi_connection_error(self, port_name, error):
             # User wants to retry: re-apply the routing (restarts a live worker)
             self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
-    
-    def on_midi_finished(self):
-        """Handle MIDI worker finished signal."""
-        self.logger.info("MIDI playback finished")
 
-    def on_software_controller_changed(self, controller):
-        """Handle software controller instance changes."""
-        self.logger.info(f"Software controller changed: {controller}")
-        self.software_controller = controller
-        self.midi_manager.set_software_controller(controller)
+    def _on_software_controller_ui(self, controller):
+        """Widget half of a software-controller change (the core already
+        pointed the MIDI stream at it and seeded its auto state)."""
         # Live channel editing in the DMX monitor only works when a software
         # controller is present to receive the overrides (its universe size caps
         # which channels are editable).
         self.dmx_display.set_editing_enabled(
             controller is not None,
             len(controller.present) if controller is not None else 0)
-        # Seed the fresh controller from the document's persisted per-track setup
-        # (note 71), then re-sync the 'A' buttons to the restored state.
-        self.midi_manager.seed_controller_auto(controller)
+        # Re-sync the 'A' buttons to the seeded/restored state.
         self.timeline.refresh_auto_buttons()
         # Redraw so the auto-mode song-part visualization appears when a
         # software controller attaches and clears when it detaches.
         self.timeline._schedule_refresh()
-
-    def _preview_clip(self, messages):
-        """Audition clip-library items live: route note_on(s) through the
-        configured MIDI outputs without modifying the timeline. `messages` is
-        a list of (channel, note, velocity) tuples — length 1 for clips, 7 for
-        LED scenes. The channel selects the target fixture (its patch index)."""
-        if not messages:
-            return
-        routing = midi_routing_from_io(self.config.io)
-        if not routing.has_output():
-            self.logger.debug("Preview ignored: no MIDI outputs configured")
-            return
-
-        if routing.to_controller:
-            controller = getattr(self, "software_controller", None)
-            if controller is None:
-                self.logger.debug(
-                    "Preview: software controller routed but not active")
-            else:
-                for channel, note, velocity in messages:
-                    try:
-                        controller.handle_note_on(
-                            int(channel), int(note), int(velocity))
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Preview to software controller failed: {e}")
-
-        if not routing.port:
-            return
-
-        # External port: reuse the running worker's open handle when it
-        # matches, since some MIDI backends refuse a second open on the
-        # same device. Otherwise open a transient port for this preview.
-        worker = self.midi_manager.current_worker
-        if (worker and worker.isRunning() and worker.port
-                and worker.port_name == routing.port):
-            for channel, note, velocity in messages:
-                try:
-                    worker.port.send(mido.Message(
-                        'note_on', channel=int(channel),
-                        note=int(note), velocity=int(velocity)))
-                except Exception as e:
-                    self.logger.warning(
-                        f"Preview via worker port failed: {e}")
-            return
-
-        try:
-            with mido.open_output(routing.port) as port:
-                for channel, note, velocity in messages:
-                    port.send(mido.Message(
-                        'note_on', channel=int(channel),
-                        note=int(note), velocity=int(velocity)))
-        except Exception as e:
-            self.logger.warning(
-                f"Preview open/send on '{routing.port}' failed: {e}")
 
     def _on_dmx_channel_edited(self, channel, value):
         """Apply a manual value dragged in the DMX monitor to the live software
@@ -642,18 +561,22 @@ class MainWindow(QMainWindow):
         old_io = asdict(self.config.io)
         old_artnet = asdict(self.config.artnet)
         old_webremote = asdict(self.config.webremote)
+        old_audio = asdict(self.config.audio)
 
-        dialog = SettingsDialog(self.config, self)
+        dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         # Re-apply the routing when it (or the Art-Net target the sinks and
         # listener read from) changed.
         if asdict(self.config.io) != old_io or asdict(self.config.artnet) != old_artnet:
-            self._apply_io_config()
+            self.app_core.apply_io_config()
 
         if asdict(self.config.webremote) != old_webremote:
             self.webremote_manager.apply_config()
+
+        if asdict(self.config.audio) != old_audio:
+            self.app_core.apply_audio_config()
 
         self.save_config()
         self.logger.info("Settings updated")
@@ -730,42 +653,23 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Show project operations
     # ------------------------------------------------------------------
-    def reload_from_show(self):
-        """Rebuild every view from the (re)attached show: patch-dependent UI,
-        the current song, counters, title and the web-remote snapshot. Reuses
-        the exact propagation path of _on_patch_changed, unconditionally."""
+    def _on_patch_reloaded(self):
+        """Widget half of core.reload_from_show: rebuild every patch-dependent
+        view (the core already propagated the patch to midi/controller).
+        Reuses the exact propagation path of _on_patch_changed, unconditionally."""
         self._last_ui_sig = self._patch_ui_signature()
         self._last_dmx_sig = self._patch_dmx_signature()
-        self.midi_manager.update_fixtures(self.config.fixtures)
         self.timeline.rebuild_for_patch(self.config.fixtures)
         self.clip_library.refresh_configuration(self.config)
         self.dmx_display.refresh_configuration(self.config)
-        controller = getattr(self, "software_controller", None)
-        if controller is not None:
-            controller.repatch(self.config.fixtures)
 
-        current_song = self.config.get_current_song()
-        if current_song:
-            self.playlist_controller.apply_song_config(current_song)
-        else:
-            self.show_manager.begin_song_load()
-            try:
-                self.midi_manager.create_empty_track()
-            finally:
-                self.show_manager.end_song_load()
-            self.timeline.refresh_from_manager()
-            self.toolbar_manager.update_midi_file_display("")
-            self.toolbar_manager.update_audio_file_display("")
-            self.timeline.set_files(None)
-
+    def _on_show_reloaded(self):
+        """Counters, show name, autosave chip and title after a show reload."""
         self.playlist_controller.update_song_counter()
         show = self.show_manager.show
         self.toolbar_manager.set_show_name(show.name if show else "")
         self.toolbar_manager.set_autosave_state("saved")
         self.update_window_title()
-        webremote = getattr(self, "webremote_manager", None)
-        if webremote is not None:
-            webremote._publish_full()
 
     def new_show_dialog(self):
         """Create a new show project (seeded with the default patch and this
@@ -886,6 +790,33 @@ class MainWindow(QMainWindow):
         if webremote is not None:
             webremote._publish_full()
 
+    def show_voice_cues_dialog(self):
+        """Open the per-song voice-cue editor (timeline toolbar 🗣 Cues)."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        dialog = VoiceCuesDialog(song.voice_cues, self,
+                                 audio_engine=self.audio_engine,
+                                 tts_voice=self.config.audio.tts_voice)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        song.voice_cues = dialog.cues()
+        self.save_config()
+        # Ruler markers are the window's half; the PCM render rides the core.
+        self.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        self.app_core.apply_voice_cues(song)
+
+    def on_song_key_edited(self, key: str):
+        """Persist the current song's musical key (TONO chip / web remote)."""
+        song = self.config.get_current_song()
+        if song is None or song.key == key:
+            return
+        song.key = key
+        self.save_config()
+        webremote = getattr(self, "webremote_manager", None)
+        if webremote is not None:
+            webremote._publish_full()
+
     def take_snapshot_dialog(self):
         """Take a named, pinned (never-pruned) snapshot of the show."""
         show = self.show_manager.show
@@ -943,6 +874,17 @@ class MainWindow(QMainWindow):
     def on_audio_mute_toggled(self, muted):
         """Handle audio mute toggle from timeline."""
         self.media_controller.set_audio_muted(muted)
+
+    def on_voice_volume_changed(self, value):
+        """Handle voice (TTS guide) volume changes from timeline."""
+        volume = float(value) / 100.0
+        self.audio_engine.set_bus_volume(BUS_VOICE, volume)
+        self.config.update_volume(voice=volume)
+        self.save_config()
+
+    def on_voice_mute_toggled(self, muted):
+        """Handle voice mute toggle from the timeline header's VOICE row."""
+        self.audio_engine.set_bus_muted(BUS_VOICE, muted)
 
     def on_track_heights_changed(self, waveform_height, midi_events_height):
         """Persist track heights when the user finishes resizing."""
@@ -1023,6 +965,9 @@ class MainWindow(QMainWindow):
         elif file_type == 'audio':
             title = "Select Audio file"
             filt = "Audio files (*.mp3 *.wav);;MP3 files (*.mp3);;WAV files (*.wav);;All files (*)"
+        elif file_type == 'guide':
+            title = "Select Guide track (full mix)"
+            filt = "Audio files (*.mp3 *.wav);;MP3 files (*.mp3);;WAV files (*.wav);;All files (*)"
         else:
             title = f"Select {file_type.upper()} file"
             filt = "All files (*)"
@@ -1064,6 +1009,23 @@ class MainWindow(QMainWindow):
                     self.playlist_controller.update_song_counter()
                     self.save_config()
                     
+                elif file_type == 'guide':
+                    # Guide track: attaches to the CURRENT song (never creates
+                    # or switches one — the backing stays the song identity).
+                    file_ext = path.lower().split('.')[-1]
+                    if file_ext not in ['mp3', 'wav']:
+                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
+                        return
+                    song = self.config.get_current_song()
+                    if song is None:
+                        ErrorDialogManager.show_media_file_error(self, path, "No song selected — load a backing track first.")
+                        return
+                    self.config.update_current_song(guide=path)
+                    self.save_config()
+                    # Full reload keeps engine/waveform/toolbar consistent
+                    self.playlist_controller.apply_song_config(song)
+                    self.logger.info(f"Guide track set: {path}")
+
                 elif file_type == 'midi':
                     # Save pending edits of the current MIDI, then copy the
                     # picked file into the show's midis/ — the show owns its
@@ -1094,6 +1056,16 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_file_permission_error(self, path, "read")
             except Exception as e:
                 ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def clear_guide_track(self):
+        """Remove the current song's guide track (the file stays on disk)."""
+        song = self.config.get_current_song()
+        if song is None or not song.guide:
+            return
+        self.config.update_current_song(guide="", guide_offset=0.0)
+        self.save_config()
+        self.playlist_controller.apply_song_config(song)
+        self.logger.info("Cleared guide track")
 
     def create_new_midi_track(self):
         """Handle creating a new empty MIDI track."""
@@ -1141,7 +1113,7 @@ class MainWindow(QMainWindow):
                 # Export via MidiManager — interop: a clean standard-MIDI
                 # copy without the tdmx1 authoring metas (saving the show is
                 # the autosave's job, not this button's).
-                if self.midi_manager.export_to_file(path, self.timeline_toolbar.get_bpm(),
+                if self.midi_manager.export_to_file(path, self.bpm_state.get_bpm(),
                                                     interop=True):
                     self.logger.info(f"MIDI file exported successfully to: {path}")
                     QMessageBox.information(self, "Export Success", f"MIDI file exported to:\n{path}")
@@ -1156,42 +1128,28 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_media_file_error(self, path, f"Export failed: {str(e)}")
 
     def save_config(self):
-        """Save configuration with error handling. Single persistence funnel:
-        machine prefs go to userprefs.json, and the show manifest is saved iff
-        its content changed (so prefs-only call sites don't rewrite it)."""
-        prefs_file = str(userprefs_path())
-        try:
-            if not self.config.save():
-                ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
-        except Exception as e:
-            self.logger.error(f"Failed to save configuration: {e}")
-            ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
-        self.show_manager.notify_changed()
+        """Single persistence funnel (prefs + show manifest) — in the core."""
+        self.app_core.save_config()
+
+    def _on_config_save_failed(self, prefs_file):
+        ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
 
     def start_playback(self):
         """Start media playback using media controller."""
         self.media_controller.start_playback()
 
     def play_pause_playback(self):
-        """Toggle playback using media controller."""
-        self.media_controller.play_pause_playback()
+        """Toggle playback via the core."""
+        self.app_core.play_pause_playback()
 
     def stop_playback(self):
-        """Stop playback using media controller."""
-        self.media_controller.stop_playback()
+        """Stop playback via the core and reset the playhead."""
+        self.app_core.stop_playback()
         self.timeline.update_playhead(0)
 
     def seek_playback(self, time_seconds):
-        """Seek to position using media controller."""
-        was_playing = self.media_controller.get_playback_state()
-        metronome_was_running = self.audio_controller.is_metronome_running()
-        
-        self.media_controller.seek_to_position(time_seconds)
-        
-        # Resynchronize metronome if it was running
-        if was_playing and metronome_was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(time_seconds)
+        """Seek to position via the core (which resyncs the metronome)."""
+        self.app_core.seek_playback(time_seconds)
 
     def update_window_title(self):
         """Update window title with the open show and loaded file names."""
@@ -1218,32 +1176,12 @@ class MainWindow(QMainWindow):
         """Handle application close event."""
         self.logger.info("Application closing - cleaning up resources")
 
-        # Flush the show FIRST (pending timeline edits + manifest), while the
-        # midi manager is still fully alive.
-        try:
-            self.show_manager.flush("close")
-        except Exception as e:
-            self.logger.error(f"Error flushing show on close: {e}")
-
         # Remove global event filter
         QApplication.instance().removeEventFilter(self)
-        
-        # Stop playback and cleanup components — guard each so one failure
-        # doesn't abort the rest of the shutdown.
-        for name, cleanup in (
-            ("webremote_manager", self.webremote_manager.cleanup),
-            ("media_controller", self.media_controller.cleanup),
-            ("audio_controller", self.audio_controller.cleanup),
-            ("dmx_manager", self.dmx_manager.cleanup),
-            ("midi_manager", self.midi_manager.cleanup),
-        ):
-            try:
-                cleanup()
-            except Exception as e:
-                self.logger.error(f"Error cleaning up {name}: {e}")
 
-        # Save configuration
-        self.save_config()
+        # Flush the show first, clean up every component, save config — all
+        # in the core (idempotent, shared with headless shutdown).
+        self.app_core.shutdown()
 
         # Accept the close event
         event.accept()

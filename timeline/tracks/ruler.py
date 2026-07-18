@@ -6,13 +6,15 @@ Displays time markers, bar numbers, and beat subdivisions.
 
 import math
 
-from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem
+from PyQt6.QtWidgets import (QGraphicsRectItem, QGraphicsLineItem,
+                             QGraphicsTextItem, QGraphicsPixmapItem)
 from PyQt6.QtGui import QColor, QBrush, QPen
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGraphicsItem
 
 from .base import BaseTrack
 from tupperlogger import get_logger
+from ui import icons
 
 
 class RulerTrack(BaseTrack):
@@ -67,6 +69,8 @@ class RulerTrack(BaseTrack):
             self._draw_time_ticks()
         else:
             self._draw_bar_ticks()
+
+        self._draw_voice_cue_markers()
 
         self.update_ruler_labels()
 
@@ -142,6 +146,32 @@ class RulerTrack(BaseTrack):
                 self.content_scene.addItem(label)
                 self.items.append(label)
                 self.time_text_items.append((sec, label))
+
+    def _draw_voice_cue_markers(self):
+        """Draw the song's voice cues (Fase 4 TTS guide) as speech-bubble
+        markers on the ruler. Display-only markers — editing lives in the
+        toolbar's Cues dialog; the tooltip carries the spoken text."""
+        cues = getattr(self.timeline_manager, "voice_cues", [])
+        pps = self.timeline_manager.PIXELS_PER_SECOND
+        for cue_time, cue_text in cues:
+            cue_x = cue_time * pps
+
+            tick = QGraphicsLineItem(cue_x, 0, cue_x, self.get_track_height())
+            pen = QPen(QColor(186, 130, 240))  # violet, like the MIDI accents
+            pen.setCosmetic(True)
+            pen.setWidth(2)
+            tick.setPen(pen)
+            tick.setToolTip(f"Voice cue: {cue_text}")
+            self.content_scene.addItem(tick)
+            self.items.append(tick)
+
+            glyph = QGraphicsPixmapItem(
+                icons.pixmap("speech", 13, "#ba82f0"))
+            glyph.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            glyph.setPos(cue_x + 2, 2)
+            glyph.setToolTip(f"Voice cue: {cue_text}")
+            self.content_scene.addItem(glyph)
+            self.items.append(glyph)
 
     def update_ruler_labels(self):
         """Update ruler label visibility based on zoom level."""

@@ -53,7 +53,7 @@ QDialog QLabel {
 QDialog QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: #e6e6e6;
-    border: 1px solid #2c2c2c;
+    border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
     border-radius: 4px;
     padding: 8px 16px;
@@ -191,7 +191,7 @@ QTableWidget {
     background-color: #2B2B2B;
     color: white;
     gridline-color: #444444;
-    border: 1px solid #444444;
+    border: 1px solid #1f1f1f;
     alternate-background-color: #333333;
     selection-background-color: #3a5a67;
 }
@@ -233,7 +233,7 @@ QToolBar {
 /* Toolbar Sections */
 QFrame#ToolbarSection {
     background-color: #363636;
-    border: 1px solid #555;
+    border: 1px solid #232323;
     border-radius: 4px;
     margin: 2px;
 }
@@ -263,12 +263,11 @@ QLabel#SmallLabel {
 QPushButton#LoadButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: #e6e6e6;
-    border: 1px solid #2c2c2c;
+    border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
     padding: 8px;
-    font-size: 14px;
-    font-weight: bold;
+    font-size: 12px;
 }
 
 QPushButton#LoadButton:hover {
@@ -279,97 +278,47 @@ QPushButton#LoadButton:pressed {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #404040, stop:1 #3a3a3a);
 }
 
-/* Import Bundle Button (darker, flat — visually distinct from siblings) */
-QPushButton#ImportButton {
-    background-color: #2f2f2f;
-    color: #cfcfcf;
-    border: 1px solid #262626;
-    border-top: 1px solid #454545;
-    border-radius: 6px;
-    padding: 8px;
+/* Export split button (blue-accented primary; the ▾ segment opens the
+   MIDI/bundle menu, the main area exports the bundle) */
+QToolButton#ExportSplitButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3f78b5, stop:1 #34659c);
+    color: #eaf4fb;
+    border: 1px solid #274b73;
+    border-top: 1px solid #6ba3d6;
+    border-radius: 5px;
+    /* right padding = 8px + the 21px ▾ segment, so the label centers in the
+       main (clickable) area rather than the full button */
+    padding: 0 29px 0 8px;
     font-size: 14px;
     font-weight: bold;
 }
 
-QPushButton#ImportButton:hover {
-    background-color: #383838;
+QToolButton#ExportSplitButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4685c4, stop:1 #3a70ab);
 }
 
-QPushButton#ImportButton:pressed {
-    background-color: #2a2a2a;
+QToolButton#ExportSplitButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #34659c, stop:1 #2b5484);
 }
 
-/* New Button */
-QPushButton#NewButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #48803f, stop:1 #3c6e35);
-    color: #eafbe6;
-    border: 1px solid #2b4f26;
-    border-top: 1px solid #5d9a4f;
-    border-radius: 6px;
-    padding: 8px;
-    font-size: 14px;
-    font-weight: bold;
-}
-QPushButton#NewButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #52914a, stop:1 #447c3d);
-}
-QPushButton#NewButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3c6e35, stop:1 #2f5a29);
+QToolButton#ExportSplitButton::menu-button {
+    border-left: 1px solid #274b73;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    width: 20px;
 }
 
-/* Export Button */
-QPushButton#ExportButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
-    color: #e6e6e6;
-    border: 1px solid #2c2c2c;
-    border-top: 1px solid #5d5d5d;
-    border-radius: 6px;
-    padding: 8px;
-    font-size: 14px;
-    font-weight: bold;
-}
-
-QPushButton#ExportButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #585858, stop:1 #4d4d4d);
-}
-
-QPushButton#ExportButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #404040, stop:1 #3a3a3a);
-}
-
-QPushButton#ExportButton:disabled {
-    background: #333;
-    color: #666;
-    border-color: #444;
-    border-top-color: #444;
-}
-
-/* Export Bundle Button (amber-accented primary export) */
-QPushButton#ExportBundleButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a3f31, stop:1 #3d3327);
-    color: #f4e9db;
-    border: 1px solid #6d5330;
-    border-top: 1px solid #a07a41;
-    border-radius: 6px;
-    padding: 8px;
-    font-size: 14px;
-    font-weight: bold;
-}
-
-QPushButton#ExportBundleButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #574a38, stop:1 #473b2c);
-    border-top-color: #c1954f;
-}
-
-QPushButton#ExportBundleButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3327, stop:1 #322a20);
+QToolButton#ExportSplitButton::menu-arrow {
+    image: url('assets/icons/chevron-down.svg');
+    width: 20px;
+    height: 20px;
 }
 
 /* Playlist Navigation Buttons */
 QPushButton#NavButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: #e6e6e6;
-    border: 1px solid #2c2c2c;
+    border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
     font-size: 16px;
@@ -395,7 +344,7 @@ QPushButton#NavButton:disabled {
 QPushButton#RemoveButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: #d98a8a;
-    border: 1px solid #2c2c2c;
+    border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
     font-size: 14px;
@@ -414,7 +363,7 @@ QPushButton#RemoveButton:pressed {
 QToolButton#MenuButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: #e6e6e6;
-    border: 1px solid #2c2c2c;
+    border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
     border-radius: 6px;
     padding: 0;
@@ -434,16 +383,6 @@ QToolButton#MenuButton::menu-indicator {
     image: none;
     width: 0;
     height: 0;
-}
-
-/* File Labels */
-QLabel#FileLabel {
-    background-color: #2b2b2b;
-    color: #ddd;
-    border: 1px solid #444;
-    border-radius: 4px;
-    padding: 2px 12px;
-    font-size: 11px;
 }
 
 /* SHOW section: header, autosave state, show name and footer stats */
@@ -473,8 +412,8 @@ QLabel#ShowStatsLabel {
 
 /* SETLIST section: unified song selector (counter badge + combobox) */
 QFrame#SetlistSelector {
-    background-color: #1e1e1e;
-    border: 1px solid #4a4a4a;
+    background-color: #202020;
+    border: 1px solid #161616;
     border-radius: 6px;
 }
 
@@ -482,9 +421,10 @@ QLabel#SetlistCounter {
     background-color: #2d4a63;
     color: #cfe4f5;
     border-radius: 4px;
-    padding: 2px 6px;
+    padding: 0px 6px;
+    margin: 6px 0px;
     font-size: 11px;
-    font-weight: bold;
+    font-family: ui-monospace,monospace;
 }
 
 QComboBox#SetlistCombo {
@@ -509,8 +449,8 @@ QComboBox#SetlistCombo::drop-down {
 }
 
 QComboBox#SetlistCombo QAbstractItemView {
-    background-color: #262626;
-    border: 1px solid #4a4a4a;
+    background-color: #202020;
+    border: 1px solid #161616;
     color: #e6e6e6;
     selection-background-color: #2d4a63;
     outline: none;
@@ -535,16 +475,67 @@ QLabel#LinkedChip {
     font-size: 11px;
 }
 
-/* SONG FILES: leading file-type icon */
-QLabel#FileTypeIcon {
-    background: transparent;
-    font-size: 13px;
+/* SONG FILES: one accent-coloured card per file (MIDI / BACKING TRACK /
+   GUIDE) — header (icon + title + small actions) over a path well, or a
+   dashed '+ Load …' call-to-action while the slot is empty. The accent
+   rides the `kind` dynamic property. */
+QFrame#FileCard {
+    background-color: #202020;
+    border: 1px solid #141414;
+    border-radius: 6px;
 }
+QFrame#FileCard[kind="midi"]    { border-left: 3px solid #c9c356; }
+QFrame#FileCard[kind="backing"] { border-left: 3px solid #6fce7f; }
+QFrame#FileCard[kind="guide"]   { border-left: 3px solid #5da9e8; }
+
+QLabel#FileCardIcon {
+    background: transparent;
+    font-size: 12px;
+}
+
+QLabel#FileCardTitle {
+    background: transparent;
+    font-size: 10px;
+    font-weight: bold;
+}
+QLabel#FileCardTitle[kind="midi"]    { color: #c9c356; }
+QLabel#FileCardTitle[kind="backing"] { color: #6fce7f; }
+QLabel#FileCardTitle[kind="guide"]   { color: #5da9e8; }
+
+QLabel#FileCardPath {
+    background-color: #202020;
+    color: #bdbdbd;
+    font-size: 11px;
+    font-family: ui-monospace,monospace;
+}
+
+QToolButton#FileCardButton {
+    background: transparent;
+    color: #b5b5b5;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    font-size: 11px;
+}
+QToolButton#FileCardButton:hover   { background-color: #3d3d3d; }
+QToolButton#FileCardButton:pressed { background-color: #262626; }
+
+QPushButton#FileCardAction {
+    background: transparent;
+    border: 1px dashed #4a4a4a;
+    border-radius: 4px;
+    font-size: 11px;
+    padding: 2px 8px;
+}
+QPushButton#FileCardAction[kind="midi"]    { color: #c9c356; border-color: #5a5730; }
+QPushButton#FileCardAction[kind="backing"] { color: #6fce7f; border-color: #3c6146; }
+QPushButton#FileCardAction[kind="guide"]   { color: #5da9e8; border-color: #35567a; }
+QPushButton#FileCardAction:hover   { background-color: #333; }
+QPushButton#FileCardAction:pressed { background-color: #262626; }
 
 /* VERSIONS section: snapshot picker, History link and Snapshot action */
 QComboBox#VersionsCombo {
-    background-color: #1e1e1e;
-    border: 1px solid #4a4a4a;
+    background-color: #262626;
+    border: 1px solid #161616;
     border-radius: 6px;
     color: #e6e6e6;
     font-size: 12px;
@@ -587,8 +578,8 @@ QPushButton#SnapshotButton:pressed {
 QPushButton#StopButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
     color: white;
-    border: 1px solid #2c2c2c;
-    border-top: 1px solid #5d5d5d;
+    border: 1px solid #202020;
+    border-top: 1px solid #141414;
     border-radius: 5px;
     padding: 4px;
 }
@@ -668,16 +659,16 @@ QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
 }
 
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
-    image: url('assets/icons/up-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-up.svg');
+    width: 14px;
+    height: 14px;
     color: white;
 }
 
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
-    image: url('assets/icons/dropdown-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-down.svg');
+    width: 14px;
+    height: 14px;
     color: white;
 }
 
@@ -754,9 +745,9 @@ QRadioButton::indicator:checked:disabled {
 
 /* ComboBoxes */
 QComboBox {
-    background-color: #2b2b2b;
+    background-color: #262626;
     color: white;
-    border: 1px solid #3f3f3f;
+    border: 1px solid #161616;
     border-radius: 5px;
     padding: 5px 10px;
     font-size: 12px;
@@ -778,9 +769,9 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
-    image: url('assets/icons/dropdown-arrow.png');
-    width: 11px;
-    height: 11px;
+    image: url('assets/icons/chevron-down.svg');
+    width: 14px;
+    height: 14px;
 }
 
 QComboBox QAbstractItemView {
@@ -995,14 +986,14 @@ QWidget#ClipPillBar {
 }
 
 QFrame#ClipPill {
-    background-color: #383838;
-    border: 1px solid #444;
-    border-radius: 6px;
+    background-color: #2e2e2e;
+    border: 1px solid #1f1f1f;
+    border-radius: 5px;
 }
 
 QFrame#ClipPill:hover {
     background-color: #4a4a4a;
-    border-color: #666;
+    border-color: #1f1f1f;
 }
 
 QFrame#ClipPill[selected="true"] {
@@ -1292,16 +1283,17 @@ QLabel {
 
 /* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar */
 QPushButton#EditStageButton {
-    background-color: rgba(40, 40, 40, 200);
-    color: white;
-    border: 1px solid rgba(255, 255, 255, 80);
+    background: rgba(26,28,32,.82);
+    color: #cfe9f5;
+    border: 1px solid #707070;
     border-radius: 6px;
     padding: 6px 14px;
     font-weight: bold;
+    font-size: 13px;
 }
 
 QPushButton#EditStageButton:hover {
-    background-color: rgba(70, 70, 70, 220);
+    background-color: rgba(30, 30, 30, 220);
     border-color: rgba(255, 255, 255, 140);
 }
 
@@ -1456,7 +1448,8 @@ QFrame#TTSeparator {
     margin: 4px 4px;
 }
 
-QLabel#TTRowsLabel {
+QLabel#TTRowsLabel,
+QLabel#TTCountInLabel {
     color: #aaa;
     padding: 0 2px;
 }
@@ -1503,35 +1496,44 @@ QWidget#TimelineToolbar QPushButton#TTSnap {
 
 QWidget#TimelineToolbar QPushButton#TTSnap:checked {
     color: white;
-    background-color: #43c556;
-    border: 1px solid #3ba84a;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3f78b5, stop:1 #34659c);
+    border: 1px solid #274b73;
     font-weight: bold;
 }
 
 /* Segmented toggles (Bars|Time, Rows S/M/L) */
 QWidget#TimelineToolbar QPushButton#TTSegment {
-    color: #cfcfcf;
-    background-color: #333;
-    border: 1px solid #444;
-    padding: 5px 2px;
+    color: #9a9a9a;
+    background-color: #242424;
+    border: 1px solid #161616;
+    padding: 4px 8px;
 }
 
 QWidget#TimelineToolbar QPushButton#TTSegment:checked {
-    color: white;
-    background-color: #4a4a4a;
-    border-color: #5a5a5a;
+    color: #e6e6e6;
+    background-color: #3a3a3a;
     font-weight: bold;
+}
+
+/* GUIDE monitor: amber when active (matches the Export-bundle accent) so
+   "not the live signal" is unmistakable */
+QWidget#TimelineToolbar QPushButton#TTSegment[monitor="guide"]:checked {
+    color: #f8e7c8;
+    background-color: #6d5330;
+    border-color: #c1954f;
 }
 
 /* Round only the outer corners of the segmented control */
 QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
     border-top-left-radius: 5px;
     border-bottom-left-radius: 5px;
+    border-right: 0px;
 }
 
 QWidget#TimelineToolbar QPushButton#TTSegment[seg="right"] {
     border-top-right-radius: 5px;
     border-bottom-right-radius: 5px;
+    border-left: 0px;
 }
 
 /* Zoom slider */
@@ -1629,4 +1631,166 @@ QLabel#IOValidationLabel[state="warn"] {
 
 QLabel#IOValidationLabel[state="error"] {
     color: #e05252;
+}
+
+/* ============================================================
+   Settings dialog — sidebar navigation + per-page chrome
+   Left rail with the page list and the version footer; each
+   page opens with a heading row over a 1px hairline.
+   ============================================================ */
+QFrame#SettingsSidebar {
+    background-color: #1f1f1f;
+    border-right: 1px solid #3a3a3a;
+}
+
+QListWidget#SettingsSidebarList {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 12px;
+}
+
+QListWidget#SettingsSidebarList::item {
+    color: #cfcfcf;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+}
+
+QListWidget#SettingsSidebarList::item:hover {
+    background-color: #2e2e2e;
+}
+
+QListWidget#SettingsSidebarList::item:selected {
+    background-color: #79cdf0;
+    color: #082230;
+}
+
+QLabel#SettingsVersionLabel {
+    color: #6a6a6a;
+    font-size: 10px;
+    padding-left: 4px;
+}
+
+QFrame#SettingsHairline {
+    background-color: #3a3a3a;
+    border: none;
+}
+
+/* Web-remote URL readout next to the port spinbox. */
+QLabel#SettingsLinkLabel {
+    color: #79cdf0;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+/* ============================================================
+   About dialog (ui/about_dialog.py)
+   Hero (icon + title + version pill) over a BUILD metadata
+   card and a © / Changelog / Website footer.
+   ============================================================ */
+QDialog#AboutDialog {
+    background-color: #262626;
+}
+
+QWidget#aboutHero {
+    background-color: #262626;
+}
+
+QWidget#aboutBuild {
+    background-color: #1f1f1f;
+    border-top: 1px solid #333333;
+    border-bottom: 1px solid #333333;
+}
+
+QWidget#aboutFooter {
+    background-color: #262626;
+}
+
+QLabel#aboutTitle {
+    color: #f2f2f2;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+QLabel#aboutTagline {
+    color: #9a9a9a;
+    font-size: 13px;
+}
+
+QLabel#aboutPill {
+    border: 1px solid #3d3d3d;
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+    background-color: #202020;
+}
+
+QLabel#aboutSectionHeader {
+    color: #767676;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+
+QLabel#aboutRowLabel {
+    color: #8f8f8f;
+    font-size: 12px;
+}
+
+QLabel#aboutRowValue {
+    color: #dcdcdc;
+    font-size: 12px;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+QPushButton#aboutCopy {
+    background-color: #333333;
+    border: 1px solid #444444;
+    border-radius: 5px;
+    padding: 2px 10px;
+    color: #d0d0d0;
+    font-size: 11px;
+}
+
+QPushButton#aboutCopy:hover {
+    background-color: #3d3d3d;
+}
+
+QPushButton#aboutCopy:pressed {
+    background-color: #202020;
+}
+
+QLabel#aboutCopyright {
+    color: #7a7a7a;
+    font-size: 12px;
+}
+
+QPushButton#aboutLink {
+    background: transparent;
+    border: none;
+    color: #9a9a9a;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+QPushButton#aboutLink:hover {
+    color: #e0e0e0;
+}
+
+QPushButton#aboutWebsite {
+    background-color: #333333;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #e6e6e6;
+    font-size: 12px;
+}
+
+QPushButton#aboutWebsite:hover {
+    background-color: #3d3d3d;
+}
+
+QPushButton#aboutWebsite:pressed {
+    background-color: #202020;
 }

@@ -66,11 +66,25 @@ class IOConfig:
 
 
 @dataclass
+class VoiceCueConfig:
+    """One spoken guide cue (Fase 4): TTS text fired at a timeline position,
+    routed to the voice bus (the musician's click side). Rides the show
+    manifest — guide audio is not sequence data, so it stays out of the .mid."""
+    time: float = 0.0
+    text: str = ""
+
+
+@dataclass
 class SongConfig:
     """Configuration for a single song in the playlist."""
     midi: Optional[str] = None
     audio: Optional[str] = None  # Primary key - audio file path uniquely identifies a song
     offset: float = 0.0
+    # Guide track: optional full-mix reference for designing lights (the
+    # backing in `audio` stays the live master). Editor-only monitoring;
+    # live surfaces never play it.
+    guide: Optional[str] = None
+    guide_offset: float = 0.0
     # Show-model metadata (Fase 3). id is a stable uuid assigned by the show
     # layer (so identity survives file renames); cache holds derived
     # {duration, bpm, audio_mtime} values, never hand-edited.
@@ -78,6 +92,7 @@ class SongConfig:
     title: str = ""
     key: str = ""                                       # musical key, e.g. "Am"
     precount: bool = True                               # count-in click; off = segue from previous song
+    voice_cues: List[VoiceCueConfig] = field(default_factory=list)
     cache: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -127,6 +142,24 @@ class FixtureInstance:
 class VolumeConfig:
     metronome: float = 0.5
     audio: float = 0.5
+    voice: float = 0.8                                  # TTS guide bus (cues + spoken count-in)
+
+
+# Valid AudioConfig.routing values (mirrors audio/mixer.py ROUTING_MODES;
+# kept literal here so the Qt-free core has no dependency on the audio package).
+AUDIO_ROUTING_MODES = ("stereo", "split_backing_left", "split_backing_right")
+
+
+@dataclass
+class AudioConfig:
+    """Machine-level audio output setup (Fase 4 live player). Device and
+    channel routing are per-machine concerns, so they live in userprefs —
+    per-song count-in on/off stays in the show (SongConfig.precount)."""
+    output_device: str = ""              # QAudioDevice id; "" = system default
+    routing: str = "stereo"              # see AUDIO_ROUTING_MODES
+    count_in_bars: int = 2               # length of the precount (bars of 4)
+    count_in_voice: bool = True          # speak beat numbers on the last bar
+    tts_voice: str = "es_ES-davefx-medium"
 
 
 @dataclass
@@ -181,6 +214,7 @@ class Config:
     volume: VolumeConfig = field(default_factory=VolumeConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     io: IOConfig = field(default_factory=IOConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
     webremote: WebRemoteConfig = field(default_factory=WebRemoteConfig)
     # Show-project pointers (machine-level: which show this machine had open).
     last_show_path: Optional[str] = None
@@ -283,6 +317,7 @@ class Config:
                     title=str(song_data.get("title", "")),
                     key=str(song_data.get("key", "")),
                     precount=bool(song_data.get("precount", True)),
+                    voice_cues=cls._parse_voice_cues(song_data.get("voice_cues")),
                     cache=(song_data["cache"]
                            if isinstance(song_data.get("cache"), dict) else {}),
                 ))
@@ -295,7 +330,25 @@ class Config:
             volume_data = data["volume"]
             config.volume = VolumeConfig(
                 metronome=cls._validate_float(volume_data.get("metronome", 0.5), 0.0, 1.0),
-                audio=cls._validate_float(volume_data.get("audio", 0.5), 0.0, 1.0)
+                audio=cls._validate_float(volume_data.get("audio", 0.5), 0.0, 1.0),
+                voice=cls._validate_float(volume_data.get("voice", 0.8), 0.0, 1.0)
+            )
+
+        if "audio" in data:
+            audio_data = data["audio"]
+            defaults = AudioConfig()
+            routing = audio_data.get("routing", defaults.routing)
+            if routing not in AUDIO_ROUTING_MODES:
+                routing = defaults.routing
+            config.audio = AudioConfig(
+                output_device=str(audio_data.get("output_device", "") or ""),
+                routing=routing,
+                count_in_bars=cls._validate_int(
+                    audio_data.get("count_in_bars", defaults.count_in_bars), 1, 8),
+                count_in_voice=bool(
+                    audio_data.get("count_in_voice", defaults.count_in_voice)),
+                tts_voice=str(audio_data.get("tts_voice", defaults.tts_voice)
+                              or defaults.tts_voice),
             )
 
         if "logging" in data:
@@ -409,6 +462,26 @@ class Config:
                 messages=messages,
             ))
 
+        return cues
+
+    @staticmethod
+    def _parse_voice_cues(cues_data: Any) -> List[VoiceCueConfig]:
+        """Parse a song's voice-cue list. Entries without text are dropped;
+        times clamp to the valid timeline range."""
+        cues: List[VoiceCueConfig] = []
+        if not isinstance(cues_data, list):
+            return cues
+        for entry in cues_data:
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            cues.append(VoiceCueConfig(
+                time=Config._validate_float(entry.get("time", 0.0), 0.0, 36000.0),
+                text=text.strip(),
+            ))
+        cues.sort(key=lambda c: c.time)
         return cues
 
     @staticmethod
@@ -557,6 +630,7 @@ class Config:
         data["volume"] = asdict(self.volume)
         data["logging"] = asdict(self.logging)
         data["io"] = asdict(self.io)
+        data["audio"] = asdict(self.audio)
         data["webremote"] = asdict(self.webremote)
         data["last_show_path"] = self.last_show_path
         data["recent_shows"] = list(self.recent_shows)
@@ -610,21 +684,30 @@ class Config:
             return True
         return False
 
-    def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None) -> None:
-        """Update the current song's MIDI or offset."""
+    def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None,
+                            guide: Optional[str] = None,
+                            guide_offset: Optional[float] = None) -> None:
+        """Update the current song's MIDI, offsets or guide track ("" clears)."""
         song = self.get_current_song()
         if song:
             if midi is not None:
                 song.midi = self._validate_file_path(midi) if midi else None
             if offset is not None:
                 song.offset = self._validate_float(offset, -3600.0, 3600.0)
+            if guide is not None:
+                song.guide = self._validate_file_path(guide) if guide else None
+            if guide_offset is not None:
+                song.guide_offset = self._validate_float(guide_offset, -3600.0, 3600.0)
 
-    def update_volume(self, metronome: Optional[float] = None, audio: Optional[float] = None) -> None:
+    def update_volume(self, metronome: Optional[float] = None, audio: Optional[float] = None,
+                      voice: Optional[float] = None) -> None:
         """Update volume settings with validation."""
         if metronome is not None:
             self.volume.metronome = self._validate_float(metronome, 0.0, 1.0)
         if audio is not None:
             self.volume.audio = self._validate_float(audio, 0.0, 1.0)
+        if voice is not None:
+            self.volume.voice = self._validate_float(voice, 0.0, 1.0)
 
     def get_used_dmx_channels(self) -> Dict[str, List[int]]:
         """Get mapping of fixture names to their DMX channels."""

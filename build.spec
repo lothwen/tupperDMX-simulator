@@ -33,6 +33,7 @@ def _generate_buildinfo() -> None:
 
     commit = git("rev-parse", "--short", "HEAD") or "unknown"
     tag = git("describe", "--tags", "--always", "--dirty") or "unknown"
+    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "unknown"
     build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     output = project_root / "_buildinfo.py"
@@ -41,7 +42,8 @@ def _generate_buildinfo() -> None:
         "# ABOUTME: Captures git metadata so the frozen app can show its provenance.\n"
         f"BUILD_DATE = {build_date!r}\n"
         f"GIT_COMMIT = {commit!r}\n"
-        f"GIT_TAG = {tag!r}\n",
+        f"GIT_TAG = {tag!r}\n"
+        f"GIT_BRANCH = {branch!r}\n",
         encoding="utf-8",
     )
 
@@ -58,6 +60,10 @@ data_files = [
     ("fixtures", "fixtures"),
     ("webremote/static", "webremote/static"),
 ]
+
+# piper needs its espeak-ng-data phoneme tables next to the module.
+from PyInstaller.utils.hooks import collect_data_files
+data_files += collect_data_files("piper")
 
 # Hidden imports for PyQt6 and other dependencies
 hidden_imports = [
@@ -104,6 +110,12 @@ hidden_imports = [
     "numpy",
     "scipy",
 
+    # TTS (voice models are downloaded at runtime into the userprefs dir,
+    # never bundled; piper ships its espeak-ng phoneme data as package data —
+    # collected via collect_data_files below)
+    "piper",
+    "onnxruntime",
+
     # Build metadata
     "core.buildinfo",
     "_buildinfo",
@@ -121,15 +133,15 @@ excludes = [
 
 # Platform-specific configurations
 if sys.platform == "win32":
-    icon_file = "assets/icons/metronome_icon.ico"
+    icon_file = "assets/icons/TupperDMX-icon.ico"
     console = False
     windowed = True
 elif sys.platform == "darwin":
-    icon_file = "assets/icons/metronome_icon.icns" 
+    icon_file = "assets/icons/TupperDMX-icon.icns"
     console = False
     windowed = True
 else:  # Linux
-    icon_file = "assets/icons/metronome_icon.png"
+    icon_file = "assets/icons/TupperDMX-icon.png"
     console = False
     windowed = True
 

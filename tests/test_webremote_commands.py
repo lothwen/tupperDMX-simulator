@@ -84,6 +84,24 @@ def test_indexed_validation():
                 f"{action} without an index is rejected")
 
 
+def test_countin_command_validation():
+    print("test_countin_command_validation")
+    cmd = parse_command({"type": "cmd", "action": "set_precount", "on": False})
+    _assert(cmd == {"action": "set_precount", "on": False},
+            "set_precount carries its bool")
+    for bad in (None, "true", 1, 0):
+        raw = {"type": "cmd", "action": "set_precount", "on": bad}
+        _assert(parse_command(raw) is None, f"set_precount on={bad!r} is rejected")
+
+    cmd = parse_command({"type": "cmd", "action": "set_countin_bars", "bars": 4})
+    _assert(cmd == {"action": "set_countin_bars", "bars": 4},
+            "set_countin_bars carries its count")
+    for bad in (None, "2", 0, -1, 1.5, True):
+        raw = {"type": "cmd", "action": "set_countin_bars", "bars": bad}
+        _assert(parse_command(raw) is None,
+                f"set_countin_bars bars={bad!r} is rejected")
+
+
 def test_worker_handle_text_delegates():
     print("test_worker_handle_text_delegates")
     worker = WebRemoteWorker(port=8765, static_dir=".")
@@ -100,7 +118,8 @@ def test_worker_handle_text_delegates():
 def test_actions_whitelist_is_closed():
     print("test_actions_whitelist_is_closed")
     _assert(ACTIONS == {"play_pause", "stop", "next", "prev", "seek", "cue",
-                        "select_song", "blackout", "panic"},
+                        "select_song", "blackout", "panic",
+                        "set_precount", "set_countin_bars"},
             "the remote action whitelist is exactly the frozen protocol set")
 
 
@@ -110,6 +129,7 @@ def main():
     test_rejects_bad_envelopes()
     test_seek_validation()
     test_indexed_validation()
+    test_countin_command_validation()
     test_worker_handle_text_delegates()
     test_actions_whitelist_is_closed()
     print("\nALL TESTS PASSED")
