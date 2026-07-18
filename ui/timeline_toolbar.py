@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 
+from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
 from ui.toggle_switch import ToggleSwitch
 
@@ -32,6 +33,7 @@ class TimelineToolbar(QWidget):
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
     voice_cues_requested = pyqtSignal()  # open the per-song voice-cue editor
+    monitor_changed = pyqtSignal(str)  # editor monitor: MONITOR_BACKING | MONITOR_GUIDE
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
     ZOOM_MIN = 20
@@ -61,6 +63,8 @@ class TimelineToolbar(QWidget):
         self.time_display: Optional[QLabel] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
         self.precount_toggle: Optional[ToggleSwitch] = None
+        self.monitor_backing_btn: Optional[QPushButton] = None
+        self.monitor_guide_btn: Optional[QPushButton] = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
@@ -215,7 +219,54 @@ class TimelineToolbar(QWidget):
         self.precount_toggle.toggled.connect(self.song_precount_toggled.emit)
         row.addWidget(self.precount_toggle)
 
+        row.addWidget(self._separator())
+
+        # Editor monitor: which track you HEAR (and see as the waveform).
+        # BACKING = the live master; GUIDE = the song's full-mix reference.
+        # Session-only — live surfaces always play the backing.
+        self.monitor_backing_btn = QPushButton("BACKING")
+        self.monitor_backing_btn.setObjectName("TTSegment")
+        self.monitor_backing_btn.setProperty("seg", "left")
+        self.monitor_backing_btn.setCheckable(True)
+        self.monitor_backing_btn.setChecked(True)
+        self.monitor_backing_btn.setToolTip("Monitor the backing track (the live master)")
+        self.monitor_guide_btn = QPushButton("GUIDE")
+        self.monitor_guide_btn.setObjectName("TTSegment")
+        self.monitor_guide_btn.setProperty("seg", "right")
+        self.monitor_guide_btn.setProperty("monitor", "guide")
+        self.monitor_guide_btn.setCheckable(True)
+        self.monitor_guide_btn.setEnabled(False)
+        self.monitor_guide_btn.setToolTip(
+            "Monitor the guide track (full-mix design reference; never played live)")
+        monitor_group = QButtonGroup(self)
+        monitor_group.setExclusive(True)
+        monitor_group.addButton(self.monitor_backing_btn)
+        monitor_group.addButton(self.monitor_guide_btn)
+        self.monitor_backing_btn.clicked.connect(
+            lambda: self.monitor_changed.emit(MONITOR_BACKING))
+        self.monitor_guide_btn.clicked.connect(
+            lambda: self.monitor_changed.emit(MONITOR_GUIDE))
+        seg = QHBoxLayout()
+        seg.setContentsMargins(0, 0, 0, 0)
+        seg.setSpacing(0)
+        seg.addWidget(self.monitor_backing_btn)
+        seg.addWidget(self.monitor_guide_btn)
+        seg_wrap = QWidget()
+        seg_wrap.setLayout(seg)
+        row.addWidget(seg_wrap)
+
         return zone
+
+    def set_monitor_state(self, monitor: str, has_guide: bool) -> None:
+        """Reflect the editor monitor + guide availability. When the monitor
+        is GUIDE but the song has no guide, BACKING shows checked (that IS
+        what's audible — the controller falls back)."""
+        if self.monitor_backing_btn is None or self.monitor_guide_btn is None:
+            return
+        self.monitor_guide_btn.setEnabled(has_guide)
+        guide_on = monitor == MONITOR_GUIDE and has_guide
+        self.monitor_backing_btn.setChecked(not guide_on)
+        self.monitor_guide_btn.setChecked(guide_on)
 
     def _build_right_zone(self) -> QWidget:
         """View controls — Rows preset (S collapses all, M/L set height) + wired

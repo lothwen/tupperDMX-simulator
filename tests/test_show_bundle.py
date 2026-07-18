@@ -100,6 +100,80 @@ def test_export_import_roundtrip():
                 "the patch entry for the custom type parsed (show-local def wins)")
 
 
+def test_guide_tracks_are_collected():
+    print("test_guide_tracks_are_collected")
+    with tempfile.TemporaryDirectory() as tmp:
+        show, external = _rich_show(tmp)
+        # A guide whose basename COLLIDES with the collected backing.
+        guide = Path(tmp) / "estudio" / "marea.mp3"
+        guide.parent.mkdir()
+        guide.write_bytes(b"guide-bytes")
+        show.playlist.songs[0].guide = str(guide)
+        show.playlist.songs[0].guide_offset = 0.25
+        store.save_manifest(show)
+
+        pack = Path(tmp) / "gira.showpack"
+        warnings = bundle.export_bundle(show, pack)
+        _assert(warnings == [], "guide exports without warnings")
+        names = set(zipfile.ZipFile(pack).namelist())
+        _assert("audio/marea.mp3" in names and "audio/marea-2.mp3" in names,
+                "backing AND guide are collected (collision suffixed)")
+        manifest = json.loads(zipfile.ZipFile(pack).read("show.json"))
+        _assert(manifest["songs"][0]["guide"] == "audio/marea-2.mp3",
+                "the bundled manifest points at the collected guide")
+        _assert(manifest["songs"][0]["guide_offset"] == 0.25,
+                "guide_offset rides the manifest")
+
+        # Round-trip: the imported show resolves the guide inside the folder.
+        target = Path(tmp) / "otra-maquina"
+        target.mkdir()
+        root = bundle.import_bundle(pack, target)
+        imported = store.load_show(root)
+        song = imported.playlist.songs[0]
+        _assert(song.guide == str(root / "audio" / "marea-2.mp3")
+                and os.path.exists(song.guide),
+                "imported guide is self-contained (lives inside the show)")
+        _assert(Path(song.guide).read_bytes() == b"guide-bytes",
+                "guide bytes arrived intact")
+
+
+def test_inshow_audio_ships_and_reserves_names():
+    print("test_inshow_audio_ships_and_reserves_names")
+    with tempfile.TemporaryDirectory() as tmp:
+        show, external = _rich_show(tmp)
+        # In-show audio (as after a bundle import) with the SAME basename as
+        # the external backing that will be collected.
+        inshow = show.audio_dir / "marea.mp3"
+        inshow.write_bytes(b"in-show-bytes")
+        show.playlist.songs.append(SongConfig(
+            audio=str(inshow), id="s2", title="Dentro"))
+        store.save_manifest(show)
+
+        pack = Path(tmp) / "gira.showpack"
+        warnings = bundle.export_bundle(show, pack)
+        _assert(warnings == [], "in-show audio exports without warnings")
+        zf = zipfile.ZipFile(pack)
+        names = set(zf.namelist())
+        _assert("audio/marea.mp3" in names,
+                "in-show audio ships wholesale at its own path")
+        _assert("audio/marea-2.mp3" in names,
+                "the colliding external backing is collected under a suffix")
+        _assert(zf.read("audio/marea.mp3") == b"in-show-bytes"
+                and zf.read("audio/marea-2.mp3") == b"audio-bytes",
+                "each arcname carries the right bytes")
+        manifest = json.loads(zf.read("show.json"))
+        _assert(manifest["songs"][0]["audio"] == "audio/marea-2.mp3"
+                and manifest["songs"][1]["audio"] == "audio/marea.mp3",
+                "manifest entries point at their respective files")
+
+        target = Path(tmp) / "otra-maquina"
+        target.mkdir()
+        root = bundle.import_bundle(pack, target)
+        imported = store.load_show(root)
+        _assert(all(os.path.exists(s.audio) for s in imported.playlist.songs),
+                "both songs' audio resolves after import")
+
+
 def test_missing_audio_warns_but_exports():
     print("test_missing_audio_warns_but_exports")
     with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +249,8 @@ def test_import_rejections():
 def main():
     try:
         test_export_import_roundtrip()
+        test_guide_tracks_are_collected()
+        test_inshow_audio_ships_and_reserves_names()
         test_missing_audio_warns_but_exports()
         test_include_history()
         test_import_rejections()

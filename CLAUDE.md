@@ -82,7 +82,9 @@ bundled).
   chain last→recents→create; one-time legacy-userprefs migration),
   `versions.py` (snapshots: show.json+midis, retention 25 unpinned, pinned
   named ones never pruned, undoable restore), `relink.py` (basename search),
-  `bundle.py` (`.showpack` zip: collect & save audio + non-shipped defs).
+  `bundle.py` (`.showpack` zip: collect & save ALL audio — backings AND
+  guides into `audio/`, the show's own `audio/` shipped wholesale with its
+  filenames reserved against collisions — plus non-shipped defs).
   `ShowManager` (QtCore-only, owned by `AppCore`, attach FIRST in `__init__`)
   **aliases** `config.playlist`/`config.fixtures` onto the show's objects so
   every existing reader mutates the show in place; persistence funnels through
@@ -99,7 +101,9 @@ bundled).
   device — a 15 ms Qt-thread timer tops up the ~120 ms buffer; push on
   purpose: a Python pull-QIODevice deadlocks/aborts inside QAudioSink.stop(),
   the audio thread blocking on the GIL — Float32 w/ Int16 fallback,
-  end-of-backing watchdog);
+  end-of-backing watchdog; `load_backing` dedupes an in-flight decode of the
+  same path — restarting QAudioDecoder mid-decode aborts with "no audio
+  data");
   `decode.py` (async QAudioDecoder → int16 (n,2)@44100, whole song in RAM);
   `tts.py` (piper render + WAV cache keyed sha1(voice|text) in
   `userprefs_dir()/tts_cache/`; count-in words per voice language;
@@ -114,7 +118,13 @@ bundled).
   (`set_count_in(enabled, bars)` + `set_bpm`); audio/MIDI/lights wait for
   t ≥ 0; pause during count-in resets to 0, seeking cancels it. Also fires
   the song's **voice cues** (`set_voice_cues([(t, samples)])`, pointer reset
-  on stop/seek) onto the voice bus.
+  on stop/seek) onto the voice bus. **Guide track**: each song can carry an
+  optional full-mix design reference (`song.guide` + `guide_offset`); the
+  editor's monitor (`set_monitor`, `MONITOR_BACKING`/`MONITOR_GUIDE`) picks
+  which file feeds the engine via `active_file()`/`active_offset()` — a
+  missing guide silently falls back to the backing. The monitor is
+  **session-only in-memory state** (always BACKING at launch, never
+  persisted), so headless/web-remote/live playback can never inherit it.
 - **`app/audio_controller.py` — `AudioController`**: Drift-free metronome
   scheduler. `start_metronome(timeline_position_sec)` aligns beats to
   timeline (floor-based math, so negative count-in positions number
@@ -211,7 +221,9 @@ Storage splits across three places:
   one-time show migration adopts) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest, per project): the setlist
   (`songs` with `id`/`title`/`key`/`precount`/`voice_cues` — the per-song
-  spoken-guide list `[{time, text}]` — /`offset`/paths + a derived
+  spoken-guide list `[{time, text}]` — /`offset`/`guide`+`guide_offset` —
+  the optional full-mix design reference, referenced in place like the
+  backing — /paths + a derived
   `cache` of duration/bpm), `current_song_index`, the fixture **patch**
   (`fixtures`) and `webremote_cues`. Owned `.mid` files live in `midis/` and
   are written by the autosave; audio is *referenced in place* (absolute path)
@@ -239,7 +251,9 @@ objects, so all pre-show code paths keep working unchanged.
   remove 🗑; footer BPM / offset / derived "linked" media chip + per-song KEY
   line-edit (`song_key_edited`) and 🔔 count-in toggle
   (`song_precount_toggled`)), SONG FILES
-  section (audio + MIDI path displays with Load buttons and the ▷ Track new-MIDI
+  section (audio + 🎧 guide + MIDI rows: path displays with Load buttons, the
+  ✕ guide clear (`guide_clear_requested` → `MainWindow.clear_guide_track`)
+  and the ▷ Track new-MIDI
   action), EXPORT section (header + two stacked buttons: interop ⤓ Export MIDI…
   and the amber-accented 📦 Export bundle — the ▾ is a decorative cue, single
   click exports the full .showpack), VERSIONS section (header; a snapshot-picker
@@ -275,7 +289,12 @@ objects, so all pre-show code paths keep working unchanged.
   (each → its engine bus); the ruler draws 🗣 voice-cue markers
   (`set_voice_cues`), display-only — editing lives in the timeline toolbar's
   🗣 Cues button → `ui/voice_cues_dialog.py` (per-song table editor with
-  TTS preview).
+  TTS preview). The timeline toolbar (`ui/timeline_toolbar.py`) also hosts
+  the segmented `BACKING | GUIDE` monitor toggle (amber when GUIDE is
+  active, disabled without a guide) → `MediaController.set_monitor`: the
+  waveform draws the monitored track, and dragging it writes that track's
+  offset (`offset` vs `guide_offset`) via
+  `MainWindow.on_waveform_offset_changed`.
 - `ClipLibraryWidget` (`ui/clip_library.py`): right sidebar tabs ("Library",
   "DMX Channels"). `QToolBox` with one section per fixture (from
   `config.midi_note_map`) plus one per LED scene bank (from the `ledbar` def's
@@ -297,6 +316,11 @@ restart on seek-during-playback or BPM change.
 - `time.time()`-based tracking; separate `current_timeline_time` /
   `playback_start_time` for pause/resume. MP3 position synced via
   `QMediaPlayer.setPosition()`. `audio.offset` fine-tunes audio↔MIDI/DMX sync.
+- The BACKING|GUIDE monitor swaps which file the engine decodes (one track
+  in RAM at a time; switching mid-play just drops out until the new decode
+  lands and the drift resync repositions it). `guide_offset` plays the same
+  timeline-alignment role for the guide that `offset` plays for the backing.
+  MIDI/DMX/metronome/cues are timeline-driven and identical under either.
 
 ### MIDI Event Management
 - Clip-style: each event is a movable, resizable rectangle on its fixture lane.
@@ -375,7 +399,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   words).
 - `ui/` — `main_window.py` (`MainWindow`, the desktop view over `AppCore`),
   `playlist_controller.py` (widget half of the playlist: timeline/toolbar
-  refresh + relink dialogs over `app.playlist.PlaylistCore`),
+  refresh + relink dialogs — guides relink silently, no dialog — over
+  `app.playlist.PlaylistCore`),
   `stage_controller.py`, `stage_fixtures.py` (Qt render
   objects: bespoke `LedBar`/`Blinder`, the data-driven `GenericFixture`, and
   the `DesignableFixture` mixin — design-mode move/select + drag-release

@@ -356,6 +356,35 @@ def test_add_song_assigns_stable_id():
                 "other song metadata defaults are innocuous")
 
 
+def test_update_current_song_guide():
+    print("test_update_current_song_guide")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+        audio = Path(tmp) / "backing.mp3"
+        audio.write_bytes(b"x")
+        guide = Path(tmp) / "mezcla.mp3"
+        guide.write_bytes(b"x")
+
+        cfg = Config.load()
+        cfg.add_song(audio=str(audio))
+        song = cfg.playlist.songs[0]
+        _assert(song.guide is None and song.guide_offset == 0.0,
+                "new songs default to no guide")
+
+        cfg.update_current_song(guide=str(guide), guide_offset=0.75)
+        _assert(song.guide == str(guide), "update_current_song sets the guide")
+        _assert(abs(song.guide_offset - 0.75) < 1e-9,
+                "update_current_song sets the guide offset")
+
+        cfg.update_current_song(guide_offset=99999.0)
+        _assert(song.guide_offset == 3600.0, "guide offset is clamped")
+        _assert(song.guide == str(guide), "omitted guide kwarg leaves it alone")
+
+        cfg.update_current_song(guide="")
+        _assert(song.guide is None, "empty-string guide clears it")
+
+
 def test_show_pointers_roundtrip():
     print("test_show_pointers_roundtrip")
     with tempfile.TemporaryDirectory() as tmp:
@@ -476,6 +505,7 @@ def main():
     test_channel_auto_assigned_in_list_order()
     test_explicit_and_missing_channels_dont_collide()
     test_add_song_assigns_stable_id()
+    test_update_current_song_guide()
     test_show_pointers_roundtrip()
     test_save_is_atomic()
     test_audio_config_roundtrip()

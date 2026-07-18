@@ -69,6 +69,14 @@ class PlaylistCore(QObject):
     def _load_song(self, song) -> bool:
         core = self.core
 
+        # Guide track (editor monitoring only) — fed BEFORE the backing so
+        # set_files resolves the monitored file against this song. A missing
+        # guide just logs: the audio_missing relink flow stays backing-only.
+        guide = song.guide if (song.guide and os.path.exists(song.guide)) else None
+        if song.guide and guide is None:
+            self.logger.warning(f"Missing guide for '{song.title}': {song.guide}")
+        core.media_controller.set_guide(guide, song.guide_offset)
+
         # Apply audio file
         if song.audio and not os.path.exists(song.audio):
             # Missing media: keep the path (it's the relink key), surface the
@@ -80,6 +88,10 @@ class PlaylistCore(QObject):
             core.media_controller.set_audio_offset(song.offset)
             if song.offset != 0.0:
                 self.logger.info(f"Applied saved audio offset: {song.offset:.3f}s")
+        else:
+            # No backing: clear it (a guide-only song stays playable while
+            # the guide is monitored).
+            core.media_controller.set_files(None)
 
         # Load MIDI file via MidiManager
         midi_ok = False
