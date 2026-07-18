@@ -1,8 +1,9 @@
 """
 Characterization test: the toolbar's SHOW section (ui/toolbar_manager.py).
 
-Covers the five project buttons firing their signals, the show-name display,
-the autosave-state chip mapping and the setlist/patch stats footer.
+Covers the project buttons firing their signals (incl. the "…" Import menu
+and the split Export button), the show-name display, the autosave-state chip
+mapping and the setlist/patch stats footer.
 
 Run with:
     uv run python tests/test_toolbar_show_panel.py
@@ -14,7 +15,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from PyQt6.QtWidgets import QApplication, QPushButton
+from PyQt6.QtWidgets import QApplication, QPushButton, QToolButton
 
 app = QApplication.instance() or QApplication([])
 
@@ -46,10 +47,41 @@ def test_show_buttons_fire_signals():
     manager.save_show_as_requested.connect(lambda: fired.append("save_as"))
     manager.import_bundle_requested.connect(lambda: fired.append("import"))
 
-    for text in ("+ New", "📂 Open", "💾 Save", "Save as…", "Import"):
+    for text in ("+ New", "📂 Open", "💾 Save", "Save as…"):
         _button(toolbar, text).click()
+    more = next(b for b in toolbar.findChildren(QToolButton)
+                if b.text() == "…")
+    import_action = next(a for a in more.menu().actions()
+                         if a.text() == "Import bundle…")
+    import_action.trigger()
     _assert(fired == ["new", "open", "save", "save_as", "import"],
-            "the five SHOW buttons fire their signals")
+            "the four SHOW buttons + the … Import action fire their signals")
+
+
+def test_export_split_button():
+    print("test_export_split_button")
+    manager = ToolbarManager(Config())
+    toolbar = manager.create_toolbar(None)
+    fired = []
+    manager.export_midi_requested.connect(lambda: fired.append("midi"))
+    manager.export_bundle_requested.connect(lambda: fired.append("bundle"))
+
+    export = next(b for b in toolbar.findChildren(QToolButton)
+                  if b.objectName() == "ExportSplitButton")
+    export.click()
+    _assert(fired == ["bundle"], "main click exports the bundle")
+
+    midi_action, bundle_action = export.menu().actions()
+    _assert(midi_action.text().endswith("Export MIDI…")
+            and not midi_action.isEnabled(),
+            "menu MIDI export starts disabled")
+    manager.set_export_midi_enabled(True)
+    _assert(midi_action.isEnabled(),
+            "set_export_midi_enabled(True) enables the action")
+    midi_action.trigger()
+    bundle_action.trigger()
+    _assert(fired == ["bundle", "midi", "bundle"],
+            "menu actions fire the export signals")
 
 
 def test_show_name_and_autosave_chip():
@@ -102,6 +134,7 @@ def test_show_stats_footer():
 
 def main():
     test_show_buttons_fire_signals()
+    test_export_split_button()
     test_show_name_and_autosave_chip()
     test_show_stats_footer()
     print("\nALL TESTS PASSED")
