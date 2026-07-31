@@ -1040,7 +1040,9 @@ class TrackHeaderWidget(QWidget):
         text_col.setSpacing(0)
         self.name_label = QLabel(label)
         self.name_label.setObjectName("TrackName")
-        addr = f"Ch. {channel + 1}"
+        # 0-based, the raw MIDI channel — the same number the patch stores and
+        # every other surface shows.
+        addr = f"Ch. {channel}"
         if dmx_end >= dmx_start:
             addr += f"  ·  DMX {dmx_start}–{dmx_end}"
         self.info_label = QLabel(addr)

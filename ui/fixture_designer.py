@@ -2,92 +2,15 @@
 # ABOUTME: per-selection inspector (name / type / DMX / delete). Placement is by drag.
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
-    QPushButton, QComboBox, QSpinBox, QLabel, QLineEdit, QDialogButtonBox,
+    QWidget, QDialog, QVBoxLayout, QHBoxLayout,
+    QPushButton, QComboBox, QSpinBox, QLabel, QLineEdit,
     QMessageBox,
 )
 
 from tupperlogger import get_logger
-from core.config import known_fixture_types
 from core.fixture_library import fixture_modes
 from ui import icons
-
-
-def _suggest_free_dmx_start(stage_controller) -> int:
-    """First DMX address past the currently patched channels (1 if empty)."""
-    used = stage_controller.config.get_used_dmx_channels()
-    highest = 0
-    for channels in used.values():
-        if channels:
-            highest = max(highest, max(channels))
-    return min(512, highest + 1) if highest else 1
-
-
-def _other_channels(config, exclude=None) -> set:
-    """MIDI channels in use by patched fixtures, excluding `exclude`."""
-    return {f.channel for f in config.fixtures
-            if f is not exclude and f.channel >= 0}
-
-
-class AddFixtureDialog(QDialog):
-    """Pick a fixture type from the library + a DMX start address."""
-
-    def __init__(self, stage_controller, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add fixture")
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-
-        self.type_combo = QComboBox()
-        for name in sorted(known_fixture_types()):
-            self.type_combo.addItem(name)
-        form.addRow("Type", self.type_combo)
-
-        # Most fixtures declare a single mode; the row only appears when there
-        # is actually something to pick.
-        self.mode_combo = QComboBox()
-        self._form = form
-        self._mode_row = form.rowCount()
-        form.addRow("Mode", self.mode_combo)
-        self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        self._on_type_changed(self.type_combo.currentText())
-
-        self.dmx_spin = QSpinBox()
-        self.dmx_spin.setRange(1, 512)
-        self.dmx_spin.setValue(_suggest_free_dmx_start(stage_controller))
-        form.addRow("DMX start", self.dmx_spin)
-
-        self.channel_spin = QSpinBox()
-        self.channel_spin.setRange(0, 15)
-        self.channel_spin.setValue(stage_controller.config.next_free_channel())
-        form.addRow("MIDI channel", self.channel_spin)
-
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _on_type_changed(self, type_name: str) -> None:
-        """Repopulate the mode list for the selected type."""
-        modes = fixture_modes(type_name)
-        self.mode_combo.clear()
-        self.mode_combo.addItems(modes)
-        self._form.setRowVisible(self._mode_row, len(modes) > 1)
-
-    def values(self):
-        """Return (type_name, dmx_start, channel, mode) for the chosen fixture.
-
-        `mode` is empty for a single-mode type, which stores as "the type's
-        default" and so survives the mode being renamed in its definition."""
-        modes = fixture_modes(self.type_combo.currentText())
-        mode = self.mode_combo.currentText() if len(modes) > 1 else ""
-        return (self.type_combo.currentText(), self.dmx_spin.value(),
-                self.channel_spin.value(), mode)
+from ui.add_fixture_dialog import AddFixtureDialog, used_midi_channels
 
 
 class StageEditToolbar(QWidget):
@@ -136,7 +59,7 @@ class StageEditToolbar(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         type_name, dmx_start, channel, mode = dialog.values()
-        if channel in _other_channels(self._stage.config):
+        if channel in used_midi_channels(self._stage.config):
             QMessageBox.warning(
                 self, "Channel in use",
                 f"MIDI channel {channel} is already used by another fixture. "
@@ -311,7 +234,7 @@ class FixtureInspector(QWidget):
         if value == self._current.channel:
             return
         # Channel is the clip-binding identity, so it must stay unique.
-        if value in _other_channels(self._stage.config, exclude=self._current):
+        if value in used_midi_channels(self._stage.config, exclude=self._current):
             QMessageBox.warning(
                 self, "Channel in use",
                 f"MIDI channel {value} is already used by another fixture.")

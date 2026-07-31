@@ -288,8 +288,12 @@ class OflPhysical:
     dimensions_mm: Optional[Tuple[float, float, float]] = None
     weight_kg: Optional[float] = None
     power_w: Optional[float] = None
+    power_connectors: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}))   # connector -> direction
+    dmx_connector: str = ""
     bulb_type: str = ""
     bulb_color_temp_k: Optional[float] = None
+    bulb_lumens: Optional[float] = None
     lens_name: str = ""
     lens_degrees: Optional[Tuple[float, float]] = None
     pixel_dimensions_mm: Optional[Tuple[float, float, float]] = None
@@ -311,14 +315,21 @@ def _parse_physical(data: Any) -> OflPhysical:
     bulb = data.get("bulb") if isinstance(data.get("bulb"), dict) else {}
     lens = data.get("lens") if isinstance(data.get("lens"), dict) else {}
     pixels = data.get("matrixPixels") if isinstance(data.get("matrixPixels"), dict) else {}
+    connectors = (data.get("powerConnectors")
+                  if isinstance(data.get("powerConnectors"), dict) else {})
     degrees = lens.get("degreesMinMax")
     return OflPhysical(
         dimensions_mm=_xyz(data.get("dimensions")),
         weight_kg=data.get("weight") if isinstance(data.get("weight"), (int, float)) else None,
         power_w=data.get("power") if isinstance(data.get("power"), (int, float)) else None,
+        power_connectors=MappingProxyType(
+            {str(k): str(v) for k, v in connectors.items()}),
+        dmx_connector=str(data.get("DMXconnector", "")),
         bulb_type=str(bulb.get("type", "")),
         bulb_color_temp_k=bulb.get("colorTemperature")
         if isinstance(bulb.get("colorTemperature"), (int, float)) else None,
+        bulb_lumens=bulb.get("lumens")
+        if isinstance(bulb.get("lumens"), (int, float)) else None,
         lens_name=str(lens.get("name", "")),
         lens_degrees=(float(degrees[0]), float(degrees[1]))
         if isinstance(degrees, (list, tuple)) and len(degrees) == 2 else None,
@@ -503,6 +514,68 @@ class ResolvedMode:
         return len(self.channels)
 
 
+# --- document metadata -------------------------------------------------------
+#
+# Nothing in the render path reads these; they are what a fixture browser shows
+# about a product (who wrote the definition, where the manual is, whether the
+# thing speaks RDM), so they are parsed but never interpreted.
+
+@dataclass(frozen=True)
+class OflImportPlugin:
+    """Provenance of a definition converted from another format."""
+    plugin: str = ""
+    date: str = ""
+    comment: str = ""
+
+
+@dataclass(frozen=True)
+class OflMeta:
+    authors: Tuple[str, ...] = ()
+    create_date: str = ""
+    last_modify_date: str = ""
+    import_plugin: Optional[OflImportPlugin] = None
+
+
+@dataclass(frozen=True)
+class OflRdm:
+    model_id: int = 0
+    software_version: str = ""
+
+
+def _parse_meta(data: Any) -> OflMeta:
+    if not isinstance(data, dict):
+        return OflMeta()
+    raw_plugin = data.get("importPlugin")
+    plugin = None
+    if isinstance(raw_plugin, dict):
+        plugin = OflImportPlugin(plugin=str(raw_plugin.get("plugin", "")),
+                                 date=str(raw_plugin.get("date", "")),
+                                 comment=str(raw_plugin.get("comment", "")))
+    return OflMeta(
+        authors=tuple(str(a) for a in data.get("authors", []) if isinstance(a, str)),
+        create_date=str(data.get("createDate", "")),
+        last_modify_date=str(data.get("lastModifyDate", "")),
+        import_plugin=plugin,
+    )
+
+
+def _parse_links(data: Any) -> Mapping[str, Tuple[str, ...]]:
+    """`links` as {kind: (url, ...)}. Kinds are manual/productPage/video/other,
+    but anything present is kept — this is display data, not a schema check."""
+    if not isinstance(data, dict):
+        return MappingProxyType({})
+    links = {str(kind): tuple(str(u) for u in urls if isinstance(u, str))
+             for kind, urls in data.items() if isinstance(urls, list)}
+    return MappingProxyType({k: v for k, v in links.items() if v})
+
+
+def _parse_rdm(data: Any) -> Optional[OflRdm]:
+    if not isinstance(data, dict) or not isinstance(data.get("modelId"), int):
+        return None
+    return OflRdm(model_id=int(data["modelId"]),
+                  software_version=str(data.get("softwareVersion", "")))
+
+
 @dataclass(frozen=True)
 class OflFixture:
     name: str
@@ -513,6 +586,11 @@ class OflFixture:
     available_channels: Mapping[str, OflChannel]
     template_channels: Mapping[str, OflChannel]
     modes: Tuple[ResolvedMode, ...]
+    meta: OflMeta = field(default_factory=OflMeta)
+    comment: str = ""
+    links: Mapping[str, Tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({}))
+    rdm: Optional[OflRdm] = None
 
 
 def resolve_mode(fixture: OflFixture, mode_name: str = "") -> Optional[ResolvedMode]:
@@ -610,6 +688,10 @@ def parse_ofl(data: dict, source: str = "") -> Optional[OflFixture]:
         available_channels=MappingProxyType(available),
         template_channels=MappingProxyType(templates),
         modes=tuple(modes),
+        meta=_parse_meta(data.get("meta")),
+        comment=str(data.get("comment", "")),
+        links=_parse_links(data.get("links")),
+        rdm=_parse_rdm(data.get("rdm")),
     )
 
 
