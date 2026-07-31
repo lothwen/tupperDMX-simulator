@@ -73,13 +73,16 @@ class ChannelSpec:
 @dataclass(frozen=True)
 class FixtureDef:
     """One fixture type resolved to ONE mode."""
-    name: str            # registry key, e.g. "par_rgb"
+    name: str            # registry key, e.g. "par_rgb" or "ADJ/Focus Spot 4Z"
     channels: List[ChannelSpec]
     banks: Dict[str, List[dict]]  # bank-name -> list of scene dicts (raw, by field)
     chases: List[dict]            # list of {"banks": [...], "scenes": [...]}
     bar_count: int = 1   # physical bars to seed for a "bar" fixture (else 1)
     # OFL-derived detail. `mode` names which mode these channels came from.
     mode: str = ""
+    # Folder the definition was found in, relative to its fixtures dir ("" for a
+    # root-level file). The fixture browser groups by it — see `_load_dir`.
+    manufacturer: str = ""
     categories: Tuple[str, ...] = ()
     physical: ofl.OflPhysical = field(default_factory=ofl.OflPhysical)
     matrix: Optional[ofl.OflMatrix] = None
@@ -161,17 +164,21 @@ def _role_for_capability(cap: ofl.Capability) -> int:
     return _ROLE_BY_CAPABILITY.get(cap.type, ROLE_GENERIC)
 
 
-def _dominant_capability(channel: ofl.OflChannel) -> Optional[ofl.Capability]:
+def dominant_capability(
+        capabilities: Tuple[ofl.Capability, ...]) -> Optional[ofl.Capability]:
     """The capability that best characterises a channel.
 
     A channel can mix capability types across its range (a strobe channel that
     is `NoFunction` at the bottom, a mode selector that is several `Effect`s).
     The type covering the most DMX wins; `NoFunction` never counts, since it is
     by definition the part of the range that does nothing.
+
+    Takes the capability tuple rather than the channel so it serves an
+    `OflChannel` and an already-bridged `ChannelSpec` alike.
     """
     spans: Dict[tuple, int] = {}
     first: Dict[tuple, ofl.Capability] = {}
-    for cap in channel.capabilities:
+    for cap in capabilities:
         if cap.type == "NoFunction":
             continue
         key = (cap.type, str(cap.get("color", "")))
@@ -211,7 +218,7 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
         # its own right: keeping it ROLE_GENERIC stops role_index_map's
         # first-wins scan from ever resolving a role to the fine slot, and stops
         # the clip library counting it as a second red.
-        coarse = _dominant_capability(channel)
+        coarse = dominant_capability(channel.capabilities)
         blend = FLAG_NAMES["blend"] if (coarse and coarse.type in _BLEND_CAPABILITIES) else 0
         return ChannelSpec(
             field=slot.key, role=ROLE_GENERIC, flags=blend,
@@ -221,7 +228,7 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
             fine_of=slot.fine_of, fine_shift=slot.fine_shift,
             pixel_key=channel.pixel_key)
 
-    dominant = _dominant_capability(channel)
+    dominant = dominant_capability(channel.capabilities)
     role = _role_for_capability(dominant) if dominant else ROLE_GENERIC
     flags = FLAG_NAMES["blend"] if (dominant and dominant.type in _BLEND_CAPABILITIES) else 0
 
@@ -243,7 +250,8 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
 
 def build_fixture_def(key: str, fixture: ofl.OflFixture,
                       sidecar: Optional[Sidecar] = None,
-                      mode_name: str = "") -> Optional[FixtureDef]:
+                      mode_name: str = "",
+                      manufacturer: str = "") -> Optional[FixtureDef]:
     """Combine an OFL document, its sidecar and a mode into a FixtureDef."""
     if not mode_name and sidecar is not None:
         mode_name = sidecar.default_mode
@@ -262,6 +270,7 @@ def build_fixture_def(key: str, fixture: ofl.OflFixture,
         # how many render objects the stage seeds.
         bar_count=fixture.matrix.pixel_count[0] if fixture.matrix else 1,
         mode=mode.name,
+        manufacturer=manufacturer,
         categories=fixture.categories,
         physical=mode.physical,
         matrix=fixture.matrix,
@@ -287,9 +296,21 @@ def _read_json(path: Path) -> Optional[dict]:
         return None
 
 
-# registry key -> (OFL document, its sidecar or None), so a mode other than the
-# default can be resolved on demand without re-reading the filesystem.
-_Source = Tuple[ofl.OflFixture, Optional[Sidecar]]
+# registry key -> (OFL document, its sidecar or None, its manufacturer), so a
+# mode other than the default can be resolved on demand without re-reading the
+# filesystem.
+_Source = Tuple[ofl.OflFixture, Optional[Sidecar], str]
+
+
+def _manufacturer_of(path: Path, root: Path) -> str:
+    """The folder `path` sits in, relative to its fixtures dir.
+
+    A file directly in the fixtures dir has no manufacturer (""). Nesting deeper
+    than one level keeps the whole relative path, so the folder layout is always
+    what the key and the browser show.
+    """
+    relative = path.parent.relative_to(root)
+    return "" if relative == Path(".") else relative.as_posix()
 
 
 def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
@@ -298,17 +319,25 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
     A definition is one or two files: the OFL document, and optionally a
     `.tdmx.json` sidecar beside it. Sidecars are indexed first so each OFL file
     can be paired with its own as it is parsed.
+
+    Subfolders are the *manufacturer*: `ADJ/focus-spot-4z.json` registers as
+    "ADJ/Focus Spot 4Z". Namespacing by folder is what lets two makers ship a
+    fixture of the same name without one silently replacing the other; files
+    directly in the fixtures dir keep their bare key, so the shipped defs
+    (ledbar, blinder, …) and every patch referring to them are unaffected.
     """
     defs: Dict[str, FixtureDef] = {}
     sources: Dict[str, _Source] = {}
     if not os.path.isdir(directory):
         return defs, sources
 
-    paths = sorted(Path(directory).glob("*.json"))
+    root = Path(directory)
+    paths = sorted(root.rglob("*.json"))
 
-    # Pass A: sidecars, keyed by the OFL filename each one targets.
-    sidecars: Dict[str, Sidecar] = {}
-    ofl_names = {p.name for p in paths if not p.name.endswith(SIDECAR_SUFFIX)}
+    # Pass A: sidecars, keyed by the OFL file each one targets. A sidecar only
+    # ever pairs with a document in its OWN folder, so the key is the full path.
+    sidecars: Dict[Path, Sidecar] = {}
+    ofl_paths = {p for p in paths if not p.name.endswith(SIDECAR_SUFFIX)}
     for path in paths:
         if not path.name.endswith(SIDECAR_SUFFIX):
             continue
@@ -318,10 +347,10 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
         sidecar = parse_sidecar(data, str(path))
         if sidecar is None:
             continue
-        target = target_filename(path.name, sidecar)
-        if target not in ofl_names:
-            logger.warning(f"Sidecar '{path}' targets '{target}', which is not in "
-                           f"this fixtures directory; ignoring it")
+        target = path.parent / target_filename(path.name, sidecar)
+        if target not in ofl_paths:
+            logger.warning(f"Sidecar '{path}' targets '{target.name}', which is not "
+                           f"beside it; ignoring it")
             continue
         sidecars[target] = sidecar
 
@@ -340,14 +369,16 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
             # the reason needs to be findable in the log.
             continue
 
-        sidecar = sidecars.get(path.name)
-        key = (sidecar.key if sidecar is not None and sidecar.key else fixture.name)
-        fdef = build_fixture_def(key, fixture, sidecar)
+        sidecar = sidecars.get(path)
+        manufacturer = _manufacturer_of(path, root)
+        base = (sidecar.key if sidecar is not None and sidecar.key else fixture.name)
+        key = f"{manufacturer}/{base}" if manufacturer else base
+        fdef = build_fixture_def(key, fixture, sidecar, manufacturer=manufacturer)
         if fdef is None:
             logger.warning(f"Skipping fixture def '{path}': no usable mode")
             continue
         defs[key] = fdef
-        sources[key] = (fixture, sidecar)
+        sources[key] = (fixture, sidecar, manufacturer)
 
     return defs, sources
 
@@ -429,22 +460,32 @@ def resolve_fixture(type_name: str, mode: str = "") -> Optional[FixtureDef]:
     source = _sources.get(type_name)
     if source is None:
         return defs.get(type_name)
-    fixture, sidecar = source
-    fdef = build_fixture_def(type_name, fixture, sidecar, mode) or defs.get(type_name)
+    fixture, sidecar, manufacturer = source
+    fdef = (build_fixture_def(type_name, fixture, sidecar, mode, manufacturer)
+            or defs.get(type_name))
     _mode_cache[(type_name, mode)] = fdef
     return fdef
+
+
+def fixture_document(type_name: str) -> Optional[ofl.OflFixture]:
+    """The parsed OFL document behind a type, mode-independent.
+
+    The FixtureDef is one *mode* summarised for the engine; the browser also
+    wants what the document says about the product as a whole (its metadata,
+    links, every mode it declares), which only lives here.
+    """
+    source = _sources.get(type_name)
+    if source is None:
+        load_fixture_defs()
+        source = _sources.get(type_name)
+    return source[0] if source is not None else None
 
 
 def fixture_modes(type_name: str) -> List[str]:
     """The mode names a type declares, in order ([] if it has none or is
     unknown). The designer offers a mode picker only when there's a choice."""
-    source = _sources.get(type_name)
-    if source is None:
-        load_fixture_defs()
-        source = _sources.get(type_name)
-    if source is None:
-        return []
-    return [mode.name for mode in source[0].modes]
+    document = fixture_document(type_name)
+    return [mode.name for mode in document.modes] if document else []
 
 
 def clear_cache() -> None:

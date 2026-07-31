@@ -229,8 +229,8 @@ def test_patch_refuses_a_fixture_past_the_universe():
     _with_defs([HUNGRY], body)
 
 
-def test_add_fixture_dialog_hides_the_mode_row_for_single_mode_types(qapp):
-    print("test_add_fixture_dialog_hides_the_mode_row_for_single_mode_types")
+def test_add_fixture_dialog_offers_every_mode(qapp):
+    print("test_add_fixture_dialog_offers_every_mode")
     from core.config import Config as RealConfig
     from ui.stage_controller import StageController
     from ui.fixture_designer import AddFixtureDialog
@@ -239,16 +239,16 @@ def test_add_fixture_dialog_hides_the_mode_row_for_single_mode_types(qapp):
         stage = StageController(RealConfig())
         dialog = AddFixtureDialog(stage)
 
-        dialog.type_combo.setCurrentText("multi")
-        _assert(dialog._form.isRowVisible(dialog._mode_row),
-                "a multi-mode type shows the mode row")
-        _assert([dialog.mode_combo.itemText(i)
-                 for i in range(dialog.mode_combo.count())] == ["4ch", "3ch"],
+        dialog.select_type("multi")
+        _assert([name for _b, name, _c, _l in dialog._mode_buttons] == ["4ch", "3ch"],
                 "the mode list matches the definition")
-        _assert(dialog.values()[3] == "4ch", "a chosen mode is returned")
+        _assert(dialog.values()[3] == "4ch",
+                "the default mode is returned without touching anything")
+        _assert(dialog.stat_channels.text() == "4", "the header counts its channels")
 
-        dialog.mode_combo.setCurrentText("3ch")
-        _assert(dialog.values()[3] == "3ch", "changing the combo changes the result")
+        dialog.set_mode("3ch")
+        _assert(dialog.values()[3] == "3ch", "picking a mode changes the result")
+        _assert(dialog.stat_channels.text() == "3", "and the channel count follows")
 
     _with_defs([MULTIMODE], body)
 
@@ -266,9 +266,9 @@ def test_add_fixture_stores_empty_mode_for_single_mode_types(qapp):
     def body():
         stage = StageController(RealConfig())
         dialog = AddFixtureDialog(stage)
-        dialog.type_combo.setCurrentText("solo")
-        _assert(not dialog._form.isRowVisible(dialog._mode_row),
-                "a single-mode type hides the mode row — there is nothing to pick")
+        dialog.select_type("solo")
+        _assert(len(dialog._mode_buttons) == 1,
+                "a single-mode type has nothing to pick")
         _assert(dialog.values()[3] == "",
                 "and stores no mode, so renaming it can't strand the patch")
 
@@ -309,7 +309,7 @@ def main():
     test_controller_compiles_per_mode()
     test_controller_type_cache_follows_library_reloads()
     test_patch_refuses_a_fixture_past_the_universe()
-    test_add_fixture_dialog_hides_the_mode_row_for_single_mode_types(app)
+    test_add_fixture_dialog_offers_every_mode(app)
     test_add_fixture_stores_empty_mode_for_single_mode_types(app)
     test_changing_mode_rebuilds_the_render_group(app)
     print("\nALL TESTS PASSED")

@@ -157,6 +157,22 @@ bundled).
   `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
   `led_bars`/`blinders`/`generic_fixtures` survive as read-only views over
   `render_objs`.
+- **`ui/add_fixture_dialog.py` — `AddFixtureDialog`**: the fixture browser the
+  designer's "Add fixture" opens. A left rail (search over name/manufacturer/
+  category, a Manufacturer|Category grouping toggle, the tree — a fixture with
+  several categories appears under each) over a detail panel rendering the OFL
+  document: General (physical / metadata / links / comment cards), Channels
+  (one row per DMX slot — address, name, a capability-family chip — expanding
+  into its capability ranges) and Modes (a radio card per mode with its
+  channel chips). The footer is the patch decision: DMX start (live "occupies
+  A – B" + overlap/overflow check against `config.get_used_dmx_channels()`),
+  MIDI channel (spin + 16 buttons, taken ones flagged; **0-15, the raw MIDI
+  channel** — every surface that shows a channel is 0-based: this dialog, the
+  inspector and the timeline lane headers) and a `PatchBar` painting the
+  universe. OK stays disabled until the patch is legal.
+  `values()` → `(type, dmx_start, channel, mode)`, with `mode` empty for a
+  single-mode type. `suggest_free_dmx_start()`/`used_midi_channels()` live here
+  too — the inspector validates the same two things.
 - **`ui/stage/` — the render engine**: category-driven fixture rendering.
   `registry.py` maps an OFL **category** to a renderer via
   `@register_renderer(...)`; the fixture's own category order wins (OFL lists
@@ -190,7 +206,11 @@ bundled).
   channel, and unused/unresolvable slots kept in place so they still consume an
   address. `parse_entity()` turns OFL's units and keywords ("fast", "50%",
   "6500K") into canonical floats. Deliberately lenient — unknown capability
-  types are preserved, not rejected.
+  types are preserved, not rejected. The document's own metadata (`meta` →
+  `OflMeta` authors/dates/import plugin, `comment`, `links`, `rdm`, plus
+  `powerConnectors`/`DMXconnector`/bulb lumens on `OflPhysical`) is parsed but
+  never interpreted — nothing in the render path reads it; it exists for the
+  fixture browser.
 - **`core/fixture_library.py`**: the fixture-type *library* and the OFL→app
   bridge. A definition is **one or two files**: `fixtures/<x>.json` (a strict OFL
   document) plus an optional `fixtures/<x>.tdmx.json` sidecar
@@ -201,10 +221,17 @@ bundled).
   Loaded in three layers — shipped `fixtures/`, writable
   `userprefs_dir()/fixtures/`, and the open show's `fixtures/`
   (`set_show_fixtures_dir()`); later layers override by key; memoized;
-  **sidecars never cross layers**. `FixtureDef` is one type resolved to **one
-  mode**: `resolve_fixture(type, mode)` is the canonical accessor
-  (`load_fixture_defs()` gives each type at its default mode) and
-  `fixture_modes(type)` lists the choices. The bridge summarises each OFL
+  **sidecars never cross layers** (a sidecar only pairs with the OFL document
+  in its own folder). Each layer is scanned **recursively**, and a subfolder is
+  the **manufacturer**: `fixtures/ADJ/focus-spot-4z.json` registers as
+  `"ADJ/Focus Spot 4Z"` (`FixtureDef.manufacturer`), so two makers can ship a
+  fixture of the same name without one silently replacing the other. A file
+  directly in a fixtures dir keeps its **bare** key — that is what every saved
+  patch and the shipped ledbar/blinder refer to. `FixtureDef` is one type
+  resolved to **one mode**: `resolve_fixture(type, mode)` is the canonical
+  accessor (`load_fixture_defs()` gives each type at its default mode),
+  `fixture_modes(type)` lists the choices and `fixture_document(type)` returns
+  the mode-independent OFL document behind it. The bridge summarises each OFL
   channel to the app's `ROLE_*` + flags: the capability type covering the most
   DMX wins (`NoFunction` never counts), `blend` is derived from the capability
   kind, and the knob flags — which aren't derivable — come from the sidecar.
@@ -454,7 +481,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
   signal-flow graph state), `buildinfo.py` (build metadata accessor).
 - `fixtures/` (repo root) — shipped fixture-type definitions: a strict OFL
-  `*.json` per type plus its optional `*.tdmx.json` sidecar.
+  `*.json` per type plus its optional `*.tdmx.json` sidecar. A **subfolder is a
+  manufacturer** and namespaces the type key (`ADJ/Focus Spot 4Z`); files at the
+  root keep their bare key and show as "Generic" in the browser.
 - `audio/` — the audio engine package (no eager re-exports): `mixer.py`
   (Qt-free three-bus stereo mixer + routing modes + beep synthesis),
   `engine.py` (`AudioEngine`: the push-mode QAudioSink bridge on the
@@ -470,8 +499,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `FixtureLabel`, `GlowingEllipse`, `StrobeGate`, geometry helpers and the
   `BodyFixture` base — `registry.py`, `beam.py`, and one module per renderer:
   `pixelbar.py`, `blinder.py`, `wash.py`, `strobe.py`, `generic.py`),
-  `fixture_designer.py` (scenario-designer panel + add
-  dialog, incl. the per-fixture mode combo shown only for multi-mode types),
+  `fixture_designer.py` (edit-mode toolbar + the per-selection inspector,
+  incl. the mode combo shown only for multi-mode types),
+  `add_fixture_dialog.py` (the fixture browser + patch footer),
   `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
   `settings_dialog.py` (incl. the Input/Output section + AUDIO card),
   `io_flow_widget.py`, `voice_cues_dialog.py` (per-song spoken-cue editor),
