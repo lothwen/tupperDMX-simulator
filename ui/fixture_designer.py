@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 
 from tupperlogger import get_logger
 from core.config import known_fixture_types
+from core.fixture_library import fixture_modes
 from ui import icons
 
 
@@ -43,6 +44,15 @@ class AddFixtureDialog(QDialog):
             self.type_combo.addItem(name)
         form.addRow("Type", self.type_combo)
 
+        # Most fixtures declare a single mode; the row only appears when there
+        # is actually something to pick.
+        self.mode_combo = QComboBox()
+        self._form = form
+        self._mode_row = form.rowCount()
+        form.addRow("Mode", self.mode_combo)
+        self.type_combo.currentTextChanged.connect(self._on_type_changed)
+        self._on_type_changed(self.type_combo.currentText())
+
         self.dmx_spin = QSpinBox()
         self.dmx_spin.setRange(1, 512)
         self.dmx_spin.setValue(_suggest_free_dmx_start(stage_controller))
@@ -62,10 +72,22 @@ class AddFixtureDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _on_type_changed(self, type_name: str) -> None:
+        """Repopulate the mode list for the selected type."""
+        modes = fixture_modes(type_name)
+        self.mode_combo.clear()
+        self.mode_combo.addItems(modes)
+        self._form.setRowVisible(self._mode_row, len(modes) > 1)
+
     def values(self):
-        """Return (type_name, dmx_start, channel) for the chosen fixture."""
+        """Return (type_name, dmx_start, channel, mode) for the chosen fixture.
+
+        `mode` is empty for a single-mode type, which stores as "the type's
+        default" and so survives the mode being renamed in its definition."""
+        modes = fixture_modes(self.type_combo.currentText())
+        mode = self.mode_combo.currentText() if len(modes) > 1 else ""
         return (self.type_combo.currentText(), self.dmx_spin.value(),
-                self.channel_spin.value())
+                self.channel_spin.value(), mode)
 
 
 class StageEditToolbar(QWidget):
@@ -113,7 +135,7 @@ class StageEditToolbar(QWidget):
         dialog = AddFixtureDialog(self._stage, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        type_name, dmx_start, channel = dialog.values()
+        type_name, dmx_start, channel, mode = dialog.values()
         if channel in _other_channels(self._stage.config):
             QMessageBox.warning(
                 self, "Channel in use",
@@ -124,7 +146,7 @@ class StageEditToolbar(QWidget):
         rect = self._stage.scene.sceneRect()
         self._stage.add_fixture(
             type_name, dmx_start, int(rect.width() / 2), int(rect.height() / 2),
-            channel,
+            channel, mode,
         )
         self._notify()
 
@@ -181,6 +203,14 @@ class FixtureInspector(QWidget):
         self._type_value.setObjectName("InspectorReadonly")
         layout.addWidget(self._type_value)
 
+        # Mode changes the channel layout, so it is only offered when the type
+        # declares more than one.
+        self._mode_label = self._field_label("Mode")
+        layout.addWidget(self._mode_label)
+        self._mode_combo = QComboBox()
+        self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        layout.addWidget(self._mode_combo)
+
         # DMX PATCH
         layout.addWidget(self._section_label("DMX PATCH"))
         layout.addWidget(self._field_label("Start address"))
@@ -231,12 +261,32 @@ class FixtureInspector(QWidget):
         self._name_edit.setText(instance.name)
         self._name_edit.blockSignals(False)
         self._type_value.setText(instance.type)
+
+        modes = fixture_modes(instance.type)
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.clear()
+        self._mode_combo.addItems(modes)
+        if modes:
+            self._mode_combo.setCurrentText(instance.mode or modes[0])
+        self._mode_combo.blockSignals(False)
+        self._mode_label.setVisible(len(modes) > 1)
+        self._mode_combo.setVisible(len(modes) > 1)
+
         self._dmx_spin.blockSignals(True)
         self._dmx_spin.setValue(instance.dmx_start)
         self._dmx_spin.blockSignals(False)
         self._channel_spin.blockSignals(True)
         self._channel_spin.setValue(max(0, instance.channel))
         self._channel_spin.blockSignals(False)
+
+    def _on_mode_changed(self, mode: str) -> None:
+        if self._current is None or not mode:
+            return
+        # Rebuilding the render group re-emits fixture_selected, so the host
+        # keeps the inspector pointed at the same fixture.
+        self._stage.change_fixture_mode(self._current, mode)
+        self._stage.refresh_labels()
+        self._notify()
 
     def _on_name_changed(self) -> None:
         if self._current is None:

@@ -20,7 +20,7 @@ from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
                       TrackResizeHandle, CustomTooltip)
 from .widgets.scene_edit import SceneEditDialog
 from core import note_layout
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import load_fixture_defs, resolve_fixture
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
@@ -1307,7 +1307,10 @@ class Timeline(QWidget):
 
     def _fdef(self, channel):
         """FixtureDef of the patched fixture with stable `channel`, or None."""
-        return load_fixture_defs().get(self._fixture_type(channel))
+        inst = self._fixture_for_channel(channel)
+        if inst is None:
+            return None
+        return resolve_fixture(inst.type, getattr(inst, "mode", ""))
 
     def _note_is_song_part(self, note: int) -> bool:
         return bool(self.midi_manager
@@ -1366,7 +1369,7 @@ class Timeline(QWidget):
         if target_idx is not None and self.midi_manager.is_fixture_locked(target_idx):
             return False
         target_type = self._fixture_type(target_idx)
-        fdef = load_fixture_defs().get(target_type)
+        fdef = self._fdef(target_idx)
         if not (fdef and fdef.banks):
             return False
         return fixture_type is None or fixture_type == target_type

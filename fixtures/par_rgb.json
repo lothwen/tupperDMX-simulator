@@ -1,10 +1,72 @@
 {
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
   "name": "par_rgb",
-  "render": "par",
-  "channels": [
-    {"field": "brightness", "role": "brightness", "flags": ["blend", "knob_level"]},
-    {"field": "red", "role": "red", "flags": ["blend"]},
-    {"field": "green", "role": "green", "flags": ["blend"]},
-    {"field": "blue", "role": "blue", "flags": ["blend"]}
+  "categories": [
+    "Color Changer",
+    "Dimmer"
+  ],
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2025-06-25",
+    "lastModifyDate": "2026-07-31"
+  },
+  "physical": {
+    "dimensions": [
+      180,
+      200,
+      180
+    ],
+    "bulb": {
+      "type": "RGB LED"
+    },
+    "lens": {
+      "degreesMinMax": [
+        25,
+        25
+      ]
+    }
+  },
+  "availableChannels": {
+    "brightness": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "red": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "green": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "blue": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "4ch",
+      "shortName": "4ch",
+      "channels": [
+        "brightness",
+        "red",
+        "green",
+        "blue"
+      ]
+    }
   ]
 }

@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
+from core import fixture_library
 from core.fixture_library import load_fixture_defs
 from core.config import shipped_fixtures
 from tupperlogger import get_logger
@@ -192,24 +193,55 @@ def _zero_scene(channels):
     return SimpleNamespace(**{ch.field: 0 for ch in channels})
 
 
+def _compile_fixture_type(fdef):
+    """Compile one library definition into the engine's FixtureType.
+
+    A definition with no banks gets an inert all-zero default bank so the engine
+    stays valid for it."""
+    channels = [ChannelDef(c.field, c.role, c.flags) for c in fdef.channels]
+    banks = {bank_name: [_scene_from_dict(channels, s) for s in scenes]
+             for bank_name, scenes in fdef.banks.items()}
+    if not banks:
+        banks = {"_default": [_zero_scene(channels)]}
+    return FixtureType(channels=channels, banks=banks, chases=list(fdef.chases),
+                       song_part_program=_build_song_part_program(fdef))
+
+
 def build_fixture_types():
     """Fixture-type registry built entirely from the fixture library. Every
     fixtures/*.json definition becomes a FixtureType (channels + scene banks +
     chases); config.json / the patch reference a type by name and resolve here.
 
-    A definition with no banks gets an inert all-zero default bank so the engine
-    stays valid for it."""
-    types = {}
-    for name, fdef in load_fixture_defs().items():
-        channels = [ChannelDef(c.field, c.role, c.flags) for c in fdef.channels]
-        banks = {bank_name: [_scene_from_dict(channels, s) for s in scenes]
-                 for bank_name, scenes in fdef.banks.items()}
-        if not banks:
-            banks = {"_default": [_zero_scene(channels)]}
-        types[name] = FixtureType(channels=channels, banks=banks,
-                                  chases=list(fdef.chases),
-                                  song_part_program=_build_song_part_program(fdef))
-    return types
+    Each type is compiled at its DEFAULT mode; use fixture_type_for() to compile
+    a specific one."""
+    return {name: _compile_fixture_type(fdef)
+            for name, fdef in load_fixture_defs().items()}
+
+
+# Compiled types, memoized per (type name, mode). This is deliberately lazy: the
+# registry used to be built once at import, which meant a show opened later
+# never contributed its show-local definitions to the controller.
+_TYPE_CACHE = {}
+_TYPE_CACHE_GENERATION = -1
+
+
+def fixture_type_for(name, mode=""):
+    """The compiled FixtureType for one patched fixture, or None.
+
+    Rebuilt whenever the fixture library is invalidated — tracked by comparing
+    its generation counter rather than by importing this module from there,
+    which would be a cycle (fixture_library <- config <- this module)."""
+    global _TYPE_CACHE, _TYPE_CACHE_GENERATION
+    generation = fixture_library.cache_generation()
+    if generation != _TYPE_CACHE_GENERATION:
+        _TYPE_CACHE = {}
+        _TYPE_CACHE_GENERATION = generation
+
+    key = (name, mode)
+    if key not in _TYPE_CACHE:
+        fdef = fixture_library.resolve_fixture(name, mode)
+        _TYPE_CACHE[key] = _compile_fixture_type(fdef) if fdef is not None else None
+    return _TYPE_CACHE[key]
 
 
 def _build_song_part_program(fdef):
@@ -219,11 +251,6 @@ def _build_song_part_program(fdef):
     auto-mode visualization) and maps each ref onto an engine SongPartEntry."""
     return {part: [SongPartEntry(r.is_chase, r.bank, r.index) for r in refs]
             for part, refs in note_layout.song_part_refs(fdef).items()}
-
-
-# (The UI stage renderer keeps its own name->render-class dispatch in
-# ui/stage_controller.py; generic types render via fixtures.GenericFixture.)
-FIXTURE_TYPES = build_fixture_types()
 
 
 @dataclass
@@ -311,9 +338,20 @@ class DMXController:
 
         patch = []
         for inst in fixtures:
-            ftype = FIXTURE_TYPES.get(getattr(inst, "type", None))
+            name = getattr(inst, "type", None)
+            ftype = fixture_type_for(name, getattr(inst, "mode", "")) if name else None
             if ftype is None:
-                self.logger.warning(f"Unknown fixture type '{getattr(inst, 'type', None)}', skipping")
+                self.logger.warning(f"Unknown fixture type '{name}', skipping")
+                continue
+            # The universe is fixed-size and indexed unguarded on the 20 Hz
+            # output path, so a fixture that would run off the end is refused
+            # here rather than raising inside the DMX thread.
+            end = inst.dmx_start - 1 + ftype.channel_count
+            if inst.dmx_start < 1 or end > UNIVERSE_SIZE:
+                self.logger.warning(
+                    f"Fixture '{name}' at DMX {inst.dmx_start} needs "
+                    f"{ftype.channel_count} channels, past the {UNIVERSE_SIZE}-channel "
+                    f"universe; skipping")
                 continue
             patch.append((ftype, inst.dmx_start, getattr(inst, "channel", -1)))
         return patch

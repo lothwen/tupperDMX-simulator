@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
 from core import note_layout
 from core.config import Config
 from core.fixture_library import GROUP_COLORS
-from core.fixture_library import (FixtureDef, load_fixture_defs,
+from core.fixture_library import (FixtureDef, resolve_fixture,
                              ROLE_RED, ROLE_GREEN, ROLE_BLUE)
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
@@ -424,22 +424,27 @@ class ClipLibraryWidget(QWidget):
     # ------------------------------------------------------------------
     # Group model
     # ------------------------------------------------------------------
-    def _patched_types(self) -> List[str]:
-        """Unique fixture-type names, deduped, ordered by DMX address (matching
-        the DMX-sorted timeline)."""
-        seen: List[str] = []
+    def _patched_types(self) -> List[Tuple[str, str]]:
+        """Unique patched (fixture type, mode) pairs, deduped, ordered by DMX
+        address (matching the DMX-sorted timeline).
+
+        Mode is part of the identity: the same type in two modes exposes
+        different channels, so each needs its own group of clips."""
+        seen: List[Tuple[str, str]] = []
         for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
             t = getattr(inst, "type", None)
-            if t and t not in seen:
-                seen.append(t)
+            if t and (t, getattr(inst, "mode", "")) not in seen:
+                seen.append((t, getattr(inst, "mode", "")))
         return seen
 
-    def _fixture_index_for_type(self, ftype: str) -> int:
-        """Stable MIDI channel of the first patched fixture of ``ftype`` (by DMX
-        address, matching the displayed group). The channel selects which
-        fixture handle_note_on targets; defaults to 0 if the type isn't patched."""
+    def _fixture_index_for_type(self, ftype: str, mode: str = "") -> int:
+        """Stable MIDI channel of the first patched fixture of ``ftype`` in
+        ``mode`` (by DMX address, matching the displayed group). The channel
+        selects which fixture handle_note_on targets; defaults to 0 if the type
+        isn't patched."""
         for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
-            if getattr(inst, "type", None) == ftype:
+            if (getattr(inst, "type", None) == ftype
+                    and getattr(inst, "mode", "") == mode):
                 return getattr(inst, "channel", 0)
         return 0
 
@@ -448,19 +453,18 @@ class ClipLibraryWidget(QWidget):
         fixture a channel-controls group, one group per scene bank and a chases
         group, all sharing the fixture's colour, plus a global Show group."""
         groups: List[Dict] = []
-        defs = load_fixture_defs()
-        for i, ftype in enumerate(self._patched_types()):
-            fdef = defs.get(ftype)
+        for i, (ftype, mode) in enumerate(self._patched_types()):
+            fdef = resolve_fixture(ftype, mode)
             if fdef is None:
                 continue
             color = _GROUP_COLORS[i % len(_GROUP_COLORS)]
-            channel = self._fixture_index_for_type(ftype)
+            channel = self._fixture_index_for_type(ftype, mode)
 
             clips = self._fixture_clips(fdef, channel)
             if clips:
                 groups.append({"label": ftype.replace("_", " ").capitalize(),
                                "color": color, "clips": clips})
-            for bank, bank_clips in self._bank_groups(ftype, fdef, channel):
+            for bank, bank_clips in self._bank_groups(ftype, mode, fdef, channel):
                 groups.append({"label": bank.replace("_", " ").capitalize(),
                                "color": color, "clips": bank_clips})
             chase_clips = self._chase_clips(fdef, channel)
@@ -491,11 +495,11 @@ class ClipLibraryWidget(QWidget):
                                          channel, self._clip_type(note)))
         return clips
 
-    def _bank_groups(self, ftype: str, fdef: FixtureDef, channel: int
+    def _bank_groups(self, ftype: str, mode: str, fdef: FixtureDef, channel: int
                      ) -> List[Tuple[str, List[Dict]]]:
         """``(bank_name, [clip, ...])`` per scene bank of the fixture."""
         by_bank: Dict[str, List[Scene]] = defaultdict(list)
-        for scene in load_scenes(ftype):
+        for scene in load_scenes(ftype, mode):
             by_bank[scene.bank].append(scene)
         out: List[Tuple[str, List[Dict]]] = []
         for bank in sorted(by_bank.keys()):

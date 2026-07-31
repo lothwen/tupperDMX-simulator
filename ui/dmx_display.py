@@ -418,7 +418,7 @@ class DMXDisplayWidget(QWidget):
             type_counts[fx.type] = type_counts.get(fx.type, 0) + 1
             name = f"{fx.type.capitalize()} {type_counts[fx.type]}"
             channels = list(range(fx.dmx_start,
-                                  fx.dmx_start + fixture_channel_count(fx.type)))
+                                  fx.dmx_start + fixture_channel_count(fx.type, fx.mode)))
             if not channels:
                 continue
             color = QColor(color_for_type(self.config.fixtures, fx.type))

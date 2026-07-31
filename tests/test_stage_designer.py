@@ -59,7 +59,7 @@ def test_added_fixture_receives_dmx(qapp):
     buf = bytearray(96)
     buf[8], buf[9], buf[10], buf[11] = 255, 10, 20, 30  # par_rgb at DMX 9 (index 8)
     sc.update_fixtures_with_dmx(buf)
-    c = sc.generic_fixtures[0].bulb.glow_color
+    c = sc.generic_fixtures[0].lamp.glow_color
     _assert((c.red(), c.green(), c.blue()) == (10, 20, 30),
             "the newly added fixture renders its DMX slice")
 
@@ -124,7 +124,7 @@ def test_remove_ledbar_purges_bars(qapp):
     buf[0], buf[3], buf[4] = 255, 255, 4  # brightness, red, animation
     sc.update_fixtures_with_dmx(buf)
     bars = list(sc.led_bars)
-    _assert(len(bars) == 1, "the ledbar contributes its bar(s) as LedBar objects")
+    _assert(len(bars) == 1, "the ledbar contributes its bar(s) as pixel-bar render objects")
 
     sc.set_design_mode(True)
     bars[0].setSelected(True)
@@ -135,7 +135,8 @@ def test_remove_ledbar_purges_bars(qapp):
     _assert(led not in cfg.fixtures, "the instance was removed from the patch")
     for b in bars:
         _assert(b.scene() is None, "each removed bar is detached from the scene")
-        _assert(b.current_movie is None, "each removed bar's animation movie was stopped")
+        _assert(b._current_movie is None,
+                    "each removed bar's animation movie was stopped")
 
 
 def test_remove_then_readd_keeps_other_channels_stable(qapp):
