@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.config import FixtureInstance, FixturePosition
 from software_controller.main import (
     DMXController,
-    FIXTURE_TYPES,
+    fixture_type_for,
 )
 
 
@@ -80,7 +80,7 @@ def test_patch_matches_legacy_default():
 
     _assert(cfg_driven.num_fixtures == 3, "three fixtures patched from config")
     _assert([f.type for f in cfg_driven.fixtures] ==
-            [FIXTURE_TYPES["ledbar"], FIXTURE_TYPES["blinder"], FIXTURE_TYPES["blinder"]],
+            [fixture_type_for("ledbar"), fixture_type_for("blinder"), fixture_type_for("blinder")],
             "patch types are [ledbar, blinder, blinder]")
     _assert([f.dmx_base for f in cfg_driven.fixtures] == [1, 33, 65],
             "patch DMX bases match the shipped addresses")

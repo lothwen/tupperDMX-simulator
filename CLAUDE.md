@@ -146,21 +146,72 @@ bundled).
   (`core/io_routing.py`): `note_on` verbs to `DMXController.handle_note_on()`
   and/or the full stream to an external mido port, independently.
 - **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering +
-  scenario designer. Updates fixture color/intensity from live DMX data;
-  dispatches render per type (bespoke `LedBar`/`Blinder`, else the data-driven
-  `GenericFixture`, all in `ui/stage_fixtures.py`). `set_design_mode()` makes fixtures movable/
-  selectable; `add_fixture`/`remove_selected`/drag-to-move mutate `config.fixtures`
-  and emit `fixture_added/moved/removed/selected`. The floating
+  scenario designer. Owns one flat `render_objs` list (one render object per
+  *body*: a fixture with a pixel matrix contributes one per `bars[]` entry, all
+  fed the same DMX slice) and slices `dmx_data` per instance in
+  `update_fixtures_with_dmx`. Which class draws a fixture comes from
+  `ui/stage/registry.renderer_for(fdef)` — never from its type name.
+  `set_design_mode()` makes fixtures movable/selectable;
+  `add_fixture`/`change_fixture_mode`/`remove_selected`/drag-to-move mutate
+  `config.fixtures` and emit `fixture_added/moved/removed/selected`. The floating
   `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
-- **`core/fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
-  (channels with semantic role + flags, render hint, plus scene `banks`/`chases`)
-  loaded from `fixtures/*.json` in three layers — shipped `fixtures/`, writable
+  `led_bars`/`blinders`/`generic_fixtures` survive as read-only views over
+  `render_objs`.
+- **`ui/stage/` — the render engine**: category-driven fixture rendering.
+  `registry.py` maps an OFL **category** to a renderer via
+  `@register_renderer(...)`; the fixture's own category order wins (OFL lists
+  the most important first), falling back to the shape of its channels and
+  finally to `GenericStageFixture`. Adding a fixture *kind* is one new module —
+  no edits to the stage controller. `base.py` holds `FixtureLabel`,
+  `DesignableFixture`, `GlowingEllipse` (the designer/glow primitives, unchanged
+  by the move here), the `StrobeGate` (a QTimer that flashes a strobing
+  fixture), the mm→px geometry helpers (`body_size`/`body_count`/`body_spacing`,
+  anchored by `MM_PER_STAGE_PX`) and `BodyFixture` — the base that turns a DMX
+  slice into a `FixtureState` so subclasses only implement `build_body()` +
+  `apply_state()`. Renderers: `pixelbar.py` (Pixel Bar / Matrix — a strip of
+  cells; `body_index` is which column of the animation this body shows, and
+  effect→GIF comes from the sidecar's `effects` map), `blinder.py` (one bulb per
+  emitter; the **only** renderer that applies `FixtureInstance.multiply_factor`,
+  the overdriven-glare look), `wash.py` (Color Changer / Dimmer — housing + lamp
+  + `beam.py` cone when the fixture declares a lens or a Zoom channel),
+  `strobe.py`, `generic.py`.
+- **`core/fixture_state.py`**: the Qt-free photometric model.
+  `resolve_state(fdef, dmx) -> FixtureState` (intensity, rgb, colour
+  temperature, shutter/strobe Hz, effect + speed, zoom, per-cell `emitters`)
+  driven entirely by OFL capabilities, so a fixture nobody wrote code for still
+  resolves. Colours mix additively from `REFERENCE_RGB` (the 13 OFL
+  `ColorIntensity` colours). **Emitters** come from matrix pixel keys, or — with
+  no matrix — from repeated colour channels: the n-th channel of a colour is the
+  n-th cell, which is how a multi-cell blinder resolves without special-casing.
+- **`core/ofl.py`**: the Open Fixture Library (schema 12.5.1) parser. Document →
+  `OflFixture`; `resolve_mode()` flattens one mode to ordered DMX slots with
+  matrix inserts expanded (all 7 `repeatFor` orders × `perPixel`/`perChannel`;
+  for `eachPixelXYZ` **X varies fastest**), fine channels linked to their coarse
+  channel, and unused/unresolvable slots kept in place so they still consume an
+  address. `parse_entity()` turns OFL's units and keywords ("fast", "50%",
+  "6500K") into canonical floats. Deliberately lenient — unknown capability
+  types are preserved, not rejected.
+- **`core/fixture_library.py`**: the fixture-type *library* and the OFL→app
+  bridge. A definition is **one or two files**: `fixtures/<x>.json` (a strict OFL
+  document) plus an optional `fixtures/<x>.tdmx.json` sidecar
+  (`core/fixture_sidecar.py`) carrying what OFL has nowhere to put — scene
+  `banks`, `chases`, `song_parts` tags, per-channel `role`/`flags` overrides, the
+  effect→animation map and `stage` render hints. A fixture taken straight from
+  the OFL project works with no sidecar; it simply has no scene banks.
+  Loaded in three layers — shipped `fixtures/`, writable
   `userprefs_dir()/fixtures/`, and the open show's `fixtures/`
-  (`set_show_fixtures_dir()`); later layers override by name; memoized. Every type —
-  including the built-in `ledbar`/`blinder` — is a library def;
-  `software_controller.build_fixture_types()` builds the whole `FIXTURE_TYPES`
-  registry from it (no Python singletons), and
-  `config.fixture_channel_count()`/`known_fixture_types()` derive from it.
+  (`set_show_fixtures_dir()`); later layers override by key; memoized;
+  **sidecars never cross layers**. `FixtureDef` is one type resolved to **one
+  mode**: `resolve_fixture(type, mode)` is the canonical accessor
+  (`load_fixture_defs()` gives each type at its default mode) and
+  `fixture_modes(type)` lists the choices. The bridge summarises each OFL
+  channel to the app's `ROLE_*` + flags: the capability type covering the most
+  DMX wins (`NoFunction` never counts), `blend` is derived from the capability
+  kind, and the knob flags — which aren't derivable — come from the sidecar.
+  `config.fixture_channel_count(type, mode)`/`known_fixture_types()` derive from
+  it; `software_controller.fixture_type_for(name, mode)` compiles types lazily,
+  tracking `fixture_library.cache_generation()` so a show opened later rebuilds
+  them.
 - **`software_controller/`**: Pure-Python DMX controller (no hardware needed).
   `DMXController` manages a 96-channel universe, patched data-driven from
   `config.fixtures` (type name + DMX address; default `ledbar`@1, two
@@ -225,7 +276,9 @@ Storage splits across three places:
   the optional full-mix design reference, referenced in place like the
   backing — /paths + a derived
   `cache` of duration/bpm), `current_song_index`, the fixture **patch**
-  (`fixtures`) and `webremote_cues`. Owned `.mid` files live in `midis/` and
+  (`fixtures` — each entry a type + `dmx_start` + stable MIDI `channel` +
+  optional `mode`, where `""` means the type's first declared mode so a mode
+  renamed in a definition never strands a saved patch) and `webremote_cues`. Owned `.mid` files live in `midis/` and
   are written by the autosave; audio is *referenced in place* (absolute path)
   unless it arrived inside a bundle. The `.mid` stays the canonical sequence
   format — authoring extras plain MIDI can't carry (stable scene `group_id`,
@@ -388,14 +441,20 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `store.py`, `migrate.py`, `versions.py`, `relink.py`, `bundle.py`),
   `paths.py` (single source of `bundle_dir()`/`asset_path()`/
   `userprefs_dir()`/`default_shows_dir()`, dev vs. PyInstaller `_MEIPASS`),
-  `fixture_library.py`
-  (data-driven fixture-type library: `FixtureDef`, JSON loaders, role/flag
-  maps, plus the per-type presentation colours `GROUP_COLORS`/
-  `color_for_type()`), `note_layout.py` (note → label/colour lookup),
+  `ofl.py` (the Open Fixture Library 12.5.1 parser: capabilities, modes,
+  matrix/fine-channel expansion, unit/entity parsing), `fixture_sidecar.py`
+  (the `.tdmx.json` sidecar: banks, chases, role/flag overrides, effect assets,
+  stage hints), `fixture_library.py` (the 3-layer loader + the OFL→`ROLE_*`
+  bridge: `FixtureDef`, `resolve_fixture()`, `fixture_modes()`, plus the
+  per-type presentation colours `GROUP_COLORS`/`color_for_type()`),
+  `fixture_state.py` (`resolve_state()` → `FixtureState`: the Qt-free
+  photometric model the stage renderers consume),
+  `note_layout.py` (note → label/colour lookup),
   `io_routing.py` (pure routing logic: `MidiRouting`, presets, `validate()`,
   `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
   signal-flow graph state), `buildinfo.py` (build metadata accessor).
-- `fixtures/` (repo root) — shipped fixture-type definitions (`*.json`).
+- `fixtures/` (repo root) — shipped fixture-type definitions: a strict OFL
+  `*.json` per type plus its optional `*.tdmx.json` sidecar.
 - `audio/` — the audio engine package (no eager re-exports): `mixer.py`
   (Qt-free three-bus stereo mixer + routing modes + beep synthesis),
   `engine.py` (`AudioEngine`: the push-mode QAudioSink bridge on the
@@ -406,11 +465,14 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `playlist_controller.py` (widget half of the playlist: timeline/toolbar
   refresh + relink dialogs — guides relink silently, no dialog — over
   `app.playlist.PlaylistCore`),
-  `stage_controller.py`, `stage_fixtures.py` (Qt render
-  objects: bespoke `LedBar`/`Blinder`, the data-driven `GenericFixture`, and
-  the `DesignableFixture` mixin — design-mode move/select + drag-release
-  position write-back), `fixture_designer.py` (scenario-designer panel + add
-  dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
+  `stage_controller.py`, `stage/` (the render engine: `base.py`
+  — `DesignableFixture` design-mode move/select + drag-release write-back,
+  `FixtureLabel`, `GlowingEllipse`, `StrobeGate`, geometry helpers and the
+  `BodyFixture` base — `registry.py`, `beam.py`, and one module per renderer:
+  `pixelbar.py`, `blinder.py`, `wash.py`, `strobe.py`, `generic.py`),
+  `fixture_designer.py` (scenario-designer panel + add
+  dialog, incl. the per-fixture mode combo shown only for multi-mode types),
+  `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
   `settings_dialog.py` (incl. the Input/Output section + AUDIO card),
   `io_flow_widget.py`, `voice_cues_dialog.py` (per-song spoken-cue editor),
   `error_dialogs.py`, `about_dialog.py`.

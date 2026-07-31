@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from software_controller.main import (
     DMXController,
-    FIXTURE_TYPES,
+    fixture_type_for,
     SongPartEntry,
 )
 
@@ -37,8 +37,8 @@ def _assert(cond, msg):
 
 def test_program_index_matches_legacy_targets():
     print("test_program_index_matches_legacy_targets")
-    led = FIXTURE_TYPES["ledbar"].song_part_program
-    blinder = FIXTURE_TYPES["blinder"].song_part_program
+    led = fixture_type_for("ledbar").song_part_program
+    blinder = fixture_type_for("blinder").song_part_program
 
     _assert(led["INTRO"] == [SongPartEntry(False, "FILLS2", 2)],
             "INTRO -> ledbar FILLS2 scene 2")

@@ -1,0 +1,15 @@
+{
+  "tdmx": 1,
+  "modes": {
+    "*": {
+      "channels": {
+        "brightness": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        }
+      }
+    }
+  }
+}

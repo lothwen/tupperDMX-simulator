@@ -37,27 +37,29 @@ class SceneEditor:
         self._doc = doc
         self._fades = fades
         self._commit = commit
-        # Lazily-loaded scene library, cached per fixture type.
-        self._scene_cache: Dict[str, List[Scene]] = {}
+        # Lazily-loaded scene library, cached per (fixture type, mode) — a
+        # type's scenes are written against one mode's channel set.
+        self._scene_cache: Dict[tuple, List[Scene]] = {}
         self.logger = get_logger("midi.scene_editor")
 
-    def _fixture_type_for(self, channel) -> str:
-        """Fixture-type name patched at `channel`; defaults to ledbar when no
-        patch resolves (synthetic data / tests)."""
+    def _fixture_type_for(self, channel) -> tuple:
+        """(fixture type, mode) patched at `channel`; defaults to the ledbar in
+        its default mode when no patch resolves (synthetic data / tests)."""
         fdef = self._doc._fdef_for_channel(channel)
-        return fdef.name if fdef else DEFAULT_FIXTURE_TYPE
+        return (fdef.name, fdef.mode) if fdef else (DEFAULT_FIXTURE_TYPE, "")
 
-    def _get_scenes(self, fixture_type: str) -> List[Scene]:
-        """Return the cached scene library for a fixture type."""
-        if fixture_type not in self._scene_cache:
+    def _get_scenes(self, fixture: tuple) -> List[Scene]:
+        """Return the cached scene library for a (fixture type, mode)."""
+        if fixture not in self._scene_cache:
+            fixture_type, mode = fixture
             try:
-                self._scene_cache[fixture_type] = load_scenes(fixture_type)
+                self._scene_cache[fixture] = load_scenes(fixture_type, mode)
             except Exception as exc:
                 self.logger.warning(
                     f"Could not load scene library for '{fixture_type}': {exc}"
                 )
-                self._scene_cache[fixture_type] = []
-        return self._scene_cache[fixture_type]
+                self._scene_cache[fixture] = []
+        return self._scene_cache[fixture]
 
     def _lookup_scene_name(self, cluster: List[Dict[str, Any]]) -> Optional[str]:
         """Match a freshly-clustered scene against the fixture's scene library.

@@ -7,8 +7,13 @@ import os
 import uuid
 from pathlib import Path
 
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import (
+    fixture_modes, load_fixture_defs, resolve_fixture,
+)
 from core.paths import bundle_dir, userprefs_dir
+from tupperlogger import get_logger
+
+logger = get_logger("config")
 
 
 def shipped_config_path() -> str:
@@ -109,12 +114,14 @@ class FixturePosition:
     y: int
 
 
-def fixture_channel_count(type_name: str) -> int:
+def fixture_channel_count(type_name: str, mode: str = "") -> int:
     """DMX channel count for a fixture type (0 if the type is unknown).
 
-    Every type — including the built-in ledbar/blinder — is now data-driven
-    from the fixture library, so the count comes from its definition."""
-    fdef = load_fixture_defs().get(type_name)
+    Every type — including the built-in ledbar/blinder — is data-driven from the
+    fixture library, so the count comes from its definition. A fixture's mode
+    decides how many channels it occupies, so pass it whenever one is known; an
+    empty mode means the type's default."""
+    fdef = resolve_fixture(type_name, mode)
     return fdef.channel_count if fdef else 0
 
 
@@ -132,6 +139,7 @@ class FixtureInstance:
     dmx_start: int
     name: str = ""                                             # user alias (optional)
     channel: int = -1                                          # stable MIDI channel (0-15); -1 = unassigned
+    mode: str = ""                                             # OFL mode; "" = the type's first
     x: int = 0
     y: int = 0
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
@@ -505,7 +513,21 @@ class Config:
                 continue
             fixture_type = str(entry.get("type", ""))
             if fixture_type not in known_fixture_types() or "dmx_start" not in entry:
+                # A patch entry whose type no longer resolves is dropped, and
+                # the fixture simply disappears from the show — so say why.
+                logger.warning(
+                    f"Dropping patched fixture '{fixture_type or '?'}': "
+                    f"{'no dmx_start' if fixture_type in known_fixture_types() else 'unknown type'}")
                 continue
+
+            # An unknown mode falls back to the type's default rather than
+            # dropping the fixture. Storing "" rather than the resolved name
+            # means renaming a mode in a def never strands a saved patch.
+            mode = str(entry.get("mode", "") or "")
+            if mode and mode not in fixture_modes(fixture_type):
+                logger.warning(f"Fixture '{fixture_type}' has no mode '{mode}'; "
+                               f"using its default mode")
+                mode = ""
 
             bars = []
             for bar_data in entry.get("bars", []):
@@ -520,6 +542,7 @@ class Config:
                 dmx_start=Config._validate_int(entry["dmx_start"], 1, 512),
                 name=str(entry.get("name", "")),
                 channel=Config._validate_int(entry.get("channel", -1), -1, 15),
+                mode=mode,
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
                 bars=bars,
@@ -717,7 +740,7 @@ class Config:
         for fixture in self.fixtures:
             type_counts[fixture.type] = type_counts.get(fixture.type, 0) + 1
             fixture_name = f"{fixture.type.capitalize()} {type_counts[fixture.type]}"
-            channel_count = fixture_channel_count(fixture.type)
+            channel_count = fixture_channel_count(fixture.type, fixture.mode)
             channels = list(range(fixture.dmx_start, fixture.dmx_start + channel_count))
             if channels:
                 used_channels[fixture_name] = channels

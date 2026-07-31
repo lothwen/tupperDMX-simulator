@@ -617,14 +617,16 @@ class MainWindow(QMainWindow):
 
     def _patch_ui_signature(self):
         """What the timeline / clip library / DMX monitor depend on (per fixture).
-        Excludes x/y so a stage drag-move doesn't churn the UI."""
-        return tuple((f.type, f.dmx_start, f.channel, f.name)
+        Excludes x/y so a stage drag-move doesn't churn the UI. `mode` is in:
+        it changes the channel count, and with it the valid note range."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel, f.name)
                      for f in self.config.fixtures)
 
     def _patch_dmx_signature(self):
         """What the software DMX engine depends on (per fixture). Excludes the
-        name so a rename never re-patches (and never blacks out) the rig."""
-        return tuple((f.type, f.dmx_start, f.channel)
+        name so a rename never re-patches (and never blacks out) the rig;
+        includes `mode`, which changes the fixture's DMX footprint."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel)
                      for f in self.config.fixtures)
 
     def _on_patch_changed(self):

@@ -1,0 +1,140 @@
+{
+  "tdmx": 1,
+  "modes": {
+    "*": {
+      "channels": {
+        "mode": {
+          "role": "mode",
+          "flags": []
+        }
+      },
+      "banks": {
+        "BLINDER_SCENES": [
+          {
+            "brightness": 25,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0
+          },
+          {
+            "brightness": 75,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0,
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "brightness": 255,
+            "cool1": 255,
+            "cool2": 255,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0
+          },
+          {
+            "brightness": 75,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 200,
+            "mode": 0,
+            "speed": 0,
+            "song_parts": [
+              "OUTRO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 250,
+            "speed": 0
+          },
+          {
+            "brightness": 1,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0
+          },
+          {
+            "brightness": 255,
+            "cool1": 255,
+            "cool2": 255,
+            "warm1": 255,
+            "warm2": 255,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0
+          },
+          {
+            "brightness": 0,
+            "cool1": 0,
+            "cool2": 0,
+            "warm1": 0,
+            "warm2": 0,
+            "strobe": 0,
+            "mode": 0,
+            "speed": 0
+          }
+        ]
+      },
+      "chases": [
+        {
+          "banks": [
+            "BLINDER_SCENES",
+            "BLINDER_SCENES"
+          ],
+          "scenes": [
+            0,
+            5
+          ],
+          "song_parts": [
+            "END"
+          ]
+        },
+        {
+          "banks": [
+            "BLINDER_SCENES",
+            "BLINDER_SCENES"
+          ],
+          "scenes": [
+            1,
+            5
+          ],
+          "song_parts": [
+            "BRIDGE",
+            "INST",
+            "SOLO"
+          ]
+        }
+      ],
+      "stage": {
+        "size_px": [
+          40,
+          80
+        ],
+        "cells": 2
+      }
+    }
+  }
+}

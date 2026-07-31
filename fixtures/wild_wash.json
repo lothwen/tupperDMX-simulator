@@ -1,10 +1,69 @@
 {
-  "name": "Wild Wash Pro 648 RGBW, 4ch mode",
-  "render": "par",
-  "channels": [
-    {"field": "red", "role": "red", "flags": ["blend", "knob_level"]},
-    {"field": "green", "role": "green", "flags": ["blend", "knob_level"]},
-    {"field": "blue", "role": "blue", "flags": ["blend", "knob_level"]},
-    {"field": "white", "role": "white_cool", "flags": ["blend", "knob_level"]}
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "Wild Wash Pro 648 RGBW",
+  "categories": [
+    "Color Changer"
+  ],
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2025-07-13",
+    "lastModifyDate": "2026-07-31"
+  },
+  "physical": {
+    "dimensions": [
+      430,
+      330,
+      240
+    ],
+    "power": 200,
+    "bulb": {
+      "type": "648x RGBW LED"
+    },
+    "lens": {
+      "degreesMinMax": [
+        25,
+        25
+      ]
+    }
+  },
+  "availableChannels": {
+    "red": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "green": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "blue": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "white": {
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Cold White"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "4ch",
+      "shortName": "4ch",
+      "channels": [
+        "red",
+        "green",
+        "blue",
+        "white"
+      ]
+    }
   ]
 }
