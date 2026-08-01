@@ -4,8 +4,7 @@
     "*": {
       "channels": {
         "mode": {
-          "role": "mode",
-          "flags": []
+          "label": "Mode"
         }
       },
       "banks": {
@@ -129,10 +128,6 @@
         }
       ],
       "stage": {
-        "size_px": [
-          40,
-          80
-        ],
         "cells": 2
       }
     }

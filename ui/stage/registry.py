@@ -12,18 +12,16 @@ when none of them has a renderer do we fall back to reading its channels.
 
 from typing import Dict, Type
 
-from core.fixture_library import (
-    FixtureDef, ROLE_BLUE, ROLE_BRIGHTNESS, ROLE_GREEN, ROLE_RED,
-    ROLE_WHITE_COOL, ROLE_WHITE_WARM,
-)
+from core.fixture_library import FixtureDef, capability_types
 from tupperlogger import get_logger
 
 logger = get_logger("ui.stage.registry")
 
 _BY_CATEGORY: Dict[str, Type] = {}
 
-_COLOUR_ROLES = frozenset({ROLE_RED, ROLE_GREEN, ROLE_BLUE,
-                           ROLE_WHITE_WARM, ROLE_WHITE_COOL})
+# Capabilities that make a fixture a colour changer, whichever colours it mixes.
+_COLOUR_CAPABILITIES = frozenset({"ColorIntensity", "ColorPreset",
+                                  "ColorTemperature"})
 
 
 def register_renderer(*categories: str):
@@ -50,12 +48,12 @@ def renderer_for(fdef: FixtureDef) -> Type:
         if category in _BY_CATEGORY:
             return _BY_CATEGORY[category]
 
-    roles = {channel.role for channel in fdef.channels}
+    types = capability_types(fdef)
     if fdef.matrix is not None:
         return PixelBarFixture
-    if roles & _COLOUR_ROLES:
+    if types & _COLOUR_CAPABILITIES:
         return ColorChangerFixture
-    if ROLE_BRIGHTNESS in roles:
+    if "Intensity" in types:
         return DimmerFixture
     logger.debug(f"No renderer matches '{fdef.name}' {fdef.categories}; "
                  f"falling back to the generic body")

@@ -48,12 +48,14 @@ def test_describe_note_per_fixture():
     defs = load_fixture_defs()
     led, bli = defs["ledbar"], defs["blinder"]
 
-    _assert(note_layout.describe_note(1, led).part == "Brightness",
-            "note 1 -> fixture's first channel name")
+    _assert(note_layout.describe_note(1, led).part == "Intensity",
+            "note 1 -> what the fixture's first channel does")
     _assert(note_layout.describe_note(4, led).part == "Red",
-            "note 4 -> ledbar Red channel")
+            "note 4 -> ledbar Red channel, named by its OFL colour")
     _assert(note_layout.describe_note(4, led).color == "#aa3333",
             "Red channel gets a red swatch")
+    _assert(note_layout.describe_note(7, led).part == "Direction",
+            "note 7 -> the sidecar label, for a channel OFL only calls Generic")
     # Note 8 is the blinder's 8th channel; for the 7-channel ledbar it resolves
     # to a generic label (the applicability gate is note_applies_to, below).
     _assert(note_layout.describe_note(8, bli).part == "Speed",

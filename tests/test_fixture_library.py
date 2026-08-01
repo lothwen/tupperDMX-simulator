@@ -26,8 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import fixture_library
 from core.fixture_library import (
-    load_fixture_defs, clear_cache, role_index_map, resolve_fixture, fixture_modes,
-    ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
+    load_fixture_defs, clear_cache, color_slots, resolve_fixture, fixture_modes,
 )
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
@@ -171,16 +170,15 @@ def test_resolve_fixture_and_modes():
     _with_temp_layers(body)
 
 
-def test_role_index_map():
-    print("test_role_index_map")
+def test_color_slots():
+    print("test_color_slots")
 
     def body(shipped, _user):
         _write(shipped, "par_rgb.json", PAR_RGB)
         load_fixture_defs(force_reload=True)
-        idx = role_index_map(resolve_fixture("par_rgb"))
-        _assert(idx[ROLE_BRIGHTNESS] == 0 and idx[ROLE_RED] == 1
-                and idx[ROLE_GREEN] == 2 and idx[ROLE_BLUE] == 3,
-                "role -> slice index mapping is correct")
+        _assert(color_slots(resolve_fixture("par_rgb")) ==
+                {"Red": 1, "Green": 2, "Blue": 3},
+                "colour name -> slice index mapping is correct")
 
     _with_temp_layers(body)
 
@@ -214,7 +212,7 @@ def main():
     test_sidecar_pairs_within_its_own_layer()
     test_orphan_sidecar_is_ignored()
     test_resolve_fixture_and_modes()
-    test_role_index_map()
+    test_color_slots()
     test_builtin_types_data_driven()
     test_config_channel_helpers()
     print("\nALL TESTS PASSED")

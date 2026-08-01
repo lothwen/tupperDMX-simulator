@@ -15,8 +15,7 @@
           ]
         },
         "direction": {
-          "role": "direction",
-          "flags": []
+          "label": "Direction"
         }
       },
       "banks": {
@@ -884,10 +883,6 @@
         }
       },
       "stage": {
-        "size_px": [
-          15,
-          400
-        ],
         "body_spacing": 175
       }
     }

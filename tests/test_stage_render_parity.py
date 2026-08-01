@@ -35,7 +35,7 @@ from core.paths import asset_path
 from core.fixture_library import resolve_fixture
 from ui.stage import renderer_for
 
-WILD_WASH = "Wild Wash Pro 648 RGBW, 4ch mode"
+WILD_WASH = "Wild Wash Pro 648 RGBW"
 
 
 def _assert(cond, msg):

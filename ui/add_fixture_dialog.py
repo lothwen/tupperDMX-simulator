@@ -31,7 +31,8 @@ from core import ofl
 from core.fixture_library import (
     FixtureDef, fixture_document, load_fixture_defs, resolve_fixture,
 )
-from ui.fixture_chips import channel_family as _channel_family, chip as _chip
+from core.channel_families import channel_family as _channel_family
+from ui.fixture_chips import chip as _chip
 from ui.fixture_scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -44,8 +45,9 @@ GENERIC_MANUFACTURER = "Generic"
 GROUP_BY_MANUFACTURER = "manufacturer"
 GROUP_BY_CATEGORY = "category"
 
-# The channel-family table and the chip label live in ui/fixture_chips.py — the
-# Scenes tab colours its faders by the same families.
+# The channel-family table lives in core/channel_families.py and the chip label
+# in ui/fixture_chips.py — the Scenes tab colours its faders by the same
+# families, and so does the timeline.
 
 _CATEGORY_COLOR = "#79cdf0"
 

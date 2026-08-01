@@ -3,10 +3,10 @@ Characterization test: the shipped fixture definitions, as the rest of the app
 sees them.
 
 This is the safety net for the Open Fixture Library migration. It pins the
-*resolved* shape of every shipped type — channel order, semantic roles, behaviour
-flags, scene banks, chases, the note<->field map and the song-part program —
-against golden data captured from the pre-OFL format. Converting the defs must
-not move any of these numbers.
+*resolved* shape of every shipped type — channel order, behaviour flags, scene
+banks, chases, the note<->field map and the song-part program — against golden
+data captured from the pre-OFL format. Converting the defs must not move any of
+these numbers.
 
 Two of them are load-bearing beyond "the def parses":
 
@@ -15,9 +15,12 @@ Two of them are load-bearing beyond "the def parses":
     deliberate; reordering it would make every scene clip in every show play the
     wrong colours, silently.
   * the golden `flags` show that `blend` tracks the channel's kind (every
-    intensity/colour channel blends, no effect/strobe/mode channel does) while
+    level-ish capability blends, every discrete one snaps) while
     `knob_level`/`knob_speed` do NOT — the ledbar's brightness carries
     knob_level and the blinder's doesn't. Only the former is derivable.
+
+What a channel *means* is not pinned here: that is its OFL capabilities, read
+live by everything that needs it, and covered by test_ofl_bridge.
 
 Run with:
     uv run python tests/test_ofl_parity.py
@@ -28,8 +31,24 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import dominant_capability, load_fixture_defs
 from core import note_layout
+
+# The capability kinds whose value is a level worth fading between, stated here
+# independently of the bridge's own table so this asserts the rule rather than
+# restating the implementation. Adding a kind means changing both, deliberately.
+_BLENDS = frozenset({
+    "Intensity", "ColorIntensity", "ColorTemperature",
+    "Zoom", "Focus", "Iris", "Frost", "BeamAngle", "BeamPosition", "Pan", "Tilt",
+})
+
+# Channels whose shipped sidecar declares `flags` outright, which replaces the
+# derived set wholesale — so they are not evidence about the derivation.
+_OVERRIDDEN_FLAGS = {
+    "ledbar": {"brightness", "speed"},
+    "par_rgb": {"brightness"},
+    "Wild Wash Pro 648 RGBW": {"red", "green", "blue", "white"},
+}
 
 
 def _assert(cond, msg):
@@ -38,23 +57,24 @@ def _assert(cond, msg):
     print(f"  ok: {msg}")
 
 
-# (field, role, flags) per channel, in DMX order; roles/flags are the ROLE_*/
-# FLAG_NAMES ints. flags: 1=blend, 2=knob_level, 4=knob_speed.
+# (field, flags) per channel, in DMX order. flags are the FLAG_NAMES ints:
+# 1=blend, 2=knob_level, 4=knob_speed. What each channel *does* isn't pinned
+# here — that is its OFL capabilities, covered by test_ofl_bridge.
 GOLDEN_CHANNELS = {
     "ledbar": [
-        ("brightness", 1, 3), ("blue", 4, 1), ("green", 3, 1), ("red", 2, 1),
-        ("animation", 7, 0), ("speed", 8, 4), ("direction", 9, 0),
+        ("brightness", 3), ("blue", 1), ("green", 1), ("red", 1),
+        ("animation", 0), ("speed", 4), ("direction", 0),
     ],
     "blinder": [
-        ("brightness", 1, 1), ("cool1", 6, 1), ("cool2", 6, 1),
-        ("warm1", 5, 1), ("warm2", 5, 1),
-        ("strobe", 10, 0), ("mode", 11, 0), ("speed", 8, 0),
+        ("brightness", 1), ("cool1", 1), ("cool2", 1),
+        ("warm1", 1), ("warm2", 1),
+        ("strobe", 0), ("mode", 0), ("speed", 0),
     ],
     "par_rgb": [
-        ("brightness", 1, 3), ("red", 2, 1), ("green", 3, 1), ("blue", 4, 1),
+        ("brightness", 3), ("red", 1), ("green", 1), ("blue", 1),
     ],
-    "Wild Wash Pro 648 RGBW, 4ch mode": [
-        ("red", 2, 3), ("green", 3, 3), ("blue", 4, 3), ("white", 6, 3),
+    "Wild Wash Pro 648 RGBW": [
+        ("red", 3), ("green", 3), ("blue", 3), ("white", 3),
     ],
 }
 
@@ -65,12 +85,12 @@ GOLDEN_BANKS = {
                ("STROBES", 8), ("TUBES", 8), ("RADARS", 8)],
     "blinder": [("BLINDER_SCENES", 8)],
     "par_rgb": [],
-    "Wild Wash Pro 648 RGBW, 4ch mode": [],
+    "Wild Wash Pro 648 RGBW": [],
 }
 
 GOLDEN_CHASES = {
     "ledbar": 15, "blinder": 2, "par_rgb": 0,
-    "Wild Wash Pro 648 RGBW, 4ch mode": 0,
+    "Wild Wash Pro 648 RGBW": 0,
 }
 
 # song part -> [(is_chase, bank, index)], from the "song_parts" tags on scenes
@@ -98,12 +118,12 @@ GOLDEN_SONG_PARTS = {
         "END": [(True, "", 0)],
     },
     "par_rgb": {},
-    "Wild Wash Pro 648 RGBW, 4ch mode": {},
+    "Wild Wash Pro 648 RGBW": {},
 }
 
 
 def _channels(fdef):
-    return [(c.field, c.role, c.flags) for c in fdef.channels]
+    return [(c.field, c.flags) for c in fdef.channels]
 
 
 def _banks(fdef):
@@ -122,34 +142,38 @@ def test_all_shipped_types_resolve():
         _assert(name in defs, f"shipped type '{name}' resolves")
 
 
-def test_channel_order_roles_and_flags():
-    print("test_channel_order_roles_and_flags")
+def test_channel_order_and_flags():
+    print("test_channel_order_and_flags")
     defs = load_fixture_defs()
     for name, golden in GOLDEN_CHANNELS.items():
         _assert(_channels(defs[name]) == golden,
-                f"{name}: channel order + roles + flags unchanged")
+                f"{name}: channel order + flags unchanged")
 
 
 def test_blend_flag_tracks_channel_kind():
     print("test_blend_flag_tracks_channel_kind")
-    # Every intensity/colour channel blends; no effect/strobe/mode/direction
-    # channel does. This is the invariant the OFL capability-type mapping must
-    # reproduce with no per-channel overrides.
-    defs = load_fixture_defs()
+    # A channel blends iff its dominant capability is a level worth fading
+    # between — colour, intensity, zoom, a mover's pan/tilt — and snaps
+    # otherwise, because interpolating an effect or a mode selector would sweep
+    # through every program in between. Checked across every fixture the machine
+    # has installed, not just the shipped four, and with no per-channel override
+    # in sight: this is what the capability types alone must produce.
     BLEND = 0x01
-    colour_roles = {1, 2, 3, 4, 5, 6}  # brightness + red/green/blue + warm/cool
-    for name, fdef in defs.items():
-        for ch in fdef.channels:
-            if ch.role in colour_roles:
-                _assert(ch.flags & BLEND, f"{name}.{ch.field} (colour/intensity) blends")
-            else:
-                _assert(not ch.flags & BLEND, f"{name}.{ch.field} (non-colour) does not blend")
+    for name, fdef in load_fixture_defs().items():
+        for spec in fdef.channels:
+            if spec.field in _OVERRIDDEN_FLAGS.get(name, ()):
+                continue
+            cap = dominant_capability(spec.capabilities)
+            blends = cap is not None and cap.type in _BLENDS
+            _assert(bool(spec.flags & BLEND) == blends,
+                    f"{name}.{spec.field} ({cap.type if cap else 'unused'}) "
+                    f"{'blends' if blends else 'snaps'}")
 
 
 def test_knob_flags_are_not_derivable():
     print("test_knob_flags_are_not_derivable")
-    # Two brightness channels, same role, different knob_level — so knob flags
-    # cannot come from the channel's kind and must stay author-declared.
+    # Two brightness channels, same capability, different knob_level — so knob
+    # flags cannot come from the channel's kind and must stay author-declared.
     defs = load_fixture_defs()
     KNOB_LEVEL = 0x02
     ledbar = next(c for c in defs["ledbar"].channels if c.field == "brightness")
@@ -173,7 +197,7 @@ def test_field_note_map():
     # The note<->channel binding every saved .mid depends on.
     defs = load_fixture_defs()
     for name, golden in GOLDEN_CHANNELS.items():
-        expected = tuple((field, i + 1) for i, (field, _r, _f) in enumerate(golden))
+        expected = tuple((field, i + 1) for i, (field, _flags) in enumerate(golden))
         _assert(note_layout.field_note_map(defs[name]) == expected,
                 f"{name}: note n binds to the same channel as before")
 
@@ -222,7 +246,7 @@ def test_animation_capabilities_reproduce_the_gif_mapping():
 
 def main():
     test_all_shipped_types_resolve()
-    test_channel_order_roles_and_flags()
+    test_channel_order_and_flags()
     test_blend_flag_tracks_channel_kind()
     test_knob_flags_are_not_derivable()
     test_banks_and_chases()

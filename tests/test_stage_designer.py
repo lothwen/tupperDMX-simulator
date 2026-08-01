@@ -67,8 +67,9 @@ def test_added_fixture_receives_dmx(qapp):
 def test_add_ledbar_seeds_all_bars(qapp):
     print("test_add_ledbar_seeds_all_bars")
     from core.fixture_library import load_fixture_defs
+    from ui.stage.base import body_count
     sc, _ = _stage()
-    count = load_fixture_defs()["ledbar"].bar_count
+    count = body_count(load_fixture_defs()["ledbar"])
     _assert(count > 1, "the ledbar type def declares more than one bar")
 
     inst = sc.add_fixture("ledbar", 9, 768, 350)

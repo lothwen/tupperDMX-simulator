@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 import json
 import os
 import shutil
@@ -20,48 +20,17 @@ from tupperlogger import get_logger
 
 logger = get_logger("fixture_library")
 
-# Channel semantic roles. These MIRROR the ROLE_* constants in
-# software_controller/main.py — keep the two in sync. They live here too so the
-# JSON-facing name->int mapping and the renderer have a Qt-free import source.
-ROLE_GENERIC = 0
-ROLE_BRIGHTNESS = 1
-ROLE_RED = 2
-ROLE_GREEN = 3
-ROLE_BLUE = 4
-ROLE_WHITE_WARM = 5
-ROLE_WHITE_COOL = 6
-ROLE_ANIMATION = 7
-ROLE_SPEED = 8
-ROLE_DIRECTION = 9
-ROLE_STROBE = 10
-ROLE_MODE = 11
-
-ROLE_NAMES = {
-    "generic": ROLE_GENERIC,
-    "brightness": ROLE_BRIGHTNESS,
-    "red": ROLE_RED,
-    "green": ROLE_GREEN,
-    "blue": ROLE_BLUE,
-    "white_warm": ROLE_WHITE_WARM,
-    "white_cool": ROLE_WHITE_COOL,
-    "animation": ROLE_ANIMATION,
-    "speed": ROLE_SPEED,
-    "direction": ROLE_DIRECTION,
-    "strobe": ROLE_STROBE,
-    "mode": ROLE_MODE,
-}
-
 # Per-channel behaviour flags (bitmask). Mirror CH_* in software_controller/main.py.
 FLAG_NAMES = {"blend": 0x01, "knob_level": 0x02, "knob_speed": 0x04}
 
 @dataclass(frozen=True)
 class ChannelSpec:
     field: str   # attribute name (also the universe order within the fixture)
-    role: int    # semantic role (ROLE_*)
     flags: int   # behaviour flags bitmask
-    # Everything below is optional detail carried over from the OFL channel, for
-    # consumers that want more than the role/flags summary (the stage renderer
-    # reads capabilities; note_layout prefers `label` over a prettified field).
+    # Everything below is carried over from the OFL channel. `capabilities` is
+    # the authority on what this channel does — what it emits, what it means at
+    # a given value, whether it is a colour and which one — read directly by the
+    # stage engine, the channel-family labels and the colour lookups.
     label: str = ""                       # the OFL channel's display name
     capabilities: Tuple[ofl.Capability, ...] = ()
     default_value: int = 0
@@ -71,6 +40,9 @@ class ChannelSpec:
     fine_of: int = -1                     # index of the coarse slot, else -1
     fine_shift: int = 0                   # left-shift when folded into the coarse value
     pixel_key: str = ""                   # matrix pixel this channel drives
+    # A sidecar-declared display name, overriding what the capabilities say this
+    # channel is. Kept apart from `label` so that stays the pristine OFL name.
+    display_name: str = ""
     # A switching channel: what this slot does depends on the live value of the
     # slot at `switch_of`. Everything above describes its DEFAULT resolution, so
     # role/label/flags stay stable for the note layout and clip library; the
@@ -86,7 +58,6 @@ class FixtureDef:
     channels: List[ChannelSpec]
     banks: Dict[str, List[dict]]  # bank-name -> list of scene dicts (raw, by field)
     chases: List[dict]            # list of {"banks": [...], "scenes": [...]}
-    bar_count: int = 1   # physical bars to seed for a "bar" fixture (else 1)
     # OFL-derived detail. `mode` names which mode these channels came from.
     mode: str = ""
     # Folder the definition was found in, relative to its fixtures dir ("" for a
@@ -117,37 +88,10 @@ def fixtures_dir_user() -> Path:
 # --- the OFL bridge -----------------------------------------------------------
 #
 # OFL describes a channel by what it *does* over its DMX range (43 capability
-# types, 13 mixable colours) rather than by a single semantic tag. The engine,
-# the note layout and the clip library all speak ROLE_*, so each channel is
-# summarised down to one role and one flag set here. This is the only place that
-# translation happens.
-
-# Capability type -> role. Anything absent is ROLE_GENERIC.
-_ROLE_BY_CAPABILITY = {
-    "Intensity": ROLE_BRIGHTNESS,
-    "ShutterStrobe": ROLE_STROBE,
-    "StrobeSpeed": ROLE_STROBE,
-    "StrobeDuration": ROLE_STROBE,
-    "Effect": ROLE_ANIMATION,
-    "EffectSpeed": ROLE_SPEED,
-    "EffectDuration": ROLE_SPEED,
-    "EffectParameter": ROLE_SPEED,
-    "Speed": ROLE_SPEED,
-    "PanTiltSpeed": ROLE_SPEED,
-    "Maintenance": ROLE_MODE,
-}
-
-# ColorIntensity `color` -> role. The other seven mixable colours (Cyan,
-# Magenta, Yellow, Amber, UV, Lime, Indigo) have no ROLE_*, so they stay
-# ROLE_GENERIC — the stage renderer mixes them from the capability directly.
-_ROLE_BY_COLOR = {
-    "Red": ROLE_RED,
-    "Green": ROLE_GREEN,
-    "Blue": ROLE_BLUE,
-    "Warm White": ROLE_WHITE_WARM,
-    "Cold White": ROLE_WHITE_COOL,
-    "White": ROLE_WHITE_COOL,
-}
+# types, 13 mixable colours), and that description is what the whole app reads:
+# the stage engine resolves it per frame, `color_slots` addresses colour by name
+# and `channel_families` labels it. All this bridge adds is the one thing OFL
+# cannot express — the behaviour flags — plus a sidecar's display name.
 
 # Capability types whose value is a level worth fading between. Effects, strobes
 # and mode selectors are discrete: interpolating them would sweep through every
@@ -157,20 +101,14 @@ _BLEND_CAPABILITIES = frozenset({
     "Zoom", "Focus", "Iris", "Frost", "BeamAngle", "BeamPosition", "Pan", "Tilt",
 })
 
-# Tiebreak order when two capability types cover the same amount of DMX.
-_ROLE_PRIORITY = (ROLE_RED, ROLE_GREEN, ROLE_BLUE, ROLE_WHITE_WARM, ROLE_WHITE_COOL,
-                  ROLE_BRIGHTNESS, ROLE_STROBE, ROLE_ANIMATION, ROLE_SPEED,
-                  ROLE_MODE, ROLE_GENERIC)
-
-# ROLE_DIRECTION has no producer on purpose: OFL folds direction into the sign of
-# a Rotation/Speed value, and guessing "negative speed means direction" would
-# misfire on real fixtures. A sidecar declares it explicitly instead.
-
-
-def _role_for_capability(cap: ofl.Capability) -> int:
-    if cap.type == "ColorIntensity":
-        return _ROLE_BY_COLOR.get(str(cap.get("color", "")), ROLE_GENERIC)
-    return _ROLE_BY_CAPABILITY.get(cap.type, ROLE_GENERIC)
+# Tiebreak order when two capability types cover the same amount of DMX on one
+# channel: the one that describes the light itself wins over one that describes
+# how it moves or what program it runs. Types absent here rank last, and two
+# capabilities of the SAME type (say a Red and a Green covering half the range
+# each) fall back to the order the fixture declares them in.
+_TYPE_PRIORITY = ("ColorIntensity", "Intensity", "ShutterStrobe", "StrobeSpeed",
+                  "StrobeDuration", "Effect", "EffectSpeed", "EffectDuration",
+                  "EffectParameter", "Speed", "PanTiltSpeed", "Maintenance")
 
 
 def dominant_capability(
@@ -198,7 +136,8 @@ def dominant_capability(
         return None
     widest = max(spans.values())
     winners = [key for key, span in spans.items() if span == widest]
-    winners.sort(key=lambda k: _ROLE_PRIORITY.index(_role_for_capability(first[k])))
+    winners.sort(key=lambda k: (_TYPE_PRIORITY.index(k[0])
+                                if k[0] in _TYPE_PRIORITY else len(_TYPE_PRIORITY)))
     return first[winners[0]]
 
 
@@ -217,32 +156,30 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
     # channel after it, and with them every note binding).
     if slot.channel is None:
         return ChannelSpec(field=slot.key or f"__unused_{slot.index}",
-                           role=ROLE_GENERIC, flags=0, label="—")
+                           flags=0, label="—")
 
     channel = slot.channel
     override = extras.channels.get(slot.key, {})
+    dominant = dominant_capability(channel.capabilities)
+    flags = FLAG_NAMES["blend"] if (dominant and dominant.type in _BLEND_CAPABILITIES) else 0
 
     if slot.fine_of >= 0:
         # A fine byte is part of its coarse channel's value, not a channel in
-        # its own right: keeping it ROLE_GENERIC stops role_index_map's
-        # first-wins scan from ever resolving a role to the fine slot, and stops
-        # the clip library counting it as a second red.
-        coarse = dominant_capability(channel.capabilities)
-        blend = FLAG_NAMES["blend"] if (coarse and coarse.type in _BLEND_CAPABILITIES) else 0
+        # its own right, so it carries no display name of its own — everything
+        # that reads one resolves it through the slot at `fine_of`.
         return ChannelSpec(
-            field=slot.key, role=ROLE_GENERIC, flags=blend,
+            field=slot.key, flags=flags,
             label=channel.name, capabilities=channel.capabilities,
             default_value=channel.default_value, constant=channel.constant,
             precedence=channel.precedence, resolution_bytes=channel.resolution_bytes,
             fine_of=slot.fine_of, fine_shift=slot.fine_shift,
             pixel_key=channel.pixel_key)
 
-    dominant = dominant_capability(channel.capabilities)
-    role = _role_for_capability(dominant) if dominant else ROLE_GENERIC
-    flags = FLAG_NAMES["blend"] if (dominant and dominant.type in _BLEND_CAPABILITIES) else 0
-
     if "role" in override:
-        role = ROLE_NAMES.get(str(override["role"]), role)
+        logger.warning(
+            f"Fixture channel '{slot.key}' declares the obsolete sidecar key "
+            f"'role'; it is ignored — use \"label\" to override the displayed "
+            f"name (what 'role' was actually doing)")
     if "flags" in override:
         # A declared flag set replaces the derived one wholesale — the knob
         # flags can't be derived (two fixtures' brightness channels differ), so
@@ -250,11 +187,11 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
         flags = _flags_from_names(override["flags"])
 
     return ChannelSpec(
-        field=slot.key, role=role, flags=flags,
+        field=slot.key, flags=flags,
         label=channel.name, capabilities=channel.capabilities,
         default_value=channel.default_value, constant=channel.constant,
         precedence=channel.precedence, resolution_bytes=channel.resolution_bytes,
-        pixel_key=channel.pixel_key,
+        pixel_key=channel.pixel_key, display_name=str(override.get("label", "")),
         switch_of=slot.switch_of, switch_options=slot.switch_options)
 
 
@@ -275,10 +212,6 @@ def build_fixture_def(key: str, fixture: ofl.OflFixture,
         channels=[_channel_spec(slot, extras) for slot in mode.channels],
         banks={name: list(scenes) for name, scenes in extras.banks.items()},
         chases=list(extras.chases),
-        # A matrix's X extent is how many physical bodies share this DMX slice
-        # (the ledbar's 8 bars all mirror the same 7 channels), so it is also
-        # how many render objects the stage seeds.
-        bar_count=fixture.matrix.pixel_count[0] if fixture.matrix else 1,
         mode=mode.name,
         manufacturer=manufacturer,
         categories=fixture.categories,
@@ -289,12 +222,35 @@ def build_fixture_def(key: str, fixture: ofl.OflFixture,
     )
 
 
-def role_index_map(fdef: FixtureDef) -> Dict[int, int]:
-    """Map each role to the index of its first channel within the DMX slice."""
-    index: Dict[int, int] = {}
-    for i, ch in enumerate(fdef.channels):
-        index.setdefault(ch.role, i)
-    return index
+def color_slots(fdef: FixtureDef) -> Dict[str, int]:
+    """OFL colour name -> the first slot index driving it.
+
+    The write-direction index: "which channel do I put red on". Keyed by OFL's
+    own colour vocabulary rather than a fixed enum, so a fixture's Amber, UV or
+    Lime is as addressable as its Red. Fine bytes are skipped — they carry part
+    of their coarse channel's value, not a colour of their own.
+    """
+    slots: Dict[str, int] = {}
+    for index, spec in enumerate(fdef.channels):
+        if spec.fine_of >= 0:
+            continue
+        cap = dominant_capability(spec.capabilities)
+        if cap is not None and cap.type == "ColorIntensity":
+            colour = str(cap.get("color", ""))
+            if colour:
+                slots.setdefault(colour, index)
+    return slots
+
+
+def capability_types(fdef: FixtureDef) -> Set[str]:
+    """The dominant capability type of every slot — the coarse "what kind of
+    light is this" summary (does it mix colour at all, does it dim, …)."""
+    types: Set[str] = set()
+    for spec in fdef.channels:
+        cap = dominant_capability(spec.capabilities)
+        if cap is not None:
+            types.add(cap.type)
+    return types
 
 
 def _read_json(path: Path) -> Optional[dict]:

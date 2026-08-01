@@ -1,18 +1,19 @@
 """
 Characterization test: the OFL -> FixtureDef bridge and the .tdmx.json sidecar.
 
-OFL describes a channel by what it does across its DMX range; the engine, the
-note layout and the clip library all speak a single ROLE_* tag plus a flag
-bitmask. This covers that translation:
+A channel's meaning is its OFL capabilities and nothing else — there is no
+second, summarised description of it to keep in sync. This covers what the
+bridge does with them:
 
-  * a capability type maps to a role, and ColorIntensity maps by its colour;
-  * a channel whose capabilities disagree resolves to the type covering the most
+  * `color_slots` addresses a colour channel by its OFL colour name, so every
+    one of the 13 mixable colours is as addressable as Red;
+  * `describe_channel` labels a channel from the capability covering the most
     DMX, ignoring NoFunction (a strobe channel that is NoFunction at the bottom
     is still a strobe channel);
   * `blend` is derived — every level-ish capability blends, every discrete one
     snaps — while the knob flags are not derivable and must be declared;
-  * a sidecar can override role and flags, but nothing in it can change the DMX
-    footprint.
+  * a sidecar can override the label and the flags, but nothing in it can change
+    the DMX footprint.
 
 The anchor test builds par_rgb both ways and demands the same result.
 
@@ -26,12 +27,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import ofl
-from core.fixture_library import (
-    build_fixture_def, role_index_map,
-    ROLE_GENERIC, ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
-    ROLE_WHITE_WARM, ROLE_WHITE_COOL, ROLE_ANIMATION, ROLE_SPEED,
-    ROLE_DIRECTION, ROLE_STROBE, ROLE_MODE,
-)
+from core.channel_families import describe_channel
+from core.fixture_library import build_fixture_def, color_slots, dominant_capability
 from core.fixture_sidecar import parse_sidecar
 
 BLEND, KNOB_LEVEL, KNOB_SPEED = 0x01, 0x02, 0x04
@@ -52,8 +49,12 @@ def _build(doc, sidecar_data=None, mode=""):
     return build_fixture_def(doc["name"], fixture, sidecar, mode)
 
 
-def _triples(fdef):
-    return [(c.field, c.role, c.flags) for c in fdef.channels]
+def _pairs(fdef):
+    return [(c.field, c.flags) for c in fdef.channels]
+
+
+def _labels(fdef):
+    return [describe_channel(c)[0] for c in fdef.channels]
 
 
 def _one_channel(channel_data, sidecar_data=None):
@@ -69,13 +70,13 @@ def _one_channel(channel_data, sidecar_data=None):
 
 # What the pre-OFL format produced for par_rgb, captured before the cut. The
 # legacy parser is gone, so this is the golden record it left behind.
-LEGACY_PAR_RGB_TRIPLES = [
-    ("brightness", ROLE_BRIGHTNESS, BLEND | KNOB_LEVEL),
-    ("red", ROLE_RED, BLEND),
-    ("green", ROLE_GREEN, BLEND),
-    ("blue", ROLE_BLUE, BLEND),
+LEGACY_PAR_RGB_PAIRS = [
+    ("brightness", BLEND | KNOB_LEVEL),
+    ("red", BLEND),
+    ("green", BLEND),
+    ("blue", BLEND),
 ]
-LEGACY_PAR_RGB_ROLE_INDEX = {ROLE_BRIGHTNESS: 0, ROLE_RED: 1, ROLE_GREEN: 2, ROLE_BLUE: 3}
+LEGACY_PAR_RGB_COLOR_SLOTS = {"Red": 1, "Green": 2, "Blue": 3}
 
 OFL_PAR_RGB = {
     "$schema": SCHEMA,
@@ -102,11 +103,11 @@ PAR_RGB_SIDECAR = {
 def test_ofl_reproduces_the_legacy_definition():
     print("test_ofl_reproduces_the_legacy_definition")
     converted = _build(OFL_PAR_RGB, PAR_RGB_SIDECAR)
-    _assert(_triples(converted) == LEGACY_PAR_RGB_TRIPLES,
-            "same channel order, roles and flags as the pre-OFL definition")
+    _assert(_pairs(converted) == LEGACY_PAR_RGB_PAIRS,
+            "same channel order and flags as the pre-OFL definition")
     _assert(converted.channel_count == 4, "same DMX footprint")
-    _assert(role_index_map(converted) == LEGACY_PAR_RGB_ROLE_INDEX,
-            "same role -> slice index mapping")
+    _assert(color_slots(converted) == LEGACY_PAR_RGB_COLOR_SLOTS,
+            "the same three colour channels, addressed by colour name")
 
 
 def test_mode_and_categories_are_carried():
@@ -117,56 +118,59 @@ def test_mode_and_categories_are_carried():
             "categories keep their order — the renderer picks the first it knows")
 
 
-# --- role derivation ---------------------------------------------------------
+# --- what a channel reads as -------------------------------------------------
 
-def test_capability_type_to_role():
-    print("test_capability_type_to_role")
+def test_capability_type_to_family():
+    print("test_capability_type_to_family")
     cases = [
-        ({"type": "Intensity"}, ROLE_BRIGHTNESS),
-        ({"type": "ShutterStrobe", "shutterEffect": "Open"}, ROLE_STROBE),
-        ({"type": "StrobeSpeed"}, ROLE_STROBE),
-        ({"type": "Effect", "effectName": "Rainbow"}, ROLE_ANIMATION),
-        ({"type": "EffectSpeed"}, ROLE_SPEED),
-        ({"type": "Speed"}, ROLE_SPEED),
-        ({"type": "Maintenance"}, ROLE_MODE),
-        ({"type": "Generic"}, ROLE_GENERIC),
-        ({"type": "NoFunction"}, ROLE_GENERIC),
-        ({"type": "Zoom"}, ROLE_GENERIC),
+        ({"type": "Intensity"}, "Intensity"),
+        ({"type": "ShutterStrobe", "shutterEffect": "Open"}, "Shutter"),
+        ({"type": "StrobeSpeed"}, "Shutter"),
+        ({"type": "Effect", "effectName": "Rainbow"}, "Effect"),
+        ({"type": "EffectSpeed"}, "Speed"),
+        ({"type": "Speed"}, "Speed"),
+        ({"type": "Maintenance"}, "Maintenance"),
+        ({"type": "Zoom"}, "Zoom"),
+        ({"type": "Pan"}, "Pan"),
+        # No family table entry: still labelled, never blank.
+        ({"type": "Generic"}, "Generic"),
     ]
     for capability, expected in cases:
         fdef = _one_channel({"capability": capability})
-        _assert(fdef.channels[0].role == expected,
-                f"{capability['type']} -> role {expected}")
+        _assert(describe_channel(fdef.channels[0])[0] == expected,
+                f"{capability['type']} reads as '{expected}'")
 
 
-def test_colour_intensity_maps_by_colour():
-    print("test_colour_intensity_maps_by_colour")
-    cases = [("Red", ROLE_RED), ("Green", ROLE_GREEN), ("Blue", ROLE_BLUE),
-             ("Warm White", ROLE_WHITE_WARM), ("Cold White", ROLE_WHITE_COOL),
-             ("White", ROLE_WHITE_COOL),
-             # No ROLE_* exists for these; the renderer mixes them from the
-             # capability directly.
-             ("Amber", ROLE_GENERIC), ("UV", ROLE_GENERIC), ("Lime", ROLE_GENERIC)]
-    for colour, expected in cases:
+def test_every_mixable_colour_is_addressable():
+    print("test_every_mixable_colour_is_addressable")
+    # All 13 of OFL's mixable colours, not the six a role enum had names for:
+    # the colour IS the key, so an amber channel is as reachable as a red one.
+    colours = ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow", "Amber",
+               "White", "Warm White", "Cold White", "UV", "Lime", "Indigo"]
+    for colour in colours:
         fdef = _one_channel({"capability": {"type": "ColorIntensity", "color": colour}})
-        _assert(fdef.channels[0].role == expected, f"ColorIntensity {colour} -> {expected}")
+        _assert(color_slots(fdef) == {colour: 0}, f"ColorIntensity {colour} -> slot 0")
+        _assert(describe_channel(fdef.channels[0])[0] == colour,
+                f"...and reads as '{colour}', not as a generic 'Color'")
 
 
-def test_direction_has_no_derivation():
-    print("test_direction_has_no_derivation")
-    # OFL folds direction into the sign of a rotation speed, so guessing would
-    # misfire; a sidecar has to say so.
-    fdef = _one_channel({"capabilities": [
-        {"dmxRange": [0, 127], "type": "Generic", "comment": "Forward"},
-        {"dmxRange": [128, 255], "type": "Generic", "comment": "Reverse"}]})
-    _assert(fdef.channels[0].role == ROLE_GENERIC, "no capability produces ROLE_DIRECTION")
+def test_sidecar_label_names_what_capabilities_cannot():
+    print("test_sidecar_label_names_what_capabilities_cannot")
+    # OFL folds direction into the sign of a rotation speed; the ledbar spells
+    # it as two commented `Generic` ranges, which no capability type names.
+    generic = [{"dmxRange": [0, 127], "type": "Generic", "comment": "Forward"},
+               {"dmxRange": [128, 255], "type": "Generic", "comment": "Reverse"}]
+    fdef = _one_channel({"capabilities": generic})
+    _assert(describe_channel(fdef.channels[0])[0] == "Generic",
+            "nothing in the capabilities says 'direction'")
 
     declared = _one_channel(
-        {"capabilities": [
-            {"dmxRange": [0, 127], "type": "Generic"},
-            {"dmxRange": [128, 255], "type": "Generic"}]},
-        {"tdmx": 1, "modes": {"*": {"channels": {"ch": {"role": "direction"}}}}})
-    _assert(declared.channels[0].role == ROLE_DIRECTION, "a sidecar can declare it")
+        {"capabilities": generic},
+        {"tdmx": 1, "modes": {"*": {"channels": {"ch": {"label": "Direction"}}}}})
+    _assert(describe_channel(declared.channels[0])[0] == "Direction",
+            "a sidecar label says it")
+    _assert(declared.channels[0].label == "ch",
+            "and leaves the OFL name alone — the browser still shows the document")
 
 
 def test_dominant_capability_wins_by_dmx_span():
@@ -176,21 +180,30 @@ def test_dominant_capability_wins_by_dmx_span():
     strobe = _one_channel({"capabilities": [
         {"dmxRange": [0, 7], "type": "NoFunction"},
         {"dmxRange": [8, 255], "type": "ShutterStrobe", "shutterEffect": "Strobe"}]})
-    _assert(strobe.channels[0].role == ROLE_STROBE, "NoFunction never counts toward the role")
+    _assert(dominant_capability(strobe.channels[0].capabilities).type == "ShutterStrobe",
+            "NoFunction never counts toward the dominant capability")
 
     # Many Effect capabilities across the range still read as one effect channel.
     effects = _one_channel({"capabilities": (
         [{"dmxRange": [i * 4, i * 4 + 3], "type": "Effect", "effectName": f"E{i}"}
          for i in range(35)]
         + [{"dmxRange": [140, 255], "type": "NoFunction"}])})
-    _assert(effects.channels[0].role == ROLE_ANIMATION,
+    _assert(describe_channel(effects.channels[0])[0] == "Effect",
             "35 Effect capabilities sum to the widest type")
 
     # The narrower type loses even though it appears first.
     mixed = _one_channel({"capabilities": [
         {"dmxRange": [0, 9], "type": "Intensity"},
         {"dmxRange": [10, 255], "type": "Effect", "effectName": "Program"}]})
-    _assert(mixed.channels[0].role == ROLE_ANIMATION, "the widest type wins, not the first")
+    _assert(describe_channel(mixed.channels[0])[0] == "Effect",
+            "the widest type wins, not the first")
+
+    # A tie between two types is broken by which describes the light itself.
+    tied = _one_channel({"capabilities": [
+        {"dmxRange": [0, 127], "type": "Effect", "effectName": "Program"},
+        {"dmxRange": [128, 255], "type": "ColorIntensity", "color": "Red"}]})
+    _assert(describe_channel(tied.channels[0])[0] == "Red",
+            "an equal-span colour outranks an effect")
 
 
 # --- flags -------------------------------------------------------------------
@@ -237,25 +250,26 @@ def test_unused_slots_get_placeholder_fields():
         "modes": [{"name": "3ch", "channels": ["a", None, "a"]}],
     })
     _assert(fdef.channel_count == 3, "an unused slot still consumes its address")
-    _assert(fdef.channels[1].field == "__unused_1" and fdef.channels[1].role == ROLE_GENERIC,
+    _assert(fdef.channels[1].field == "__unused_1",
             "the placeholder keeps later channels on their own addresses")
+    _assert(describe_channel(fdef.channels[1])[0] == "—",
+            "and reads as unused rather than as a channel")
 
 
-def test_fine_channels_do_not_shadow_the_coarse_role():
-    print("test_fine_channels_do_not_shadow_the_coarse_role")
+def test_fine_channels_do_not_shadow_the_coarse_channel():
+    print("test_fine_channels_do_not_shadow_the_coarse_channel")
     fdef = _build({
-        "$schema": SCHEMA, "name": "fine", "categories": ["Dimmer"], "meta": META,
+        "$schema": SCHEMA, "name": "fine", "categories": ["Color Changer"], "meta": META,
         "availableChannels": {
-            "dimmer": {"fineChannelAliases": ["dimmer fine"],
-                       "capability": {"type": "Intensity"}}},
-        "modes": [{"name": "2ch", "channels": ["dimmer", "dimmer fine"]}],
+            "red": {"fineChannelAliases": ["red fine"],
+                    "capability": {"type": "ColorIntensity", "color": "Red"}}},
+        "modes": [{"name": "2ch", "channels": ["red", "red fine"]}],
     })
     coarse, fine = fdef.channels
-    _assert(coarse.role == ROLE_BRIGHTNESS, "the coarse slot carries the role")
-    _assert(fine.role == ROLE_GENERIC,
-            "the fine byte is part of a value, not a channel of its own")
-    _assert(role_index_map(fdef)[ROLE_BRIGHTNESS] == 0,
-            "role lookup still resolves to the coarse slot")
+    _assert(color_slots(fdef) == {"Red": 0},
+            "colour lookup resolves to the coarse slot, never the fine byte")
+    _assert(describe_channel(coarse)[0] == "Red" and describe_channel(fine)[0] == "Red fine",
+            "the fine byte says so instead of posing as a second red")
     _assert(fine.fine_of == 0 and fine.resolution_bytes == 2,
             "the fine slot points back at its coarse slot")
 
@@ -284,10 +298,10 @@ def test_no_sidecar_means_no_banks():
     fdef = _build(OFL_PAR_RGB)
     _assert(fdef is not None, "an OFL document alone is a usable fixture type")
     _assert(fdef.banks == {} and fdef.chases == [], "it simply has no scene banks")
-    _assert(_triples(fdef)[1:] == [("red", ROLE_RED, BLEND),
-                                   ("green", ROLE_GREEN, BLEND),
-                                   ("blue", ROLE_BLUE, BLEND)],
-            "roles and blend still derive with no sidecar at all")
+    _assert(_pairs(fdef)[1:] == [("red", BLEND), ("green", BLEND), ("blue", BLEND)],
+            "blend still derives with no sidecar at all")
+    _assert(_labels(fdef) == ["Intensity", "Red", "Green", "Blue"],
+            "and so does every channel's name — the capabilities carry it")
 
 
 def test_sidecar_merges_shared_and_named_mode_blocks():
@@ -341,7 +355,7 @@ def test_sidecar_cannot_change_the_footprint():
     # Channel count and order come only from the OFL document — the invariant
     # that keeps saved .mid note bindings correct.
     noisy = {"tdmx": 1, "modes": {"*": {"channels": {
-        "nonexistent": {"role": "red"}, "brightness": {"role": "red"}}}}}
+        "nonexistent": {"label": "Nope"}, "brightness": {"label": "Level"}}}}}
     fdef = _build(OFL_PAR_RGB, noisy)
     _assert(fdef.channel_count == 4, "an override for an unknown channel adds nothing")
     _assert([c.field for c in fdef.channels] == ["brightness", "red", "green", "blue"],
@@ -351,15 +365,15 @@ def test_sidecar_cannot_change_the_footprint():
 def main():
     test_ofl_reproduces_the_legacy_definition()
     test_mode_and_categories_are_carried()
-    test_capability_type_to_role()
-    test_colour_intensity_maps_by_colour()
-    test_direction_has_no_derivation()
+    test_capability_type_to_family()
+    test_every_mixable_colour_is_addressable()
+    test_sidecar_label_names_what_capabilities_cannot()
     test_dominant_capability_wins_by_dmx_span()
     test_blend_is_derived_from_the_capability_kind()
     test_knob_flags_require_a_sidecar()
     test_declared_flags_replace_the_derived_set()
     test_unused_slots_get_placeholder_fields()
-    test_fine_channels_do_not_shadow_the_coarse_role()
+    test_fine_channels_do_not_shadow_the_coarse_channel()
     test_sidecar_supplies_banks_and_chases()
     test_no_sidecar_means_no_banks()
     test_sidecar_merges_shared_and_named_mode_blocks()
