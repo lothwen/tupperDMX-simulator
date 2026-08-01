@@ -178,12 +178,19 @@ bundled).
   with the Scenes tab's faders.
 - **`ui/fixture_scenes_tab.py` — `FixtureScenesTab`**: the browser's Scenes tab,
   which edits the fixture *library* (a type's sidecar scene banks) rather than
-  the patch — so the dialog's OK/Cancel doesn't apply to it and every committed
-  edit writes straight through (fader moves debounced ~400 ms, flushed on
-  fixture switch and on close). Left: a `_SceneTree` of **bank sections** with
+  the patch — so the dialog's OK/Cancel doesn't apply to it. It opens on a blank
+  **draft** (`_draft`: a scene in no bank, faders at the channel defaults,
+  nothing selected), and the single button beside the name is the only thing
+  that writes: **Create** turns the draft into a scene in `_target_bank()` (the
+  selected bank, else the first), **Save** overwrites the scene picked from the
+  list. A pending change to the banks themselves (delete/reorder/edit → `_dirty`)
+  takes the button first — otherwise it could never be written — leaving the
+  draft for the press after. Leaving the fixture or closing the dialog with work
+  pending asks whether to write it (`save_pending_changes()`). Left: a `_SceneTree` of **bank sections** with
   their scenes beneath — both orders are what MIDI addresses (36+n picks the
   bank, 24+n the scene), so they are never flattened — a colour swatch per scene
-  painted by `resolve_state`, `+ New` (scene | bank), Duplicate/Delete and
+  painted by `resolve_state`, `+ New` (scene = back to a blank draft | bank),
+  Duplicate/Delete and
   inline rename. Reorder is drag-and-drop, resolved to a
   `move_requested(src_bank, src_index, dst_bank, position)` and applied to the
   data (Qt never moves the items, or their bank/index roles would go stale).
@@ -553,7 +560,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   incl. the mode combo shown only for multi-mode types),
   `add_fixture_dialog.py` (the fixture browser + patch footer),
   `fixture_scenes_tab.py` (its Scenes tab: bank/scene list, channel faders and
-  the stage-engine preview, written through to the `.tdmx.json` sidecar),
+  the stage-engine preview, written to the `.tdmx.json` sidecar by its own
+  Create/Save button),
   `fixture_chips.py` (the chip label + the capability→channel-family colour
   table both tabs read),
   `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
