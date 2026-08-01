@@ -468,6 +468,19 @@ def test_switching_channel_fine_alias():
             "and folds into it")
 
 
+def test_switching_channel_fine_alias_named_after_the_real_channel():
+    print("test_switching_channel_fine_alias_named_after_the_real_channel")
+    # Chauvet's Colorado 1 Solo does this: its mode lists "Red fine" while "Red"
+    # itself only appears behind the switching key "Red / Fade Duration".
+    fx = parse_ofl(_switching_fixture(
+        ["Programs", "Speed / Sensitivity", "Program Speed fine"]))
+    slot = resolve_mode(fx).channels[2]
+    _assert(slot.fine_of == 1,
+            "a fine byte named after the switched channel folds into the "
+            "switching slot that holds it")
+    _assert(slot.fine_shift == 0, "and carries the coarse channel's shift")
+
+
 def test_switching_channel_without_its_trigger_keeps_the_default():
     print("test_switching_channel_without_its_trigger_keeps_the_default")
     fx = parse_ofl(_switching_fixture(["Speed / Sensitivity"]))
@@ -570,6 +583,7 @@ def main():
     test_switching_channel_default_follows_the_trigger_default()
     test_switching_channel_trigger_may_come_later()
     test_switching_channel_fine_alias()
+    test_switching_channel_fine_alias_named_after_the_real_channel()
     test_switching_channel_without_its_trigger_keeps_the_default()
     test_parse_entity_units()
     test_parse_entity_keywords()
