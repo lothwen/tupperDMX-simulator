@@ -34,6 +34,7 @@ class TimelineToolbar(QWidget):
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
     voice_cues_requested = pyqtSignal()  # open the per-song voice-cue editor
+    add_track_requested = pyqtSignal()  # enter stage edit mode + patch a fixture
     monitor_changed = pyqtSignal(str)  # editor monitor: MONITOR_BACKING | MONITOR_GUIDE
 
     # Zoom slider maps integer percent -> scale factor (slider/100.0).
@@ -95,11 +96,13 @@ class TimelineToolbar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
 
-        # TODO: Future implementation
-        #add_track = QPushButton("+ Add track")
-        #add_track.setObjectName("TTAddTrack")
-        #row.addWidget(add_track)
+        add_track = QPushButton("+ Add track")
+        add_track.setObjectName("TTAddTrack")
+        add_track.setToolTip("Patch a new fixture (opens the stage designer)")
+        add_track.clicked.connect(self.add_track_requested.emit)
+        row.addWidget(add_track)
 
+        # TODO: Future implementation
         #group_btn = QPushButton("🖿 Group")
         #group_btn.setObjectName("TTToolButton")
         #row.addWidget(group_btn)
