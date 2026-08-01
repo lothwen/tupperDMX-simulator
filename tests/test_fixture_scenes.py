@@ -6,6 +6,9 @@ The rules being pinned:
 
   * scenes stay in their BANKS — the list is sections, not a flat list, because
     note 36+n selects the n-th bank and 24+n the n-th scene inside it;
+  * the tab opens on a blank DRAFT — nothing selected, faders at their channel
+    defaults — and the one button reads "Create" there and "Save" on a scene
+    picked from the list; nothing reaches the sidecar until it is pressed;
   * an edit round-trips the RAW sidecar JSON: keys this app doesn't model, and
     other modes' blocks, survive untouched;
   * which mode block the banks land in follows whoever already supplies them,
@@ -279,15 +282,23 @@ def test_the_list_keeps_banks_as_sections(qapp):
                 == ["FILLS", "STROBES"], "in the order the sidecar declares")
         _assert(tab.tree.topLevelItem(0).childCount() == 2,
                 "with that bank's scenes beneath it")
-        _assert(tab._selected == ("FILLS", 0), "the first scene starts selected")
-        _assert(tab.name_input.text() == "Red wash", "and is loaded into the editor")
+        _assert(tab._selected is None and tab._drafting(),
+                "nothing starts selected — the tab opens on a blank draft")
+        _assert(tab.name_input.text() == "" and tab.name_input.isEnabled(),
+                "with an unnamed, editable scene in the editor")
 
         _assert(len(tab._faders) == 4, "one fader per channel of the mode")
         _assert([f.address_label.text() for f in tab._faders]
                 == ["10", "11", "12", "13"],
                 "addressed from the DMX start the dialog is offering")
+        _assert(all(f.isEnabled() for f in tab._faders),
+                "the faders are live from the first click, no scene needed")
+
+        _select(tab, "FILLS", 0)
+        _assert(tab.name_input.text() == "Red wash",
+                "picking a scene from the list loads it into the editor")
         _assert([f.slider.value() for f in tab._faders] == [255, 255, 0, 0],
-                "loaded with the scene's values")
+                "with the scene's values on the faders")
         _assert(tab._part_buttons["CHORUS"].isChecked(),
                 "the scene's song_parts are shown as tags")
         _assert(not tab._part_buttons["INTRO"].isChecked(), "and only those")
@@ -316,6 +327,7 @@ def test_the_preview_is_the_stage_render_engine(qapp):
         _assert(all(isinstance(b, expected) for b in tab.preview._bodies),
                 f"drawn by the stage's own renderer ({expected.__name__})")
 
+        _select(tab, "FILLS", 0)
         # "Red wash": full brightness, red only.
         _assert(tab.preview._bodies[0].state.scaled_rgb() == (255, 0, 0),
                 "the body resolves the selected scene's DMX")
@@ -364,8 +376,8 @@ def test_the_readout_follows_a_switching_channel(qapp):
     _with_tree({"switcher.json": doc}, body)
 
 
-def test_editing_writes_through_to_the_sidecar(qapp):
-    print("test_editing_writes_through_to_the_sidecar")
+def test_the_faders_compose_a_new_scene_and_create_writes_it(qapp):
+    print("test_the_faders_compose_a_new_scene_and_create_writes_it")
 
     def sidecar(shipped):
         return json.loads((shipped / "wash-12.tdmx.json").read_text())
@@ -373,43 +385,90 @@ def test_editing_writes_through_to_the_sidecar(qapp):
     def body(shipped, _user):
         tab = _tab()
         tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
+        _assert(tab.save_button.text() == "Create" and tab.save_button.isEnabled(),
+                "the tab opens offering to create what the faders hold")
+        _assert("FILLS" in tab.status_label.text(),
+                "saying which bank it would land in")
 
+        # The whole point: walk in, move faders, press the button.
+        for fader, value in zip(tab._faders, (200, 10, 20, 30)):
+            fader.slider.setValue(value)
+        _assert(len(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]) == 2,
+                "nothing is written while the draft is being dialled in")
+        tab.name_input.setText("Sunrise")
+        tab._on_name_edited()
+        tab.save_button.click()
+
+        scenes = sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]
+        _assert(len(scenes) == 3, "Create appends the draft to the target bank")
+        _assert(scenes[2] == {"brightness": 200, "red": 10, "green": 20,
+                              "blue": 30, "name": "Sunrise"},
+                "with the fader values and the typed name, and every channel of "
+                "the mode so the engine accepts it")
+        _assert(tab._selected == ("FILLS", 2),
+                "and the new scene is what the editor is now on")
+        _assert(tab.save_button.text() == "Save" and not tab.save_button.isEnabled(),
+                "so the button becomes an ordinary, idle Save")
+
+        # An unnamed draft falls back to a placeholder name.
+        tab._new_draft()
+        _assert(tab._drafting() and tab.name_input.text() == "",
+                "+ New scene clears back to a blank draft")
+        tab._faders[0].slider.setValue(5)
+        tab.save_button.click()
+        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][3]["name"]
+                == "Scene 4", "an unnamed one gets a placeholder name")
+
+        # Modifying an existing scene overwrites it instead.
+        _select(tab, "FILLS", 0)
         tab.name_input.setText("Crimson")
         tab._on_name_edited()
-        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["name"]
-                == "Crimson", "a rename is saved as it is committed")
-
         tab._faders[0].slider.setValue(64)
-        tab.flush()                       # the fader write is debounced
-        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["brightness"]
-                == 64, "so is a fader move, once it settles")
+        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["name"]
+                == "Red wash",
+                "edits to it stay in memory until the button is pressed")
+        _assert(tab.save_button.isEnabled() and tab.save_button.text() == "Save",
+                "which now offers to update that scene, not add one")
+        tab.save_button.click()
+        scenes = sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]
+        _assert(len(scenes) == 4, "Save adds nothing to the bank")
+        _assert(scenes[0]["name"] == "Crimson" and scenes[0]["brightness"] == 64,
+                "it overwrites the scene that was picked")
+        _assert(not tab.save_button.isEnabled(), "and the button goes quiet again")
 
         tab._part_buttons["SOLO"].setChecked(True)
         tab._on_song_parts_changed()
+        tab.save_button.click()
         _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["song_parts"]
                 == ["CHORUS", "SOLO"],
                 "song-part tags are stored in their canonical order")
 
-        tab._add_scene()
-        scenes = sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]
-        _assert(len(scenes) == 3, "+ New appends to the selected bank")
-        _assert(scenes[2]["name"] == "Scene 3", "with a placeholder name")
-        _assert(set(scenes[2]) == {"brightness", "red", "green", "blue", "name"},
-                "and every channel of the mode, so the engine accepts it")
-
         _select(tab, "FILLS", 0)
         tab._duplicate()
+        tab.save_button.click()
         scenes = sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]
-        _assert(len(scenes) == 4 and scenes[1]["name"] == "Crimson copy",
+        _assert(len(scenes) == 5 and scenes[1]["name"] == "Crimson copy",
                 "Duplicate inserts the copy right after its original")
 
         _select(tab, "FILLS", 1)
         tab._delete()
-        _assert(len(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]) == 3,
-                "Delete removes just that scene")
+        tab.save_button.click()
         _assert([s["name"] for s in sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]]
-                == ["Crimson", "Blue wash", "Scene 3"],
-                "and leaves the rest in order")
+                == ["Crimson", "Blue wash", "Sunrise", "Scene 4"],
+                "Delete removes just that scene, leaving the rest in order")
+
+        # Stepping off a scene onto a bank header starts a fresh scene there.
+        _select(tab, "STROBES")
+        _assert(tab._drafting() and all(f.isEnabled() for f in tab._faders),
+                "a bank header is a blank draft, faders live")
+        _assert(tab._target_bank() == "STROBES",
+                "aimed at the bank that was clicked")
+        tab._faders[0].slider.setValue(7)
+        _select(tab, "FILLS")
+        _assert(tab._drafting() and tab._faders[0].slider.value() == 7,
+                "and moving between bank headers only re-targets it, keeping "
+                "what has been dialled in")
+        _assert(tab._target_bank() == "FILLS", "now aimed at the other bank")
 
     _with_tree({"wash-12.json": _doc("Wash 12"),
                 "wash-12.tdmx.json": SIDECAR}, body)
@@ -431,6 +490,7 @@ def test_renaming_a_bank_follows_through_into_its_chases(qapp):
         _assert(item.data(0, _ROLE_BANK) == "FILLS", "the first bank is FILLS")
         item.setText(0, "WASHES")
         QCoreApplication.processEvents()
+        tab.save_button.click()
 
         written = json.loads((shipped / "wash-12.tdmx.json").read_text())
         banks = written["modes"]["*"]["banks"]
@@ -451,15 +511,20 @@ def test_a_drag_reorders_scenes_and_banks(qapp):
         tab = _tab()
         tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
 
+        def saved_banks():
+            tab.save_button.click()
+            return json.loads(
+                (shipped / "wash-12.tdmx.json").read_text())["modes"]["*"]["banks"]
+
         # Move FILLS' second scene to the front of the bank.
         tab._on_move("FILLS", 1, "FILLS", 0)
-        banks = json.loads((shipped / "wash-12.tdmx.json").read_text())["modes"]["*"]["banks"]
+        banks = saved_banks()
         _assert([s["name"] for s in banks["FILLS"]] == ["Blue wash", "Red wash"],
                 "a scene drag reorders within its bank")
 
         # Move it across into STROBES.
         tab._on_move("FILLS", 0, "STROBES", 1)
-        banks = json.loads((shipped / "wash-12.tdmx.json").read_text())["modes"]["*"]["banks"]
+        banks = saved_banks()
         _assert([s["name"] for s in banks["FILLS"]] == ["Red wash"],
                 "a cross-bank drag leaves the source bank")
         _assert([s["name"] for s in banks["STROBES"]] == ["White", "Blue wash"],
@@ -467,9 +532,14 @@ def test_a_drag_reorders_scenes_and_banks(qapp):
 
         # Drag STROBES above FILLS (index -1 marks the bank itself).
         tab._on_move("STROBES", -1, "", 0)
-        banks = json.loads((shipped / "wash-12.tdmx.json").read_text())["modes"]["*"]["banks"]
+        _assert(tab.save_button.text() == "Save",
+                "a bank edit deselects, but the button still offers to Save it "
+                "— otherwise the reorder could never be written")
+        banks = saved_banks()
         _assert(list(banks) == ["STROBES", "FILLS"],
                 "a bank drag reorders the banks — what note 36+n addresses")
+        _assert(sum(len(scenes) for scenes in banks.values()) == 3,
+                "and pressing it invents no scene out of the open draft")
 
     _with_tree({"wash-12.json": _doc("Wash 12"),
                 "wash-12.tdmx.json": SIDECAR}, body)
@@ -520,7 +590,7 @@ def main():
     test_the_list_keeps_banks_as_sections(app)
     test_the_preview_is_the_stage_render_engine(app)
     test_the_readout_follows_a_switching_channel(app)
-    test_editing_writes_through_to_the_sidecar(app)
+    test_the_faders_compose_a_new_scene_and_create_writes_it(app)
     test_renaming_a_bank_follows_through_into_its_chases(app)
     test_a_drag_reorders_scenes_and_banks(app)
     test_the_dialog_shows_the_tab_and_follows_its_selection(app)

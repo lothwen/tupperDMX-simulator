@@ -991,9 +991,9 @@ class AddFixtureDialog(QDialog):
         return (key, self.dmx_spin.value(), self.channel_spin.value(), mode)
 
     def done(self, result: int) -> None:
-        # Scene edits are library edits, so a pending one is written on the way
-        # out whichever button closed the dialog.
-        self.scenes_tab.flush()
+        # Scene edits are library edits, so neither button here decides their
+        # fate: an unsaved one asks on the way out, whichever closed the dialog.
+        self.scenes_tab.save_pending_changes()
         self.scenes_tab.preview.clear()
         super().done(result)
 
