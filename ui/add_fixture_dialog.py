@@ -405,6 +405,8 @@ class AddFixtureDialog(QDialog):
         """Regroup + refilter, keeping the current fixture selected if it survives."""
         wanted = self._entry.key if self._entry else ""
         entries = self._visible_entries()
+        # Groups start collapsed; a search only makes sense with its matches shown.
+        searching = bool(self.search_input.text().split())
         self.count_label.setText(f"{len(entries)} / {len(self._entries)}")
 
         groups: Dict[str, List[LibraryEntry]] = {}
@@ -438,7 +440,7 @@ class AddFixtureDialog(QDialog):
                                               | Qt.AlignmentFlag.AlignVCenter))
                 if entry.key == wanted and restored is None:
                     restored = child
-            parent.setExpanded(True)
+            parent.setExpanded(searching)
         self.tree.blockSignals(False)
 
         # A selection filtered out of the tree stays shown in the detail panel
