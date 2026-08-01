@@ -30,9 +30,22 @@ resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
 **A sidecar can never change the DMX footprint.** Channel count, order and
 addressing come only from the OFL document. That is what keeps saved .mid files
 — which bind note N to the N-th channel — correct across an edit here.
+
+Writing
+-------
+The scene editor edits `banks` (and, when a bank is renamed, the `chases` that
+name it) and nothing else. It therefore round-trips the *raw* JSON rather than
+re-serialising a parsed `Sidecar`: anything this parser doesn't model — a key
+from a newer version, a comment field someone added by hand — survives an edit
+untouched.
 """
 
+import copy
+import json
+import os
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -159,3 +172,75 @@ def target_filename(sidecar_path_name: str, sidecar: Optional[Sidecar]) -> str:
     if sidecar is not None and sidecar.fixture:
         return sidecar.fixture
     return sidecar_path_name[:-len(SIDECAR_SUFFIX)] + ".json"
+
+
+def sidecar_filename(ofl_path) -> str:
+    """The sidecar filename that pairs with an OFL document by default."""
+    return Path(ofl_path).stem + SIDECAR_SUFFIX
+
+
+# --- writing ------------------------------------------------------------------
+
+def banks_mode_key(document: Any, mode_name: str, single_mode: bool) -> str:
+    """Which mode block a fixture's banks should be written into.
+
+    Whichever block already supplies them wins, so an edit lands where the
+    author put them. With nothing to go on, a one-mode fixture writes to "*"
+    (its scenes can only mean one thing) while a multi-mode fixture writes to
+    the named block — scene dicts are keyed by channel field, and two modes
+    don't share a channel set.
+    """
+    modes = document.get("modes") if isinstance(document, dict) else None
+    for key in (mode_name, ANY_MODE):
+        block = (modes or {}).get(key)
+        if isinstance(block, dict) and "banks" in block:
+            return key
+    return ANY_MODE if single_mode else mode_name
+
+
+def apply_banks(document: Any, mode_key: str, banks: Mapping[str, List[dict]],
+                chases: Optional[List[dict]] = None) -> dict:
+    """A copy of a raw sidecar document with `banks` replaced in `mode_key`.
+
+    `chases` is written only when given (a bank rename has to follow through
+    into the chases naming it). An empty bank set drops the key rather than
+    writing `"banks": {}`.
+    """
+    result = copy.deepcopy(document) if isinstance(document, dict) else {}
+    result.setdefault("tdmx", SIDECAR_VERSION)
+    modes = result.setdefault("modes", {})
+    if not isinstance(modes, dict):
+        modes = result["modes"] = {}
+    block = modes.setdefault(mode_key, {})
+    if not isinstance(block, dict):
+        block = modes[mode_key] = {}
+
+    if banks:
+        block["banks"] = {str(name): list(scenes) for name, scenes in banks.items()}
+    else:
+        block.pop("banks", None)
+
+    if chases is not None:
+        if chases:
+            block["chases"] = list(chases)
+        else:
+            block.pop("chases", None)
+    return result
+
+
+def write_sidecar(path, document: dict) -> None:
+    """Write a sidecar via a temp file + os.replace, so a crash mid-write can
+    never leave a fixture definition half-written."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(document, f, indent=2)
+        os.replace(tmp, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

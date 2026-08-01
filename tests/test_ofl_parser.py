@@ -365,6 +365,117 @@ def test_pixel_groups():
             "eachPixelGroup yields group keys in declaration order")
 
 
+def test_template_channels_expand_for_pixel_groups():
+    print("test_template_channels_expand_for_pixel_groups")
+    # A batten whose modes address groups of pixels rather than each pixel: the
+    # real shape of Chroma-Q Color Force II, Astera tubes and most LED battens.
+    fx = parse_ofl(_fixture(
+        matrix={"pixelCount": [4, 1, 1],
+                "pixelGroups": {"Master": "all", "1/2": ["1", "2"], "2/2": ["3", "4"]}},
+        templateChannels={
+            "Red $pixelKey": {"capability": {"type": "ColorIntensity", "color": "Red"},
+                              "fineChannelAliases": ["Red $pixelKey fine"]},
+            "Green $pixelKey": {"capability": {"type": "ColorIntensity", "color": "Green"}},
+        },
+        modes=[
+            {"name": "master", "channels": [
+                _insert(["Master"], "perPixel", ["Red $pixelKey", "Green $pixelKey"])]},
+            {"name": "halves", "channels": [
+                _insert(["1/2", "2/2"], "perPixel", ["Red $pixelKey"])]},
+            {"name": "fine", "channels": ["Red Master", "Red Master fine"]},
+        ]))
+
+    master = fx.modes[0]
+    _assert(_keys(master) == ["Red Master", "Green Master"],
+            "a group key resolves like a pixel key")
+    _assert(all(c.channel is not None for c in master.channels),
+            "group channels resolve to real channels, not placeholder slots")
+    _assert(master.channels[0].channel.capabilities[0].get("color") == "Red",
+            "the template's capability survives group expansion")
+    _assert(master.channels[0].channel.pixel_key == "",
+            "a group drives several cells, so it claims no single pixel")
+
+    _assert(_keys(fx.modes[1]) == ["Red 1/2", "Red 2/2"],
+            "repeatFor over several groups expands each in order")
+
+    fine = fx.modes[2]
+    _assert(fine.channels[1].fine_of == 0 and fine.channels[1].fine_shift == 0,
+            "a group channel's fine alias links back to its coarse slot")
+
+
+def _switching_fixture(mode_channels, trigger_default=0):
+    """A fixture whose "Speed / Sensitivity" slot means different things
+    depending on where its "Programs" channel sits — the shape behind most of
+    OFL's `X / Y` channel names."""
+    return _fixture(
+        availableChannels={
+            "Programs": {
+                "defaultValue": trigger_default,
+                "capabilities": [
+                    {"dmxRange": [0, 127], "type": "Effect", "effectName": "Auto",
+                     "switchChannels": {"Speed / Sensitivity": "Program Speed"}},
+                    {"dmxRange": [128, 255], "type": "Effect", "effectName": "Sound",
+                     "switchChannels": {"Speed / Sensitivity": "Sound Sensitivity"}},
+                ]},
+            "Program Speed": {"capability": {"type": "EffectSpeed"},
+                              "fineChannelAliases": ["Program Speed fine"]},
+            "Sound Sensitivity": {"capability": {"type": "SoundSensitivity"}},
+        },
+        modes=[{"name": "test", "channels": mode_channels}])
+
+
+def test_switching_channel_resolves_to_its_default_target():
+    print("test_switching_channel_resolves_to_its_default_target")
+    fx = parse_ofl(_switching_fixture(["Programs", "Speed / Sensitivity"]))
+    slot = resolve_mode(fx).channels[1]
+    _assert(slot.channel is not None,
+            "a switching key resolves to a real channel, not a placeholder")
+    _assert(slot.channel.name == "Program Speed",
+            "the trigger's default value picks which target is the static one")
+    _assert(slot.switch_of == 0, "the slot points at its trigger channel")
+    _assert([o.trigger_range for o in slot.switch_options] == [(0, 127), (128, 255)],
+            "every alternative is kept, ordered by the trigger's range")
+    _assert([o.channel.name for o in slot.switch_options] ==
+            ["Program Speed", "Sound Sensitivity"],
+            "each alternative carries the channel it switches to")
+
+
+def test_switching_channel_default_follows_the_trigger_default():
+    print("test_switching_channel_default_follows_the_trigger_default")
+    fx = parse_ofl(_switching_fixture(["Programs", "Speed / Sensitivity"],
+                                      trigger_default=200))
+    _assert(resolve_mode(fx).channels[1].channel.name == "Sound Sensitivity",
+            "a trigger defaulting into the second range picks the second target")
+
+
+def test_switching_channel_trigger_may_come_later():
+    print("test_switching_channel_trigger_may_come_later")
+    # Patch order is the fixture's business: 87 real OFL fixtures list the
+    # switching slot before the channel that drives it.
+    fx = parse_ofl(_switching_fixture(["Speed / Sensitivity", "Programs"]))
+    slot = resolve_mode(fx).channels[0]
+    _assert(slot.switch_of == 1, "a trigger patched after the slot still resolves")
+
+
+def test_switching_channel_fine_alias():
+    print("test_switching_channel_fine_alias")
+    fx = parse_ofl(_switching_fixture(
+        ["Programs", "Speed / Sensitivity", "Speed / Sensitivity fine"]))
+    mode = resolve_mode(fx)
+    _assert(mode.channel_count == 3, "the fine byte keeps its own address")
+    _assert(mode.channels[2].fine_of == 1,
+            "a switching channel's fine byte is named after the virtual key "
+            "and folds into it")
+
+
+def test_switching_channel_without_its_trigger_keeps_the_default():
+    print("test_switching_channel_without_its_trigger_keeps_the_default")
+    fx = parse_ofl(_switching_fixture(["Speed / Sensitivity"]))
+    slot = resolve_mode(fx).channels[0]
+    _assert(slot.switch_of == -1 and slot.channel.name == "Program Speed",
+            "no trigger in the mode -> the slot stays on its default resolution")
+
+
 # --- entity / unit parsing ---------------------------------------------------
 
 def test_parse_entity_units():
@@ -454,6 +565,12 @@ def main():
     test_matrix_insert_null_template_leaves_a_gap()
     test_template_channel_expansion_records_its_pixel()
     test_pixel_groups()
+    test_template_channels_expand_for_pixel_groups()
+    test_switching_channel_resolves_to_its_default_target()
+    test_switching_channel_default_follows_the_trigger_default()
+    test_switching_channel_trigger_may_come_later()
+    test_switching_channel_fine_alias()
+    test_switching_channel_without_its_trigger_keeps_the_default()
     test_parse_entity_units()
     test_parse_entity_keywords()
     test_parse_entity_colour_temperature_percent_is_bipolar()
