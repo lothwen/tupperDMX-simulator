@@ -262,6 +262,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
         self.timeline_toolbar.voice_cues_requested.connect(self.show_voice_cues_dialog)
+        self.timeline_toolbar.add_track_requested.connect(self.add_fixture_from_timeline)
 
         # Bundle the timeline toolbar + tracks into one resizable section.
         timeline_section = QWidget()
@@ -605,6 +606,14 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.hide()
         self.edit_stage_button.show()
         stage_view.reposition_overlays()
+
+    def add_fixture_from_timeline(self):
+        """Timeline toolbar's "+ Add track": a timeline lane IS a patched
+        fixture, so this enters the stage designer and opens the same fixture
+        browser the edit toolbar's Add button uses. Edit mode stays on
+        afterwards so the new fixture can be dragged into place."""
+        self.enter_edit_mode()
+        self.edit_toolbar.open_add_fixture()
 
     def _on_fixture_selected(self, instance):
         """Show + populate the inspector for the selected fixture (or hide it)."""

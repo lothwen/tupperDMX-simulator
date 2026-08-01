@@ -41,7 +41,7 @@ class StageEditToolbar(QWidget):
 
         add_button = QPushButton("Add fixture")
         add_button.setObjectName("EditToolbarAdd")
-        add_button.clicked.connect(self._on_add)
+        add_button.clicked.connect(self.open_add_fixture)
         layout.addWidget(add_button)
 
         done_button = QPushButton("Done")
@@ -54,7 +54,9 @@ class StageEditToolbar(QWidget):
 
         self.adjustSize()
 
-    def _on_add(self) -> None:
+    def open_add_fixture(self) -> None:
+        """Open the fixture browser and patch what it returns. Public: the
+        timeline toolbar's "+ Add track" opens the same flow."""
         dialog = AddFixtureDialog(self._stage, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
