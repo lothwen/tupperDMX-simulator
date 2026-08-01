@@ -498,6 +498,7 @@ class SwitchOption:
     while the trigger channel's value falls inside `trigger_range`."""
     trigger_range: Tuple[int, int]      # inclusive, on the TRIGGER channel
     channel: Optional[OflChannel]
+    channel_key: str = ""               # the switched channel's key in the document
 
 
 @dataclass(frozen=True)
@@ -750,7 +751,8 @@ def _collect_switches(
             for virtual, target in targets.items():
                 _, options = found.setdefault(str(virtual), (trigger_key, []))
                 options.append(SwitchOption(cap.dmx_range,
-                                            universe.get(str(target))))
+                                            universe.get(str(target)),
+                                            str(target)))
     return {virtual: (trigger, tuple(sorted(options, key=lambda o: o.trigger_range)))
             for virtual, (trigger, options) in found.items()}
 
@@ -829,6 +831,11 @@ def _resolve_channels(entries: Sequence[Any], universe: Mapping[str, OflChannel]
         if switch is not None:
             trigger_key, options = switch
             emitted.setdefault(key, index)
+            # The switched channels sit at this address too, so a fine byte
+            # named after one of them — OFL fixtures name them either way, after
+            # the virtual key or after the real channel — folds into this slot.
+            for option in options:
+                emitted.setdefault(option.channel_key, index)
             switch_triggers[index] = trigger_key
             slots.append(ResolvedChannel(
                 index=index, key=key,
