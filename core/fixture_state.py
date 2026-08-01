@@ -1,12 +1,15 @@
 # ABOUTME: Turns a fixture's DMX slice into what it actually emits — colour,
 # ABOUTME: intensity, strobe, effect, beam — driven by its OFL capabilities.
-"""The photometric model: DMX in, light out.
+"""The photometric model, both directions.
 
-This is the half of the stage engine that doesn't draw anything. A renderer
-asks "what is this fixture doing right now?" and gets a `FixtureState` back;
-how to paint that is the renderer's problem. Keeping the two apart means the
-same resolution logic serves a pixel bar, a blinder and a par, and it stays
-Qt-free and directly testable.
+`resolve_state` is DMX in, light out: the half of the stage engine that doesn't
+draw anything. A renderer asks "what is this fixture doing right now?" and gets
+a `FixtureState` back; how to paint that is the renderer's problem. Keeping the
+two apart means the same resolution logic serves a pixel bar, a blinder and a
+par, and it stays Qt-free and directly testable.
+
+`solve_color` is the inverse the controller needs: light in, DMX out — "make
+this fixture emit this colour, with whatever emitters it happens to have".
 
 Everything is derived from the fixture's OFL capabilities rather than from
 channel positions, so a fixture nobody wrote code for still resolves correctly:
@@ -27,7 +30,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from core import ofl
-from core.fixture_library import FixtureDef
+from core.fixture_library import FixtureDef, color_slots
 
 # The 13 mixable colours OFL's ColorIntensity can name, as the RGB each one
 # contributes at full. Warm/Cold White match the tints the bespoke renderers
@@ -325,6 +328,82 @@ def _build_emitters(fdef, mix, preset, pixel_names, master,
         states.append(EmitterState(key=pixel_names.get(index, ""), rgb=rgb,
                                    intensity=max(0.0, min(1.0, master))))
     return tuple(states)
+
+
+# --- the write direction ------------------------------------------------------
+#
+# `resolve_state` mixes a fixture's colours additively from REFERENCE_RGB.
+# `solve_color` inverts that same model, so what the controller writes is what
+# the stage draws. (A real CMY mixer is subtractive; the app has no subtractive
+# model anywhere, and being consistent with the renderer matters more here than
+# being right about a dye wheel.)
+
+# Colours that carry no hue, so a palette has nothing to say to them.
+_ACHROMATIC = frozenset({"White", "Warm White", "Cold White"})
+
+
+def solve_color(fdef: FixtureDef, rgb: Sequence[int]) -> Dict[int, int]:
+    """`{slot index: value}` making `fdef` emit `rgb` — the inverse of resolve_state.
+
+    Three cases, in order:
+
+      * the fixture mixes **Red + Green + Blue** — the components go straight to
+        those three slots and every other colour slot is zeroed, so a leftover
+        amber from the previous scene can't tint the new colour;
+      * it mixes some other chromatic set (CMY, RGBA-without-blue, …) — the
+        colour is fitted greedily onto whatever it has;
+      * it mixes only whites, or no colour at all — `{}`. A palette is a hue,
+        and a blinder has none to set; leaving it alone is what the role-based
+        code did too.
+    """
+    slots = color_slots(fdef)
+    if not slots:
+        return {}
+
+    target = [max(0, min(255, int(c))) for c in rgb]
+    if {"Red", "Green", "Blue"} <= set(slots):
+        values = {index: 0 for index in slots.values()}
+        for colour, component in (("Red", 0), ("Green", 1), ("Blue", 2)):
+            values[slots[colour]] = target[component]
+        return values
+
+    if not set(slots) - _ACHROMATIC:
+        return {}
+    return _greedy_mix(slots, target)
+
+
+def _greedy_mix(slots: Dict[str, int], target: List[int]) -> Dict[int, int]:
+    """Fit `target` with the fixture's colours, largest contribution first.
+
+    Matching pursuit: repeatedly take the colour whose projection onto what is
+    still missing supplies the most of it, at the level that best fits, and
+    subtract what it gives. Deterministic, and exact whenever the fixture's
+    colours actually span the target.
+    """
+    remaining = [float(c) for c in target]
+    values = {index: 0 for index in slots.values()}
+    candidates = {colour: REFERENCE_RGB[colour]
+                  for colour in slots if colour in REFERENCE_RGB}
+
+    while candidates:
+        best = None
+        best_level = 0.0
+        best_gain = 0.0
+        for colour, reference in candidates.items():
+            norm = sum(float(c) * c for c in reference)
+            level = sum(r * c for r, c in zip(remaining, reference)) / norm
+            level = max(0.0, min(1.0, level))
+            gain = level * sum(r * c for r, c in zip(remaining, reference))
+            if gain > best_gain:
+                best, best_level, best_gain = colour, level, gain
+        if best is None:
+            break
+        values[slots[best]] = round(best_level * 255)
+        for component, contribution in enumerate(REFERENCE_RGB[best]):
+            remaining[component] = max(0.0, remaining[component]
+                                       - best_level * contribution)
+        del candidates[best]
+    return values
 
 
 def capability_at(fdef: FixtureDef, index: int, values: Sequence[int]):

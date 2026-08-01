@@ -25,12 +25,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core import ofl
 from core.fixture_library import build_fixture_def, resolve_fixture
 from core.fixture_state import (
-    REFERENCE_RGB, kelvin_to_rgb, resolve_state,
+    REFERENCE_RGB, kelvin_to_rgb, resolve_state, solve_color,
 )
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
 META = {"authors": ["test"], "createDate": "2026-01-01", "lastModifyDate": "2026-01-01"}
-WILD_WASH = "Wild Wash Pro 648 RGBW, 4ch mode"
+WILD_WASH = "Wild Wash Pro 648 RGBW"
 
 
 def _assert(cond, msg):
@@ -349,6 +349,70 @@ def test_switching_channel_changes_what_a_slot_means():
             "trigger high -> it reads as effect speed instead")
 
 
+# --- the write direction: solve_color ----------------------------------------
+
+def _colour_probe(*colours):
+    return _probe({c: {"capability": {"type": "ColorIntensity", "color": c}}
+                   for c in colours}, mode_channels=list(colours))
+
+
+def test_solve_color_writes_rgb_straight_through():
+    print("test_solve_color_writes_rgb_straight_through")
+    fdef = _colour_probe("Red", "Green", "Blue")
+    _assert(solve_color(fdef, (255, 120, 0)) == {0: 255, 1: 120, 2: 0},
+            "an RGB fixture gets the components on their own channels")
+
+    # The ledbar's channels are ordered B, G, R — the components follow the
+    # colours, never the positions.
+    ledbar = resolve_fixture("ledbar")
+    _assert(solve_color(ledbar, (10, 20, 30)) == {1: 30, 2: 20, 3: 10},
+            "...whatever order the fixture declares them in")
+
+
+def test_solve_color_zeroes_the_other_emitters():
+    print("test_solve_color_zeroes_the_other_emitters")
+    # An RGBAW fixture must not keep the previous scene's amber lit under the
+    # new colour — the role-based code only ever touched R/G/B and left it.
+    fdef = _colour_probe("Red", "Green", "Blue", "Amber", "White")
+    _assert(solve_color(fdef, (255, 0, 0)) == {0: 255, 1: 0, 2: 0, 3: 0, 4: 0},
+            "every colour the fixture has is driven, not just the three")
+
+
+def test_solve_color_fits_a_fixture_without_rgb():
+    print("test_solve_color_fits_a_fixture_without_rgb")
+    # 27 of the installed fixtures mix CMY and have no red channel at all; the
+    # role enum had no name for any of them, so they never lit.
+    fdef = _colour_probe("Cyan", "Magenta", "Yellow")
+    solved = solve_color(fdef, (255, 0, 0))
+    _assert(set(solved) == {0, 1, 2} and any(solved.values()),
+            "a CMY fixture is driven rather than skipped")
+
+    lit = resolve_state(fdef, [solved[i] for i in range(3)]).scaled_rgb()
+    _assert(lit[0] > lit[1] and lit[0] > lit[2],
+            f"...and lands on a red-dominant mix, not on nothing ({lit})")
+
+
+def test_solve_color_leaves_a_white_only_fixture_alone():
+    print("test_solve_color_leaves_a_white_only_fixture_alone")
+    # A palette is a hue, and a blinder has none to set. Driving its whites from
+    # a colour would hand the fixture to the colour cycler mid-song.
+    _assert(solve_color(resolve_fixture("blinder"), (255, 0, 0)) == {},
+            "a warm/cold white blinder is not a colour mixer")
+    _assert(solve_color(_probe({"Dimmer": {"capability": {"type": "Intensity"}}}),
+                        (255, 0, 0)) == {},
+            "neither is a fixture with no colour channels at all")
+
+
+def test_solve_color_round_trips_through_resolve_state():
+    print("test_solve_color_round_trips_through_resolve_state")
+    fdef = _colour_probe("Red", "Green", "Blue", "White")
+    for target in ((255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255),
+                   (128, 64, 200)):
+        solved = solve_color(fdef, target)
+        lit = resolve_state(fdef, [solved[i] for i in range(4)]).scaled_rgb()
+        _assert(lit == target, f"{target} survives the round trip")
+
+
 def main():
     test_parity_par_rgb()
     test_parity_ledbar_channel_order()
@@ -369,6 +433,11 @@ def main():
     test_fine_channels_fold_into_one_value()
     test_short_dmx_slice_uses_declared_defaults()
     test_switching_channel_changes_what_a_slot_means()
+    test_solve_color_writes_rgb_straight_through()
+    test_solve_color_zeroes_the_other_emitters()
+    test_solve_color_fits_a_fixture_without_rgb()
+    test_solve_color_leaves_a_white_only_fixture_alone()
+    test_solve_color_round_trips_through_resolve_state()
     print("\nALL TESTS PASSED")
 
 

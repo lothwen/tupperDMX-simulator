@@ -49,9 +49,10 @@ from PyQt6.QtWidgets import (
 
 from core import ofl
 from core.fixture_library import FixtureDef, save_fixture_banks
+from core.channel_families import channel_family
 from core.fixture_state import FixtureState, capability_at, resolve_state
 from core.note_layout import SONG_PARTS
-from ui.fixture_chips import channel_family, rgba
+from ui.fixture_chips import rgba
 from ui.stage.base import body_count, body_spacing, body_size
 from ui.stage.beam import BEAM_LENGTH_PX
 from ui.stage.registry import renderer_for

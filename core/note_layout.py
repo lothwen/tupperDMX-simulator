@@ -7,22 +7,22 @@ each MIDI note *does* (the pitch is a universal verb, the channel selects the
 fixture). This module is the *reverse*: it turns a note (resolved against a
 fixture's own def when the verb is per-fixture) into the label/colour the clip
 library, timeline and edit dialog show. The range constants below MIRROR the
-match arms in ``handle_note_on`` — keep the two in sync (same convention as the
-``ROLE_*`` constants shared with ``fixture_library``).
+match arms in ``handle_note_on`` — keep the two in sync.
 
-Qt-free on purpose: imported by both the controller and the UI without a cycle
-(it depends only on ``fixture_library``).
+Channel-control verbs (notes 1-23) name and colour themselves from the
+fixture's own OFL capabilities via ``channel_families``, and a scene's swatch
+comes from ``resolve_state`` — the same two sources the stage renders from, so
+a clip can never claim a colour the fixture won't emit.
+
+Qt-free on purpose: imported by both the controller and the UI without a cycle.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from core.fixture_library import (
-    FixtureDef,
-    ROLE_GENERIC, ROLE_BRIGHTNESS, ROLE_RED, ROLE_GREEN, ROLE_BLUE,
-    ROLE_WHITE_WARM, ROLE_WHITE_COOL, ROLE_ANIMATION, ROLE_SPEED,
-    ROLE_DIRECTION, ROLE_STROBE, ROLE_MODE,
-)
+from core.channel_families import describe_channel
+from core.fixture_library import FixtureDef
+from core.fixture_state import resolve_state
 
 # ---------------------------------------------------------------------------
 # Note layout — MIRRORS software_controller/main.py:handle_note_on.
@@ -71,23 +71,9 @@ _SONG_PART_COLORS = {
     'SOLO': '#ffffff', 'OUTRO': '#c79337', 'END': '#808080',
 }
 
-# Channel-control display name + swatch colour, by semantic role.
-_ROLE_NAMES = {
-    ROLE_GENERIC: 'Channel', ROLE_BRIGHTNESS: 'Brightness',
-    ROLE_RED: 'Red', ROLE_GREEN: 'Green', ROLE_BLUE: 'Blue',
-    ROLE_WHITE_WARM: 'Warm White', ROLE_WHITE_COOL: 'Cool White',
-    ROLE_ANIMATION: 'Animation', ROLE_SPEED: 'Speed',
-    ROLE_DIRECTION: 'Direction', ROLE_STROBE: 'Strobe', ROLE_MODE: 'Mode',
-}
-_ROLE_COLORS = {
-    ROLE_RED: '#aa3333', ROLE_GREEN: '#33aa33', ROLE_BLUE: '#3333aa',
-    ROLE_WHITE_WARM: '#c7a037', ROLE_WHITE_COOL: '#9fb6c7',
-}
-
-# Approximate RGB a white channel contributes to a scene swatch (so blinder
-# scenes, which have no RGB channels, don't render as black).
-_WHITE_WARM_RGB = (255, 170, 70)
-_WHITE_COOL_RGB = (205, 220, 255)
+# Floor on a scene swatch's brightness, so a near-black scene still reads
+# against the dark track background instead of vanishing into it.
+_MIN_SWATCH_INTENSITY = 0.18
 
 
 @dataclass(frozen=True)
@@ -153,14 +139,6 @@ def is_global_verb(note: int) -> bool:
     the fixture), so they are NOT global."""
     n = int(note)
     return n == BLACKOUT_ALL or is_song_part(n)
-
-
-def _role_name(ch) -> str:
-    return _ROLE_NAMES.get(ch.role) or ch.field.replace('_', ' ').title()
-
-
-def _role_color(ch) -> str:
-    return _ROLE_COLORS.get(ch.role, _NEUTRAL)
 
 
 def _bank_name(fdef: Optional[FixtureDef], idx: int) -> Optional[str]:
@@ -231,8 +209,7 @@ def describe_note(note: int, fdef: Optional[FixtureDef] = None,
         return NoteInfo(label, _NEUTRAL)
     if _in(CHANNEL_OFFSET_RANGE, n):
         if fdef and n <= fdef.channel_count:
-            ch = fdef.channels[n - 1]
-            return NoteInfo(_role_name(ch), _role_color(ch))
+            return NoteInfo(*describe_channel(fdef.channels[n - 1]))
         return NoteInfo(f'CH {n}', _NEUTRAL)
     if _in(SCENE_LOAD_RANGE, n):
         idx = n - SCENE_LOAD_RANGE[0]
@@ -279,56 +256,37 @@ def field_note_map(fdef: FixtureDef) -> Tuple[Tuple[str, int], ...]:
     return tuple((ch.field, i + 1) for i, ch in enumerate(fdef.channels))
 
 
-def channel_control_notes(fdef: FixtureDef) -> frozenset:
-    """The channel-control note numbers (1..channel_count) of a fixture."""
-    return frozenset(range(1, fdef.channel_count + 1))
+def _swatch(fdef: FixtureDef, dmx: List[int]) -> Tuple[int, int, int]:
+    """A scene's swatch: the colour the stage would render it, floored.
 
-
-def _rgb_from_values(fdef: FixtureDef, value_of: Callable[[str], int]
-                     ) -> Tuple[int, int, int]:
-    """Approximate a scene's RGB swatch from its per-channel values, using each
-    channel's semantic role. ``value_of(field)`` returns the 0..255 value."""
-    r = g = b = 0
-    brightness = 255
-    have_brightness = False
-    for ch in fdef.channels:
-        v = max(0, min(255, int(value_of(ch.field))))
-        if ch.role == ROLE_RED:
-            r = max(r, v)
-        elif ch.role == ROLE_GREEN:
-            g = max(g, v)
-        elif ch.role == ROLE_BLUE:
-            b = max(b, v)
-        elif ch.role == ROLE_BRIGHTNESS:
-            brightness = v
-            have_brightness = True
-        elif ch.role in (ROLE_WHITE_WARM, ROLE_WHITE_COOL):
-            tint = _WHITE_WARM_RGB if ch.role == ROLE_WHITE_WARM else _WHITE_COOL_RGB
-            r = max(r, tint[0] * v // 255)
-            g = max(g, tint[1] * v // 255)
-            b = max(b, tint[2] * v // 255)
-    # Brightness scales the colour so dim scenes read dim; floor so near-black
-    # scenes stay faintly visible against the dark track background.
-    scale = max(brightness / 255.0, 0.18) if have_brightness else 1.0
-    return int(r * scale), int(g * scale), int(b * scale)
+    Goes through the same `resolve_state` the stage does, so a scene's chip in
+    the clip library and its clip on the timeline show the colour the fixture
+    will actually emit — including from colours no swatch table would know about
+    (amber, UV, a colour preset, a colour temperature). Multi-cell fixtures
+    collapse to the brightest of their cells, since one chip stands for the
+    whole fixture.
+    """
+    state = resolve_state(fdef, dmx)
+    rgb = [0, 0, 0]
+    for emitter in state.emitters:
+        rgb = [max(channel, lit) for channel, lit in zip(rgb, emitter.rgb)]
+    scale = max(state.intensity, _MIN_SWATCH_INTENSITY)
+    return tuple(int(channel * scale) for channel in rgb)
 
 
 def scene_rgb(fdef: FixtureDef, values_by_field: Dict[str, int]
               ) -> Tuple[int, int, int]:
     """Swatch RGB for a scene given its ``{channel_field: 0..255}`` values."""
-    return _rgb_from_values(fdef, lambda f: values_by_field.get(f, 0))
+    return _swatch(fdef, [max(0, min(255, int(values_by_field.get(ch.field, 0))))
+                          for ch in fdef.channels])
 
 
 def scene_rgb_from_notes(fdef: FixtureDef, velocity_by_note: Dict[int, int]
                          ) -> Tuple[int, int, int]:
     """Swatch RGB for an in-timeline scene group: ``{note: velocity}`` where
     channel value == velocity*2 (the controller's convention)."""
-    field_to_note = {f: nt for f, nt in field_note_map(fdef)}
-
-    def value_of(field: str) -> int:
-        return min(255, velocity_by_note.get(field_to_note.get(field, -1), 0) * 2)
-
-    return _rgb_from_values(fdef, value_of)
+    return _swatch(fdef, [min(255, velocity_by_note.get(note, 0) * 2)
+                          for _field, note in field_note_map(fdef)])
 
 
 # ---------------------------------------------------------------------------

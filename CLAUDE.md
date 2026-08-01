@@ -174,8 +174,9 @@ bundled).
   `values()` → `(type, dmx_start, channel, mode)`, with `mode` empty for a
   single-mode type. `suggest_free_dmx_start()`/`used_midi_channels()` live here
   too — the inspector validates the same two things. The channel-family table
-  (capability type → chip label + colour) lives in `ui/fixture_chips.py`, shared
-  with the Scenes tab's faders.
+  (capability type → chip label + colour) lives in `core/channel_families.py`,
+  shared with the Scenes tab's faders and the timeline's clip labels;
+  `ui/fixture_chips.py` is only the Qt chip widget over it.
 - **`ui/fixture_scenes_tab.py` — `FixtureScenesTab`**: the browser's Scenes tab,
   which edits the fixture *library* (a type's sidecar scene banks) rather than
   the patch — so the dialog's OK/Cancel doesn't apply to it. It opens on a blank
@@ -231,6 +232,13 @@ bundled).
   doing right now" — it takes the whole slice on purpose, because a switching
   channel's meaning lives on another slot, so a per-channel read describes the
   wrong channel. The Scenes tab's read-outs go through it too.
+  `solve_color(fdef, rgb)` is the **inverse** — light in, DMX out — that the
+  controller's palette/colour macros write through: R/G/B straight through where
+  the fixture mixes them (zeroing its other emitters so a stale amber can't tint
+  the result), a greedy fit onto whatever it does mix otherwise (CMY, RGBA
+  without blue), and `{}` for a whites-only fixture like the blinder, which has
+  no hue to set. Inverting the SAME additive `REFERENCE_RGB` model means what
+  the controller writes is what the stage draws.
 - **`core/ofl.py`**: the Open Fixture Library (schema 12.5.1) parser. Document →
   `OflFixture`; `resolve_mode()` flattens one mode to ordered DMX slots with
   matrix inserts expanded (all 7 `repeatFor` orders × `perPixel`/`perChannel`;
@@ -242,7 +250,7 @@ bundled).
   **Switching channels** (a capability's `switchChannels`) resolve too: the slot
   carries `switch_options` plus `switch_of`, the slot index of the trigger
   channel that selects between them (trigger may be patched later in the mode),
-  while `channel` holds the resolution at the trigger's default so roles, labels
+  while `channel` holds the resolution at the trigger's default so labels
   and the clip library stay static. `core/fixture_state.py` picks the live one
   per frame — the same address really is a strobe in one program and an effect
   speed in another. `parse_entity()` turns OFL's units and keywords ("fast", "50%",
@@ -256,8 +264,9 @@ bundled).
   bridge. A definition is **one or two files**: `fixtures/<x>.json` (a strict OFL
   document) plus an optional `fixtures/<x>.tdmx.json` sidecar
   (`core/fixture_sidecar.py`) carrying what OFL has nowhere to put — scene
-  `banks`, `chases`, `song_parts` tags, per-channel `role`/`flags` overrides, the
-  effect→animation map and `stage` render hints. A fixture taken straight from
+  `banks`, `chases`, `song_parts` tags, per-channel `label`/`flags` overrides,
+  the effect→animation map and `stage` render hints. What a channel *does* is
+  never declared there — that is what its capabilities say. A fixture taken straight from
   the OFL project works with no sidecar; it simply has no scene banks.
   Loaded in three layers — shipped `fixtures/`, writable
   `userprefs_dir()/fixtures/`, and the open show's `fixtures/`
@@ -272,10 +281,14 @@ bundled).
   resolved to **one mode**: `resolve_fixture(type, mode)` is the canonical
   accessor (`load_fixture_defs()` gives each type at its default mode),
   `fixture_modes(type)` lists the choices and `fixture_document(type)` returns
-  the mode-independent OFL document behind it. The bridge summarises each OFL
-  channel to the app's `ROLE_*` + flags: the capability type covering the most
-  DMX wins (`NoFunction` never counts), `blend` is derived from the capability
-  kind, and the knob flags — which aren't derivable — come from the sidecar.
+  the mode-independent OFL document behind it. The bridge adds only what OFL
+  cannot express: `blend` is derived from the capability kind, and the knob
+  flags — which aren't derivable — come from the sidecar. **A channel has no
+  second, summarised description** (there is no role enum): what it does is its
+  capabilities, and everything reads them through `dominant_capability()` (the
+  type covering the most DMX wins, `NoFunction` never counts),
+  `color_slots(fdef)` (OFL colour name → slot index, so amber and CMY are as
+  addressable as red) and `capability_types(fdef)`.
   `config.fixture_channel_count(type, mode)`/`known_fixture_types()` derive from
   it; `software_controller.fixture_type_for(name, mode)` compiles types lazily,
   tracking `fixture_library.cache_generation()` so a show opened later rebuilds
@@ -303,6 +316,11 @@ bundled).
   (velocity×2), 24–35 scene loaders, 36–47 bank select, 48 take-manual /
   49 manual / 50 blackout-fixture, 51 blackout-all (global), 52–59 timing /
   palette / scene step, 60 START, 61–69 song parts (global), 72–75 color macros.
+  Colour verbs go through `fixture_state.solve_color()`, so a palette or a macro
+  drives whatever emitters the fixture actually has (an RGBA par's amber is
+  zeroed rather than left over from the last scene, a CMY mover is fitted, a
+  whites-only blinder is left alone). A scene hands its colour to the live
+  palette by setting the fixture's Red/Green/Blue channels to the 255 sentinel.
   The 20 Hz output loop fans each universe snapshot to pluggable *sinks*
   (`set_sinks()`; `ArtNetSender` UDP, `USBDMXSender` FTDI DMX TX, or the Qt
   `StageFrameBridge`); each type's scene banks/chases live in its
@@ -524,16 +542,22 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `userprefs_dir()`/`default_shows_dir()`, dev vs. PyInstaller `_MEIPASS`),
   `ofl.py` (the Open Fixture Library 12.5.1 parser: capabilities, modes,
   matrix/fine-channel expansion, unit/entity parsing), `fixture_sidecar.py`
-  (the `.tdmx.json` sidecar: banks, chases, role/flag overrides, effect assets,
+  (the `.tdmx.json` sidecar: banks, chases, label/flag overrides, effect assets,
   stage hints — plus the raw-JSON writer `banks_mode_key()`/`apply_banks()`/
   `write_sidecar()` the scene editor round-trips through),
-  `fixture_library.py` (the 3-layer loader + the OFL→`ROLE_*`
-  bridge: `FixtureDef`, `resolve_fixture()`, `fixture_modes()`,
-  `save_fixture_banks()`, plus the
+  `fixture_library.py` (the 3-layer loader + the OFL bridge: `FixtureDef`,
+  `resolve_fixture()`, `fixture_modes()`, `save_fixture_banks()`, the
+  capability lookups `dominant_capability()`/`color_slots()`/
+  `capability_types()`, plus the
   per-type presentation colours `GROUP_COLORS`/`color_for_type()`),
+  `channel_families.py` (`channel_family()`/`describe_channel()`: what a channel
+  is, in one word and one colour, from its capabilities — the browser's chips,
+  the Scenes tab's faders and the timeline's clip labels all read it),
   `fixture_state.py` (`resolve_state()` → `FixtureState`: the Qt-free
-  photometric model the stage renderers consume),
-  `note_layout.py` (note → label/colour lookup),
+  photometric model the stage renderers consume, plus its inverse
+  `solve_color()`),
+  `note_layout.py` (note → label/colour lookup; channel-control verbs name
+  themselves via `channel_families` and scene swatches via `resolve_state`),
   `io_routing.py` (pure routing logic: `MidiRouting`, presets, `validate()`,
   `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
   signal-flow graph state), `buildinfo.py` (build metadata accessor).
@@ -562,8 +586,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `fixture_scenes_tab.py` (its Scenes tab: bank/scene list, channel faders and
   the stage-engine preview, written to the `.tdmx.json` sidecar by its own
   Create/Save button),
-  `fixture_chips.py` (the chip label + the capability→channel-family colour
-  table both tabs read),
+  `fixture_chips.py` (the Qt chip widget; the family table it shows lives in
+  `core/channel_families.py`),
   `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
   `settings_dialog.py` (incl. the Input/Output section + AUDIO card),
   `io_flow_widget.py`, `voice_cues_dialog.py` (per-song spoken-cue editor),

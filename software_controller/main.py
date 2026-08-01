@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from core import fixture_library
 from core.fixture_library import load_fixture_defs
+from core.fixture_state import solve_color
 from core.config import shipped_fixtures
 from tupperlogger import get_logger
 from core import note_layout
@@ -122,21 +123,6 @@ def generate_song_colors(mode, hue_index, FromDialog=False):
 # patch is whatever config.fixtures (type name + DMX address) describes.
 # ============================================================================
 
-# Channel semantic roles. The engine uses these to address channels by meaning
-# (which one carries brightness, the R/G/B color, etc.) instead of by position.
-ROLE_GENERIC = 0
-ROLE_BRIGHTNESS = 1
-ROLE_RED = 2
-ROLE_GREEN = 3
-ROLE_BLUE = 4
-ROLE_WHITE_WARM = 5
-ROLE_WHITE_COOL = 6
-ROLE_ANIMATION = 7
-ROLE_SPEED = 8
-ROLE_DIRECTION = 9
-ROLE_STROBE = 10
-ROLE_MODE = 11
-
 # Per-channel behaviour flags (bitmask).
 CH_BLEND = 0x01       # interpolate over blend_time (else snap instantly)
 CH_KNOB_LEVEL = 0x02  # capped by the brightness_cap knob at scene load
@@ -146,7 +132,6 @@ CH_KNOB_SPEED = 0x04  # value from MIDI velocity / speed_cap knob / scene
 @dataclass(frozen=True)
 class ChannelDef:
     field: str   # attribute on the scene dataclass (also the universe order)
-    role: int
     flags: int
 
 
@@ -166,6 +151,10 @@ class FixtureType:
     channels: list           # list[ChannelDef]
     banks: dict              # bank-name -> list[scene namespace] (channel fields)
     chases: list             # list[{'banks': [...], 'scenes': [...]}]
+    fdef: object             # the FixtureDef this was compiled from
+    # OFL colour name -> slot index. Addressing colour by name rather than by a
+    # fixed R/G/B enum is what lets an RGBA or CMY fixture follow a palette.
+    color_slots: dict = field(default_factory=dict)
     # song-part name -> list[SongPartEntry]; what this type runs per song part.
     song_part_program: dict = field(default_factory=dict)
 
@@ -198,13 +187,14 @@ def _compile_fixture_type(fdef):
 
     A definition with no banks gets an inert all-zero default bank so the engine
     stays valid for it."""
-    channels = [ChannelDef(c.field, c.role, c.flags) for c in fdef.channels]
+    channels = [ChannelDef(c.field, c.flags) for c in fdef.channels]
     banks = {bank_name: [_scene_from_dict(channels, s) for s in scenes]
              for bank_name, scenes in fdef.banks.items()}
     if not banks:
         banks = {"_default": [_zero_scene(channels)]}
     return FixtureType(channels=channels, banks=banks, chases=list(fdef.chases),
-                       song_part_program=_build_song_part_program(fdef))
+                       song_part_program=_build_song_part_program(fdef),
+                       color_slots=fixture_library.color_slots(fdef), fdef=fdef)
 
 
 def build_fixture_types():
@@ -394,23 +384,17 @@ class DMXController:
         self.logger.info(f"Repatched: {self.num_fixtures} fixtures")
 
     # ------------------------------------------------------------------
-    # Channel accessors (address channels by role/meaning)
+    # Channel accessors (address channels by meaning, not by position)
     # ------------------------------------------------------------------
-    def channel_index_by_role(self, fx, role):
-        for i, ch in enumerate(self.fixtures[fx].type.channels):
-            if ch.role == role:
-                return i
-        return -1
-
-    def set_channel_target(self, fx, role, value):
-        i = self.channel_index_by_role(fx, role)
-        if i < 0:
+    def set_channel_target(self, fx, index, value):
+        """Drive the fixture's `index`-th channel, blending if it blends."""
+        s = self.fixtures[fx]
+        if not 0 <= index < s.type.channel_count:
             return
-        ch = self.fixtures[fx].type.channels[i]
-        if ch.flags & CH_BLEND:
-            self.target[self.fixtures[fx].base + i] = value
+        if s.type.channels[index].flags & CH_BLEND:
+            self.target[s.base + index] = value
         else:
-            self.present[self.fixtures[fx].base + i] = value
+            self.present[s.base + index] = value
 
     def set_manual_channel(self, channel, value):
         """Force one absolute DMX channel (1-based) to ``value`` right now.
@@ -457,27 +441,25 @@ class DMXController:
         ft = s.type
         scene_obj = ft.banks[bank][scene]
 
-        # Palette substitution: if the fixture has R/G/B and the scene sets all
-        # three to the sentinel 255, the live palette color is used instead.
-        ri = self.channel_index_by_role(fx, ROLE_RED)
-        gi = self.channel_index_by_role(fx, ROLE_GREEN)
-        bi = self.channel_index_by_role(fx, ROLE_BLUE)
-        has_rgb = ri >= 0 and gi >= 0 and bi >= 0
-        palette_mode = False
-        if has_rgb:
-            palette_mode = (getattr(scene_obj, ft.channels[ri].field) == 255 and
-                            getattr(scene_obj, ft.channels[gi].field) == 255 and
-                            getattr(scene_obj, ft.channels[bi].field) == 255)
+        # Palette substitution: if the fixture mixes R/G/B and the scene sets all
+        # three to the sentinel 255, the live palette color is used instead. The
+        # sentinel stays anchored on the additive RGB triple: a blinder's scenes
+        # rest its warm/cool whites at 255, and reading those as "use the
+        # palette" would hand the whole fixture to the colour cycler.
+        rgb_slots = {ft.color_slots[c]: component
+                     for component, c in enumerate(("Red", "Green", "Blue"))
+                     if c in ft.color_slots}
+        has_rgb = len(rgb_slots) == 3
+        palette_mode = has_rgb and all(
+            getattr(scene_obj, ft.channels[i].field) == 255 for i in rgb_slots)
 
         for i, ch in enumerate(ft.channels):
             raw = getattr(scene_obj, ch.field)
             value = raw
 
-            if ch.role in (ROLE_RED, ROLE_GREEN, ROLE_BLUE):
+            if i in rgb_slots:
                 if palette_mode:
-                    value = (s.color[0] if ch.role == ROLE_RED
-                             else s.color[1] if ch.role == ROLE_GREEN
-                             else s.color[2])
+                    value = s.color[rgb_slots[i]]
             elif ch.flags & CH_KNOB_LEVEL:
                 # Brightness capped by the brightness knob.
                 if raw > self.brightness_cap:
@@ -560,12 +542,15 @@ class DMXController:
     # Color (LED palette system)
     # ------------------------------------------------------------------
     def set_fixture_color(self, fx, color):
-        # Set the RGB channels of the fixture and start a blend transition.
-        self.fixtures[fx].color = color
-        self.set_channel_target(fx, ROLE_RED, color[0])
-        self.set_channel_target(fx, ROLE_GREEN, color[1])
-        self.set_channel_target(fx, ROLE_BLUE, color[2])
-        self.fixtures[fx].blend_time_elapsed = 0
+        # Drive the fixture's colour emitters — whichever ones it has — and start
+        # a blend transition. solve_color spells the colour on this fixture:
+        # straight R/G/B where there is one, a fit onto amber/CMY/etc. where
+        # there isn't, and nothing at all for a fixture with no hue to set.
+        s = self.fixtures[fx]
+        s.color = color
+        for index, value in solve_color(s.type.fdef, color).items():
+            self.set_channel_target(fx, index, value)
+        s.blend_time_elapsed = 0
         self.reseed_all_blend_starts()
 
     def change_fixture_color(self, fx, color):

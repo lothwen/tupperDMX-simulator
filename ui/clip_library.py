@@ -15,8 +15,7 @@ from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
 from core import note_layout
 from core.config import Config
 from core.fixture_library import GROUP_COLORS
-from core.fixture_library import (FixtureDef, resolve_fixture,
-                             ROLE_RED, ROLE_GREEN, ROLE_BLUE)
+from core.fixture_library import FixtureDef, color_slots, resolve_fixture
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
 from ui import icons
@@ -589,9 +588,13 @@ class ClipLibraryWidget(QWidget):
 
     @staticmethod
     def _is_palette_sentinel(fdef: FixtureDef, values: Dict[str, int]) -> bool:
-        rgb = [ch.field for ch in fdef.channels
-               if ch.role in (ROLE_RED, ROLE_GREEN, ROLE_BLUE)]
-        return len(rgb) == 3 and all(int(values.get(f, 0)) >= 254 for f in rgb)
+        """Whether a scene hands its colour to the live palette — the same
+        R/G/B-at-full rule `DMXController.load_scene` applies."""
+        slots = color_slots(fdef)
+        fields = [fdef.channels[slots[colour]].field
+                  for colour in ("Red", "Green", "Blue") if colour in slots]
+        return len(fields) == 3 and all(int(values.get(f, 0)) >= 254
+                                        for f in fields)
 
     # ------------------------------------------------------------------
     # Rendering

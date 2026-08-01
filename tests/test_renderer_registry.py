@@ -25,7 +25,7 @@ from ui.stage import (
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
 META = {"authors": ["test"], "createDate": "2026-01-01", "lastModifyDate": "2026-01-01"}
-WILD_WASH = "Wild Wash Pro 648 RGBW, 4ch mode"
+WILD_WASH = "Wild Wash Pro 648 RGBW"
 
 
 def _assert(cond, msg):

@@ -24,8 +24,14 @@ at all — it simply has no scene banks.
       }
     }
 
-Each mode block holds `channels` (per-channel `role`/`flags` overrides, keyed by
+Each mode block holds `channels` (per-channel `label`/`flags` overrides, keyed by
 resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
+
+What a channel *does* is never declared here — that is what its OFL capabilities
+say, and the app reads them directly. `flags` carries the two knob behaviours no
+capability implies, and `label` renames a channel whose capabilities describe it
+too vaguely to show (a pair of `Generic` ranges commented "Forward"/"Reverse" is
+a direction channel, and only a human can say so).
 
 **A sidecar can never change the DMX footprint.** Channel count, order and
 addressing come only from the OFL document. That is what keeps saved .mid files
