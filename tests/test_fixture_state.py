@@ -320,6 +320,35 @@ def test_short_dmx_slice_uses_declared_defaults():
             "a channel the frame doesn't reach falls back to its declared default")
 
 
+def test_switching_channel_changes_what_a_slot_means():
+    print("test_switching_channel_changes_what_a_slot_means")
+    # Address 3 is a strobe while "Mode" is low and an effect speed while it is
+    # high — the real shape of Chauvet/Eurolite "Strobe / Speed" channels. Read
+    # with the wrong capability list, the fixture strobes when it should fade.
+    fdef = _probe({
+        "Dimmer": {"capability": {"type": "Intensity"}},
+        "Mode": {"capabilities": [
+            {"dmxRange": [0, 127], "type": "Effect", "effectName": "Strobing",
+             "switchChannels": {"Strobe / Speed": "Strobe"}},
+            {"dmxRange": [128, 255], "type": "Effect", "effectName": "Chase",
+             "switchChannels": {"Strobe / Speed": "Effect Speed"}}]},
+        "Strobe": {"capability": {"type": "ShutterStrobe", "shutterEffect": "Strobe",
+                                  "speedStart": "0Hz", "speedEnd": "20Hz"}},
+        "Effect Speed": {"capability": {"type": "EffectSpeed",
+                                        "speedStart": "0Hz", "speedEnd": "10Hz"}},
+    }, mode_channels=["Dimmer", "Mode", "Strobe / Speed"])
+
+    strobing = resolve_state(fdef, [255, 0, 255])
+    _assert(strobing.strobe_hz == 20.0,
+            "trigger low -> the shared address reads as a 20Hz strobe")
+
+    chasing = resolve_state(fdef, [255, 200, 255])
+    _assert(chasing.strobe_hz is None,
+            "trigger high -> the same address is no longer a strobe at all")
+    _assert(chasing.effect_speed_hz == 10.0,
+            "trigger high -> it reads as effect speed instead")
+
+
 def main():
     test_parity_par_rgb()
     test_parity_ledbar_channel_order()
@@ -339,6 +368,7 @@ def main():
     test_declared_cell_count_pads_emitters()
     test_fine_channels_fold_into_one_value()
     test_short_dmx_slice_uses_declared_defaults()
+    test_switching_channel_changes_what_a_slot_means()
     print("\nALL TESTS PASSED")
 
 

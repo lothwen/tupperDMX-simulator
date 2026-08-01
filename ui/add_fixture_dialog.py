@@ -7,7 +7,9 @@ by *manufacturer* (the folder a definition lives in, see
 `core.fixture_library._load_dir`) or by *category* (the OFL `categories` array,
 where a fixture legitimately belongs to several groups at once). The detail
 panel renders the OFL document — physical data, metadata, links, the channel
-layout of the selected mode, and every mode the fixture declares.
+layout of the selected mode, and every mode the fixture declares — plus the
+Scenes tab (`ui/fixture_scenes_tab.py`), which edits the type's sidecar scene
+banks rather than the patch.
 
 The footer is the actual patch decision: where in the universe the fixture lands
 and which MIDI channel drives it. Both are validated live against the current
@@ -27,9 +29,10 @@ from PyQt6.QtWidgets import (
 
 from core import ofl
 from core.fixture_library import (
-    FixtureDef, dominant_capability, fixture_document, load_fixture_defs,
-    resolve_fixture,
+    FixtureDef, fixture_document, load_fixture_defs, resolve_fixture,
 )
+from ui.fixture_chips import channel_family as _channel_family, chip as _chip
+from ui.fixture_scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
 
@@ -41,83 +44,17 @@ GENERIC_MANUFACTURER = "Generic"
 GROUP_BY_MANUFACTURER = "manufacturer"
 GROUP_BY_CATEGORY = "category"
 
-# OFL capability type -> (chip label, colour). The label is a *family*: a
-# "Pan/Tilt speed" channel reads as Speed, "Gobo rotation" as Gobo. Anything
-# absent falls back to _GENERIC_FAMILY, so an unknown capability still gets a
-# chip instead of an empty cell.
-_CHANNEL_FAMILIES: Dict[str, Tuple[str, str]] = {
-    "Intensity": ("Intensity", "#d9a13b"),
-    "ColorIntensity": ("Color", "#d95fa0"),
-    "ColorPreset": ("Color", "#d95fa0"),
-    "ColorTemperature": ("Color", "#d95fa0"),
-    "Pan": ("Pan", "#5b8fd9"),
-    "Tilt": ("Tilt", "#5b8fd9"),
-    "PanTiltSpeed": ("Speed", "#8f8f8f"),
-    "ShutterStrobe": ("Shutter", "#7fa8c9"),
-    "StrobeSpeed": ("Shutter", "#7fa8c9"),
-    "StrobeDuration": ("Shutter", "#7fa8c9"),
-    "Effect": ("Effect", "#c08a4f"),
-    "EffectParameter": ("Effect", "#c08a4f"),
-    "EffectSpeed": ("Speed", "#8f8f8f"),
-    "EffectDuration": ("Speed", "#8f8f8f"),
-    "Speed": ("Speed", "#8f8f8f"),
-    "Time": ("Speed", "#8f8f8f"),
-    "Rotation": ("Speed", "#8f8f8f"),
-    "SoundSensitivity": ("Sound", "#8f8f8f"),
-    "Focus": ("Focus", "#5fae72"),
-    "Zoom": ("Zoom", "#4fb0c0"),
-    "Iris": ("Iris", "#4fb0c0"),
-    "Frost": ("Frost", "#4fb0c0"),
-    "BeamAngle": ("Beam", "#4fb0c0"),
-    "BeamPosition": ("Beam", "#4fb0c0"),
-    "Prism": ("Prism", "#9b7fd4"),
-    "PrismRotation": ("Prism", "#9b7fd4"),
-    "BladeInsertion": ("Blade", "#9b7fd4"),
-    "BladeRotation": ("Blade", "#9b7fd4"),
-    "BladeSystemRotation": ("Blade", "#9b7fd4"),
-    "Fog": ("Fog", "#7f9ac0"),
-    "FogOutput": ("Fog", "#7f9ac0"),
-    "FogType": ("Fog", "#7f9ac0"),
-    "Maintenance": ("Maintenance", "#c9713b"),
-    "NoFunction": ("Unused", "#6a6a6a"),
-}
-_GENERIC_FAMILY = ("Generic", "#8f8f8f")
-_UNUSED_FAMILY = ("—", "#5f5f5f")
-
-# The four wheel capability types serve colour wheels and gobo wheels alike; OFL
-# tells them apart only by the wheel's name (which defaults to the channel's).
-_WHEEL_TYPES = frozenset({"WheelSlot", "WheelShake", "WheelSlotRotation",
-                          "WheelRotation"})
+# The channel-family table and the chip label live in ui/fixture_chips.py — the
+# Scenes tab colours its faders by the same families.
 
 _CATEGORY_COLOR = "#79cdf0"
 
 
 # --- small formatting helpers -------------------------------------------------
 
-def _rgba(hex_color: str, alpha: int) -> str:
-    """`hex_color` as a QSS rgba() string — QSS has no #RRGGBBAA literal."""
-    color = QColor(hex_color)
-    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
-
-
 def _number(value: float) -> str:
     """Trim the trailing ".0" off whole numbers ("600 W", not "600.0 W")."""
     return f"{value:g}"
-
-
-def _channel_family(spec) -> Tuple[str, str]:
-    """The (label, colour) chip for one resolved channel."""
-    cap = dominant_capability(spec.capabilities)
-    if cap is None:
-        return _UNUSED_FAMILY
-    if cap.type in _WHEEL_TYPES:
-        wheel = str(cap.get("wheel") or spec.label).lower()
-        if "gobo" in wheel:
-            return ("Gobo", "#5fae72")
-        if "color" in wheel or "colour" in wheel:
-            return ("Color", "#d95fa0")
-        return ("Wheel", "#8f8f8f")
-    return _CHANNEL_FAMILIES.get(cap.type, _GENERIC_FAMILY)
 
 
 def _capability_summary(cap: ofl.Capability) -> str:
@@ -556,6 +493,10 @@ class AddFixtureDialog(QDialog):
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_channels_tab(), "Channels")
         self.tabs.addTab(self._build_modes_tab(), "Modes")
+        # Edits the fixture *library* (its sidecar scene banks), not the patch
+        # this dialog is building — so it is unaffected by OK/Cancel.
+        self.scenes_tab = FixtureScenesTab()
+        self.tabs.addTab(self.scenes_tab, "Scenes")
         layout.addWidget(self.tabs, 1)
         return panel
 
@@ -816,6 +757,7 @@ class AddFixtureDialog(QDialog):
             card.style().polish(card)
         self._populate_channels()
         self._populate_stats()
+        self._populate_scenes()
         self._on_patch_changed()
 
     def _current_def(self) -> Optional[FixtureDef]:
@@ -869,6 +811,14 @@ class AddFixtureDialog(QDialog):
         self._populate_modes()
         self._populate_channels()
         self._populate_stats()
+        self._populate_scenes()
+
+    def _populate_scenes(self) -> None:
+        """Point the Scenes tab at the type + mode now on screen. The channel
+        set — and so every scene value — depends on the mode, so this follows
+        both."""
+        self.scenes_tab.set_fixture(self._entry.key if self._entry else "",
+                                    self._current_def(), self.dmx_spin.value())
 
     def _populate_stats(self) -> None:
         fdef = self._current_def()
@@ -968,6 +918,7 @@ class AddFixtureDialog(QDialog):
         start = self.dmx_spin.value()
         for item, index in self._channel_rows:
             item.setText(0, f"{index + 1:02d} · {start + index}")
+        self.scenes_tab.set_dmx_start(start)
         fdef = self._current_def()
         if fdef and fdef.channel_count:
             self.channels_range.setText(
@@ -1039,18 +990,15 @@ class AddFixtureDialog(QDialog):
         mode = self._mode if len(self._mode_buttons) > 1 else ""
         return (key, self.dmx_spin.value(), self.channel_spin.value(), mode)
 
+    def done(self, result: int) -> None:
+        # Scene edits are library edits, so a pending one is written on the way
+        # out whichever button closed the dialog.
+        self.scenes_tab.flush()
+        self.scenes_tab.preview.clear()
+        super().done(result)
+
 
 # --- shared construction helpers ---------------------------------------------
-
-def _chip(text: str, color: str) -> QLabel:
-    chip = QLabel(text)
-    chip.setObjectName("AddFxChip")
-    chip.setStyleSheet(
-        f"color: {color};"
-        f"border: 1px solid {_rgba(color, 90)};"
-        f"background-color: {_rgba(color, 32)};")
-    return chip
-
 
 def _chip_cell(text: str, color: str) -> QWidget:
     """A chip in a table cell: the trailing stretch keeps it text-sized rather

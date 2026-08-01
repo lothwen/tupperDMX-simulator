@@ -6,12 +6,15 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 import json
 import os
+import shutil
+import sys
 
 from core.paths import bundle_dir, userprefs_dir
 from core import ofl
 from core.fixture_sidecar import (
-    EMPTY_EXTRAS, SIDECAR_SUFFIX, ModeExtras, Sidecar, parse_sidecar,
-    target_filename,
+    EMPTY_EXTRAS, SIDECAR_SUFFIX, ModeExtras, Sidecar, apply_banks,
+    banks_mode_key, parse_sidecar, sidecar_filename, target_filename,
+    write_sidecar,
 )
 from tupperlogger import get_logger
 
@@ -68,6 +71,12 @@ class ChannelSpec:
     fine_of: int = -1                     # index of the coarse slot, else -1
     fine_shift: int = 0                   # left-shift when folded into the coarse value
     pixel_key: str = ""                   # matrix pixel this channel drives
+    # A switching channel: what this slot does depends on the live value of the
+    # slot at `switch_of`. Everything above describes its DEFAULT resolution, so
+    # role/label/flags stay stable for the note layout and clip library; the
+    # stage resolves the live one from `switch_options`.
+    switch_of: int = -1
+    switch_options: Tuple[ofl.SwitchOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -245,7 +254,8 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
         label=channel.name, capabilities=channel.capabilities,
         default_value=channel.default_value, constant=channel.constant,
         precedence=channel.precedence, resolution_bytes=channel.resolution_bytes,
-        pixel_key=channel.pixel_key)
+        pixel_key=channel.pixel_key,
+        switch_of=slot.switch_of, switch_options=slot.switch_options)
 
 
 def build_fixture_def(key: str, fixture: ofl.OflFixture,
@@ -296,10 +306,19 @@ def _read_json(path: Path) -> Optional[dict]:
         return None
 
 
-# registry key -> (OFL document, its sidecar or None, its manufacturer), so a
-# mode other than the default can be resolved on demand without re-reading the
-# filesystem.
-_Source = Tuple[ofl.OflFixture, Optional[Sidecar], str]
+@dataclass(frozen=True)
+class _Source:
+    """Where a registered fixture type came from.
+
+    Kept per key so a mode other than the default can be resolved on demand
+    without re-reading the filesystem, and so an edit to the sidecar knows
+    which files to write (see `save_fixture_banks`).
+    """
+    fixture: ofl.OflFixture
+    sidecar: Optional[Sidecar]
+    manufacturer: str
+    ofl_path: Path
+    sidecar_path: Optional[Path]   # None when the definition ships without one
 
 
 def _manufacturer_of(path: Path, root: Path) -> str:
@@ -336,7 +355,7 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
 
     # Pass A: sidecars, keyed by the OFL file each one targets. A sidecar only
     # ever pairs with a document in its OWN folder, so the key is the full path.
-    sidecars: Dict[Path, Sidecar] = {}
+    sidecars: Dict[Path, Tuple[Sidecar, Path]] = {}
     ofl_paths = {p for p in paths if not p.name.endswith(SIDECAR_SUFFIX)}
     for path in paths:
         if not path.name.endswith(SIDECAR_SUFFIX):
@@ -352,7 +371,7 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
             logger.warning(f"Sidecar '{path}' targets '{target.name}', which is not "
                            f"beside it; ignoring it")
             continue
-        sidecars[target] = sidecar
+        sidecars[target] = (sidecar, path)
 
     # Pass B: the OFL documents themselves.
     for path in paths:
@@ -369,7 +388,7 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
             # the reason needs to be findable in the log.
             continue
 
-        sidecar = sidecars.get(path)
+        sidecar, sidecar_path = sidecars.get(path, (None, None))
         manufacturer = _manufacturer_of(path, root)
         base = (sidecar.key if sidecar is not None and sidecar.key else fixture.name)
         key = f"{manufacturer}/{base}" if manufacturer else base
@@ -378,7 +397,7 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
             logger.warning(f"Skipping fixture def '{path}': no usable mode")
             continue
         defs[key] = fdef
-        sources[key] = (fixture, sidecar, manufacturer)
+        sources[key] = _Source(fixture, sidecar, manufacturer, path, sidecar_path)
 
     return defs, sources
 
@@ -460,8 +479,8 @@ def resolve_fixture(type_name: str, mode: str = "") -> Optional[FixtureDef]:
     source = _sources.get(type_name)
     if source is None:
         return defs.get(type_name)
-    fixture, sidecar, manufacturer = source
-    fdef = (build_fixture_def(type_name, fixture, sidecar, mode, manufacturer)
+    fdef = (build_fixture_def(type_name, source.fixture, source.sidecar, mode,
+                              source.manufacturer)
             or defs.get(type_name))
     _mode_cache[(type_name, mode)] = fdef
     return fdef
@@ -474,11 +493,17 @@ def fixture_document(type_name: str) -> Optional[ofl.OflFixture]:
     wants what the document says about the product as a whole (its metadata,
     links, every mode it declares), which only lives here.
     """
+    source = _source_for(type_name)
+    return source.fixture if source is not None else None
+
+
+def _source_for(type_name: str) -> Optional[_Source]:
+    """The loaded source record for a type, loading the registry if needed."""
     source = _sources.get(type_name)
     if source is None:
         load_fixture_defs()
         source = _sources.get(type_name)
-    return source[0] if source is not None else None
+    return source
 
 
 def fixture_modes(type_name: str) -> List[str]:
@@ -486,6 +511,98 @@ def fixture_modes(type_name: str) -> List[str]:
     unknown). The designer offers a mode picker only when there's a choice."""
     document = fixture_document(type_name)
     return [mode.name for mode in document.modes] if document else []
+
+
+# --- editing a definition's scene banks ---------------------------------------
+#
+# The scene editor is the only writer. It touches `banks` (and the `chases` that
+# name a renamed bank) and nothing else — never the OFL document, so a type's
+# DMX footprint, and with it every saved note binding, is untouchable from here.
+
+
+def _is_persistable(directory: Path) -> bool:
+    """Whether writing into `directory` would actually outlive the session.
+
+    A frozen build's shipped fixtures/ lives under PyInstaller's `_MEIPASS`,
+    which *is* writable — and is deleted on exit. Writes there would vanish
+    silently, so the bundle is treated as read-only whatever the mode bits say.
+    """
+    if getattr(sys, "frozen", False):
+        try:
+            directory.relative_to(Path(bundle_dir()))
+            return False
+        except ValueError:
+            pass
+    return os.access(str(directory), os.W_OK)
+
+
+def _fork_to_user_layer(source: _Source) -> Tuple[Path, Path]:
+    """Copy a read-only definition into the writable user layer.
+
+    Both files are copied under the same manufacturer folder and the same
+    names, so the fork registers under the identical key — and, being a later
+    layer, overrides the shipped one from the next reload on.
+    """
+    target_dir = Path(fixtures_dir_user()) / source.manufacturer
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    ofl_path = target_dir / source.ofl_path.name
+    if not ofl_path.exists():
+        shutil.copyfile(source.ofl_path, ofl_path)
+
+    name = (source.sidecar_path.name if source.sidecar_path is not None
+            else sidecar_filename(source.ofl_path))
+    sidecar_path = target_dir / name
+    if source.sidecar_path is not None and not sidecar_path.exists():
+        shutil.copyfile(source.sidecar_path, sidecar_path)
+
+    logger.info(f"Forked read-only fixture def '{source.ofl_path}' into "
+                f"'{target_dir}' so it can be edited")
+    return ofl_path, sidecar_path
+
+
+def save_fixture_banks(type_name: str, mode: str,
+                       banks: Mapping[str, List[dict]],
+                       chases: Optional[List[dict]] = None) -> Optional[Path]:
+    """Persist a type's scene banks to its `.tdmx.json`, and reload the registry.
+
+    Writes beside the OFL document the type came from; when that isn't
+    persistable (a shipped def in a frozen build, a read-only install) the
+    definition is forked into the user layer first and written there. `mode` is
+    the RESOLVED mode name the banks were authored against.
+
+    Returns the sidecar path written, or None if the type is unknown.
+    """
+    source = _source_for(type_name)
+    if source is None:
+        logger.warning(f"Cannot save banks for unknown fixture type '{type_name}'")
+        return None
+
+    sidecar_path = source.sidecar_path
+    if _is_persistable(source.ofl_path.parent):
+        if sidecar_path is None:
+            sidecar_path = source.ofl_path.with_name(sidecar_filename(source.ofl_path))
+    else:
+        _, sidecar_path = _fork_to_user_layer(source)
+
+    raw: Any = {}
+    if sidecar_path.exists():
+        raw = _read_json(sidecar_path)
+        if raw is None:
+            # Unreadable, not absent: overwriting would silently discard whatever
+            # is in there. _read_json has already logged why.
+            logger.error(f"Refusing to overwrite unreadable sidecar '{sidecar_path}'")
+            return None
+
+    mode_key = banks_mode_key(raw, mode, len(source.fixture.modes) <= 1)
+    write_sidecar(sidecar_path, apply_banks(raw, mode_key, banks, chases))
+
+    # Bumps the generation, so the software controller rebuilds its compiled
+    # fixture types and the new scenes are live without a restart.
+    clear_cache()
+    logger.info(f"Saved {sum(len(s) for s in banks.values())} scene(s) in "
+                f"{len(banks)} bank(s) for '{type_name}' to '{sidecar_path}'")
+    return sidecar_path
 
 
 def clear_cache() -> None:

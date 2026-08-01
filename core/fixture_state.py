@@ -134,7 +134,27 @@ def _fold_values(fdef: FixtureDef, dmx: Sequence[int]) -> List[int]:
     return folded
 
 
-def _emitter_index(spec, colour_seen: Dict[str, int], pixels: Dict[str, int]) -> int:
+def _active_capabilities(spec, values: Sequence[int]):
+    """The capabilities in force on a slot right now.
+
+    Normally just the channel's own. A *switching* channel is the exception: its
+    slot holds a different channel depending on where its trigger channel
+    currently sits, so the same address can be a strobe in one program and an
+    effect speed in another, and reading it with the wrong capability list is
+    how a fixture ends up strobing when it should be fading.
+    """
+    if spec.switch_of < 0 or not spec.switch_options:
+        return spec.capabilities
+    trigger = values[spec.switch_of] if spec.switch_of < len(values) else 0
+    for option in spec.switch_options:
+        low, high = option.trigger_range
+        if low <= trigger <= high:
+            return option.channel.capabilities if option.channel else ()
+    return spec.capabilities
+
+
+def _emitter_index(spec, capabilities, colour_seen: Dict[str, int],
+                   pixels: Dict[str, int]) -> int:
     """Which cell a channel drives.
 
     Matrix channels name their pixel outright. Otherwise, repeated channels of
@@ -144,7 +164,7 @@ def _emitter_index(spec, colour_seen: Dict[str, int], pixels: Dict[str, int]) ->
     """
     if spec.pixel_key:
         return pixels.setdefault(spec.pixel_key, len(pixels))
-    for cap in spec.capabilities:
+    for cap in capabilities:
         if cap.type == "ColorIntensity":
             colour = str(cap.get("color", ""))
             index = colour_seen.get(colour, 0)
@@ -181,11 +201,12 @@ def resolve_state(fdef: FixtureDef, dmx: Sequence[int]) -> FixtureState:
         value = values[index]
         # Unused slots and values no capability covers contribute nothing (a
         # placeholder slot has no capabilities at all).
-        cap = _capability_at(spec, value)
+        capabilities = _active_capabilities(spec, values)
+        cap = _capability_at(capabilities, value)
         if cap is None:
             continue
 
-        emitter = _emitter_index(spec, colour_seen, pixels)
+        emitter = _emitter_index(spec, capabilities, colour_seen, pixels)
         if spec.pixel_key:
             pixel_names[emitter] = spec.pixel_key
 
@@ -306,9 +327,24 @@ def _build_emitters(fdef, mix, preset, pixel_names, master,
     return tuple(states)
 
 
-def _capability_at(spec, value: int):
-    """The capability covering `value` on a ChannelSpec's capability list."""
-    for cap in spec.capabilities:
+def capability_at(fdef: FixtureDef, index: int, values: Sequence[int]):
+    """The capability in force on slot `index`, given the whole DMX slice.
+
+    Public because a channel can't be read in isolation: a switching channel's
+    meaning depends on another slot's value, so anything showing "what is this
+    channel doing right now" — the stage, the scene editor's read-outs — has to
+    ask with the full slice or it will describe the wrong channel.
+    """
+    if not 0 <= index < len(fdef.channels):
+        return None
+    spec = fdef.channels[index]
+    value = values[index] if index < len(values) else spec.default_value
+    return _capability_at(_active_capabilities(spec, values), value)
+
+
+def _capability_at(capabilities, value: int):
+    """The capability covering `value` on a capability list."""
+    for cap in capabilities:
         low, high = cap.dmx_range
         if low <= value <= high:
             return cap

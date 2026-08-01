@@ -493,6 +493,14 @@ def _matches_number(value: int, constraint: Any) -> bool:
 # --- resolved mode -----------------------------------------------------------
 
 @dataclass(frozen=True)
+class SwitchOption:
+    """One resolution of a switching channel: which channel occupies the slot
+    while the trigger channel's value falls inside `trigger_range`."""
+    trigger_range: Tuple[int, int]      # inclusive, on the TRIGGER channel
+    channel: Optional[OflChannel]
+
+
+@dataclass(frozen=True)
 class ResolvedChannel:
     """One DMX slot of a mode, in address order."""
     index: int                          # 0-based offset within the footprint
@@ -500,6 +508,13 @@ class ResolvedChannel:
     channel: Optional[OflChannel]       # None for unused / unresolvable slots
     fine_of: int = -1                   # index of the coarse slot, else -1
     fine_shift: int = 0                 # left-shift when folded into the coarse value
+    # A switching channel's slot holds a DIFFERENT channel depending on where
+    # its trigger channel currently sits. `channel` above is the one active at
+    # the trigger's default value, so readers wanting a single static answer
+    # (roles, labels, the clip library) get the most likely one; `switch_of`
+    # names the trigger's slot for readers that resolve it live.
+    switch_of: int = -1
+    switch_options: Tuple[SwitchOption, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -641,22 +656,33 @@ def parse_ofl(data: dict, source: str = "") -> Optional[OflFixture]:
 
     # Expand every template channel for every pixel up front, so mode
     # resolution can look up an expanded key (or one of its fine aliases)
-    # exactly like a normal channel.
+    # exactly like a normal channel. $pixelKey also stands for a pixel *group*
+    # ("Master", "1/2"), which a mode's insert can repeatFor just like a pixel,
+    # so groups are expanded too. Only real pixels carry `pixel_key`: it says
+    # which cell a channel drives, and a group drives several — leaving it unset
+    # lets the repeated-colour heuristic downstream assign the cells instead.
     expanded: Dict[str, OflChannel] = {}
     if matrix and templates:
         raw_templates = data.get("templateChannels") or {}
-        for pixel_key in matrix.positions():
+
+        def expand(target: str, pixel_key: str) -> None:
             for template_key, template_data in raw_templates.items():
-                resolved_key = str(template_key).replace("$pixelKey", pixel_key)
+                resolved_key = str(template_key).replace("$pixelKey", target)
                 channel = _parse_channel(resolved_key,
-                                         _substitute(template_data, pixel_key))
+                                         _substitute(template_data, target))
                 expanded[resolved_key] = replace(channel, pixel_key=pixel_key)
+
+        for pixel in matrix.positions():
+            expand(pixel, pixel)
+        for group in matrix.pixel_groups:
+            expand(group, "")
 
     universe = {**available, **expanded}
     fine_lookup: Dict[str, Tuple[str, int]] = {}
     for key, channel in universe.items():
         for position, alias in enumerate(channel.fine_aliases):
             fine_lookup[alias] = (key, position)
+    switches = _collect_switches(universe)
 
     modes = []
     for mode_data in data["modes"]:
@@ -671,7 +697,8 @@ def parse_ofl(data: dict, source: str = "") -> Optional[OflFixture]:
             name=mode_name,
             short_name=str(mode_data.get("shortName") or mode_name),
             channels=_resolve_channels(mode_data["channels"], universe,
-                                       fine_lookup, matrix, source=source),
+                                       fine_lookup, matrix, switches,
+                                       source=source),
             physical=_merge_physical(data.get("physical"), mode_data.get("physical")),
         ))
 
@@ -704,14 +731,72 @@ def _merge_physical(fixture_physical: Any, mode_physical: Any) -> OflPhysical:
     return _parse_physical(base)
 
 
+def _collect_switches(
+        universe: Mapping[str, OflChannel],
+) -> Dict[str, Tuple[str, Tuple[SwitchOption, ...]]]:
+    """Every switching channel the document declares.
+
+    A capability can hand a *virtual* channel key a different real channel over
+    its own slice of DMX (`switchChannels`), so a mode may legitimately list a
+    key that no channel is named after — what occupies that address depends on
+    where the trigger channel sits. Returns virtual key -> (trigger key, options).
+    """
+    found: Dict[str, Tuple[str, List[SwitchOption]]] = {}
+    for trigger_key, trigger in universe.items():
+        for cap in trigger.capabilities:
+            targets = cap.get("switchChannels")
+            if not isinstance(targets, dict):
+                continue
+            for virtual, target in targets.items():
+                _, options = found.setdefault(str(virtual), (trigger_key, []))
+                options.append(SwitchOption(cap.dmx_range,
+                                            universe.get(str(target))))
+    return {virtual: (trigger, tuple(sorted(options, key=lambda o: o.trigger_range)))
+            for virtual, (trigger, options) in found.items()}
+
+
+def _switch_default(trigger: Optional[OflChannel],
+                    options: Sequence[SwitchOption]) -> Optional[OflChannel]:
+    """The channel a switching slot holds while its trigger is at its default."""
+    value = trigger.default_value if trigger else 0
+    for option in options:
+        low, high = option.trigger_range
+        if low <= value <= high:
+            return option.channel
+    return options[0].channel if options else None
+
+
+def _switch_fine_aliases(
+        switches: Mapping[str, Tuple[str, Tuple[SwitchOption, ...]]],
+) -> Dict[str, Tuple[str, int]]:
+    """Fine-byte names for switching channels -> (virtual key, byte position).
+
+    A switching channel's fine bytes are named after the *virtual* key rather
+    than after whichever channel is resolved behind it, so they can't come from
+    any real channel's `fineChannelAliases`. OFL generates them, and so do we.
+    """
+    aliases: Dict[str, Tuple[str, int]] = {}
+    for virtual, (_, options) in switches.items():
+        depth = max((len(o.channel.fine_aliases) for o in options if o.channel),
+                    default=0)
+        for position in range(depth):
+            name = (f"{virtual} fine" if position == 0
+                    else f"{virtual} fine^{position + 1}")
+            aliases[name] = (virtual, position)
+    return aliases
+
+
 def _resolve_channels(entries: Sequence[Any], universe: Mapping[str, OflChannel],
                       fine_lookup: Mapping[str, Tuple[str, int]],
                       matrix: Optional[OflMatrix],
+                      switches: Mapping[str, Tuple[str, Tuple[SwitchOption, ...]]] = {},
                       source: str = "") -> Tuple[ResolvedChannel, ...]:
     """Flatten a mode's `channels` array into ordered DMX slots."""
     where = f" in '{source}'" if source else ""
     slots: List[ResolvedChannel] = []
     emitted: Dict[str, int] = {}      # coarse channel key -> its slot index
+    switch_fine = _switch_fine_aliases(switches)
+    switch_triggers: Dict[int, str] = {}   # slot index -> its trigger's key
 
     def emit(key: Optional[str]) -> None:
         index = len(slots)
@@ -740,6 +825,32 @@ def _resolve_channels(entries: Sequence[Any], universe: Mapping[str, OflChannel]
                                f"channel '{coarse_key}'; treating it as 8-bit")
             return
 
+        switch = switches.get(key)
+        if switch is not None:
+            trigger_key, options = switch
+            emitted.setdefault(key, index)
+            switch_triggers[index] = trigger_key
+            slots.append(ResolvedChannel(
+                index=index, key=key,
+                channel=_switch_default(universe.get(trigger_key), options),
+                switch_options=options))
+            return
+
+        switched_fine = switch_fine.get(key)
+        if switched_fine is not None:
+            virtual, position = switched_fine
+            trigger_key, options = switches[virtual]
+            coarse = _switch_default(universe.get(trigger_key), options)
+            # Fine bytes are folded using the default resolution: an option of a
+            # different width is rare, and the alternative — a slot whose byte
+            # count moves at runtime — would make the footprint unstable.
+            width = coarse.resolution_bytes if coarse else 1
+            slots.append(ResolvedChannel(
+                index=index, key=key, channel=coarse,
+                fine_of=emitted.get(virtual, -1),
+                fine_shift=max(0, 8 * (width - 2 - position))))
+            return
+
         logger.warning(f"Unknown channel key '{key}'{where}; the slot still "
                        f"consumes a DMX address")
         slots.append(ResolvedChannel(index=index, key=key, channel=None))
@@ -757,6 +868,17 @@ def _resolve_channels(entries: Sequence[Any], universe: Mapping[str, OflChannel]
                 emit(key)
         else:
             logger.warning(f"Unsupported mode channel entry{where}: {entry!r}")
+
+    # A trigger channel may be patched after the slot it switches, so its index
+    # is only knowable once every slot has been emitted.
+    for index, trigger_key in switch_triggers.items():
+        trigger_index = emitted.get(trigger_key, -1)
+        if trigger_index < 0:
+            logger.warning(f"Switching channel '{slots[index].key}'{where} has no "
+                           f"trigger channel '{trigger_key}' in this mode; using "
+                           f"its default resolution")
+            continue
+        slots[index] = replace(slots[index], switch_of=trigger_index)
 
     return tuple(slots)
 
