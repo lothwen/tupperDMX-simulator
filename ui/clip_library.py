@@ -16,6 +16,7 @@ from core import note_layout
 from core.config import Config
 from core.fixture_library import GROUP_COLORS
 from core.fixture_library import FixtureDef, color_slots, resolve_fixture
+from midi.scene_editor import TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
 from ui import icons
@@ -564,7 +565,11 @@ class ClipLibraryWidget(QWidget):
 
     def _scene_clip(self, fdef: FixtureDef, scene: Scene, channel: int) -> Dict:
         r, g, b = note_layout.scene_rgb(fdef, scene.values)
-        preview: List[Tuple[int, int, int]] = []
+        # Lead with take-manual, exactly as add_scene folds it into a dropped
+        # scene: without it the auto/song-part program overwrites the channel
+        # values on its next frame and the audition shows nothing.
+        preview: List[Tuple[int, int, int]] = [
+            (int(channel), note_layout.TAKE_MANUAL, TAKE_MANUAL_VELOCITY)]
         for ch_name, note in note_layout.field_note_map(fdef):
             if ch_name not in scene.values:
                 continue

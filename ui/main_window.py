@@ -252,6 +252,13 @@ class MainWindow(QMainWindow):
         self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
         self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
+        # The clip editor can write a fixture's scene banks, which the library
+        # panel has already read — rebuild it rather than wait for a restart.
+        self.timeline.library_changed.connect(
+            lambda: self.clip_library.refresh_configuration(self.config))
+        # Auditioning a clip from the editor takes the same route as the clip
+        # library's click-to-preview, so config.io routing applies.
+        self.timeline.preview_requested.connect(self.app_core.preview_clip)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
         # mirror live zoom (Fit / Ctrl+wheel) back onto the toolbar slider.
@@ -474,6 +481,9 @@ class MainWindow(QMainWindow):
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
         self.timeline_toolbar.update_play_pause_icon(is_playing)
+        # A clip editor's live output must not fight the sequencer for the
+        # same DMX slots, so it is disarmed for the duration.
+        self.timeline.set_transport_playing(is_playing)
         
         if is_playing:
             # Start metronome synchronized to current timeline position

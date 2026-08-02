@@ -102,6 +102,59 @@ def test_update_scene():
     _assert(all(mm["scene_name"] == "A2" for mm in _members(m, g)), "scene renamed to A2")
 
 
+def test_update_scene_value_edit_does_not_reconcile():
+    """A pure velocity edit cannot change any clip extent, so it must not
+    reconcile — that path is reserved for membership changes."""
+    print("test_update_scene_value_edit_does_not_reconcile")
+    m = _make_manager()
+    g = m.add_scene(4.0, SCENE_CH, "A", channel=LEDBAR_CH)
+
+    calls = []
+    original = m._doc.reconcile_blackouts
+    m._doc.reconcile_blackouts = lambda *a, **k: (calls.append(a),
+                                                  original(*a, **k))[1]
+    try:
+        m.update_scene(g, {"red": 200})
+        _assert(not calls, f"no reconcile for a value-only edit ({len(calls)})")
+        m.update_scene(g, {"red": 210}, remove={"direction"})
+        _assert(len(calls) == 1, f"exactly one for a membership change ({len(calls)})")
+    finally:
+        m._doc.reconcile_blackouts = original
+
+
+def test_grown_scene_survives_a_roundtrip():
+    """A member added by update_scene is a real note_on like any other, so the
+    file round-trip re-clusters the whole group — the count included."""
+    print("test_grown_scene_survives_a_roundtrip")
+    import os
+    import tempfile
+
+    m = _make_manager()
+    partial = {"brightness": 200, "red": 180}
+    g = m.add_scene(4.0, partial, "Grown", channel=LEDBAR_CH)
+    m.update_scene(g, {"green": 120, "blue": 60})
+    before = sorted(e["note"] for e in _members(m, g))
+    _assert(before == [1, 2, 3, 4, 48],
+            f"group carries 4 channels + take-manual ({before})")
+
+    path = os.path.join(tempfile.gettempdir(), "_grown_scene_rt.mid")
+    try:
+        _assert(m.export_to_file(path), "exported")
+        m2 = _make_manager()
+        _assert(m2.load_from_file(path), "reloaded")
+        groups = {e.get("group_id") for e in m2.midi_events if e.get("group_id")}
+        _assert(len(groups) == 1, f"re-clustered into one group ({len(groups)})")
+        gid = groups.pop()
+        after = sorted(e["note"] for e in _members(m2, gid))
+        _assert(after == before, f"same members after the round-trip ({after})")
+        rep = next(e for e in _members(m2, gid))
+        _assert(rep["scene_name"] == "Grown",
+                f"custom name preserved by the tdmx1 meta ({rep['scene_name']})")
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
 def test_set_scene_right_edge_caps_with_blackout():
     print("test_set_scene_right_edge_caps_with_blackout")
     m = _make_manager()
@@ -142,6 +195,8 @@ def main():
     test_add_scene_atomic()
     test_move_scene()
     test_update_scene()
+    test_update_scene_value_edit_does_not_reconcile()
+    test_grown_scene_survives_a_roundtrip()
     test_set_scene_right_edge_caps_with_blackout()
     test_set_scene_left_edge_moves_start()
     test_delete_scene_replaces_with_blackout()

@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Iterable, Tuple
 from contextlib import contextmanager
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
@@ -431,8 +431,10 @@ class MidiManager(QObject):
         return self._scenes.move_scene(group_id, new_time)
 
     def update_scene(self, group_id: str, channels: Dict[str, int],
-                     name: Optional[str] = None) -> bool:
-        return self._scenes.update_scene(group_id, channels, name)
+                     name: Optional[str] = None, *,
+                     remove: Optional[Iterable[str]] = None) -> bool:
+        return self._scenes.update_scene(group_id, channels, name,
+                                         remove=remove)
 
     def delete_scene(self, group_id: str) -> bool:
         return self._scenes.delete_scene(group_id)
