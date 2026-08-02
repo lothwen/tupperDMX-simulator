@@ -22,6 +22,7 @@ fixture at all is refused.
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+import math
 import re
 
 from tupperlogger import get_logger
@@ -34,6 +35,7 @@ logger = get_logger("ofl")
 # affect how animated things look; nothing in the spec fixes them.
 SPEED_MAX_HZ = 20.0       # what "fast" / "100%" means on a speed entity
 DISTANCE_MAX_M = 20.0     # what "far" / "100%" means on a distance entity
+FOG_MAX_M3_MIN = 10.0     # what "strong" / "100%" means on a fog output
 CT_WARM_K = 2800.0        # "warm" / "CTO" / -100%
 CT_DEFAULT_K = 5600.0     # "default" / 0%
 CT_COLD_K = 8000.0        # "cold" / "CTB" / +100%
@@ -59,8 +61,20 @@ _KEYWORDS: Dict[str, Dict[str, float]] = {
                          "cold": CT_COLD_K, "CTB": CT_COLD_K},
     "beamAngle": {"closed": 0.0, "narrow": 10.0, "wide": 60.0},
     "distance": {"near": 1.0, "far": DISTANCE_MAX_M},
-    "angle": {},
+    "rotationAngle": {},
+    "horizontalAngle": {"left": -90.0, "center": 0.0, "right": 90.0},
+    "verticalAngle": {"top": -90.0, "center": 0.0, "bottom": 90.0},
+    "swingAngle": {"closed": 0.0, "narrow": 5.0, "wide": 45.0},
+    "fogOutput": {"off": 0.0, "weak": 0.25, "strong": 1.0},
+    "insertion": {"out": 0.0, "in": 1.0},
+    "irisPercent": {"closed": 0.0, "open": 1.0},
+    "slotNumber": {},
 }
+
+# The kinds this module names differently from OFL. "angle" predates the real
+# vocabulary and IS rotationAngle — Pan/Tilt read-outs already ask for it by
+# that name, so it stays spelled both ways rather than breaking callers.
+_KIND_ALIASES = {"angle": "rotationAngle"}
 
 # unit suffix -> factor onto the kind's canonical unit. "%" is handled per kind
 # below because its meaning varies (fraction, Hz, degrees, Kelvin...).
@@ -73,28 +87,42 @@ _UNIT_FACTORS: Dict[str, Dict[str, float]] = {
     "time": {"s": 1.0, "ms": 1 / 1000.0},
     "colorTemperature": {"K": 1.0},
     "beamAngle": {"deg": 1.0},
-    "angle": {"deg": 1.0},
     "distance": {"m": 1.0},
+    "rotationAngle": {"deg": 1.0},
+    "horizontalAngle": {"deg": 1.0},
+    "verticalAngle": {"deg": 1.0},
+    "swingAngle": {"deg": 1.0},
+    "fogOutput": {"m^3/min": 1 / FOG_MAX_M3_MIN},
+    "insertion": {},
+    "irisPercent": {},
+    "slotNumber": {},
 }
 
 # What "100%" means, per kind. None -> percent is a plain 0..1 fraction.
 _PERCENT_SCALE: Dict[str, Optional[float]] = {
     "brightness": None, "percent": None, "parameter": None,
     "speed": SPEED_MAX_HZ, "rotationSpeed": SPEED_MAX_HZ,
-    "time": None, "beamAngle": 90.0, "angle": 360.0, "distance": DISTANCE_MAX_M,
+    "time": None, "beamAngle": 90.0, "distance": DISTANCE_MAX_M,
+    # A full sweep of a rotation is a turn; the two aim axes are bipolar, so
+    # 100% is a quarter turn each way rather than a full one.
+    "rotationAngle": 360.0, "horizontalAngle": 180.0, "verticalAngle": 180.0,
+    "swingAngle": 90.0,
+    "fogOutput": None, "insertion": None, "irisPercent": None,
+    "slotNumber": None,
 }
 
 
 def parse_entity(value: Any, kind: str) -> Optional[float]:
     """One OFL entity value -> a float in `kind`'s canonical unit, or None.
 
-    Canonical units: brightness/percent/parameter -> 0..1, speed/rotationSpeed
-    -> Hz (signed; negative is reverse), time -> seconds, colorTemperature ->
-    Kelvin, beamAngle/angle -> degrees, distance -> metres.
+    Canonical units: brightness/percent/parameter/fogOutput/insertion/
+    irisPercent -> 0..1, speed/rotationSpeed -> Hz (signed; negative is
+    reverse), time -> seconds, colorTemperature -> Kelvin, every angle kind ->
+    degrees, distance -> metres, slotNumber -> a 1-based slot index.
 
     Returns None for anything unparseable — including units that can't convert
-    (lumens on a brightness, m^3/min on a fog output). Callers fall back to the
-    DMX position within the capability's range, which is always available.
+    (lumens on a brightness). Callers fall back to the DMX position within the
+    capability's range, which is always available.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -103,6 +131,7 @@ def parse_entity(value: Any, kind: str) -> Optional[float]:
     if not isinstance(value, str):
         return None
 
+    kind = _KIND_ALIASES.get(kind, kind)
     text = value.strip()
     keyword = _KEYWORDS.get(kind, {}).get(text)
     if keyword is not None:
@@ -189,6 +218,7 @@ class OflChannel:
     precedence: str = "LTP"             # "LTP" | "HTP"
     capabilities: Tuple[Capability, ...] = ()
     pixel_key: str = ""                 # set when expanded from a template channel
+    pixel_group: str = ""               # set instead, when that template drove a group
 
     @property
     def max_value(self) -> int:
@@ -336,6 +366,112 @@ def _parse_physical(data: Any) -> OflPhysical:
         pixel_dimensions_mm=_xyz(pixels.get("dimensions")),
         pixel_spacing_mm=_xyz(pixels.get("spacing")),
     )
+
+
+# --- wheels ------------------------------------------------------------------
+#
+# A wheel is a physical disc of slots the fixture rotates in front of its lamp:
+# colour gels, gobo patterns, a prism, an iris. The channel capabilities say
+# *which* slot is in the beam (`slotNumber`); this says what that slot IS.
+
+@dataclass(frozen=True)
+class WheelSlot:
+    """One position on a wheel. `props` is a raw passthrough, like Capability's."""
+    type: str
+    props: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.props.get(key, default)
+
+    @property
+    def name(self) -> str:
+        return str(self.props.get("name", ""))
+
+    @property
+    def colors(self) -> Tuple[Tuple[int, int, int], ...]:
+        """The slot's gel colours as RGB. Empty for anything but a Color slot."""
+        raw = self.props.get("colors")
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        return tuple(rgb for rgb in (hex_rgb(c) for c in raw) if rgb is not None)
+
+
+@dataclass(frozen=True)
+class Wheel:
+    name: str
+    slots: Tuple[WheelSlot, ...]
+    direction: str = ""          # "CW" | "CCW" | "" (undeclared)
+
+
+def hex_rgb(text: Any) -> Optional[Tuple[int, int, int]]:
+    """`"#rrggbb"` -> an RGB triple, or None if it isn't one."""
+    if not isinstance(text, str):
+        return None
+    body = text.strip().lstrip("#")
+    if len(body) != 6:
+        return None
+    try:
+        return (int(body[0:2], 16), int(body[2:4], 16), int(body[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _parse_wheels(data: Any) -> Mapping[str, Wheel]:
+    """The `wheels` block. Lenient like the rest of this module: an unknown slot
+    type keeps its properties rather than being rejected."""
+    if not isinstance(data, dict):
+        return MappingProxyType({})
+
+    wheels: Dict[str, Wheel] = {}
+    for raw_name, body in data.items():
+        if not isinstance(body, dict):
+            continue
+        slots = tuple(
+            WheelSlot(type=str(slot.get("type", "Open")),
+                      props=MappingProxyType({k: v for k, v in slot.items()
+                                              if k != "type"}))
+            for slot in body.get("slots") or [] if isinstance(slot, dict))
+        if not slots:
+            logger.warning(f"Wheel '{raw_name}' declares no usable slots")
+            continue
+        name = str(raw_name)
+        wheels[name] = Wheel(name=name, slots=slots,
+                             direction=str(body.get("direction", "")))
+    return MappingProxyType(wheels)
+
+
+def slot_at(wheel: Wheel,
+            slot_number: float) -> Tuple[WheelSlot, Optional[WheelSlot], float]:
+    """Which slot a 1-based (possibly fractional) slot number selects.
+
+    Returns `(slot, next_slot, blend)`. A whole number is that slot, with no
+    next and a blend of 0. OFL uses a fractional number — 2.5 — to say the wheel
+    is physically *between* two slots, which is what a renderer needs to draw a
+    half-rotated colour wheel. Numbers wrap, because a wheel does.
+    """
+    count = len(wheel.slots)
+    if count == 0:
+        raise ValueError(f"wheel '{wheel.name}' has no slots")
+    offset = slot_number - 1.0
+    index = int(math.floor(offset)) % count
+    blend = offset - math.floor(offset)
+    if blend <= 0.0:
+        return wheel.slots[index], None, 0.0
+    return wheel.slots[index], wheel.slots[(index + 1) % count], blend
+
+
+def wheel_names(cap: Capability, channel_name: str) -> Tuple[str, ...]:
+    """The wheel(s) a capability addresses.
+
+    `wheel` may be a name, a list of names (only WheelRotation does that), or be
+    absent — in which case OFL says it is the wheel named after the channel.
+    """
+    raw = cap.get("wheel")
+    if isinstance(raw, str):
+        return (raw,)
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(name) for name in raw if isinstance(name, str))
+    return (channel_name,)
 
 
 def _natural_key(text: str):
@@ -602,6 +738,8 @@ class OflFixture:
     available_channels: Mapping[str, OflChannel]
     template_channels: Mapping[str, OflChannel]
     modes: Tuple[ResolvedMode, ...]
+    wheels: Mapping[str, Wheel] = field(
+        default_factory=lambda: MappingProxyType({}))
     meta: OflMeta = field(default_factory=OflMeta)
     comment: str = ""
     links: Mapping[str, Tuple[str, ...]] = field(
@@ -662,21 +800,24 @@ def parse_ofl(data: dict, source: str = "") -> Optional[OflFixture]:
     # so groups are expanded too. Only real pixels carry `pixel_key`: it says
     # which cell a channel drives, and a group drives several — leaving it unset
     # lets the repeated-colour heuristic downstream assign the cells instead.
+    # A group channel names its group in `pixel_group` instead, so a renderer
+    # can still find out which cells it commands.
     expanded: Dict[str, OflChannel] = {}
     if matrix and templates:
         raw_templates = data.get("templateChannels") or {}
 
-        def expand(target: str, pixel_key: str) -> None:
+        def expand(target: str, pixel_key: str, pixel_group: str = "") -> None:
             for template_key, template_data in raw_templates.items():
                 resolved_key = str(template_key).replace("$pixelKey", target)
                 channel = _parse_channel(resolved_key,
                                          _substitute(template_data, target))
-                expanded[resolved_key] = replace(channel, pixel_key=pixel_key)
+                expanded[resolved_key] = replace(channel, pixel_key=pixel_key,
+                                                 pixel_group=pixel_group)
 
         for pixel in matrix.positions():
             expand(pixel, pixel)
         for group in matrix.pixel_groups:
-            expand(group, "")
+            expand(group, "", pixel_group=group)
 
     universe = {**available, **expanded}
     fine_lookup: Dict[str, Tuple[str, int]] = {}
@@ -716,6 +857,7 @@ def parse_ofl(data: dict, source: str = "") -> Optional[OflFixture]:
         available_channels=MappingProxyType(available),
         template_channels=MappingProxyType(templates),
         modes=tuple(modes),
+        wheels=_parse_wheels(data.get("wheels")),
         meta=_parse_meta(data.get("meta")),
         comment=str(data.get("comment", "")),
         links=_parse_links(data.get("links")),

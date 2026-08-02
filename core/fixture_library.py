@@ -40,6 +40,7 @@ class ChannelSpec:
     fine_of: int = -1                     # index of the coarse slot, else -1
     fine_shift: int = 0                   # left-shift when folded into the coarse value
     pixel_key: str = ""                   # matrix pixel this channel drives
+    pixel_group: str = ""                 # matrix group it drives, when not one pixel
     # A sidecar-declared display name, overriding what the capabilities say this
     # channel is. Kept apart from `label` so that stays the pristine OFL name.
     display_name: str = ""
@@ -66,6 +67,10 @@ class FixtureDef:
     categories: Tuple[str, ...] = ()
     physical: ofl.OflPhysical = field(default_factory=ofl.OflPhysical)
     matrix: Optional[ofl.OflMatrix] = None
+    # The fixture's wheels, by name. A WheelSlot capability says which slot is in
+    # the beam; this says what that slot is — a gel colour, a gobo, a prism.
+    wheels: Mapping[str, ofl.Wheel] = field(
+        default_factory=lambda: MappingProxyType({}))
     effects: Mapping[str, dict] = field(default_factory=lambda: MappingProxyType({}))
     stage: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
@@ -93,22 +98,63 @@ def fixtures_dir_user() -> Path:
 # and `channel_families` labels it. All this bridge adds is the one thing OFL
 # cannot express — the behaviour flags — plus a sidecar's display name.
 
-# Capability types whose value is a level worth fading between. Effects, strobes
-# and mode selectors are discrete: interpolating them would sweep through every
-# intermediate program instead of cutting to the new one.
+# Capability types whose value is a level worth fading between. Effects, strobes,
+# wheel slots and mode selectors are discrete: interpolating them would sweep
+# through every intermediate program (or every gobo) instead of cutting to the
+# new one. Note what is deliberately absent — `EffectSpeed`, `Speed` and
+# `Effect`: the shipped blinder derives its flags from this table, so adding
+# them would start fading its speed channel and change real controller output.
 _BLEND_CAPABILITIES = frozenset({
     "Intensity", "ColorIntensity", "ColorTemperature",
     "Zoom", "Focus", "Iris", "Frost", "BeamAngle", "BeamPosition", "Pan", "Tilt",
+    # The continuous ones: a value that names a rate or a depth, where sweeping
+    # between two settings is exactly what the fixture does anyway.
+    "PanContinuous", "TiltContinuous", "PanTiltSpeed", "Rotation",
+    "PrismRotation", "WheelRotation", "WheelSlotRotation",
+    "BladeInsertion", "BladeRotation", "BladeSystemRotation",
+    "Fog", "FogOutput", "SoundSensitivity", "EffectParameter",
 })
 
 # Tiebreak order when two capability types cover the same amount of DMX on one
 # channel: the one that describes the light itself wins over one that describes
-# how it moves or what program it runs. Types absent here rank last, and two
-# capabilities of the SAME type (say a Red and a Green covering half the range
-# each) fall back to the order the fixture declares them in.
-_TYPE_PRIORITY = ("ColorIntensity", "Intensity", "ShutterStrobe", "StrobeSpeed",
-                  "StrobeDuration", "Effect", "EffectSpeed", "EffectDuration",
-                  "EffectParameter", "Speed", "PanTiltSpeed", "Maintenance")
+# how it shapes it, then how it moves, then what program it runs. Types absent
+# here rank last, and two capabilities of the SAME type (say a Red and a Green
+# covering half the range each) fall back to the order the fixture declares them
+# in. `NoFunction` is missing on purpose — it never competes.
+_TYPE_PRIORITY = (
+    # what the light IS
+    "ColorIntensity", "ColorPreset", "ColorTemperature", "Intensity",
+    # what it passes through
+    "WheelSlot", "WheelRotation", "WheelSlotRotation", "WheelShake",
+    "ShutterStrobe", "StrobeSpeed", "StrobeDuration",
+    "Prism", "PrismRotation", "Iris", "IrisEffect", "Frost", "FrostEffect",
+    "Zoom", "Focus", "BeamAngle", "BeamPosition",
+    "BladeInsertion", "BladeRotation", "BladeSystemRotation",
+    # where it points
+    "Pan", "PanContinuous", "Tilt", "TiltContinuous", "PanTiltSpeed",
+    # what it fills the air with
+    "Fog", "FogOutput", "FogType",
+    # what program is running
+    "Effect", "EffectSpeed", "EffectDuration", "EffectParameter",
+    "SoundSensitivity", "Rotation", "Speed", "Time",
+    # housekeeping
+    "Maintenance", "Generic",
+)
+
+
+def _dominance_key(cap: ofl.Capability) -> tuple:
+    """What makes two capabilities on one channel "the same thing".
+
+    Two ranges only add up if they describe the same subject: the same colour,
+    the same wheel, the same blade. Keying on the type alone made a channel that
+    selects a colour wheel over half its range and a gobo wheel over the other
+    half look like one 100%-wide wheel channel.
+    """
+    wheel = cap.get("wheel")
+    if isinstance(wheel, (list, tuple)):
+        wheel = ",".join(str(name) for name in wheel)
+    return (cap.type, str(cap.get("color", "")), str(wheel or ""),
+            str(cap.get("blade", "")))
 
 
 def dominant_capability(
@@ -128,7 +174,7 @@ def dominant_capability(
     for cap in capabilities:
         if cap.type == "NoFunction":
             continue
-        key = (cap.type, str(cap.get("color", "")))
+        key = _dominance_key(cap)
         low, high = cap.dmx_range
         spans[key] = spans.get(key, 0) + (high - low + 1)
         first.setdefault(key, cap)
@@ -173,7 +219,7 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
             default_value=channel.default_value, constant=channel.constant,
             precedence=channel.precedence, resolution_bytes=channel.resolution_bytes,
             fine_of=slot.fine_of, fine_shift=slot.fine_shift,
-            pixel_key=channel.pixel_key)
+            pixel_key=channel.pixel_key, pixel_group=channel.pixel_group)
 
     if "role" in override:
         logger.warning(
@@ -191,7 +237,8 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
         label=channel.name, capabilities=channel.capabilities,
         default_value=channel.default_value, constant=channel.constant,
         precedence=channel.precedence, resolution_bytes=channel.resolution_bytes,
-        pixel_key=channel.pixel_key, display_name=str(override.get("label", "")),
+        pixel_key=channel.pixel_key, pixel_group=channel.pixel_group,
+        display_name=str(override.get("label", "")),
         switch_of=slot.switch_of, switch_options=slot.switch_options)
 
 
@@ -217,6 +264,7 @@ def build_fixture_def(key: str, fixture: ofl.OflFixture,
         categories=fixture.categories,
         physical=mode.physical,
         matrix=fixture.matrix,
+        wheels=fixture.wheels,
         effects=extras.effects,
         stage=extras.stage,
     )
@@ -251,6 +299,50 @@ def capability_types(fdef: FixtureDef) -> Set[str]:
         if cap is not None:
             types.add(cap.type)
     return types
+
+
+def all_capability_types(fdef: FixtureDef) -> Set[str]:
+    """Every capability type the fixture declares anywhere.
+
+    `capability_types` answers "what is this channel mostly for", which is the
+    wrong question when the answer decides whether to build a gobo layer at all:
+    a channel that is 90% `Effect` with a strobe at the top of its range really
+    does strobe. Switching channels count too — their alternate resolutions are
+    things this fixture can do.
+    """
+    types: Set[str] = set()
+    for spec in fdef.channels:
+        if spec.fine_of >= 0:
+            continue
+        for cap in spec.capabilities:
+            types.add(cap.type)
+        for option in spec.switch_options:
+            if option.channel is not None:
+                types.update(cap.type for cap in option.channel.capabilities)
+    types.discard("NoFunction")
+    return types
+
+
+def color_sources(fdef: FixtureDef) -> Set[str]:
+    """How this fixture can be given a colour, if at all.
+
+    The read-direction counterpart of `color_slots`: `"mix"` for additive colour
+    channels, `"preset"` for canned colours, `"temperature"` for a CTO/CTB
+    channel and `"wheel"` for a physical colour wheel. A fixture with none of
+    them emits whatever its lamp emits.
+    """
+    present = all_capability_types(fdef)
+    sources = set()
+    if "ColorIntensity" in present:
+        sources.add("mix")
+    if "ColorPreset" in present:
+        sources.add("preset")
+    if "ColorTemperature" in present:
+        sources.add("temperature")
+    if any(slot.type == "Color" for wheel in fdef.wheels.values()
+           for slot in wheel.slots):
+        sources.add("wheel")
+    return sources
 
 
 def _read_json(path: Path) -> Optional[dict]:

@@ -136,7 +136,7 @@ def test_remove_ledbar_purges_bars(qapp):
     _assert(led not in cfg.fixtures, "the instance was removed from the patch")
     for b in bars:
         _assert(b.scene() is None, "each removed bar is detached from the scene")
-        _assert(b._current_movie is None,
+        _assert(b.current_movie is None,
                     "each removed bar's animation movie was stopped")
 
 
@@ -176,6 +176,69 @@ def test_remove_then_readd_keeps_other_channels_stable(qapp):
             "no existing channel shifted by a gap insert")
 
 
+def test_opening_another_show_replaces_the_fixtures(qapp):
+    print("test_opening_another_show_replaces_the_fixtures")
+    # Opening a show rebinds config.fixtures to a whole new list. Nothing used
+    # to tell the stage, so the previous show's rig stayed lit until restart.
+    stage, cfg = _stage()
+    before = list(stage.render_objs)
+    _assert(len(stage._render_groups) == 2, "the first show's patch is on stage")
+
+    cfg.fixtures = [
+        FixtureInstance(type="par_rgb", dmx_start=1, x=100, y=100),
+        FixtureInstance(type="blinder", dmx_start=65, x=400, y=400),
+    ]
+    stage.sync_from_config(cfg)
+
+    _assert([i.type for i, _ in stage._render_groups] == ["par_rgb", "blinder"],
+            "the stage now shows the new show's patch")
+    _assert(all(obj.scene() is None for obj in before),
+            "and every body of the old one has left the scene")
+    _assert(len(stage.render_objs) == 2, "with no bodies left over")
+
+
+def test_sync_keeps_unchanged_fixtures_identical(qapp):
+    print("test_sync_keeps_unchanged_fixtures_identical")
+    # Same reason add/remove are incremental: a body torn down and rebuilt is a
+    # body the view may have been mid-paint on.
+    stage, cfg = _stage()
+    kept = cfg.fixtures[0]
+    kept_bodies = [obj for inst, objs in stage._render_groups
+                   if inst is kept for obj in objs]
+
+    cfg.fixtures = [kept, FixtureInstance(type="par_rgb", dmx_start=70,
+                                          x=200, y=200)]
+    stage.sync_from_config(cfg)
+
+    still = [obj for inst, objs in stage._render_groups
+             if inst is kept for obj in objs]
+    _assert(still == kept_bodies,
+            "a fixture in both patches keeps the very same bodies")
+    _assert(len(stage._render_groups) == 2, "and the new one was added beside it")
+
+
+def test_one_resolve_feeds_every_body_of_a_fixture(qapp):
+    print("test_one_resolve_feeds_every_body_of_a_fixture")
+    from ui.stage_controller import StageController
+    cfg = Config()
+    cfg.fixtures = [FixtureInstance(
+        type="ledbar", dmx_start=1,
+        bars=[FixturePosition(150 + i * 175, 350) for i in range(4)])]
+    stage = StageController(cfg)
+
+    data = bytearray(96)
+    data[0:7] = bytes([255, 10, 20, 30, 0, 255, 0])
+    stage.update_fixtures_with_dmx(data)
+
+    bars = stage.led_bars
+    _assert(len(bars) == 4, "the LED bar has several bodies")
+    first = bars[0].state
+    _assert(all(bar.state is first for bar in bars),
+            "they share one resolved state — the same slice resolved once, "
+            "not once per bar")
+    _assert(first.rgb == (30, 20, 10), "and it is the right one")
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -186,6 +249,9 @@ def main():
     test_scene_uses_no_index(app)
     test_remove_ledbar_purges_bars(app)
     test_remove_then_readd_keeps_other_channels_stable(app)
+    test_opening_another_show_replaces_the_fixtures(app)
+    test_sync_keeps_unchanged_fixtures_identical(app)
+    test_one_resolve_feeds_every_body_of_a_fixture(app)
     print("\nALL TESTS PASSED")
 
 

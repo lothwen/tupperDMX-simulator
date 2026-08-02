@@ -27,6 +27,7 @@ from core.fixture_library import build_fixture_def, resolve_fixture
 from core.fixture_state import (
     REFERENCE_RGB, kelvin_to_rgb, resolve_state, solve_color,
 )
+import ofl_factory
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
 META = {"authors": ["test"], "createDate": "2026-01-01", "lastModifyDate": "2026-01-01"}
@@ -125,6 +126,62 @@ def test_parity_ledbar_effect_names():
     _assert(fdef.effects.get(last.effect, {}).get("gif") == "35-strobo+rain.gif",
             "DMX 136 selects the last one")
     _assert(none.effect == "", "past the last animation, no effect runs")
+
+
+# The resolve-side wall. Every one of these numbers is DMX the app already
+# writes: `solve_color` inverts this same mix to drive real fixtures, and
+# `note_layout.scene_rgb` paints timeline clips from it. Extending
+# `resolve_state` to cover more capability types must leave all of them exactly
+# where they are — a fixture that declares none of the new types can't notice
+# the new code exists.
+GOLDENS = [
+    # (type, mode, dmx slice, intensity, rgb, scaled_rgb, per-emitter scaled rgb)
+    ("par_rgb", "", [255, 255, 0, 0],
+     1.0, (255, 0, 0), (255, 0, 0), [(255, 0, 0)]),
+    ("par_rgb", "", [128, 200, 100, 50],
+     128 / 255, (200, 100, 50), (100, 50, 25), [(100, 50, 25)]),
+    ("par_rgb", "", [0, 255, 255, 255],
+     0.0, (255, 255, 255), (0, 0, 0), [(0, 0, 0)]),
+    ("par_rgb", "", [255, 0, 0, 0],
+     1.0, (0, 0, 0), (0, 0, 0), [(0, 0, 0)]),
+
+    # The ledbar is wired B, G, R.
+    ("ledbar", "", [255, 10, 20, 30, 0, 0, 0],
+     1.0, (30, 20, 10), (30, 20, 10), [(30, 20, 10)]),
+    ("ledbar", "", [128, 255, 255, 255, 0, 255, 0],
+     128 / 255, (255, 255, 255), (128, 128, 128), [(128, 128, 128)]),
+    ("ledbar", "", [0, 255, 0, 0, 0, 0, 0],
+     0.0, (0, 0, 255), (0, 0, 0), [(0, 0, 0)]),
+
+    # Two cells, cool white on the first pair of channels and warm on the second.
+    ("blinder", "", [255, 255, 255, 0, 0, 0],
+     1.0, (200, 220, 255), (200, 220, 255), [(200, 220, 255), (200, 220, 255)]),
+    ("blinder", "", [128, 255, 0, 0, 0, 0],
+     128 / 255, (200, 220, 255), (100, 110, 128), [(100, 110, 128), (0, 0, 0)]),
+    ("blinder", "", [255, 0, 0, 255, 255, 0],
+     1.0, (255, 200, 100), (255, 200, 100), [(255, 200, 100), (255, 200, 100)]),
+    ("blinder", "", [64, 128, 64, 32, 16, 0],
+     64 / 255, (132, 135, 140), (33, 33, 35), [(33, 33, 35), (16, 16, 17)]),
+
+    # No intensity channel at all: the colour channels are the only level control.
+    (WILD_WASH, "", [255, 0, 0, 0], 1.0, (255, 0, 0), (255, 0, 0), [(255, 0, 0)]),
+    (WILD_WASH, "", [0, 0, 0, 255],
+     1.0, (200, 220, 255), (200, 220, 255), [(200, 220, 255)]),
+    (WILD_WASH, "", [128, 64, 32, 16],
+     1.0, (140, 77, 48), (140, 77, 48), [(140, 77, 48)]),
+]
+
+
+def test_shipped_fixtures_resolve_goldens():
+    print("test_shipped_fixtures_resolve_goldens")
+    for name, mode, dmx, intensity, rgb, scaled, emitters in GOLDENS:
+        state = resolve_state(resolve_fixture(name, mode), dmx)
+        label = f"{name} {dmx}"
+        _assert(abs(state.intensity - intensity) < 1e-6, f"{label}: intensity")
+        _assert(state.rgb == rgb, f"{label}: rgb {state.rgb} == {rgb}")
+        _assert(state.scaled_rgb() == scaled, f"{label}: scaled {scaled}")
+        _assert([e.scaled_rgb() for e in state.emitters] == emitters,
+                f"{label}: {len(emitters)} emitter(s)")
 
 
 # --- colour mixing -----------------------------------------------------------
@@ -293,6 +350,129 @@ def test_declared_cell_count_pads_emitters():
             "only the driven cell lights")
 
 
+def test_per_pixel_intensity():
+    print("test_per_pixel_intensity")
+    # A matrix whose template gives every pixel its own dimmer. Before, the last
+    # such channel became the fixture's one global master and the others were
+    # simply lost.
+    fdef = ofl_factory.fdef(
+        matrix={"pixelCount": [3, 1, 1]},
+        channels={},
+        template_channels={"$pixelKey dim": ofl_factory.channel("Intensity")},
+        modes=[{"name": "test", "channels": [
+            {"insert": "matrixChannels", "repeatFor": "eachPixelXYZ",
+             "channelOrder": "perPixel",
+             "templateChannels": ["$pixelKey dim"]}]}])
+
+    state = resolve_state(fdef, [255, 128, 0])
+    levels = [round(e.intensity, 3) for e in state.emitters]
+    _assert(levels == [1.0, round(128 / 255, 3), 0.0],
+            "each pixel keeps its own level instead of the last one winning")
+    _assert(state.intensity == 1.0,
+            "the fixture-wide level is the brightest cell")
+
+
+def test_repeated_dimmers_are_repeated_cells():
+    print("test_repeated_dimmers_are_repeated_cells")
+    # No matrix, two plain dimmers: the same rule the repeated colour channels
+    # follow, which is how a two-cell fixture resolves with no per-fixture code.
+    fdef = ofl_factory.fdef(channels={
+        "a": ofl_factory.channel("Intensity"),
+        "b": ofl_factory.channel("Intensity")})
+    state = resolve_state(fdef, [255, 0])
+    _assert([e.intensity for e in state.emitters] == [1.0, 0.0],
+            "the n-th dimmer is the n-th cell")
+
+    # But one dimmer is still the whole fixture's master — the path every
+    # shipped fixture takes, and the one the goldens pin.
+    single = resolve_state(ofl_factory.fdef(
+        channels={"a": ofl_factory.channel("Intensity")}), [128])
+    _assert(len(single.emitters) == 1 and abs(single.intensity - 128 / 255) < 1e-6,
+            "one dimmer is a master, not a cell")
+
+
+def test_pixel_group_master_dims_its_members():
+    print("test_pixel_group_master_dims_its_members")
+    fdef = ofl_factory.fdef(
+        matrix={"pixelCount": [4, 1, 1],
+                "pixelGroups": {"Left": ["1", "2"], "Right": ["3", "4"]}},
+        channels={},
+        template_channels={"$pixelKey dim": ofl_factory.channel("Intensity")},
+        modes=[{"name": "test", "channels": [
+            {"insert": "matrixChannels", "repeatFor": "eachPixelXYZ",
+             "channelOrder": "perPixel", "templateChannels": ["$pixelKey dim"]},
+            "Left dim", "Right dim"]}])
+
+    state = resolve_state(fdef, [255, 255, 255, 255, 128, 0])
+    levels = [round(e.intensity, 3) for e in state.emitters]
+    _assert(levels[:2] == [round(128 / 255, 3)] * 2,
+            "the Left master scales both of its pixels")
+    _assert(levels[2:] == [0.0, 0.0], "and the Right master blacks its own out")
+
+
+def test_switching_channel_reaches_the_new_handlers():
+    print("test_switching_channel_reaches_the_new_handlers")
+    # One address that is a pan channel in one program and a gobo wheel in
+    # another. The dispatch keys off the LIVE capability, so the same slot has
+    # to route to two different handlers depending on the trigger.
+    fdef = ofl_factory.fdef(
+        wheels={"Gobo Wheel": {"slots": [
+            {"type": "Open"}, {"type": "Gobo", "resource": "gobos/dots",
+                               "name": "Dots"}]}},
+        channels={
+            "mode": ofl_factory.ranged(
+                ofl_factory.cap("Effect", [0, 127], effectName="Position",
+                                switchChannels={"dual": "pan"}),
+                ofl_factory.cap("Effect", [128, 255], effectName="Gobo",
+                                switchChannels={"dual": "gobo"})),
+            "pan": ofl_factory.channel("Pan", angleStart="0deg", angleEnd="540deg"),
+            "gobo": ofl_factory.channel("WheelSlot", wheel="Gobo Wheel",
+                                        slotNumber=2),
+        },
+        mode_channels=["mode", "dual"])
+
+    moving = resolve_state(fdef, [0, 255])
+    _assert(abs(moving.motion.pan_deg - 540.0) < 1e-6,
+            "under the first trigger the slot is a pan channel")
+    _assert(not moving.wheels, "and no wheel is in the beam")
+
+    gobos = resolve_state(fdef, [255, 255])
+    _assert(gobos.motion.pan_deg is None, "under the second it stops being pan")
+    _assert(gobos.wheels["Gobo Wheel"].slot.name == "Dots",
+            "and becomes a gobo wheel at the same address")
+
+
+def test_legacy_fields_are_views_of_the_groups():
+    print("test_legacy_fields_are_views_of_the_groups")
+    # The flat names predate the grouped records and are what the timeline, the
+    # clip library and solve_color read. They have to keep agreeing.
+    fdef = ofl_factory.fdef(channels={
+        "d": ofl_factory.channel("Intensity"),
+        "r": ofl_factory.channel("ColorIntensity", color="Red"),
+        "s": ofl_factory.channel("ShutterStrobe", shutterEffect="Strobe",
+                                 speed="9Hz"),
+        "e": ofl_factory.channel("Effect", effectName="Rainbow"),
+        "z": ofl_factory.channel("Zoom", angleStart="10deg", angleEnd="40deg"),
+    }, physical={"lens": {"degreesMinMax": [10, 40]}})
+    state = resolve_state(fdef, [255, 255, 255, 255, 255])
+
+    pairs = [
+        ("rgb", state.color.rgb), ("has_color", state.color.has_color),
+        ("color_temp_k", state.color.color_temp_k),
+        ("emitters", state.color.emitters),
+        ("shutter", state.strobe.effect), ("strobe_hz", state.strobe.hz),
+        ("effect", state.program.name), ("effect_dmx", state.program.dmx),
+        ("effect_speed_hz", state.program.speed_hz),
+        ("zoom_deg", state.optics.zoom_deg), ("beam_deg", state.optics.lens_deg),
+    ]
+    for name, grouped in pairs:
+        _assert(getattr(state, name) == grouped, f"state.{name} is its group's view")
+
+    _assert(state.shutter == "Strobe" and state.effect == "Rainbow"
+            and state.beam_deg == (10.0, 40.0),
+            "and the views carry the values a renderer expects")
+
+
 # --- value folding -----------------------------------------------------------
 
 def test_fine_channels_fold_into_one_value():
@@ -419,6 +599,7 @@ def main():
     test_parity_blinder_two_cells()
     test_parity_wild_wash_white_is_a_cool_tint()
     test_parity_ledbar_effect_names()
+    test_shipped_fixtures_resolve_goldens()
     test_all_reference_colours_mix()
     test_colours_mix_additively_and_clamp()
     test_pure_dimmer_emits_white()
@@ -430,6 +611,11 @@ def main():
     test_beam_and_zoom()
     test_matrix_pixels_become_emitters()
     test_declared_cell_count_pads_emitters()
+    test_per_pixel_intensity()
+    test_repeated_dimmers_are_repeated_cells()
+    test_pixel_group_master_dims_its_members()
+    test_switching_channel_reaches_the_new_handlers()
+    test_legacy_fields_are_views_of_the_groups()
     test_fine_channels_fold_into_one_value()
     test_short_dmx_slice_uses_declared_defaults()
     test_switching_channel_changes_what_a_slot_means()

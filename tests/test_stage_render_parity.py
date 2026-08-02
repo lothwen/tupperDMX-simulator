@@ -172,7 +172,7 @@ def test_ledbar_animation_frames_modulate_colour(qapp):
     # every lit cell comes out red-only.
     bar = _render("ledbar", [255, 0, 0, 255, 0, 255, 0])
     try:
-        _assert(bar._current_movie is not None and bar._current_movie.isValid(),
+        _assert(bar.current_movie is not None and bar.current_movie.isValid(),
                 "a shipped animation loads a QMovie")
         greens_blues = {(_rgb(c.brush().color())[1], _rgb(c.brush().color())[2])
                         for c in bar.cells}
@@ -192,7 +192,7 @@ def test_each_body_shows_its_own_animation_column(qapp):
     try:
         _assert({b.column for b in bars} == set(range(8)),
                 "each body reads its own animation column")
-        _assert(bars[0]._current_asset == "17-radar.gif", "the radar animation loaded")
+        _assert(bars[0].current_asset == "17-radar.gif", "the radar animation loaded")
         columns = [tuple(_rgb(c.brush().color()) for c in b.cells) for b in bars]
         _assert(len(set(columns)) > 1,
                 "a spatially-varying animation does not light every bar identically")

@@ -40,6 +40,10 @@ from core import note_layout
 _BLENDS = frozenset({
     "Intensity", "ColorIntensity", "ColorTemperature",
     "Zoom", "Focus", "Iris", "Frost", "BeamAngle", "BeamPosition", "Pan", "Tilt",
+    "PanContinuous", "TiltContinuous", "PanTiltSpeed", "Rotation",
+    "PrismRotation", "WheelRotation", "WheelSlotRotation",
+    "BladeInsertion", "BladeRotation", "BladeSystemRotation",
+    "Fog", "FogOutput", "SoundSensitivity", "EffectParameter",
 })
 
 # Channels whose shipped sidecar declares `flags` outright, which replaces the

@@ -673,6 +673,9 @@ class MainWindow(QMainWindow):
         self.timeline.rebuild_for_patch(self.config.fixtures)
         self.clip_library.refresh_configuration(self.config)
         self.dmx_display.refresh_configuration(self.config)
+        # The stage too: opening a show rebinds config.fixtures to a new list,
+        # and without this the previous show's rig stayed lit until a restart.
+        self.stage_controller.sync_from_config(self.config)
 
     def _on_show_reloaded(self):
         """Counters, show name, autosave chip and title after a show reload."""

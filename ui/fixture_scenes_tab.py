@@ -54,16 +54,13 @@ from core.fixture_state import FixtureState, capability_at, resolve_state
 from core.note_layout import SONG_PARTS
 from ui.fixture_chips import rgba
 from ui.stage.base import body_count, body_spacing, body_size
-from ui.stage.beam import BEAM_LENGTH_PX
+from ui.stage.emission.base import emission_reach
 from ui.stage.registry import renderer_for
 from tupperlogger import get_logger
 
 logger = get_logger("ui.fixture_scenes")
 
 DEFAULT_BANK_NAME = "SCENES"
-
-# Capability types that mean "this fixture has optics", i.e. draws a beam cone.
-_OPTICS = frozenset({"Zoom", "BeamAngle"})
 
 # Roles carried on the tree items, so a selection resolves back to its data
 # without a parallel index.
@@ -72,15 +69,6 @@ _ROLE_INDEX = Qt.ItemDataRole.UserRole + 1
 
 
 # --- preview ------------------------------------------------------------------
-
-def _throws_a_beam(fdef: FixtureDef) -> bool:
-    """Whether this fixture draws a cone — the same test `ui/stage/beam.py`
-    makes, so the preview reserves room for exactly what gets drawn."""
-    if fdef.physical.lens_degrees is not None:
-        return True
-    return any(cap.type in _OPTICS
-               for spec in fdef.channels for cap in spec.capabilities)
-
 
 class ScenePreview(QGraphicsView):
     """The stage's own renderer for a fixture, fed a scene instead of live DMX.
@@ -130,7 +118,7 @@ class ScenePreview(QGraphicsView):
         pad_x = width * self._PAD_X
         pad_y = height * self._PAD_Y
         # A fixture with optics throws its cone downstage, well past its body.
-        below = pad_y + (BEAM_LENGTH_PX if _throws_a_beam(fdef) else 0)
+        below = pad_y + emission_reach(fdef)
         self._scene.setSceneRect(-pad_x, -pad_y,
                                  span + 2 * pad_x, height + pad_y + below)
         self._fit()

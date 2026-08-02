@@ -202,32 +202,78 @@ bundled).
   values — so a scene looks here exactly as it will on stage, animations, beam
   cone and strobe included. Persistence is
   `core.fixture_library.save_fixture_banks`.
-- **`ui/stage/` — the render engine**: category-driven fixture rendering.
-  `registry.py` maps an OFL **category** to a renderer via
-  `@register_renderer(...)`; the fixture's own category order wins (OFL lists
-  the most important first), falling back to the shape of its channels and
-  finally to `GenericStageFixture`. Adding a fixture *kind* is one new module —
-  no edits to the stage controller. `base.py` holds `FixtureLabel`,
-  `DesignableFixture`, `GlowingEllipse` (the designer/glow primitives, unchanged
-  by the move here), the `StrobeGate` (a QTimer that flashes a strobing
-  fixture), the mm→px geometry helpers (`body_size`/`body_count`/`body_spacing`,
-  anchored by `MM_PER_STAGE_PX`) and `BodyFixture` — the base that turns a DMX
-  slice into a `FixtureState` so subclasses only implement `build_body()` +
-  `apply_state()`. Renderers: `pixelbar.py` (Pixel Bar / Matrix — a strip of
-  cells; `body_index` is which column of the animation this body shows, and
-  effect→GIF comes from the sidecar's `effects` map), `blinder.py` (one bulb per
-  emitter; the **only** renderer that applies `FixtureInstance.multiply_factor`,
-  the overdriven-glare look), `wash.py` (Color Changer / Dimmer — housing + lamp
-  + `beam.py` cone when the fixture declares a lens or a Zoom channel),
-  `strobe.py`, `generic.py`.
-- **`core/fixture_state.py`**: the Qt-free photometric model.
-  `resolve_state(fdef, dmx) -> FixtureState` (intensity, rgb, colour
-  temperature, shutter/strobe Hz, effect + speed, zoom, per-cell `emitters`)
-  driven entirely by OFL capabilities, so a fixture nobody wrote code for still
-  resolves. Colours mix additively from `REFERENCE_RGB` (the 13 OFL
-  `ColorIntensity` colours). **Emitters** come from matrix pixel keys, or — with
-  no matrix — from repeated colour channels: the n-th channel of a colour is the
-  n-th cell, which is how a multi-cell blinder resolves without special-casing.
+- **`ui/stage/` — the render engine**: **two stages, in this order — the OFL
+  *category* picks the body and the kind of light it makes; the *capabilities*
+  its channels declare pick the layers that shape that light.** All 17 OFL
+  categories and all 43 capability types resolve; see `tests/
+  test_capability_coverage.py` and `test_renderer_registry.py`, whose tables
+  fail loudly if either gains an entry nobody handled.
+  - `registry.py` maps a category to a **profile** via `@register_renderer(...)`;
+    the fixture's own category order wins (OFL lists the most important first),
+    falling back to the shape of its channels — a fixture that makes fog is a
+    hazer, one that pans is a mover — and finally to `GenericStageFixture`
+    ("Other" is the only category with no profile of its own).
+  - `profiles/` — the body and its chassis animation, one class per kind:
+    `lamp.py` (Color Changer / Dimmer / the generic fallback), `array.py`
+    (Pixel Bar / Matrix, Blinder, Strobe), `motorised.py` (Moving Head, Scanner /
+    Barrel Scanner, Flower / Effect, Laser), `atmospheric.py` (Hazer / Smoke,
+    Fan, Stand). A profile declares only its housing, `aim_origin()`,
+    `emission_for(fdef)` and `paint_housing()`; it never reads a capability.
+  - `emission/` — how the light is drawn: `cone.py` (`WashLamp`, `HardBeam` with
+    its gobo plane and prism copies, `BeamFan`), `surface.py` (`MatrixCells`,
+    `BulbArray`, `FlatPanel`), `volumetric.py` (`LaserFan`, `FogPlume`),
+    `NoEmission`. `emission_reach(fdef)` is the one answer to "does this fixture
+    throw a beam, and how far" — the scene preview sizes its viewport from it.
+  - `features/` — the capability layers, each naming the OFL types it consumes
+    and mutating the shared `BeamParams`: dimmer, colour, colour wheel, shutter
+    (all ten `shutterEffect` waveforms), zoom, iris, frost, gobo, prism, blades,
+    pan/tilt. **Discovered once at construction** from
+    `all_capability_types(fdef)`, so a "Moving Head" that is really a wash with
+    no gobo wheel simply has no gobo layer — graceful degradation with no
+    per-fixture code anywhere.
+  - `frame.py` (`Frame` + `BeamParams`, the contract between the two stages),
+    `geometry.py` (`Aim`: pan/tilt onto a flat front elevation — pan swings the
+    beam across the picture, tilt rotates and foreshortens it; **a fixture with
+    no pan/tilt comes out straight down at full length**, exactly as before —
+    plus `Spinner` and `Slew`), `atmosphere.py` (the stage-wide haze level; see
+    below), `clock.py` (ONE 30 Hz timer for everything that animates, subscribed
+    weakly so a body that leaves without cleanup stops ticking), `wheelart.py`
+    (procedural gobo/gel/prism art from the slot's own OFL description — no
+    vendored SVGs), `base.py` (`FixtureLabel`, `DesignableFixture`,
+    `GlowingEllipse`, the mm→px helpers `body_size`/`body_count`/`body_spacing`
+    anchored by `MM_PER_STAGE_PX`, and `BodyFixture` — which runs the pipeline:
+    reset the beam → each feature shapes it → the emission draws it → the
+    profile repaints its chassis). `beam.py`/`pixelbar.py`/`blinder.py`/
+    `wash.py`/`strobe.py`/`generic.py` remain as shims re-exporting the names
+    that moved.
+  - **Atmosphere**: a beam is invisible in clean air, so beam visibility is the
+    one genuinely cross-fixture quantity — a hazer downstage lights up a mover's
+    beam across the rig. `StageController` owns one `Atmosphere`; any body whose
+    capabilities resolve a fog output contributes to it (not just the Hazer
+    profile — plenty of movers have one built in), sources combine without ever
+    exceeding full, and the level drifts on the shared clock with a ~1.5 s
+    attack and ~12 s decay because haze hangs in a room. The manual baseline is
+    `config.window.stage_haze`, edited by the HAZE slider on the edit toolbar.
+  - `FixtureInstance.multiply_factor` (the blinder's overdriven-glare look) is
+    still applied by exactly one profile, via `BodyFixture.overdrive()`.
+- **`core/fixture_state.py`**: the Qt-free photometric model, covering **all 43
+  OFL capability types** through a dispatch table (`_HANDLERS`) rather than a
+  branch chain — "what does this app do with capability X" is one dict lookup.
+  `resolve_state(fdef, dmx) -> FixtureState`, grouped into frozen records:
+  `color` (rgb, temperature, per-cell `emitters`, wheel gel), `optics` (zoom,
+  focus, iris, frost, prism facets/spin, blades, beam offset), `motion` (pan,
+  tilt, continuous spins, move speed, rotation), `strobe` (all ten shutter
+  effects + rate), `program` (the fixture's own effect + speed/parameter/sound),
+  `atmosphere` (fog output and kind) and `wheels` (which slot is in the beam,
+  and how far the wheel has turned between two). **The flat names the rest of
+  the app reads — `rgb`, `emitters`, `shutter`, `effect`, `zoom_deg`,
+  `beam_deg`, … — survive as read-only views onto those groups**, so
+  `note_layout`, the timeline swatches, the clip library and `solve_color` need
+  no changes. Colours mix additively from `REFERENCE_RGB` (the 13 OFL
+  `ColorIntensity` colours). **Emitters** come from matrix pixel keys, from
+  matrix *groups*, or — with no matrix — from repeated channels: the n-th
+  channel of a colour (or the n-th plain dimmer) is the n-th cell, which is how
+  a multi-cell blinder resolves without special-casing.
   `capability_at(fdef, index, values)` is the ONE public "what is this channel
   doing right now" — it takes the whole slice on purpose, because a switching
   channel's meaning lives on another slot, so a per-channel read describes the
@@ -246,16 +292,27 @@ bundled).
   channel, and unused/unresolvable slots kept in place so they still consume an
   address. `$pixelKey` expands over **pixels and pixel groups alike** — a mode
   addressing `Red Master` or `Red 1/2` is as normal as one addressing `Red 1`,
-  and group channels claim no `pixel_key` since a group drives several cells.
+  and group channels claim no `pixel_key` since a group drives several cells —
+  they name it in `pixel_group` instead, so a renderer can still find the cells
+  a master channel commands.
   **Switching channels** (a capability's `switchChannels`) resolve too: the slot
   carries `switch_options` plus `switch_of`, the slot index of the trigger
   channel that selects between them (trigger may be patched later in the mode),
   while `channel` holds the resolution at the trigger's default so labels
   and the clip library stay static. `core/fixture_state.py` picks the live one
   per frame — the same address really is a strobe in one program and an effect
-  speed in another. `parse_entity()` turns OFL's units and keywords ("fast", "50%",
-  "6500K") into canonical floats. Deliberately lenient — unknown capability
-  types are preserved, not rejected. The document's own metadata (`meta` →
+  speed in another. **Wheels** are parsed too (`wheels` → `Wheel`/`WheelSlot`,
+  raw-prop passthrough like `Capability`): a `WheelSlot` capability says which
+  slot is in the beam, and this says what that slot IS — a gel colour, a gobo
+  resource, a prism's facet count. `slot_at(wheel, number)` resolves a 1-based
+  (possibly fractional) slot number, wrapping, and returns the *pair* either
+  side when the wheel is mid-change so the renderer can crossfade;
+  `wheel_names(cap, channel)` handles OFL's three forms (a name, an array, or
+  absent — meaning the wheel named after the channel). `parse_entity()` turns
+  OFL's units and keywords ("fast", "50%", "6500K", "540deg") into canonical
+  floats across all 17 entity kinds; `"angle"` is kept as an alias of the real
+  `rotationAngle`, which backs nine capability types. Deliberately lenient —
+  unknown capability types are preserved, not rejected. The document's own metadata (`meta` →
   `OflMeta` authors/dates/import plugin, `comment`, `links`, `rdm`, plus
   `powerConnectors`/`DMXconnector`/bulb lumens on `OflPhysical`) is parsed but
   never interpreted — nothing in the render path reads it; it exists for the
@@ -289,6 +346,13 @@ bundled).
   type covering the most DMX wins, `NoFunction` never counts),
   `color_slots(fdef)` (OFL colour name → slot index, so amber and CMY are as
   addressable as red) and `capability_types(fdef)`.
+  `all_capability_types(fdef)` is the "does this fixture do X *anywhere*"
+  question the render engine's feature discovery and category fallback ask —
+  every capability on every slot including switching alternates, as against
+  `capability_types()`'s dominant-only summary. `color_sources(fdef)` names how
+  a fixture can be given a colour (`mix`/`preset`/`temperature`/`wheel`);
+  `color_slots()` deliberately stays mix-only, because it is the *write*
+  direction feeding `solve_color` and a wheel position is not a colour level.
   `config.fixture_channel_count(type, mode)`/`known_fixture_types()` derive from
   it; `software_controller.fixture_type_for(name, mode)` compiles types lazily,
   tracking `fixture_library.cache_generation()` so a show opened later rebuilds
@@ -554,7 +618,9 @@ interpolates present↔future DMX to avoid blackout artifacts.
   is, in one word and one colour, from its capabilities — the browser's chips,
   the Scenes tab's faders and the timeline's clip labels all read it),
   `fixture_state.py` (`resolve_state()` → `FixtureState`: the Qt-free
-  photometric model the stage renderers consume, plus its inverse
+  photometric model the stage renderers consume — all 43 OFL capability types,
+  grouped into `color`/`optics`/`motion`/`strobe`/`program`/`atmosphere`/
+  `wheels` with the old flat names kept as views — plus its inverse
   `solve_color()`),
   `note_layout.py` (note → label/colour lookup; channel-control verbs name
   themselves via `channel_families` and scene swatches via `resolve_state`),
@@ -575,11 +641,16 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `playlist_controller.py` (widget half of the playlist: timeline/toolbar
   refresh + relink dialogs — guides relink silently, no dialog — over
   `app.playlist.PlaylistCore`),
-  `stage_controller.py`, `stage/` (the render engine: `base.py`
-  — `DesignableFixture` design-mode move/select + drag-release write-back,
-  `FixtureLabel`, `GlowingEllipse`, `StrobeGate`, geometry helpers and the
-  `BodyFixture` base — `registry.py`, `beam.py`, and one module per renderer:
-  `pixelbar.py`, `blinder.py`, `wash.py`, `strobe.py`, `generic.py`),
+  `stage_controller.py` (also owns the stage's `Atmosphere` and
+  `sync_from_config()`), `stage/` (the two-stage render engine: `base.py` —
+  `DesignableFixture` design-mode move/select + drag-release write-back,
+  `FixtureLabel`, `GlowingEllipse`, geometry helpers and the `BodyFixture`
+  pipeline — `registry.py`, `frame.py`, `geometry.py`, `clock.py`,
+  `atmosphere.py`, `wheelart.py`, `profiles/` (`lamp.py`, `array.py`,
+  `motorised.py`, `atmospheric.py`), `emission/` (`cone.py`, `surface.py`,
+  `volumetric.py`), `features/` (`level.py`, `beamshape.py`, `wheels.py`), and
+  `beam.py`/`pixelbar.py`/`blinder.py`/`wash.py`/`strobe.py`/`generic.py` as
+  shims for the names that moved),
   `fixture_designer.py` (edit-mode toolbar + the per-selection inspector,
   incl. the mode combo shown only for multi-mode types),
   `add_fixture_dialog.py` (the fixture browser + patch footer),
@@ -617,6 +688,10 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `scene_edit.py` — gradient slider/color wheel/animation grid,
   `start_event_edit.py` — START-event editor, `resize_handle.py`).
 - `tests/` — headless characterization tests (standalone scripts; see above).
+  `ofl_factory.py` builds synthetic OFL documents so a capability nobody ships a
+  fixture for can still be exercised; `test_capability_coverage.py` and
+  `test_renderer_registry.py` carry the two tables that fail loudly when OFL
+  gains a capability type or a category nobody handled.
 - `tupperlogger/` — custom logger with file rotation.
 
 ## Timeline Architecture Notes

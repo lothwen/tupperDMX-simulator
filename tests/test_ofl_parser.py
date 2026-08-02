@@ -20,8 +20,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.ofl import (
-    parse_ofl, resolve_mode, parse_entity, capability_value, interp,
-    SPEED_MAX_HZ, CT_WARM_K, CT_DEFAULT_K, CT_COLD_K,
+    Capability, parse_ofl, resolve_mode, parse_entity, capability_value, interp,
+    slot_at, wheel_names, SPEED_MAX_HZ, CT_WARM_K, CT_DEFAULT_K, CT_COLD_K,
 )
 
 
@@ -394,6 +394,12 @@ def test_template_channels_expand_for_pixel_groups():
             "the template's capability survives group expansion")
     _assert(master.channels[0].channel.pixel_key == "",
             "a group drives several cells, so it claims no single pixel")
+    _assert(master.channels[0].channel.pixel_group == "Master",
+            "it names the group it drives, so the cells stay findable")
+    _assert(_keys(fx.modes[1]) == ["Red 1/2", "Red 2/2"]
+            and [c.channel.pixel_group for c in fx.modes[1].channels]
+            == ["1/2", "2/2"],
+            "each expanded group channel names its own group")
 
     _assert(_keys(fx.modes[1]) == ["Red 1/2", "Red 2/2"],
             "repeatFor over several groups expands each in order")
@@ -549,6 +555,180 @@ def test_parse_entity_rejects_unconvertible():
     _assert(parse_entity(0.25, "parameter") == 0.25, "a plain number passes through")
 
 
+def test_parse_entity_angle_kinds():
+    print("test_parse_entity_angle_kinds")
+    # rotationAngle backs nine capability types (Pan, Tilt, Rotation, Prism,
+    # every wheel and blade rotation). Before it was in the tables these all
+    # came back None, so a mover's position silently didn't exist.
+    cases = [
+        ("540deg", "rotationAngle", 540.0), ("50%", "rotationAngle", 180.0),
+        ("-90deg", "rotationAngle", -90.0),
+        ("45deg", "horizontalAngle", 45.0), ("50%", "horizontalAngle", 90.0),
+        ("30deg", "verticalAngle", 30.0),
+        ("20deg", "swingAngle", 20.0), ("100%", "swingAngle", 90.0),
+    ]
+    for text, kind, expected in cases:
+        got = parse_entity(text, kind)
+        _assert(got is not None and abs(got - expected) < 1e-6,
+                f"{text!r} as {kind} -> {expected}")
+
+    _assert(parse_entity("left", "horizontalAngle") == -90.0
+            and parse_entity("right", "horizontalAngle") == 90.0,
+            "the aim keywords are bipolar")
+    _assert(parse_entity("top", "verticalAngle") == -90.0
+            and parse_entity("wide", "swingAngle") == 45.0,
+            "vertical and swing carry their own vocabularies")
+
+
+def test_angle_kind_is_an_alias_of_rotation_angle():
+    print("test_angle_kind_is_an_alias_of_rotation_angle")
+    # "angle" predates the real OFL name and callers still ask for it.
+    for text in ("540deg", "50%", "-90deg"):
+        _assert(parse_entity(text, "angle") == parse_entity(text, "rotationAngle"),
+                f"{text!r} reads the same under either name")
+
+
+def test_parse_entity_fog_iris_and_insertion():
+    print("test_parse_entity_fog_iris_and_insertion")
+    cases = [
+        ("50%", "fogOutput", 0.5), ("strong", "fogOutput", 1.0),
+        ("off", "fogOutput", 0.0),
+        ("5m^3/min", "fogOutput", 0.5),
+        ("out", "insertion", 0.0), ("in", "insertion", 1.0),
+        ("75%", "insertion", 0.75),
+        ("closed", "irisPercent", 0.0), ("open", "irisPercent", 1.0),
+        ("40%", "irisPercent", 0.4),
+        (3, "slotNumber", 3.0),
+    ]
+    for text, kind, expected in cases:
+        got = parse_entity(text, kind)
+        _assert(got is not None and abs(got - expected) < 1e-6,
+                f"{text!r} as {kind} -> {expected}")
+
+
+# --- wheels ------------------------------------------------------------------
+
+WHEELS = {
+    "Color Wheel": {
+        "slots": [
+            {"type": "Open"},
+            {"type": "Color", "name": "Red", "colors": ["#ff0000"]},
+            {"type": "Color", "name": "CTB", "colors": ["#c8dcff"],
+             "colorTemperature": "8000K"},
+        ],
+    },
+    "Gobo Wheel": {
+        "direction": "CCW",
+        "slots": [
+            {"type": "Open"},
+            {"type": "Gobo", "resource": "gobos/biohazard", "name": "Biohazard"},
+            {"type": "Prism", "name": "3-facet", "facets": 3},
+            {"type": "Iris", "openPercent": "40%"},
+            {"type": "Frost", "frostIntensity": "60%"},
+            {"type": "AnimationGoboStart", "name": "Fire"},
+            {"type": "AnimationGoboEnd"},
+            {"type": "Closed"},
+        ],
+    },
+}
+
+
+def _wheel_fixture():
+    return parse_ofl(_fixture(
+        wheels=WHEELS,
+        availableChannels={
+            "Color Wheel": {"capability": {"type": "WheelSlot", "slotNumber": 2}},
+            "Gobo Wheel": {"capability": {"type": "WheelSlot", "slotNumber": 2}},
+            "Gobo Spin": {"capability": {"type": "WheelRotation",
+                                         "wheel": ["Gobo Wheel", "Color Wheel"],
+                                         "speedStart": "slow CW", "speedEnd": "fast CW"}},
+        },
+        modes=[{"name": "test",
+                "channels": ["Color Wheel", "Gobo Wheel", "Gobo Spin"]}]))
+
+
+def test_wheels_parse_every_slot_type():
+    print("test_wheels_parse_every_slot_type")
+    fx = _wheel_fixture()
+    _assert(set(fx.wheels) == {"Color Wheel", "Gobo Wheel"}, "both wheels parsed")
+
+    colour = fx.wheels["Color Wheel"]
+    _assert([s.type for s in colour.slots] == ["Open", "Color", "Color"],
+            "slot types survive in order")
+    _assert(colour.slots[1].colors == ((255, 0, 0),), "a gel colour becomes RGB")
+    _assert(colour.slots[1].name == "Red", "a slot keeps its name")
+    _assert(colour.slots[2].get("colorTemperature") == "8000K",
+            "unmodelled slot properties pass through raw")
+
+    gobo = fx.wheels["Gobo Wheel"]
+    _assert(gobo.direction == "CCW", "the wheel's spin direction is kept")
+    _assert([s.type for s in gobo.slots] ==
+            ["Open", "Gobo", "Prism", "Iris", "Frost",
+             "AnimationGoboStart", "AnimationGoboEnd", "Closed"],
+            "all nine OFL slot types round-trip")
+    _assert(gobo.slots[1].get("resource") == "gobos/biohazard",
+            "a gobo names the pattern to draw")
+    _assert(gobo.slots[2].get("facets") == 3, "a prism declares its facet count")
+
+
+def test_a_fixture_without_wheels_has_none():
+    print("test_a_fixture_without_wheels_has_none")
+    fx = parse_ofl(_fixture())
+    _assert(fx.wheels == {}, "no wheels block -> an empty mapping, not None")
+
+
+def test_slot_at_wraps_and_blends():
+    print("test_slot_at_wraps_and_blends")
+    wheel = _wheel_fixture().wheels["Color Wheel"]
+
+    slot, nxt, blend = slot_at(wheel, 1)
+    _assert(slot.type == "Open" and nxt is None and blend == 0.0,
+            "slot 1 is the first slot, with nothing to blend toward")
+
+    slot, nxt, blend = slot_at(wheel, 2.5)
+    _assert(slot.name == "Red" and nxt.name == "CTB" and abs(blend - 0.5) < 1e-6,
+            "2.5 sits halfway between slots 2 and 3 — the wheel is mid-turn")
+
+    slot, nxt, _ = slot_at(wheel, 3.5)
+    _assert(slot.name == "CTB" and nxt.type == "Open",
+            "past the last slot it wraps back to the first")
+
+    _assert(slot_at(wheel, 4)[0].type == "Open", "a whole turn comes back around")
+
+
+def test_wheel_names_from_a_capability():
+    print("test_wheel_names_from_a_capability")
+    fx = _wheel_fixture()
+    mode = fx.modes[0]
+
+    plain = mode.channels[0].channel.capabilities[0]
+    _assert(wheel_names(plain, "Color Wheel") == ("Color Wheel",),
+            "no `wheel` property means the wheel named after the channel")
+
+    several = mode.channels[2].channel.capabilities[0]
+    _assert(wheel_names(several, "Gobo Spin") == ("Gobo Wheel", "Color Wheel"),
+            "WheelRotation may drive several wheels at once")
+
+    named = Capability(type="WheelSlot", dmx_range=(0, 255),
+                       props={"wheel": "Gobo Wheel"})
+    _assert(wheel_names(named, "Whatever") == ("Gobo Wheel",),
+            "an explicit name wins over the channel's")
+
+
+def test_slot_number_interpolates_across_the_range():
+    print("test_slot_number_interpolates_across_the_range")
+    # The between-slots case needs no new code: slotNumberStart/End go through
+    # the same interpolation as every other entity pair.
+    cap = Capability(type="WheelSlot", dmx_range=(0, 100),
+                     props={"slotNumberStart": 1, "slotNumberEnd": 3})
+    _assert(capability_value(cap, 0, "slotNumber", "slotNumber") == 1.0,
+            "the bottom of the range is the first slot")
+    _assert(capability_value(cap, 50, "slotNumber", "slotNumber") == 2.0,
+            "halfway is the middle slot")
+    _assert(capability_value(cap, 100, "slotNumber", "slotNumber") == 3.0,
+            "the top is the last")
+
+
 def test_interp():
     print("test_interp")
     _assert(interp(0.0, 10.0, 0.5) == 5.0, "both endpoints lerp")
@@ -589,6 +769,14 @@ def main():
     test_parse_entity_keywords()
     test_parse_entity_colour_temperature_percent_is_bipolar()
     test_parse_entity_rejects_unconvertible()
+    test_parse_entity_angle_kinds()
+    test_angle_kind_is_an_alias_of_rotation_angle()
+    test_parse_entity_fog_iris_and_insertion()
+    test_wheels_parse_every_slot_type()
+    test_a_fixture_without_wheels_has_none()
+    test_slot_at_wraps_and_blends()
+    test_wheel_names_from_a_capability()
+    test_slot_number_interpolates_across_the_range()
     test_interp()
     print("\nALL TESTS PASSED")
 
