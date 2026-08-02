@@ -248,6 +248,95 @@ def test_matrix_cells_cover_the_whole_grid(qapp):
         b.cleanup()
 
 
+def _segmented_wash(zones):
+    """A Color Changer whose face is split into independently-driven zones.
+
+    The shape of the Wild Wash Pro: a wash — not a pixel bar — that happens to
+    address its face in segments, so its category picks a lamp body and its
+    matrix decides how many lamps that body has.
+    """
+    return ofl_factory.fdef(
+        categories=("Color Changer",),
+        matrix={"pixelCount": [zones, 1, 1]},
+        template_channels={
+            "Red $pixelKey": ofl_factory.channel("ColorIntensity", color="Red"),
+            "Green $pixelKey": ofl_factory.channel("ColorIntensity", color="Green"),
+            "Blue $pixelKey": ofl_factory.channel("ColorIntensity", color="Blue"),
+        },
+        mode_channels=["d", {"insert": "matrixChannels",
+                             "repeatFor": "eachPixelXYZ",
+                             "channelOrder": "perPixel",
+                             "templateChannels": ["Red $pixelKey",
+                                                  "Green $pixelKey",
+                                                  "Blue $pixelKey"]}],
+        physical={"lens": {"degreesMinMax": [40, 40]}},
+    )
+
+
+def _rgb(color):
+    return color.red(), color.green(), color.blue()
+
+
+def test_a_segmented_wash_lights_every_zone(qapp):
+    print("test_a_segmented_wash_lights_every_zone")
+    body = _body(_segmented_wash(4))
+    lamps = body.emission.lamps
+    _assert(type(body).__name__ == "ColorChangerFixture",
+            "a segmented wash is still a wash, not a pixel bar")
+    _assert(len(lamps) == 4, "with one lamp per zone")
+    _assert([round(lamp.rect().x()) for lamp in lamps]
+            == sorted(round(lamp.rect().x()) for lamp in lamps)
+            and len({round(lamp.rect().width(), 3) for lamp in lamps}) == 1,
+            "laid out evenly across the face, the way the segments are")
+
+    body.update_dmx([255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0])
+    _assert([_rgb(lamp.glow_color) for lamp in lamps]
+            == [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 0, 0)],
+            "each zone draws its own channels, not the first zone's")
+
+    stops = body.emission.cone.brush().gradient().stops()
+    # Red, green and blue at full over a dark fourth: a quarter of each.
+    _assert(_rgb(stops[0][1]) == (63, 63, 63),
+            "and the cone shows the zones mixed, as they are once they land")
+
+    body.update_dmx([128, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0])
+    _assert([round(lamp.glow_intensity, 2) for lamp in lamps] == [0.5] * 4,
+            "the fixture's dimmer still scales every zone")
+    body.cleanup()
+
+
+def test_a_wash_with_one_zone_is_unchanged(qapp):
+    print("test_a_wash_with_one_zone_is_unchanged")
+    par = ofl_factory.fdef(categories=("Color Changer",),
+                           channels=dict(ofl_factory.RGB_CHANNELS),
+                           physical={"lens": {"degreesMinMax": [25, 25]}})
+    body = _body(par)
+    _assert(len(body.emission.lamps) == 1, "a par has a single lamp")
+    _assert(body.emission.lamp is body.emission.lamps[0],
+            "which is the one the profile and the preview reach for")
+    _assert(round(body.emission.lamp.rect().x(), 3)
+            == round((body.width - body.emission.lamp.rect().width()) / 2, 3),
+            "centred in its body, as it has always been")
+
+    body.update_dmx([255, 0, 0])
+    _assert(_rgb(body.emission.lamp.glow_color) == (255, 0, 0),
+            "and takes the fixture's own colour")
+    body.cleanup()
+
+
+def test_a_big_matrix_behind_a_lamp_is_sampled(qapp):
+    print("test_a_big_matrix_behind_a_lamp_is_sampled")
+    from ui.stage.emission.cone import MAX_LAMPS
+
+    body = _body(_segmented_wash(200))
+    _assert(len(body.emission.lamps) == MAX_LAMPS,
+            "a wash with hundreds of pixels doesn't put one item on stage each")
+    _assert(body.emission.emitter_index[0] == 0
+            and body.emission.emitter_index[-1] < 200,
+            "the lamps it does draw are spread across the whole face")
+    body.cleanup()
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -261,6 +350,9 @@ def main():
     test_every_registered_feature_declares_itself(app)
     test_a_matrix_is_one_body_unless_its_pixels_are_separated(app)
     test_matrix_cells_cover_the_whole_grid(app)
+    test_a_segmented_wash_lights_every_zone(app)
+    test_a_wash_with_one_zone_is_unchanged(app)
+    test_a_big_matrix_behind_a_lamp_is_sampled(app)
     print("\nALL TESTS PASSED")
 
 

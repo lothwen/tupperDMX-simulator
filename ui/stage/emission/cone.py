@@ -33,6 +33,10 @@ BEAM_MAX_ALPHA = 90        # opacity at the lens, fading to nothing at the end
 BEAM_MIN_INTENSITY = 0.02  # below this the cone is hidden entirely
 LAMP_INSET = 0.15          # fraction of the body inset on each side
 
+# Above this many zones the lamps are sampled: a wash with a big matrix behind
+# it would otherwise put hundreds of glowing items on the scene for one fixture.
+MAX_LAMPS = 24
+
 # How much of the cone's visibility comes from the air rather than from the
 # fixture. At zero haze a wash still shows a hint of its beam; a hard beam
 # without haze is nearly all lens flare and no shaft.
@@ -63,9 +67,13 @@ class BeamCone(QGraphicsPolygonItem):
         self.setVisible(False)
 
     def apply_beam(self, beam: BeamParams, haze: float = 1.0,
-                   hard: bool = False) -> None:
+                   hard: bool = False,
+                   rgb: Optional[Tuple[int, int, int]] = None) -> None:
         """Redraw for one frame. `hard` is the spot-vs-wash distinction: a hard
-        beam is tighter and brighter, and stays visible in less haze."""
+        beam is tighter and brighter, and stays visible in less haze.
+
+        `rgb` overrides the beam's colour, for a fixture whose face is several
+        colours at once: what it throws is their mix."""
         if beam.half_angle_deg is None or beam.level <= BEAM_MIN_INTENSITY:
             self.setVisible(False)
             return
@@ -86,7 +94,8 @@ class BeamCone(QGraphicsPolygonItem):
 
         tip = _tip(self._origin, beam.axis_deg, length)
         gradient = QLinearGradient(self._origin, tip)
-        near = QColor(*(max(0, min(255, int(c * beam.level))) for c in beam.rgb))
+        colour = beam.rgb if rgb is None else rgb
+        near = QColor(*(max(0, min(255, int(c * beam.level))) for c in colour))
         peak = HARD_BEAM_ALPHA if hard else BEAM_MAX_ALPHA
         near.setAlpha(int(peak * beam.level
                           * (HAZE_FLOOR + (1.0 - HAZE_FLOOR) * haze)))
@@ -118,28 +127,79 @@ def _cone_polygon(origin: QPointF, axis_deg: float, length: float,
 
 
 class WashLamp(Emission):
-    """A single glowing lamp, plus its cone when the fixture has optics.
+    """One glowing lamp per zone, plus the cone when the fixture has optics.
 
     The common case by a distance: pars, washes, plain dimmers, and any moving
-    head whose channels don't describe a hard-edged beam.
+    head whose channels don't describe a hard-edged beam. Nearly all of them are
+    a single lamp, and that is exactly what one zone draws.
+
+    A wash whose face is split into independently-driven zones — a segmented
+    blinder-wash, anything with a small matrix — gets one lamp per zone, laid
+    out across its face the way the segments are. The cone takes their mix:
+    by the time the light lands the zones have overlapped into one colour.
     """
 
     def build(self) -> None:
         body = self.body
+        zones = max(1, body.cell_count())
+        count = min(zones, MAX_LAMPS)
+        # More zones than lamps: sample across them rather than drawing the
+        # first few, so the whole face is still represented.
+        self.emitter_index = [index * zones // count for index in range(count)]
+
         inset_x, inset_y = body.width * LAMP_INSET, body.height * LAMP_INSET
-        size = min(body.width - 2 * inset_x, body.height - 2 * inset_y)
-        self.lamp = GlowingEllipse((body.width - size) / 2,
-                                   (body.height - size) / 2, size, size, body)
-        self.lamp.glow_radius_multiplier = (
-            GLOW_WITH_WASH if self.reach(body.fdef) else GLOW_WITHOUT_BEAM)
+        slot = (body.width - 2 * inset_x) / count
+        size = min(slot, body.height - 2 * inset_y)
+        top = (body.height - size) / 2
+        multiplier = (GLOW_WITH_WASH if self.reach(body.fdef)
+                      else GLOW_WITHOUT_BEAM)
+        self.lamps = []
+        for index in range(count):
+            lamp = GlowingEllipse(inset_x + index * slot + (slot - size) / 2,
+                                  top, size, size, body)
+            lamp.glow_radius_multiplier = multiplier
+            self.lamps.append(lamp)
+
         origin_x, origin_y = body.aim_origin()
         self.cone = BeamCone(body, origin_x, origin_y)
 
+    @property
+    def lamp(self):
+        """The lamp, for the single-zone fixtures that have only one — the name
+        the profile, the scene preview and the parity tests reach for."""
+        return self.lamps[0]
+
     def render(self, frame: Frame) -> None:
         beam = frame.beam
-        self.lamp.setGlowColor(self.body.clamped_color(beam.rgb, beam.level),
-                               min(1.0, beam.level))
-        self.cone.apply_beam(beam, frame.haze)
+        emitters = frame.state.emitters
+        # Per-zone only when the state drives every zone this body shows;
+        # `emitter_index` rises with the lamps, so its last entry is the
+        # highest emitter asked for.
+        per_zone = len(self.lamps) > 1 and len(emitters) > self.emitter_index[-1]
+
+        for index, lamp in enumerate(self.lamps):
+            if per_zone:
+                emitter = emitters[self.emitter_index[index]]
+                rgb, level = emitter.rgb, emitter.intensity * beam.gate
+            else:
+                rgb, level = beam.rgb, beam.level
+            lamp.setGlowColor(self.body.clamped_color(rgb, level),
+                              min(1.0, level))
+
+        self.cone.apply_beam(beam, frame.haze,
+                             rgb=self._mixed(emitters) if per_zone else None)
+
+    def _mixed(self, emitters) -> Tuple[int, int, int]:
+        """The colour this body's zones make together.
+
+        The zones' own colours, averaged — a dark zone pulls the mix down, which
+        is how one lit segment of four throws a quarter of the light. Levels are
+        deliberately left out: the beam already carries the fixture's dimmer,
+        and counting it here too would dim the cone twice.
+        """
+        shown = [emitters[index] for index in self.emitter_index]
+        return tuple(sum(e.rgb[component] for e in shown) // len(shown)
+                     for component in range(3))
 
     @classmethod
     def reach(cls, fdef) -> float:

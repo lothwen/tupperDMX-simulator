@@ -224,6 +224,12 @@ bundled).
     `BulbArray`, `FlatPanel`), `volumetric.py` (`LaserFan`, `FogPlume`),
     `NoEmission`. `emission_reach(fdef)` is the one answer to "does this fixture
     throw a beam, and how far" — the scene preview sizes its viewport from it.
+    An emission that draws a face draws **one item per zone**, from the state's
+    emitters: `MatrixCells` a cell per pixel, `BulbArray` a bulb per emitter and
+    `WashLamp` a lamp per `cell_count()` — so a wash whose face is segmented
+    (the Wild Wash Pro's four) shows every segment while staying a wash, its
+    cone taking their mix. One zone is the overwhelming case and draws exactly
+    as a single lamp always did.
   - `features/` — the capability layers, each naming the OFL types it consumes
     and mutating the shared `BeamParams`: dimmer, colour, colour wheel, shutter
     (all ten `shutterEffect` waveforms), zoom, iris, frost, gobo, prism, blades,
