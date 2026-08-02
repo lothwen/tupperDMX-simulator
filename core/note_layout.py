@@ -247,13 +247,97 @@ def note_applies_to(note: int, fdef: Optional[FixtureDef]) -> bool:
     return _in((COLOR_MACRO_BASE, COLOR_MACRO_BASE + len(COLOR_MACROS) - 1), n)
 
 
+# Which group of the authoring picker a verb belongs to, in the order they are
+# offered. Mirrors the match arms of handle_note_on, read as a menu.
+_VERB_GROUPS: Tuple[Tuple[str, Tuple[int, ...]], ...] = (
+    ("Channels", tuple(range(CHANNEL_OFFSET_RANGE[0], CHANNEL_OFFSET_RANGE[1] + 1))),
+    ("Scenes", tuple(range(SCENE_LOAD_RANGE[0], SCENE_LOAD_RANGE[1] + 1))
+     + (SCENE_PREV, SCENE_NEXT, SCENE_PACKED)),
+    ("Banks", tuple(range(BANK_SELECT_RANGE[0], BANK_SELECT_RANGE[1] + 1))),
+    ("Chases", (CHASE_LOAD,)),
+    ("Control", (TAKE_MANUAL, MANUAL, BLACKOUT_FIXTURE, BLEND_TIME,
+                 COLOR_CHANGE_TIME, CHASE_CHANGE_TIME,
+                 PALETTE_RANDOM_ON, PALETTE_RANDOM_OFF)),
+    ("Colour", tuple(range(COLOR_MACRO_BASE,
+                           COLOR_MACRO_BASE + len(COLOR_MACROS)))),
+    ("Show", (START, BLACKOUT_ALL)
+     + tuple(range(SONG_PART_BASE, SONG_PART_BASE + len(SONG_PARTS)))),
+)
+
+
+def verb_choices(fdef: Optional[FixtureDef], *,
+                 include_song_parts: bool = False,
+                 include_channels: bool = True
+                 ) -> List[Tuple[str, List[Tuple[int, str, str]]]]:
+    """Grouped ``(group label, [(note, label, colour), ...])`` for every verb
+    worth authoring on `fdef` — the authoring counterpart of the runtime
+    dispatch, and what the clip editor's type picker is built from.
+
+    Filtered by ``note_applies_to``, so a fixture with no banks is never offered
+    a scene verb and a 6-channel par is never offered channel 7. Labelled by
+    ``describe_note``, so the picker names the fixture's own channels, banks and
+    chases rather than "CH 3".
+
+    Song parts are excluded by default: they are global verbs that route with no
+    channel, and ``edit_event`` never clears one, so offering them on a fixture
+    lane would let a clip become a channel-scoped song part — a shape nothing
+    else in the app produces. The waveform band, where they DO belong, asks for
+    them explicitly.
+    """
+    out: List[Tuple[str, List[Tuple[int, str, str]]]] = []
+    for label, notes in _VERB_GROUPS:
+        entries: List[Tuple[int, str, str]] = []
+        for note in notes:
+            if not include_channels and _in(CHANNEL_OFFSET_RANGE, note):
+                continue
+            if is_song_part(note) and not include_song_parts:
+                continue
+            if not note_applies_to(note, fdef) or not _verb_resolves(note, fdef):
+                continue
+            info = describe_note(note, fdef)
+            if info is None:
+                continue
+            entries.append((note, info.part, info.color))
+        if entries:
+            out.append((label, entries))
+    return out
+
+
+def _verb_resolves(note: int, fdef: Optional[FixtureDef]) -> bool:
+    """Whether an INDEXED verb points at something the fixture actually has.
+
+    ``note_applies_to`` answers the coarser question the drop validator needs
+    ("is a scene verb meaningful on this fixture at all"), so it says yes to all
+    twelve scene slots the moment a fixture has one bank. A picker has to be
+    exact, or it offers "Scene 9" on a fixture with three.
+    """
+    n = int(note)
+    if fdef is None:
+        return True
+    if _in(SCENE_LOAD_RANGE, n):
+        first = next(iter(fdef.banks.values()), [])
+        return n - SCENE_LOAD_RANGE[0] < len(first)
+    if _in(BANK_SELECT_RANGE, n):
+        return n - BANK_SELECT_RANGE[0] < len(fdef.banks)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Scene-expansion helpers (per-fixture channel <-> note mapping).
 # ---------------------------------------------------------------------------
 def field_note_map(fdef: FixtureDef) -> Tuple[Tuple[str, int], ...]:
     """``((channel_field, midi_note), ...)`` for a fixture: note *i+1* drives the
-    *i*-th channel, mirroring ``set_channel_offset`` (note n -> channel n)."""
-    return tuple((ch.field, i + 1) for i, ch in enumerate(fdef.channels))
+    *i*-th channel, mirroring ``set_channel_offset`` (note n -> channel n).
+
+    Capped at ``CHANNEL_OFFSET_RANGE``'s top: note 24 up is the scene-load verb,
+    so emitting one for a 30-channel fixture's 24th slot would make
+    ``handle_note_on`` LOAD A SCENE instead of setting a channel. A fixture
+    wider than 23 slots simply has its tail unreachable from the timeline —
+    which is what the editor greys out — rather than silently misfiring.
+    """
+    limit = CHANNEL_OFFSET_RANGE[1]
+    return tuple((ch.field, i + 1)
+                 for i, ch in enumerate(fdef.channels) if i + 1 <= limit)
 
 
 def _swatch(fdef: FixtureDef, dmx: List[int]) -> Tuple[int, int, int]:

@@ -195,13 +195,37 @@ bundled).
   inline rename. Reorder is drag-and-drop, resolved to a
   `move_requested(src_bank, src_index, dst_bank, position)` and applied to the
   data (Qt never moves the items, or their bank/index roles would go stale).
-  Right: the scene name, its `song_parts` tags as toggles, a SIMULATED OUTPUT
-  card and one `ChannelFader` per DMX slot (coloured by channel family,
-  addressed from the footer's DMX start). `ScenePreview` **is** the stage
-  engine — `renderer_for(fdef)`, one body per `body_count()`, fed the scene's
-  values — so a scene looks here exactly as it will on stage, animations, beam
-  cone and strobe included. Persistence is
+  Right: the scene name, its `song_parts` tags as toggles, and the shared
+  **console** from `ui/fixture_console.py` (below). Persistence is
   `core.fixture_library.save_fixture_banks`.
+- **`ui/fixture_console.py` — the fixture console**: one fixture's channels as
+  faders over a live preview, shared by the Scenes tab and the timeline's clip
+  editor so a look is edited the same way wherever you meet it. `FaderStrip`
+  (one `ChannelFader` per `fdef.channels[i]`, coloured by `channel_family`;
+  `set_addressable_limit` greys the slots past MIDI note 23, `set_present` dims
+  the channels a scene doesn't carry; it IS its faders — `len`/iteration/
+  indexing all work) and `OutputCard` (the SIMULATED OUTPUT read-out beside
+  `ScenePreview`). `ScenePreview` **is** the stage engine —
+  `renderer_for(fdef)`, one body per `body_count()`, fed raw DMX — so a look
+  previews exactly as it will appear on stage, animations, beam cone and strobe
+  included; **`clear()` it before it goes away**, the bodies own timers on the
+  shared 30 Hz clock. Plus the value helpers (`default_values`, `scene_values`,
+  `values_to_fields`/`fields_to_values`) and `summary_html`.
+- **`ui/channel_affordances.py`**: controls that beat a fader for particular
+  channels, both chosen from the fixture's own capabilities and never from its
+  name. `ColorWheel` writes through `fixture_state.solve_color`, so a hue lands
+  on whatever the fixture actually mixes (RGB straight through, a greedy fit for
+  CMY/RGBA, nothing for a whites-only blinder — `wheel_applies()` asks
+  `solve_color` rather than `color_slots`, which counts Cold/Warm White).
+  `CapabilityGrid` turns a channel carrying ≥4 discrete `Effect`/`ColorPreset`/
+  `WheelSlot`/`Maintenance` capabilities into a grid of tiles, one per
+  capability, valued from its own `dmxRange` — **all animating at once**, so the
+  whole menu is on screen and the look is picked by eye. That is what the LED
+  bar's animation channel is (35 `Effect` capabilities at [0,3] [4,7] … plus a
+  `NoFunction` tail, exactly the `index*4` the old hardcoded grid re-derived).
+  `assets/animations/*.gif` is now optional artwork matched to a capability by
+  its `effectName`, so it can never appear on a fixture that didn't declare
+  those effects. `affordance_for(fdef, index)` is the one lookup.
 - **`ui/stage/` — the render engine**: **two stages, in this order — the OFL
   *category* picks the body and the kind of light it makes; the *capabilities*
   its channels declare pick the layers that shape that light.** All 17 OFL
@@ -523,10 +547,12 @@ objects, so all pre-show code paths keep working unchanged.
   offset (`offset` vs `guide_offset`) via
   `MainWindow.on_waveform_offset_changed`.
 - `ClipLibraryWidget` (`ui/clip_library.py`): right sidebar tabs ("Library",
-  "DMX Channels"). `QToolBox` with one section per fixture (from
-  `config.midi_note_map`) plus one per LED scene bank (from the `ledbar` def's
-  banks via `scene_loader.load_led_scenes()`).
-  Click previews; drag drops onto the timeline; per-fixture pages hide notes 1–7.
+  "DMX Channels"). One group per patched fixture (its channel verbs, blackout
+  and colour macros, all named by `describe_note(note, fdef)`), one per scene
+  bank (`scene_loader.load_scenes(type, mode)`) and one for its chases, plus a
+  global "Show" group (START / song parts / blackout-all). Click previews; drag
+  drops onto the timeline. A scene's preview payload **leads with note 48
+  TAKE_MANUAL**, or the auto/song-part program overwrites it on the next frame.
 - `DMXDisplayWidget` (`ui/dmx_display.py`): live channel monitor.
 - `ErrorDialogManager` (`ui/error_dialogs.py`): centralized retry/reset dialogs.
 
@@ -660,9 +686,13 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `fixture_designer.py` (edit-mode toolbar + the per-selection inspector,
   incl. the mode combo shown only for multi-mode types),
   `add_fixture_dialog.py` (the fixture browser + patch footer),
-  `fixture_scenes_tab.py` (its Scenes tab: bank/scene list, channel faders and
-  the stage-engine preview, written to the `.tdmx.json` sidecar by its own
-  Create/Save button),
+  `fixture_scenes_tab.py` (its Scenes tab: bank/scene list over the shared
+  console, written to the `.tdmx.json` sidecar by its own Create/Save button),
+  `fixture_console.py` (`FaderStrip` + `OutputCard` + `ScenePreview` +
+  `summary_html`: one fixture's channels as a console, shared with the
+  timeline's clip editor),
+  `channel_affordances.py` (`ColorWheel` via `solve_color`, `CapabilityGrid`
+  over a channel's discrete capabilities, `affordance_for`),
   `fixture_chips.py` (the Qt chip widget; the family table it shows lives in
   `core/channel_families.py`),
   `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
@@ -680,8 +710,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `worker.py` (threaded output with controller/port fan-out).
 - `software_controller/` — `main.py` (`DMXController`), `artnet_sender.py`,
   `usb_dmx_sender.py` (FTDI DMX512 TX: break/MAB/start-code, self-disabling),
-  `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
-  from the `ledbar` fixture def's banks). Scene banks/chases live in the
+  `scene_loader.py` (`load_scenes(type, mode)` → immutable `Scene` records
+  sourced from any fixture def's banks). Scene banks/chases live in the
   `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
 - `webremote/` — `server.py` (`WebRemoteWorker`: aiohttp HTTP+WS in a
   QThread), `manager.py` (`WebRemoteManager`: Qt bridge — worker lifecycle,
@@ -690,9 +720,12 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `style.css`, `app.js`; bundled via build.spec).
 - `timeline/` — `manager.py` (coordinator, one `MidiEventsTrack` per fixture
   filter), `tracks/` (`base.py`, `ruler.py`, `waveform.py`, `midi_events.py`),
-  `widgets/` (`tooltip.py`, `content_view.py`, `midi_event_edit.py`,
-  `scene_edit.py` — gradient slider/color wheel/animation grid,
+  `widgets/` (`tooltip.py`, `content_view.py`, `clip_edit.py` — the generalized
+  `ClipEditDialog`, `verb_editors.py` — one velocity editor per verb class,
   `start_event_edit.py` — START-event editor, `resize_handle.py`).
+  `clip_edit` is NOT re-exported from `widgets/__init__.py`: it pulls in the
+  stage render engine (via `ui.fixture_console`) and that package is imported by
+  the tracks themselves — import it from `.widgets.clip_edit` directly.
 - `tests/` — headless characterization tests (standalone scripts; see above).
   `ofl_factory.py` builds synthetic OFL documents so a capability nobody ships a
   fixture for can still be exercised; `test_capability_coverage.py` and
@@ -711,6 +744,55 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `window.midi_events_track_height`). Cross-component sync via
   `MidiManager.data_changed` (events cached in `_cached_events`); scene groups
   collapse to one `DraggableMidiEvent` via `build_render_units()`.
+
+### Editing a clip (`timeline/widgets/clip_edit.py`)
+
+**A clip is edited against the fixture it lives on, never against a table.** Its
+note is a *verb*, its MIDI channel selects the fixture, and its velocity is that
+verb's parameter — so `Timeline._fdef(channel)` (plus `_fixture_type` /
+`_dmx_start` / `_is_locked`) resolves the patch entry first and everything the
+dialog offers follows from that `FixtureDef`.
+
+One dispatcher, `on_midi_event_edit_by_id` — group → `_edit_scene`, note 60 →
+the untouched `StartEventEditDialog` (its velocity packs a hue and a palette
+mode, which is not a verb parameter like the others), else `ClipEditDialog`.
+`on_add_event_requested` is the third door.
+
+- **Two pages, one shell.** A scene group gets the `ui/fixture_console.py`
+  console (a fader per channel over the live preview, plus a `ColorWheel` where
+  `solve_color` can place a hue). Any other clip gets its verb's own editor from
+  `verb_editors.py`, picked by `editor_class_for(note)` off a table whose
+  predicates mirror `handle_note_on`'s match arms — a chase index and a blend
+  time are not the same control. **Retyping resets the velocity**
+  (`default_velocity_for`): channel-at-200 is velocity 100, and carried across
+  it would silently select chase #100.
+- **The picker is `note_layout.verb_choices(fdef)`**, gated by the same
+  `note_applies_to` drag-and-drop validates with, so the dialog can never author
+  a clip a drop would have refused. Song parts are excluded on a fixture lane
+  (they are global and carry no channel).
+- **Only `present | touched` is submitted.** `present` is what the group had a
+  member for on open; untouched channels stay out and render dimmed. Submitting
+  every fader would silently widen a scene, and an absent channel holds the last
+  frame's value while a present one at its default *forces* it — different looks.
+  Growth goes through `update_scene(..., remove=...)`, which inserts missing
+  members and never drops below 2 (one member stops being a group).
+- **Only a fixture's first 23 slots are reachable**: the channel verbs are notes
+  1–23 and 24 up are scene-load, so `field_note_map` caps there and
+  `FaderStrip.set_addressable_limit` greys the tail.
+- **Live output** (`live_messages` → `Timeline.preview_requested` →
+  `AppCore.preview_clip`) is opt-in, never persisted, 30 ms-throttled, and locked
+  out while the transport plays (`Timeline.set_transport_playing`) or the lane is
+  muted/locked. Scene and channel-verb payloads **lead with note 48 TAKE_MANUAL**
+  or the auto/song-part program overwrites them on its next frame — the clip
+  library's previews do the same. Cancel re-sends the opening values *once*; that
+  is a re-send, not a restore.
+- **"Save as scene…" writes the fixture library immediately**, independent of
+  OK/Cancel — it edits a type every show shares, not this clip. It then
+  re-resolves `fdef` (`save_fixture_banks` clears the cache) and emits
+  `library_changed` so the clip-library panel rebuilds.
+- Writes go through `move_event`/`move_scene` for the time (they clamp and keep
+  the BLACKOUT markers honest, unlike `edit_event(time=...)`), then
+  **`_schedule_refresh()` — never `refresh_from_manager()`**.
 
 ## Common Debugging
 

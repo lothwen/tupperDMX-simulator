@@ -38,25 +38,27 @@ is safe (the chases naming it are rewritten to follow).
 
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QPointF, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle,
-    QStyleOptionSlider, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit, QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from core import ofl
 from core.fixture_library import FixtureDef, save_fixture_banks
-from core.channel_families import channel_family
-from core.fixture_state import FixtureState, capability_at, resolve_state
+from core.fixture_state import FixtureState, resolve_state
 from core.note_layout import SONG_PARTS
-from ui.fixture_chips import flow_holder, rgba
-from ui.stage.base import body_count, body_spacing, body_size
-from ui.stage.emission.base import emission_reach
-from ui.stage.registry import renderer_for
+from ui.fixture_chips import flow_holder
+# The console — faders, preview and read-out — is shared with the timeline's
+# clip editor, so a scene looks the same wherever it is edited. Re-exported
+# under their old private names for the callers (and tests) that reach in.
+from ui.fixture_console import (  # noqa: F401  (re-exported)
+    ChannelFader, FaderSlider as _FaderSlider, FaderStrip, OutputCard,
+    ScenePreview, capability_rows as _capability_rows, clamp as _clamp,
+    colour_text as _colour_text, escape as _escape, scene_values,
+    strobe_text as _strobe_text, summary_html as _summary_html,
+)
 from tupperlogger import get_logger
 
 logger = get_logger("ui.fixture_scenes")
@@ -67,239 +69,6 @@ DEFAULT_BANK_NAME = "SCENES"
 # without a parallel index.
 _ROLE_BANK = Qt.ItemDataRole.UserRole
 _ROLE_INDEX = Qt.ItemDataRole.UserRole + 1
-
-
-# --- preview ------------------------------------------------------------------
-
-class ScenePreview(QGraphicsView):
-    """The stage's own renderer for a fixture, fed a scene instead of live DMX.
-
-    Builds one body per `body_count()` exactly as the stage does, so a
-    multi-body fixture (the LED bar's eight bars) previews as the row it really
-    is rather than as a single strip.
-
-    The backdrop is the card's own gradient, repainted here: the view is a child
-    widget, so it has to draw what the card behind it would have drawn.
-    """
-
-    # Room around the bodies for the glow, as a fraction of ONE body — scaling
-    # it off the whole row instead would shrink a wide fixture (the LED bar's
-    # eight bars) into a sliver.
-    _PAD_X = 0.8
-    _PAD_Y = 0.3
-
-    # Keep in step with QFrame#AddFxOutputCard's gradient, or the preview shows
-    # as a block against the card it sits on.
-    _BACKDROP_TOP = QColor("#1a1a1a")
-    _BACKDROP_BOTTOM = QColor("#0e0e0e")
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._scene = QGraphicsScene(self)
-        # Same reason as the stage: this scene is torn down and rebuilt on every
-        # fixture change, and the BSP index keeps dangling child-item pointers.
-        self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-        self.setScene(self._scene)
-        self.setObjectName("AddFxPreview")
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setRenderHints(QPainter.RenderHint.Antialiasing
-                            | QPainter.RenderHint.SmoothPixmapTransform)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._bodies: List = []
-
-    def drawBackground(self, painter, rect):
-        # Anchored to the widget rather than the scene, so the fall stays the
-        # same whatever the fixture on show zooms the view to.
-        top = self.mapToScene(0, 0).y()
-        bottom = self.mapToScene(0, self.viewport().height()).y()
-        gradient = QLinearGradient(QPointF(0, top), QPointF(0, bottom))
-        gradient.setColorAt(0, self._BACKDROP_TOP)
-        gradient.setColorAt(1, self._BACKDROP_BOTTOM)
-        painter.fillRect(rect, gradient)
-
-    def set_fixture(self, fdef: Optional[FixtureDef]) -> None:
-        """Rebuild the preview for a fixture definition (None clears it)."""
-        self.clear()
-        if fdef is None:
-            return
-
-        renderer = renderer_for(fdef)
-        count = body_count(fdef)
-        spacing = body_spacing(fdef)
-        width, height = body_size(fdef)
-        for index in range(count):
-            body = renderer(fdef, index * spacing, 0.0, body_index=index)
-            self._scene.addItem(body)
-            self._bodies.append(body)
-
-        span = spacing * (count - 1) + width
-        pad_x = width * self._PAD_X
-        pad_y = height * self._PAD_Y
-        # A fixture with optics throws its cone downstage, well past its body.
-        below = pad_y + emission_reach(fdef)
-        self._scene.setSceneRect(-pad_x, -pad_y,
-                                 span + 2 * pad_x, height + pad_y + below)
-        self._fit()
-
-    def set_values(self, values: List[int]) -> None:
-        """Feed every body the same DMX slice, as the stage does."""
-        for body in self._bodies:
-            body.update_dmx(values)
-
-    def clear(self) -> None:
-        """Stop and drop the current bodies (timers, animations and all)."""
-        for body in self._bodies:
-            body.cleanup()
-            self._scene.removeItem(body)
-        self._bodies = []
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit()
-
-    def _fit(self) -> None:
-        if self._bodies:
-            self.fitInView(self._scene.sceneRect(),
-                           Qt.AspectRatioMode.KeepAspectRatio)
-
-
-# --- faders -------------------------------------------------------------------
-
-class _FaderSlider(QSlider):
-    """A vertical slider that behaves like a console fader.
-
-    Qt's default is to page-step when the groove is clicked, which on a 96 px
-    column means several clicks to cross the range. Here the whole bar is the
-    handle: press anywhere and the value jumps there, then follows the drag.
-    Right-click is the flash button — full, or back to zero if already full.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(Qt.Orientation.Vertical, parent)
-        self.setCursor(Qt.CursorShape.SizeVerCursor)
-        # Right-click is ours; don't let it bubble up as a context menu.
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.RightButton:
-            self.setValue(0 if self.value() >= self.maximum() else self.maximum())
-            event.accept()
-            return
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.setSliderDown(True)
-            self._set_from_y(event.position().y())
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.isSliderDown():
-            self._set_from_y(event.position().y())
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
-            self.setSliderDown(False)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def _set_from_y(self, y: float) -> None:
-        """Set the value from a y inside the widget — top is the maximum.
-
-        The handle is centred on the cursor, so the travel is the groove minus
-        one handle, exactly as a drag of the handle itself would be.
-        """
-        option = QStyleOptionSlider()
-        self.initStyleOption(option)
-        groove = self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider, option,
-            QStyle.SubControl.SC_SliderGroove, self)
-        handle = self.style().subControlRect(
-            QStyle.ComplexControl.CC_Slider, option,
-            QStyle.SubControl.SC_SliderHandle, self)
-        position = y - groove.top() - handle.height() / 2
-        self.setValue(QStyle.sliderValueFromPosition(
-            self.minimum(), self.maximum(), int(position),
-            groove.height() - handle.height(), True))
-
-
-class ChannelFader(QWidget):
-    """One channel's column: value, slider, DMX address and name.
-
-    Coloured by the channel's family, so a strip of faders reads the same way
-    the Channels tab's chips do.
-    """
-
-    valueChanged = pyqtSignal(int, int)      # channel index, value
-
-    def __init__(self, index: int, spec, address: int, parent=None):
-        super().__init__(parent)
-        self.index = index
-        _label, color = channel_family(spec)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        self.value_label = QLabel("000")
-        self.value_label.setObjectName("AddFxFaderValue")
-        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.value_label)
-
-        self.slider = _FaderSlider()
-        self.slider.setObjectName("AddFxFader")
-        self.slider.setRange(0, 255)
-        self.slider.setFixedHeight(96)
-        self.slider.setToolTip("Drag anywhere on the bar · "
-                               "right-click for full, again for zero")
-        # A vertical slider's add-page is the part BELOW the handle, so that is
-        # what carries the fill. It is a gradient rather than a flat block so
-        # the bar reads as a lit column: brightest just under the handle, the
-        # family colour proper below it, deepening toward the base.
-        tint = QColor(color)
-        fill = (f"qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-                f" stop:0 {tint.lighter(118).name()},"
-                f" stop:0.35 {color},"
-                f" stop:1 {tint.darker(128).name()})")
-        self.slider.setStyleSheet(
-            f"QSlider#AddFxFader::add-page:vertical {{ background: {fill}; }}"
-            f"QSlider#AddFxFader::handle:vertical {{ background: {rgba(color, 235)}; }}")
-        self.slider.valueChanged.connect(self._on_changed)
-        layout.addWidget(self.slider, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.address_label = QLabel(str(address))
-        self.address_label.setObjectName("AddFxFaderAddress")
-        self.address_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.address_label)
-
-        # A fine slot carries its coarse channel's label, so name it by its own
-        # key ("Pan fine") — the same way the Channels tab does.
-        text = spec.field if spec.fine_of >= 0 else (spec.label or spec.field)
-        name = QLabel(text)
-        name.setObjectName("AddFxFaderName")
-        name.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        name.setWordWrap(True)
-        name.setFixedWidth(56)
-        name.setToolTip(text)
-        layout.addWidget(name, 1)
-
-    def set_address(self, address: int) -> None:
-        self.address_label.setText(str(address))
-
-    def set_value(self, value: int) -> None:
-        """Set the fader without reporting it back as an edit."""
-        self.slider.blockSignals(True)
-        self.slider.setValue(value)
-        self.slider.blockSignals(False)
-        self.value_label.setText(f"{value:03d}")
-
-    def _on_changed(self, value: int) -> None:
-        self.value_label.setText(f"{value:03d}")
-        self.valueChanged.emit(self.index, value)
 
 
 # --- song-part tags -----------------------------------------------------------
@@ -435,7 +204,6 @@ class FixtureScenesTab(QWidget):
         # The scene being composed while nothing is selected: it belongs to no
         # bank yet, which is exactly what Create is for.
         self._draft: Optional[dict] = None
-        self._faders: List[ChannelFader] = []
         self._part_chips: Dict[str, _PartChip] = {}
         # Whether `self._banks` has run ahead of the sidecar. A draft never
         # counts — it isn't in them yet.
@@ -550,79 +318,24 @@ class FixtureScenesTab(QWidget):
         parts_row.addWidget(holder, 1)
         layout.addLayout(parts_row)
 
-        layout.addWidget(self._build_output_card(), 1)
-        layout.addWidget(self._build_faders_card())
+        self._output = OutputCard()
+        self._faders = FaderStrip()
+        self._faders.value_changed.connect(self._on_fader_changed)
+        layout.addWidget(self._output, 1)
+        layout.addWidget(self._faders)
         return panel
 
-    def _build_output_card(self) -> QWidget:
-        # Its own card style: this one IS the dark surface the preview draws on,
-        # read-out and caption included, rather than a light card with a dark
-        # panel dropped into it.
-        card = QFrame()
-        card.setObjectName("AddFxOutputCard")
-        outer = QVBoxLayout(card)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+    @property
+    def preview(self):
+        """The stage preview inside the output card. Kept as a direct handle
+        because `AddFixtureDialog` calls `scenes_tab.preview.clear()` on close —
+        the bodies own animation timers on the shared 30 Hz clock."""
+        return self._output.preview
 
-        header = QHBoxLayout()
-        header.setContentsMargins(14, 10, 14, 0)
-        header.addStretch(1)
-        caption = QLabel("SIMULATED OUTPUT")
-        caption.setObjectName("AddFxHint")
-        header.addWidget(caption)
-        outer.addLayout(header)
-
-        body = QHBoxLayout()
-        body.setContentsMargins(14, 4, 8, 8)
-        body.setSpacing(12)
-        self.summary_label = QLabel()
-        self.summary_label.setObjectName("AddFxSceneSummary")
-        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignLeft
-                                        | Qt.AlignmentFlag.AlignTop)
-        # Only as wide as the read-out needs: the rest of the card is the
-        # preview, and a beam wants room around it more than this does.
-        self.summary_label.setFixedWidth(168)
-        body.addWidget(self.summary_label)
-        self.preview = ScenePreview()
-        self.preview.setMinimumHeight(150)
-        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                   QSizePolicy.Policy.Expanding)
-        body.addWidget(self.preview, 1)
-        outer.addLayout(body, 1)
-        return card
-
-    def _build_faders_card(self) -> QWidget:
-        card = QFrame()
-        card.setObjectName("AddFxCard")
-        outer = QVBoxLayout(card)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 14, 0)
-        self.faders_title = QLabel("CHANNEL FADERS")
-        self.faders_title.setObjectName("AddFxCardTitle")
-        header.addWidget(self.faders_title, 1)
-        hint = QLabel("drag · right-click full/off · live output")
-        hint.setObjectName("AddFxHint")
-        header.addWidget(hint)
-        outer.addLayout(header)
-
-        self.faders_scroll = QScrollArea()
-        self.faders_scroll.setObjectName("AddFxScroll")
-        self.faders_scroll.setWidgetResizable(True)
-        self.faders_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.faders_scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.faders_scroll.setFixedHeight(196)
-        holder = QWidget()
-        self._faders_layout = QHBoxLayout(holder)
-        self._faders_layout.setContentsMargins(12, 10, 12, 10)
-        self._faders_layout.setSpacing(6)
-        self._faders_layout.addStretch(1)
-        self.faders_scroll.setWidget(holder)
-        outer.addWidget(self.faders_scroll)
-        return card
+    @property
+    def summary_label(self):
+        """The SIMULATED OUTPUT read-out inside the output card."""
+        return self._output.summary_label
 
     # ------------------------------------------------------------------
     # Population
@@ -648,31 +361,15 @@ class FixtureScenesTab(QWidget):
         # live from the first click, and Create is what puts them in a bank.
         self._draft = self._default_scene() if fdef else None
 
-        self.faders_title.setText(
-            f"CHANNEL FADERS — {fdef.mode.upper()}" if fdef and fdef.mode
-            else "CHANNEL FADERS")
-        self._build_faders()
-        self.preview.set_fixture(fdef)
+        self._faders.set_fixture(fdef, dmx_start)
+        self._output.set_fixture(fdef)
         self._rebuild_tree()
         self._refresh_editor()
 
     def set_dmx_start(self, dmx_start: int) -> None:
         """Re-stamp the fader addresses against a new DMX start."""
         self._dmx_start = dmx_start
-        for fader in self._faders:
-            fader.set_address(dmx_start + fader.index)
-
-    def _build_faders(self) -> None:
-        for fader in self._faders:
-            fader.setParent(None)
-        self._faders = []
-        if self._fdef is None:
-            return
-        for index, spec in enumerate(self._fdef.channels):
-            fader = ChannelFader(index, spec, self._dmx_start + index)
-            fader.valueChanged.connect(self._on_fader_changed)
-            self._faders_layout.insertWidget(self._faders_layout.count() - 1, fader)
-            self._faders.append(fader)
+        self._faders.set_dmx_start(dmx_start)
 
     def _rebuild_tree(self) -> None:
         """Relay the whole tree from `self._banks`, keeping the selection."""
@@ -777,12 +474,7 @@ class FixtureScenesTab(QWidget):
     def _scene_values(self, scene: Optional[dict]) -> List[int]:
         """A scene as a DMX slice, filling anything it omits with the channel's
         declared default — the same fallback `resolve_state` applies."""
-        if self._fdef is None:
-            return []
-        if scene is None:
-            return [0] * self._fdef.channel_count
-        return [_clamp(scene.get(spec.field, spec.default_value))
-                for spec in self._fdef.channels]
+        return scene_values(self._fdef, scene)
 
     def _resolve(self, values: List[int]) -> Optional[FixtureState]:
         if self._fdef is None or not values:
@@ -801,8 +493,7 @@ class FixtureScenesTab(QWidget):
         self.name_input.setEnabled(editable)
         for chip in self._part_chips.values():
             chip.setEnabled(editable)
-        for fader in self._faders:
-            fader.setEnabled(editable)
+        self._faders.set_editable(editable)
         self.duplicate_button.setEnabled(self.tree.currentItem() is not None)
         self.delete_button.setEnabled(self.tree.currentItem() is not None)
         self._refresh_save_button()
@@ -825,16 +516,12 @@ class FixtureScenesTab(QWidget):
             chip.setChecked(name in parts)
 
         values = self._scene_values(scene)
-        for fader in self._faders:
-            fader.set_value(values[fader.index] if fader.index < len(values) else 0)
+        self._faders.set_values(values)
         self._refresh_output(values)
         self._refresh_status()
 
     def _refresh_output(self, values: List[int]) -> None:
-        self.preview.set_values(values)
-        state = self._resolve(values)
-        self.summary_label.setText(
-            _summary_html(self._fdef, state, values) if state else "")
+        self._output.set_values(values)
 
     def _refresh_save_button(self) -> None:
         """Create a draft, Save the banks. A draft is always there to be
@@ -1199,92 +886,3 @@ class FixtureScenesTab(QWidget):
         self._refresh_status()
 
 
-# --- formatting ---------------------------------------------------------------
-
-def _clamp(value) -> int:
-    try:
-        return max(0, min(255, int(value)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _summary_html(fdef: Optional[FixtureDef], state: FixtureState,
-                  values: List[int]) -> str:
-    """The SIMULATED OUTPUT read-out: what the engine resolved, in words.
-
-    Everything comes from the resolved state, except the rows OFL keeps on the
-    channel rather than in `FixtureState` (position, fog), which are read back
-    off the capability covering the current value.
-    """
-    rows: List[Tuple[str, str]] = [
-        ("intensity", f"{state.intensity * 100:.0f} %"),
-        ("colour", _colour_text(state)),
-    ]
-    rows.extend(_capability_rows(fdef, values))
-    rows.append(("strobe", _strobe_text(state)))
-    if state.effect:
-        speed = (f" · {state.effect_speed_hz:.1f} Hz"
-                 if state.effect_speed_hz else "")
-        rows.append(("effect", f"{state.effect}{speed}"))
-    if state.zoom_deg is not None:
-        rows.append(("zoom", f"{state.zoom_deg:.0f}°"))
-
-    cells = "".join(
-        f"<tr><td style='color:#7a7a7a;padding-right:14px'>{_escape(name)}</td>"
-        f"<td style='color:#d6d6d6'>{_escape(value)}</td></tr>"
-        for name, value in rows)
-    return f"<table cellspacing='0' cellpadding='1'>{cells}</table>"
-
-
-def _escape(text: str) -> str:
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;"))
-
-
-def _colour_text(state: FixtureState) -> str:
-    if state.color_temp_k is not None:
-        return f"{state.color_temp_k:.0f} K"
-    if not state.has_color:
-        return "fixed / white"
-    red, green, blue = state.rgb
-    cells = f" · {len(state.emitters)} cells" if len(state.emitters) > 1 else ""
-    return f"#{red:02x}{green:02x}{blue:02x}{cells}"
-
-
-def _strobe_text(state: FixtureState) -> str:
-    if state.strobe_hz:
-        return f"{state.shutter.lower()} · {state.strobe_hz:.1f} Hz"
-    return state.shutter.lower()
-
-
-# Capability types worth a read-out that FixtureState doesn't carry, and the
-# entity to read them as.
-_EXTRA_ROWS = (
-    ("Pan", "pan", "angle", "angle", "°"),
-    ("Tilt", "tilt", "angle", "angle", "°"),
-    ("Fog", "fog", "", "", ""),
-    ("FogOutput", "fog", "fogOutput", "percent", ""),
-)
-
-
-def _capability_rows(fdef: Optional[FixtureDef],
-                     values: List[int]) -> List[Tuple[str, str]]:
-    """Read-out rows for channels whose meaning lives on the capability."""
-    if fdef is None:
-        return []
-    found: Dict[str, str] = {}
-    for index, spec in enumerate(fdef.channels):
-        if spec.fine_of >= 0 or index >= len(values):
-            continue
-        cap = capability_at(fdef, index, values)
-        if cap is None:
-            continue
-        for cap_type, label, key, kind, unit in _EXTRA_ROWS:
-            if cap.type != cap_type or label in found:
-                continue
-            amount = (ofl.capability_value(cap, values[index], key, kind)
-                      if key else None)
-            found[label] = (f"{amount:.0f}{unit}" if amount is not None
-                            else str(cap.get("comment") or "—"))
-
-    return list(found.items())
