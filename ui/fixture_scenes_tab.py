@@ -38,13 +38,14 @@ is safe (the chases naming it are rewritten to follow).
 
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QPointF, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QToolButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle,
+    QStyleOptionSlider, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from core import ofl
@@ -52,7 +53,7 @@ from core.fixture_library import FixtureDef, save_fixture_banks
 from core.channel_families import channel_family
 from core.fixture_state import FixtureState, capability_at, resolve_state
 from core.note_layout import SONG_PARTS
-from ui.fixture_chips import rgba
+from ui.fixture_chips import flow_holder, rgba
 from ui.stage.base import body_count, body_spacing, body_size
 from ui.stage.emission.base import emission_reach
 from ui.stage.registry import renderer_for
@@ -76,6 +77,9 @@ class ScenePreview(QGraphicsView):
     Builds one body per `body_count()` exactly as the stage does, so a
     multi-body fixture (the LED bar's eight bars) previews as the row it really
     is rather than as a single strip.
+
+    The backdrop is the card's own gradient, repainted here: the view is a child
+    widget, so it has to draw what the card behind it would have drawn.
     """
 
     # Room around the bodies for the glow, as a fraction of ONE body — scaling
@@ -84,6 +88,11 @@ class ScenePreview(QGraphicsView):
     _PAD_X = 0.8
     _PAD_Y = 0.3
 
+    # Keep in step with QFrame#AddFxOutputCard's gradient, or the preview shows
+    # as a block against the card it sits on.
+    _BACKDROP_TOP = QColor("#1a1a1a")
+    _BACKDROP_BOTTOM = QColor("#0e0e0e")
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
@@ -91,13 +100,23 @@ class ScenePreview(QGraphicsView):
         # fixture change, and the BSP index keeps dangling child-item pointers.
         self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.setScene(self._scene)
+        self.setObjectName("AddFxPreview")
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setRenderHints(QPainter.RenderHint.Antialiasing
                             | QPainter.RenderHint.SmoothPixmapTransform)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setBackgroundBrush(QColor("#0d0d0d"))
         self._bodies: List = []
+
+    def drawBackground(self, painter, rect):
+        # Anchored to the widget rather than the scene, so the fall stays the
+        # same whatever the fixture on show zooms the view to.
+        top = self.mapToScene(0, 0).y()
+        bottom = self.mapToScene(0, self.viewport().height()).y()
+        gradient = QLinearGradient(QPointF(0, top), QPointF(0, bottom))
+        gradient.setColorAt(0, self._BACKDROP_TOP)
+        gradient.setColorAt(1, self._BACKDROP_BOTTOM)
+        painter.fillRect(rect, gradient)
 
     def set_fixture(self, fdef: Optional[FixtureDef]) -> None:
         """Rebuild the preview for a fixture definition (None clears it)."""
@@ -147,6 +166,67 @@ class ScenePreview(QGraphicsView):
 
 # --- faders -------------------------------------------------------------------
 
+class _FaderSlider(QSlider):
+    """A vertical slider that behaves like a console fader.
+
+    Qt's default is to page-step when the groove is clicked, which on a 96 px
+    column means several clicks to cross the range. Here the whole bar is the
+    handle: press anywhere and the value jumps there, then follows the drag.
+    Right-click is the flash button — full, or back to zero if already full.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        # Right-click is ours; don't let it bubble up as a context menu.
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.setValue(0 if self.value() >= self.maximum() else self.maximum())
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setSliderDown(True)
+            self._set_from_y(event.position().y())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.isSliderDown():
+            self._set_from_y(event.position().y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _set_from_y(self, y: float) -> None:
+        """Set the value from a y inside the widget — top is the maximum.
+
+        The handle is centred on the cursor, so the travel is the groove minus
+        one handle, exactly as a drag of the handle itself would be.
+        """
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, option,
+            QStyle.SubControl.SC_SliderGroove, self)
+        handle = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, option,
+            QStyle.SubControl.SC_SliderHandle, self)
+        position = y - groove.top() - handle.height() / 2
+        self.setValue(QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(), int(position),
+            groove.height() - handle.height(), True))
+
+
 class ChannelFader(QWidget):
     """One channel's column: value, slider, DMX address and name.
 
@@ -170,14 +250,23 @@ class ChannelFader(QWidget):
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.value_label)
 
-        self.slider = QSlider(Qt.Orientation.Vertical)
+        self.slider = _FaderSlider()
         self.slider.setObjectName("AddFxFader")
         self.slider.setRange(0, 255)
         self.slider.setFixedHeight(96)
+        self.slider.setToolTip("Drag anywhere on the bar · "
+                               "right-click for full, again for zero")
         # A vertical slider's add-page is the part BELOW the handle, so that is
-        # what carries the fill.
+        # what carries the fill. It is a gradient rather than a flat block so
+        # the bar reads as a lit column: brightest just under the handle, the
+        # family colour proper below it, deepening toward the base.
+        tint = QColor(color)
+        fill = (f"qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+                f" stop:0 {tint.lighter(118).name()},"
+                f" stop:0.35 {color},"
+                f" stop:1 {tint.darker(128).name()})")
         self.slider.setStyleSheet(
-            f"QSlider#AddFxFader::add-page:vertical {{ background: {color}; }}"
+            f"QSlider#AddFxFader::add-page:vertical {{ background: {fill}; }}"
             f"QSlider#AddFxFader::handle:vertical {{ background: {rgba(color, 235)}; }}")
         self.slider.valueChanged.connect(self._on_changed)
         layout.addWidget(self.slider, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -211,6 +300,48 @@ class ChannelFader(QWidget):
     def _on_changed(self, value: int) -> None:
         self.value_label.setText(f"{value:03d}")
         self.valueChanged.emit(self.index, value)
+
+
+# --- song-part tags -----------------------------------------------------------
+
+class _PartChip(QLabel):
+    """One song-part tag: a chip you click, not a button.
+
+    A label rather than a checkable QPushButton because that is what these are
+    — tags — and a button carries chrome a tag shouldn't: its own minimum size
+    and the pressed/raised look every other button in the dialog has. The state
+    rides on a `checked` property, which is how the stylesheet reaches it (a
+    label has no `:checked` pseudo-state).
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("AddFxSongPart")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._checked = False
+        self.setProperty("checked", "false")
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:
+        if checked == self._checked:
+            return
+        self._checked = checked
+        self.setProperty("checked", "true" if checked else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):
+        # A disabled widget never gets here, so there is nothing to guard.
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked)
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
 
 
 # --- the scene list -----------------------------------------------------------
@@ -305,7 +436,7 @@ class FixtureScenesTab(QWidget):
         # bank yet, which is exactly what Create is for.
         self._draft: Optional[dict] = None
         self._faders: List[ChannelFader] = []
-        self._part_buttons: Dict[str, QPushButton] = {}
+        self._part_chips: Dict[str, _PartChip] = {}
         # Whether `self._banks` has run ahead of the sidecar. A draft never
         # counts — it isn't in them yet.
         self._dirty = False
@@ -400,26 +531,23 @@ class FixtureScenesTab(QWidget):
         layout.addLayout(name_row)
 
         parts_row = QHBoxLayout()
-        parts_row.setSpacing(4)
+        parts_row.setSpacing(12)      # same gutter as the name row above
         parts_caption = QLabel("SONG PARTS")
         parts_caption.setObjectName("AddFxFieldLabel")
         parts_caption.setFixedWidth(96)
-        parts_row.addWidget(parts_caption)
-        parts_row.addSpacing(8)
+        parts_row.addWidget(parts_caption, 0, Qt.AlignmentFlag.AlignTop)
+        # The nine tags fit one row at the dialog's own width; the flow layout
+        # is there for when it doesn't — squeezed into a QHBoxLayout they would
+        # overlap instead. Each is sized by the stylesheet's font, which is the
+        # only thing that knows how wide the text really is.
+        holder = flow_holder(spacing=4)
         for part in SONG_PARTS:
-            button = QPushButton(part)
-            button.setObjectName("AddFxSongPart")
-            button.setCheckable(True)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.setToolTip(f"Offer this scene automatically during {part}")
-            # Chips are elided rather than wrapped when squeezed, so the text
-            # has to reserve its own width.
-            button.setFixedWidth(
-                button.fontMetrics().horizontalAdvance(part) + 16)
-            button.clicked.connect(self._on_song_parts_changed)
-            self._part_buttons[part] = button
-            parts_row.addWidget(button)
-        parts_row.addStretch(1)
+            chip = _PartChip(part)
+            chip.setToolTip(f"Offer this scene automatically during {part}")
+            chip.clicked.connect(self._on_song_parts_changed)
+            self._part_chips[part] = chip
+            holder.layout().addWidget(chip)
+        parts_row.addWidget(holder, 1)
         layout.addLayout(parts_row)
 
         layout.addWidget(self._build_output_card(), 1)
@@ -427,14 +555,17 @@ class FixtureScenesTab(QWidget):
         return panel
 
     def _build_output_card(self) -> QWidget:
+        # Its own card style: this one IS the dark surface the preview draws on,
+        # read-out and caption included, rather than a light card with a dark
+        # panel dropped into it.
         card = QFrame()
-        card.setObjectName("AddFxCard")
+        card.setObjectName("AddFxOutputCard")
         outer = QVBoxLayout(card)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         header = QHBoxLayout()
-        header.setContentsMargins(14, 0, 14, 0)
+        header.setContentsMargins(14, 10, 14, 0)
         header.addStretch(1)
         caption = QLabel("SIMULATED OUTPUT")
         caption.setObjectName("AddFxHint")
@@ -448,7 +579,9 @@ class FixtureScenesTab(QWidget):
         self.summary_label.setObjectName("AddFxSceneSummary")
         self.summary_label.setAlignment(Qt.AlignmentFlag.AlignLeft
                                         | Qt.AlignmentFlag.AlignTop)
-        self.summary_label.setFixedWidth(240)
+        # Only as wide as the read-out needs: the rest of the card is the
+        # preview, and a beam wants room around it more than this does.
+        self.summary_label.setFixedWidth(168)
         body.addWidget(self.summary_label)
         self.preview = ScenePreview()
         self.preview.setMinimumHeight(150)
@@ -470,7 +603,7 @@ class FixtureScenesTab(QWidget):
         self.faders_title = QLabel("CHANNEL FADERS")
         self.faders_title.setObjectName("AddFxCardTitle")
         header.addWidget(self.faders_title, 1)
-        hint = QLabel("drag · live output")
+        hint = QLabel("drag · right-click full/off · live output")
         hint.setObjectName("AddFxHint")
         header.addWidget(hint)
         outer.addLayout(header)
@@ -666,8 +799,8 @@ class FixtureScenesTab(QWidget):
         scene = self._current_scene()
         editable = scene is not None
         self.name_input.setEnabled(editable)
-        for button in self._part_buttons.values():
-            button.setEnabled(editable)
+        for chip in self._part_chips.values():
+            chip.setEnabled(editable)
         for fader in self._faders:
             fader.setEnabled(editable)
         self.duplicate_button.setEnabled(self.tree.currentItem() is not None)
@@ -688,8 +821,8 @@ class FixtureScenesTab(QWidget):
 
         parts = scene.get("song_parts") if scene else None
         parts = set(parts) if isinstance(parts, list) else set()
-        for name, button in self._part_buttons.items():
-            button.setChecked(name in parts)
+        for name, chip in self._part_chips.items():
+            chip.setChecked(name in parts)
 
         values = self._scene_values(scene)
         for fader in self._faders:
@@ -779,7 +912,7 @@ class FixtureScenesTab(QWidget):
         scene = self._current_scene()
         if scene is None:
             return
-        parts = [name for name in SONG_PARTS if self._part_buttons[name].isChecked()]
+        parts = [name for name in SONG_PARTS if self._part_chips[name].isChecked()]
         if parts:
             scene["song_parts"] = parts
         else:
@@ -1139,8 +1272,7 @@ def _capability_rows(fdef: Optional[FixtureDef],
     """Read-out rows for channels whose meaning lives on the capability."""
     if fdef is None:
         return []
-    rows: List[Tuple[str, str]] = []
-    seen = set()
+    found: Dict[str, str] = {}
     for index, spec in enumerate(fdef.channels):
         if spec.fine_of >= 0 or index >= len(values):
             continue
@@ -1148,11 +1280,11 @@ def _capability_rows(fdef: Optional[FixtureDef],
         if cap is None:
             continue
         for cap_type, label, key, kind, unit in _EXTRA_ROWS:
-            if cap.type != cap_type or label in seen:
+            if cap.type != cap_type or label in found:
                 continue
-            seen.add(label)
             amount = (ofl.capability_value(cap, values[index], key, kind)
                       if key else None)
-            rows.append((label, f"{amount:.0f}{unit}" if amount is not None
-                         else str(cap.get("comment") or cap.type)))
-    return rows
+            found[label] = (f"{amount:.0f}{unit}" if amount is not None
+                            else str(cap.get("comment") or "—"))
+
+    return list(found.items())

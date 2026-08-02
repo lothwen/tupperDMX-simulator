@@ -299,9 +299,9 @@ def test_the_list_keeps_banks_as_sections(qapp):
                 "picking a scene from the list loads it into the editor")
         _assert([f.slider.value() for f in tab._faders] == [255, 255, 0, 0],
                 "with the scene's values on the faders")
-        _assert(tab._part_buttons["CHORUS"].isChecked(),
+        _assert(tab._part_chips["CHORUS"].isChecked(),
                 "the scene's song_parts are shown as tags")
-        _assert(not tab._part_buttons["INTRO"].isChecked(), "and only those")
+        _assert(not tab._part_chips["INTRO"].isChecked(), "and only those")
 
         tab.set_dmx_start(100)
         _assert(tab._faders[0].address_label.text() == "100",
@@ -436,7 +436,7 @@ def test_the_faders_compose_a_new_scene_and_create_writes_it(qapp):
                 "it overwrites the scene that was picked")
         _assert(not tab.save_button.isEnabled(), "and the button goes quiet again")
 
-        tab._part_buttons["SOLO"].setChecked(True)
+        tab._part_chips["SOLO"].setChecked(True)
         tab._on_song_parts_changed()
         tab.save_button.click()
         _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["song_parts"]
