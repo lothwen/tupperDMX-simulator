@@ -7,7 +7,9 @@ from dataclasses import asdict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
-                             QStyle, QTabWidget, QDialog, QInputDialog)
+                             QStyle, QTabWidget, QDialog, QInputDialog,
+                             QAbstractSpinBox, QComboBox, QLineEdit,
+                             QPlainTextEdit, QTextEdit)
 from PyQt6.QtGui import QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
@@ -1177,10 +1179,27 @@ class MainWindow(QMainWindow):
             title += f" - {file_name}"
         self.setWindowTitle(title)
 
+    def _spacebar_toggles_playback(self):
+        """True when Space means play/pause instead of a keystroke for a widget.
+
+        The filter is installed on the QApplication, so it sees every key press
+        in the process: while a dialog is up, or a text field in this window has
+        focus, Space belongs to them and must not reach the transport.
+        """
+        active = QApplication.activeWindow()
+        if active is not None and active is not self:
+            return False
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
+                              QAbstractSpinBox)):
+            return False
+        return not (isinstance(focus, QComboBox) and focus.isEditable())
+
     def eventFilter(self, source, event):
         """Global event filter to capture spacebar from any widget."""
-        if (event.type() == QEvent.Type.KeyPress and 
-            event.key() == Qt.Key.Key_Space):
+        if (event.type() == QEvent.Type.KeyPress and
+            event.key() == Qt.Key.Key_Space and
+            self._spacebar_toggles_playback()):
             # Toggle play/pause when spacebar is pressed anywhere
             self.play_pause_playback()
             return True  # Event handled, don't pass to widget
