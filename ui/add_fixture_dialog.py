@@ -19,12 +19,15 @@ patch, and OK stays disabled until the choice is legal.
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QPoint, QRect, QSize, Qt, QUrl
-from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QPainter
+from PyQt6.QtCore import QRect, QRectF, Qt, QUrl
+from PyQt6.QtGui import (
+    QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter,
+)
 from PyQt6.QtWidgets import (
-    QButtonGroup, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLayout,
+    QButtonGroup, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSpinBox,
-    QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from core import ofl
@@ -32,7 +35,7 @@ from core.fixture_library import (
     FixtureDef, fixture_document, load_fixture_defs, resolve_fixture,
 )
 from core.channel_families import channel_family as _channel_family
-from ui.fixture_chips import chip as _chip
+from ui.fixture_chips import FlowLayout, chip as _chip
 from ui.fixture_scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -155,70 +158,87 @@ def used_dmx_spans(config) -> List[Tuple[str, int, int]]:
 
 # --- widgets ------------------------------------------------------------------
 
-class _FlowLayout(QLayout):
-    """Left-to-right layout wrapping onto a new line when it runs out of width.
+class _TreeAsideDelegate(QStyledItemDelegate):
+    """The library tree's second column: a badge on a group, a caption on a leaf.
 
-    Chips are text-sized and so unpredictably wide that no grid fits them; this
-    is the standard Qt flow-layout recipe.
+    A group's member count sits in a dark pill so it reads as a tally rather
+    than as more text, and a fixture's manufacturer/category is set a size
+    smaller and dimmer than its name so the eye lands on the name first.
+    Neither is expressible in the stylesheet — QSS reaches a tree's items but
+    not one column of them — so this paints the column and leaves the row's own
+    background, selection and hover to the QSS as before.
     """
 
-    def __init__(self, parent=None, spacing: int = 5):
-        super().__init__(parent)
-        self._items: List = []
-        self.setSpacing(spacing)
-        self.setContentsMargins(0, 0, 0, 0)
+    _BADGE_BG = QColor("#1B1D1E")
+    _BADGE_BORDER = QColor("#1B1D1E")
+    _BADGE_TEXT = QColor("#8f8f8f")
+    _CAPTION = QColor("#6f6f6f")
+    # On the blue selection band the dim grey would sink; lift it just enough.
+    _CAPTION_SELECTED = QColor("#cfe0ee")
 
-    def addItem(self, item):
-        self._items.append(item)
+    _MARGIN = 8          # right-hand breathing room, matching the tree's padding
 
-    def count(self) -> int:
-        return len(self._items)
+    def paint(self, painter, option, index):
+        style_option = QStyleOptionViewItem(option)
+        self.initStyleOption(style_option, index)
+        text = style_option.text
+        # Draw the row (its QSS background, selection, hover) with no text, then
+        # put ours in its place.
+        style_option.text = ""
+        widget = style_option.widget
+        widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem,
+                                   style_option, painter, widget)
+        if not text:
+            return
 
-    def itemAt(self, index):
-        return self._items[index] if 0 <= index < len(self._items) else None
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = _smaller_font(style_option.font)
+        painter.setFont(font)
+        if index.parent().isValid():
+            self._paint_caption(painter, style_option, font, text)
+        else:
+            self._paint_badge(painter, style_option, font, text)
+        painter.restore()
 
-    def takeAt(self, index):
-        return self._items.pop(index) if 0 <= index < len(self._items) else None
+    def _paint_badge(self, painter, option, font: QFont, text: str) -> None:
+        height = min(option.rect.height() - 4, 17)
+        width = max(height, QFontMetrics(font).horizontalAdvance(text) + 11)
+        rect = QRectF(option.rect.right() - width - self._MARGIN,
+                      option.rect.center().y() - height / 2 + 1, width, height)
+        painter.setPen(self._BADGE_BORDER)
+        painter.setBrush(self._BADGE_BG)
+        painter.drawRoundedRect(rect, height / 2, height / 2)
+        painter.setPen(self._BADGE_TEXT)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
-    def expandingDirections(self):
-        return Qt.Orientation(0)
+    def _paint_caption(self, painter, option, font: QFont, text: str) -> None:
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.setPen(self._CAPTION_SELECTED if selected else self._CAPTION)
+        rect = option.rect.adjusted(0, 0, -self._MARGIN, 0)
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignRight
+                                   | Qt.AlignmentFlag.AlignVCenter),
+                         QFontMetrics(font).elidedText(
+                             text, Qt.TextElideMode.ElideRight, rect.width()))
 
-    def hasHeightForWidth(self) -> bool:
-        return True
 
-    def heightForWidth(self, width: int) -> int:
-        return self._arrange(QRect(0, 0, width, 0), apply=False)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._arrange(rect, apply=True)
-
-    def sizeHint(self) -> QSize:
-        return self.minimumSize()
-
-    def minimumSize(self) -> QSize:
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        return size
-
-    def _arrange(self, rect: QRect, apply: bool) -> int:
-        x, y, line_height = rect.x(), rect.y(), 0
-        for item in self._items:
-            hint = item.sizeHint()
-            if x > rect.x() and x + hint.width() > rect.right():
-                x, y = rect.x(), y + line_height + self.spacing()
-                line_height = 0
-            if apply:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x += hint.width() + self.spacing()
-            line_height = max(line_height, hint.height())
-        return y + line_height - rect.y()
+def _smaller_font(font: QFont) -> QFont:
+    """`font` one step down and never bold — QSS sizes the tree in pixels, but
+    a point-sized font has to keep working too."""
+    smaller = QFont(font)
+    if font.pixelSize() > 0:
+        smaller.setPixelSize(max(8, font.pixelSize() - 2))
+    else:
+        smaller.setPointSizeF(max(6.0, font.pointSizeF() - 1.5))
+    smaller.setBold(False)
+    return smaller
 
 
 class PatchBar(QWidget):
     """The universe at a glance: hatched blocks for what is patched, a solid one
     for where the new fixture would land (red if the two collide)."""
+
+    _BORDER = QColor("#3f3f3f")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -233,11 +253,17 @@ class PatchBar(QWidget):
         self._used, self._pending, self._conflict = used, pending, conflict
         self.update()
 
+    def _inner(self) -> QRect:
+        """The universe itself — the frame is drawn around it, not over it."""
+        return self.rect().adjusted(1, 1, -1, -1)
+
     def _span_rect(self, first: int, last: int) -> QRect:
-        scale = self.width() / UNIVERSE_SIZE
-        left = int((first - 1) * scale)
-        right = max(left + 2, int(last * scale))
-        return QRect(left, 0, right - left, self.height())
+        inner = self._inner()
+        scale = inner.width() / UNIVERSE_SIZE
+        left = inner.left() + int((first - 1) * scale)
+        right = min(inner.right() + 1,
+                    max(left + 2, inner.left() + int(last * scale)))
+        return QRect(left, inner.top(), right - left, inner.height())
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -254,6 +280,10 @@ class PatchBar(QWidget):
         if self._pending:
             painter.fillRect(self._span_rect(*self._pending),
                              QColor("#e05252" if self._conflict else "#79cdf0"))
+
+        painter.setPen(self._BORDER)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
         painter.end()
 
 
@@ -322,6 +352,12 @@ class AddFixtureDialog(QDialog):
         layout.addLayout(body, 1)
         layout.addWidget(self._build_footer())
 
+        # The bar is as tall as the buttons beside it, and only the stylesheet
+        # knows how tall that is — so ask once the dialog is assembled and its
+        # `QDialog#AddFixtureDialog …` rules can match.
+        self.ok_button.ensurePolished()
+        self.patch_bar.setFixedHeight(self.ok_button.sizeHint().height())
+
         self._rebuild_tree()
         self.dmx_spin.setValue(suggest_free_dmx_start(self._config))
         self.channel_spin.setValue(self._config.next_free_channel())
@@ -384,6 +420,7 @@ class AddFixtureDialog(QDialog):
         self.tree.setRootIsDecorated(True)
         self.tree.header().setStretchLastSection(False)
         self.tree.setColumnWidth(0, 200)
+        self.tree.setItemDelegateForColumn(1, _TreeAsideDelegate(self.tree))
         self.tree.currentItemChanged.connect(self._on_tree_selection)
         layout.addWidget(self.tree, 1)
         return panel
@@ -426,20 +463,16 @@ class AddFixtureDialog(QDialog):
         restored = None
         for group in sorted(groups, key=str.lower):
             members = groups[group]
+            # Column 1 — the count badge and the leaves' captions — is painted
+            # by `_TreeAsideDelegate`, so it needs no colour or alignment here.
             parent = QTreeWidgetItem(self.tree, [group, str(len(members))])
             parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            parent.setForeground(1, QColor("#7a7a7a"))
-            parent.setTextAlignment(1, int(Qt.AlignmentFlag.AlignRight
-                                           | Qt.AlignmentFlag.AlignVCenter))
             for entry in members:
                 secondary = (entry.categories[0] if entry.categories else "")
                 if self._group_by == GROUP_BY_CATEGORY:
                     secondary = entry.manufacturer
                 child = QTreeWidgetItem(parent, [f"  {entry.name}", secondary])
                 child.setData(0, Qt.ItemDataRole.UserRole, entry.key)
-                child.setForeground(1, QColor("#7a7a7a"))
-                child.setTextAlignment(1, int(Qt.AlignmentFlag.AlignRight
-                                              | Qt.AlignmentFlag.AlignVCenter))
                 if entry.key == wanted and restored is None:
                     restored = child
             parent.setExpanded(searching)
@@ -483,7 +516,7 @@ class AddFixtureDialog(QDialog):
         self.detail_name.setObjectName("AddFxDetailName")
         identity.addWidget(self.detail_name)
         self.category_chips = QWidget()
-        self._category_layout = _FlowLayout(self.category_chips)
+        self._category_layout = FlowLayout(self.category_chips)
         identity.addWidget(self.category_chips)
         header.addLayout(identity, 1)
 
@@ -689,17 +722,25 @@ class AddFixtureDialog(QDialog):
         channel_block.addLayout(channel_row)
         layout.addLayout(channel_block)
 
+        # The universe read-out sits centred in the gap between the MIDI
+        # channels and the actions — hence a stretch on either side of it — and
+        # hangs from the bottom of the row, which is what puts its bar on the
+        # same line as the buttons.
         layout.addStretch(1)
 
         patch_block = QVBoxLayout()
         patch_block.setSpacing(4)
+        patch_block.addStretch(1)
         self.patch_summary = QLabel()
         self.patch_summary.setObjectName("AddFxFieldLabel")
-        self.patch_summary.setAlignment(Qt.AlignmentFlag.AlignRight)
         patch_block.addWidget(self.patch_summary)
+        # No stretch anywhere in this column, so it is exactly as wide as the
+        # label and the bar takes that width.
         self.patch_bar = PatchBar()
         patch_block.addWidget(self.patch_bar)
         layout.addLayout(patch_block)
+
+        layout.addStretch(1)
 
         self.ok_button = QPushButton("✓  OK")
         self.ok_button.setObjectName("AddFxOk")
@@ -708,10 +749,13 @@ class AddFixtureDialog(QDialog):
         cancel = QPushButton("⊘  Cancel")
         cancel.setObjectName("AddFxCancel")
         cancel.clicked.connect(self.reject)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addWidget(self.ok_button)
+        buttons.addWidget(cancel)
         actions = QVBoxLayout()
-        actions.setSpacing(4)
-        actions.addWidget(self.ok_button)
-        actions.addWidget(cancel)
+        actions.addStretch(1)
+        actions.addLayout(buttons)
         layout.addLayout(actions)
         return footer
 
@@ -868,7 +912,7 @@ class AddFixtureDialog(QDialog):
             card_layout.addLayout(head)
 
             chips = QWidget()
-            chip_layout = _FlowLayout(chips)
+            chip_layout = FlowLayout(chips)
             for slot in mode.channels:
                 chip_layout.addWidget(_chip(
                     slot.channel.name if slot.channel else "—", "#9a9a9a"))
@@ -970,6 +1014,9 @@ class AddFixtureDialog(QDialog):
         # The channel is a fixture's identity for every saved clip, so a
         # duplicate is refused rather than silently reassigned.
         self.channel_status_label.setText("already used" if channel_taken else "")
+        # Empty, it still costs the row its spacing, which pushes the universe
+        # block off the centre of the gap it is supposed to sit in.
+        self.channel_status_label.setVisible(channel_taken)
         _set_state(self.channel_status_label, "error")
 
         used_total = sum(end - first + 1 for _n, first, end in self._used_spans)

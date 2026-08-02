@@ -35,7 +35,7 @@ QGraphicsView {
     background-color: #2b2b2b;
     color: white;
     border: 1px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -159,7 +159,7 @@ QMenu::separator {
 QSlider#MasterVolumeSlider::groove:horizontal,
 QSlider#MetroVolumeSlider::groove:horizontal {
     height: 8px;
-    border-radius: 4px;
+    border-radius: 3px;
     border: 1px solid #333;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #3e8a3a, stop:0.7 #9bcf3a, stop:1 #e0a52e);
@@ -168,7 +168,7 @@ QSlider#MetroVolumeSlider::groove:horizontal {
 QSlider#MasterVolumeSlider::add-page:horizontal,
 QSlider#MetroVolumeSlider::add-page:horizontal {
     background: rgba(18, 18, 18, 190);
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QSlider#MasterVolumeSlider::sub-page:horizontal,
@@ -234,7 +234,7 @@ QToolBar {
 QFrame#ToolbarSection {
     background-color: #363636;
     border: 1px solid #232323;
-    border-radius: 4px;
+    border-radius: 3px;
     margin: 2px;
 }
 
@@ -285,7 +285,7 @@ QToolButton#ExportSplitButton {
     color: #eaf4fb;
     border: 1px solid #274b73;
     border-top: 1px solid #6ba3d6;
-    border-radius: 5px;
+    border-radius: 3px;
     /* right padding = 8px + the 21px ▾ segment, so the label centers in the
        main (clickable) area rather than the full button */
     padding: 0 29px 0 8px;
@@ -420,7 +420,7 @@ QFrame#SetlistSelector {
 QLabel#SetlistCounter {
     background-color: #2d4a63;
     color: #cfe4f5;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 0px 6px;
     margin: 6px 0px;
     font-size: 11px;
@@ -513,7 +513,7 @@ QToolButton#FileCardButton {
     background: transparent;
     color: #b5b5b5;
     border: 1px solid #4a4a4a;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 11px;
 }
 QToolButton#FileCardButton:hover   { background-color: #3d3d3d; }
@@ -522,7 +522,7 @@ QToolButton#FileCardButton:pressed { background-color: #262626; }
 QPushButton#FileCardAction {
     background: transparent;
     border: 1px dashed #4a4a4a;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 11px;
     padding: 2px 8px;
 }
@@ -559,7 +559,7 @@ QPushButton#SnapshotButton {
     background-color: #2f2f2f;
     color: #d7d7d7;
     border: 1px solid #3a4a5a;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 2px 12px;
     font-size: 12px;
     font-weight: bold;
@@ -623,7 +623,7 @@ QLineEdit {
     background-color: #1a1a1a;
     color: white;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -637,7 +637,7 @@ QSpinBox, QDoubleSpinBox {
     background-color: #1a1a1a;
     color: white;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 0px;
     font-size: 12px;
 }
@@ -655,7 +655,7 @@ QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
 
 QSpinBox::up-button:hover, QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
-    background-color: #444;
+    /*background-color: #444;*/
 }
 
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
@@ -681,7 +681,7 @@ QCheckBox::indicator {
     width: 18px;
     height: 18px;
     border: 1px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     background-color: #1a1a1a;
 }
 
@@ -748,7 +748,7 @@ QComboBox {
     background-color: #262626;
     color: white;
     border: 1px solid #161616;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 5px 10px;
     font-size: 12px;
 }
@@ -843,7 +843,7 @@ QPushButton#DmxPanelToggle {
     background-color: rgba(40, 40, 40, 200);
     color: white;
     border: 1px solid rgba(255, 255, 255, 80);
-    border-radius: 4px;
+    border-radius: 3px;
     font-weight: bold;
     padding: 0;
 }
@@ -951,7 +951,7 @@ QLineEdit#ClipSearchBox {
     background-color: #1a1a1a;
     color: #ddd;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
     font-size: 12px;
 }
@@ -964,7 +964,7 @@ QToolButton#ClipViewToggle {
     background-color: #1a1a1a;
     color: #aaa;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 7px;
     font-size: 13px;
 }
@@ -1092,7 +1092,7 @@ QLabel#ClipLibraryPlaceholder {
 QFrame#AnimationTile {
     background-color: #1a1a1a;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QFrame#AnimationTile:hover {
@@ -1110,7 +1110,7 @@ QSlider#BrightnessSlider::groove:horizontal {
         stop:0 #000000, stop:1 #ffffff);
     height: 10px;
     border: 1px solid #555;
-    border-radius: 5px;
+    border-radius: 3px;
 }
 
 QSlider#BrightnessSlider::handle:horizontal {
@@ -1144,7 +1144,7 @@ QPushButton#RandomHueButton {
     background-color: #2a2a2a;
     color: #dddddd;
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 22px;
     font-weight: bold;
 }
@@ -1156,7 +1156,7 @@ QPushButton#RandomHueButton:checked {
 QPushButton#PaletteModeButton {
     padding: 8px;
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QPushButton#PaletteModeButton:checked {
@@ -1167,7 +1167,7 @@ QPushButton#PaletteModeButton:checked {
 /* Color swatch border/checked styling; the per-swatch fill is set in code. */
 QPushButton#ColorSwatch {
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QPushButton#ColorSwatch:checked {
@@ -1395,7 +1395,7 @@ QLabel#InspectorReadonly {
     color: white;
     background-color: #333;
     border: 1px solid rgba(255, 255, 255, 30);
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
 }
 
@@ -1404,7 +1404,7 @@ QWidget#FixtureInspector QSpinBox {
     color: white;
     background-color: #3a3a3a;
     border: 1px solid rgba(255, 255, 255, 40);
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
 }
 
@@ -1462,7 +1462,7 @@ QWidget#TimelineToolbar QPushButton#TTFit {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
     border: 1px solid #1d1d1d;
     border-top: 1px solid #454545;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 10px;
 }
 
@@ -1490,7 +1490,7 @@ QWidget#TimelineToolbar QPushButton#TTSnap {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
     border: 1px solid #1d1d1d;
     border-top: 1px solid #454545;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 5px 10px;
 }
 
@@ -1747,7 +1747,7 @@ QLabel#aboutRowValue {
 QPushButton#aboutCopy {
     background-color: #333333;
     border: 1px solid #444444;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 2px 10px;
     color: #d0d0d0;
     font-size: 11px;
@@ -1864,6 +1864,10 @@ QPushButton#AddFxSegmentButton:checked {
     font-weight: bold;
 }
 
+/* The library tree. Only the rows are styled here: the second column — a
+   group's count badge and a fixture's dimmed caption — is painted by
+   `_TreeAsideDelegate` in ui/add_fixture_dialog.py, because QSS reaches a
+   tree's items but not one column of them. */
 QTreeWidget#AddFxTree {
     background: transparent;
     border: none;
@@ -1965,10 +1969,9 @@ QFrame#AddFxCard {
 }
 
 QLabel#AddFxCardTitle {
-    background-color: #303030;
     border-bottom: 1px solid #383838;
     border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
+    border-top-right-radius: 0px;
     color: #9a9a9a;
     font-size: 10px;
     font-weight: bold;
@@ -2008,8 +2011,9 @@ QPushButton#AddFxLinkButton:hover {
 }
 
 QLabel#AddFxHint {
-    color: #8a8a8a;
+    color: #9a9a9a;
     font-size: 11px;
+    border-bottom: 1px solid #383838;
 }
 
 /* --- channels table --- */
@@ -2167,29 +2171,55 @@ QPushButton#AddFxSceneSave:disabled {
     color: #5a5a5a;
 }
 
-QPushButton#AddFxSongPart {
-    background-color: #242424;
-    border: 1px solid #383838;
-    border-radius: 3px;
-    color: #7f7f7f;
-    font-size: 9px;
+/* Song-part tags. Outlined, not filled, so they read as tags rather than as
+   another row of buttons — they are `_PartChip` labels, and the checked state
+   arrives as a property. Nothing here may set a width: they are sized by their
+   own text so the nine of them fit one row (ui/fixture_scenes_tab.py). */
+QLabel#AddFxSongPart {
+    background: transparent;
+    border: 1px solid #343434;
+    border-radius: 7px;
+    color: #7a7a7a;
+    font-size: 8px;
     letter-spacing: 1px;
-    padding: 2px;
+    padding: 3px 5px;
 }
 
-QPushButton#AddFxSongPart:hover {
-    border: 1px solid #4a4a4a;
-    color: #b4b4b4;
+QLabel#AddFxSongPart:hover {
+    border: 1px solid #4f4f4f;
+    color: #b8b8b8;
 }
 
-QPushButton#AddFxSongPart:checked {
-    background-color: #2c3947;
+QLabel#AddFxSongPart[checked="true"] {
+    background-color: #24405a;
     border: 1px solid #4a90e2;
-    color: #9ecbf5;
+    color: #bfe0fb;
 }
 
-QPushButton#AddFxSongPart:disabled {
-    color: #4a4a4a;
+QLabel#AddFxSongPart[checked="true"]:hover {
+    background-color: #2c4a63;
+    color: #ddf0ff;
+}
+
+QLabel#AddFxSongPart:disabled {
+    border: 1px solid #2a2a2a;
+    color: #454545;
+}
+
+/* The Scenes tab's SIMULATED OUTPUT card: one dark surface carrying the
+   read-out, the caption and the preview. The preview has no panel of its own —
+   it repaints this same gradient (ScenePreview._BACKDROP_TOP/_BOTTOM, which
+   must follow any change here). */
+QFrame#AddFxOutputCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #1a1a1a, stop:1 #0e0e0e);
+    border: 1px solid #303030;
+    border-radius: 3px;
+}
+
+QGraphicsView#AddFxPreview {
+    background: transparent;
+    border: none;
 }
 
 QLabel#AddFxSceneSummary {
@@ -2215,20 +2245,22 @@ QLabel#AddFxFaderName {
 }
 
 QSlider#AddFxFader::groove:vertical {
-    background: #151515;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #191919, stop:1 #131313);
     border: 1px solid #333333;
-    border-radius: 3px;
+    border-radius: 0px;
     width: 12px;
 }
 
 QSlider#AddFxFader::add-page:vertical {
-    border-radius: 3px;
+    border-radius: 0px;
     margin: 1px;
 }
 
 QSlider#AddFxFader::sub-page:vertical {
-    background: #202020;
-    border-radius: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #242424, stop:1 #1c1c1c);
+    border-radius: 0px;
     margin: 1px;
 }
 
@@ -2274,9 +2306,9 @@ QLabel#AddFxStatus[state="error"] {
 
 QDialog#AddFixtureDialog QSpinBox#AddFxDmxSpin,
 QDialog#AddFixtureDialog QSpinBox#AddFxChannelSpin {
-    background-color: #2b2b2b;
+    background-color: #1a1a1a;
     border: 1px solid #3f3f3f;
-    border-radius: 5px;
+    border-radius: 3px;
     color: #ffffff;
     font-size: 18px;
     padding: 4px 8px;
@@ -2318,7 +2350,7 @@ QDialog#AddFixtureDialog QPushButton#AddFxChannelButton:checked {
 QDialog#AddFixtureDialog QPushButton#AddFxOk {
     background-color: #79cdf0;
     border: 1px solid #5fb4d8;
-    border-radius: 5px;
+    border-radius: 3px;
     color: #082230;
     font-size: 12px;
     font-weight: bold;
