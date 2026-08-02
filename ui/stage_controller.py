@@ -239,9 +239,11 @@ class StageController(QObject):
             return []
 
         renderer = renderer_for(fdef)
-        multi_body = bool(fixture.bars)
-        positions = (fixture.bars if multi_body
-                     else [FixturePosition(fixture.x, fixture.y)])
+        # A patch saved before a definition's body count was settled can carry
+        # more `bars` than the fixture really has; the definition decides.
+        bars = fixture.bars[:body_count(fdef)]
+        multi_body = len(bars) > 1
+        positions = bars if multi_body else [FixturePosition(fixture.x, fixture.y)]
 
         objs = []
         for index, position in enumerate(positions):
@@ -376,9 +378,9 @@ class StageController(QObject):
         instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
                                    channel=int(channel), mode=str(mode),
                                    x=int(x), y=int(y))
-        # A fixture whose definition declares a pixel matrix has one body per
-        # matrix column sharing the same DMX slice (the ledbar's 8 bars); seed
-        # them as a horizontal row centred on the drop point.
+        # A fixture sold as several housings on one DMX slice (the ledbar's 8
+        # bars) gets a body each; seed them as a horizontal row centred on the
+        # drop point.
         fdef = resolve_fixture(type_name, mode)
         count = body_count(fdef) if fdef else 1
         if count > 1 and not instance.bars:

@@ -10,13 +10,13 @@ as light rather than as coloured rectangles.
 
 import glob
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from PyQt6.QtGui import QBrush, QColor, QMovie
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsRectItem
 
 from core.paths import asset_path
-from ui.stage.base import GlowingEllipse
+from ui.stage.base import GlowingEllipse, body_count
 from ui.stage.emission.base import Emission
 from ui.stage.frame import Frame
 
@@ -28,6 +28,22 @@ BULB_MARGIN = 5          # gap above the first bulb and below the last
 # otherwise put four thousand items on the scene for one fixture.
 MAX_CELLS = 256
 
+
+def _fit_grid(columns: int, rows: int) -> Tuple[int, int]:
+    """Halve the longer axis until the grid fits MAX_CELLS.
+
+    Coarser than the real matrix, but a 64x64 wall reads the same at stage
+    scale and costs sixteen times fewer scene items.
+    """
+    columns, rows = max(1, columns), max(1, rows)
+    while columns * rows > MAX_CELLS:
+        if columns >= rows:
+            columns = max(1, columns // 2)
+        else:
+            rows = max(1, rows // 2)
+    return columns, rows
+
+
 # One QMovie per animation file for the whole stage. An eight-body LED bar used
 # to decode eight copies of the same GIF, and every one of them ran its own
 # frame timer.
@@ -38,28 +54,47 @@ _MOVIE_USERS: Dict[str, int] = {}
 class MatrixCells(Emission):
     """A strip or grid of individually-lit cells.
 
+    The grid is the matrix's own X by Y extent — a 24-pixel bar is 24 cells
+    across, a 5x5 flower is a 5x5 grid — divided between the fixture's bodies
+    when it has several (the LED bar's eight bars take one column each).
+
     Each cell takes its own emitter's colour when the fixture drives its pixels
     separately, and the fixture's colour when it doesn't — which is what an LED
     bar with one set of RGB channels for all its pixels does.
 
     When an effect is running, the animation supplies the *pattern* and the DMX
-    supplies the *colour*: `body_index` picks which column of the animation this
-    body shows, so the eight bars of one bar-set differ.
+    supplies the *colour*: `column` is the animation column this body starts at,
+    so the eight bars of one bar-set differ.
     """
 
     animates = True
 
     def build(self) -> None:
         body = self.body
-        matrix = body.fdef.matrix
+        fdef = body.fdef
+        matrix = fdef.matrix
+        bodies = body_count(fdef)
+        # A fixture split into several bodies shares its columns out between
+        # them; every other matrix keeps all of them.
+        columns = (max(1, matrix.pixel_count[0]) // bodies) if matrix else 1
         rows = max(1, matrix.pixel_count[1]) if matrix else 1
-        self.rows = min(rows, MAX_CELLS)
-        self.column = body.body_index
+        self.columns, self.rows = _fit_grid(columns, rows)
+        self.column = body.body_index * self.columns
 
+        # Which emitter feeds which cell. Emitters arrive in the matrix's own
+        # reading order (X fastest), and a body only shows its own columns.
+        stride = self.columns * bodies
+        self.emitter_index = [row * stride + self.column + col
+                              for row in range(self.rows)
+                              for col in range(self.columns)]
+
+        cell_width = body.width / self.columns
         cell_height = body.height / self.rows
         self.cells = [
-            QGraphicsRectItem(0, row * cell_height, body.width, cell_height, body)
+            QGraphicsRectItem(col * cell_width, row * cell_height,
+                              cell_width, cell_height, body)
             for row in range(self.rows)
+            for col in range(self.columns)
         ]
         for cell in self.cells:
             cell.setBrush(QColor("darkgrey"))
@@ -85,11 +120,14 @@ class MatrixCells(Emission):
         """No animation: every cell takes its own colour, or the fixture's."""
         beam = frame.beam
         emitters = frame.state.emitters
-        per_cell = len(emitters) >= self.rows > 1
+        # Per-cell only when the state drives every cell this body shows;
+        # `emitter_index` rises with the cells, so its last entry is the
+        # highest emitter asked for.
+        per_cell = len(self.cells) > 1 and len(emitters) > self.emitter_index[-1]
 
-        for row, cell in enumerate(self.cells):
+        for index, cell in enumerate(self.cells):
             if per_cell:
-                emitter = emitters[row]
+                emitter = emitters[self.emitter_index[index]]
                 cell.setBrush(QBrush(self.body.clamped_color(
                     emitter.rgb, emitter.intensity * beam.gate)))
             else:
@@ -99,7 +137,7 @@ class MatrixCells(Emission):
         self._set_glow(beam.rgb)
 
     def _paint_animation(self, frame: Frame) -> None:
-        """Tint this body's column of the animation with the fixture's colour."""
+        """Tint this body's slice of the animation with the fixture's colour."""
         image = self._movie.currentImage()
         if image.isNull() or image.width() <= self.column:
             return
@@ -108,8 +146,14 @@ class MatrixCells(Emission):
         red, green, blue = beam.rgb
         totals = [0, 0, 0]
         lit = 0
-        for row in range(min(self.rows, image.height())):
-            pixel = image.pixelColor(self.column, row)
+        for index, cell in enumerate(self.cells):
+            column = self.column + index % self.columns
+            row = index // self.columns
+            # A grid wider or taller than the animation keeps its last colour
+            # there rather than going black.
+            if column >= image.width() or row >= image.height():
+                continue
+            pixel = image.pixelColor(column, row)
             # The animation supplies the pattern, the DMX supplies the colour.
             mixed = (pixel.red() / 255.0 * red,
                      pixel.green() / 255.0 * green,
@@ -117,7 +161,7 @@ class MatrixCells(Emission):
             for component in range(3):
                 totals[component] += mixed[component]
             lit += 1
-            self.cells[row].setBrush(self.body.clamped_color(mixed, beam.level))
+            cell.setBrush(self.body.clamped_color(mixed, beam.level))
 
         if lit:
             self._set_glow(tuple(int(total / lit) for total in totals))

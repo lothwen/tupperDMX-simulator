@@ -36,6 +36,10 @@ MIN_BODY_PX, MAX_BODY_PX = 12.0, 640.0
 _FOG_CAPABILITIES = frozenset({"Fog", "FogOutput", "FogType"})
 DEFAULT_BODY_SPACING_PX = 175             # between bodies of one multi-body fixture
 
+# Pixels spaced this much further apart than they are wide aren't a row of
+# cells behind one lens; they are separate housings on one DMX slice.
+SEPARATE_BODY_RATIO = 1.5
+
 
 def body_size(fdef: FixtureDef) -> Tuple[float, float]:
     """On-stage size of one body, in scene units.
@@ -54,10 +58,26 @@ def body_size(fdef: FixtureDef) -> Tuple[float, float]:
 def body_count(fdef: FixtureDef) -> int:
     """How many physical bodies share this fixture's DMX slice.
 
-    A matrix's X extent: the LED bar's eight bars all mirror the same seven
-    channels and differ only in which column of an effect they show.
+    Almost always one. A matrix is a grid of cells *inside* a housing — OFL's
+    X axis is where a pixel sits across the fixture's face, not a fixture of
+    its own — so a 24-pixel bar is one bar, and a 5x5 flower is one flower.
+
+    The exception is a set sold as several units on a single slice (the LED
+    bar's eight bars). That shows up in the fixture's own physical data, as
+    pixels spaced far wider apart than a pixel is wide, so it is read from
+    there rather than assumed of every matrix.
     """
-    return max(1, fdef.matrix.pixel_count[0]) if fdef.matrix else 1
+    override = fdef.stage.get("bodies")
+    if isinstance(override, int) and override > 0:
+        return override
+    if not fdef.matrix:
+        return 1
+    spacing = fdef.physical.pixel_spacing_mm
+    pixel = fdef.physical.pixel_dimensions_mm
+    if (spacing and pixel and pixel[0] > 0
+            and spacing[0] > pixel[0] * SEPARATE_BODY_RATIO):
+        return max(1, fdef.matrix.pixel_count[0])
+    return 1
 
 
 def body_spacing(fdef: FixtureDef) -> int:
