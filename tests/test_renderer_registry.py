@@ -19,8 +19,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core import ofl
 from core.fixture_library import build_fixture_def, resolve_fixture
 from ui.stage import (
-    BlinderFixture, ColorChangerFixture, DimmerFixture, GenericStageFixture,
-    PixelBarFixture, StrobeFixture, registered_categories, renderer_for,
+    BlinderFixture, ColorChangerFixture, DimmerFixture, FanFixture,
+    FlowerFixture, GenericStageFixture, HazerFixture, LaserFixture,
+    MovingHeadFixture, PixelBarFixture, ScannerFixture, StandFixture,
+    StrobeFixture, registered_categories, renderer_for,
 )
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
@@ -47,6 +49,39 @@ def _fdef(categories, channels=None, matrix=None):
     return build_fixture_def("probe", ofl.parse_ofl(doc))
 
 
+# Every OFL 12.5.1 category, and the profile that draws it. "Other" is the one
+# category with no profile of its own — it is the catch-all, so what it looks
+# like has to come from its channels.
+CATEGORY_PROFILES = {
+    "Barrel Scanner": ScannerFixture,
+    "Blinder": BlinderFixture,
+    "Color Changer": ColorChangerFixture,
+    "Dimmer": DimmerFixture,
+    "Effect": FlowerFixture,
+    "Fan": FanFixture,
+    "Flower": FlowerFixture,
+    "Hazer": HazerFixture,
+    "Laser": LaserFixture,
+    "Matrix": PixelBarFixture,
+    "Moving Head": MovingHeadFixture,
+    "Pixel Bar": PixelBarFixture,
+    "Scanner": ScannerFixture,
+    "Smoke": HazerFixture,
+    "Stand": StandFixture,
+    "Strobe": StrobeFixture,
+}
+OFL_CATEGORIES = tuple(CATEGORY_PROFILES) + ("Other",)
+
+FOG_CHANNELS = {
+    "f": {"capability": {"type": "FogOutput", "fogOutputStart": "off",
+                         "fogOutputEnd": "strong"}},
+}
+
+PAN_CHANNELS = {
+    "p": {"capability": {"type": "Pan", "angleStart": "0deg",
+                         "angleEnd": "540deg"}},
+}
+
 RGB_CHANNELS = {
     "r": {"capability": {"type": "ColorIntensity", "color": "Red"}},
     "g": {"capability": {"type": "ColorIntensity", "color": "Green"}},
@@ -56,17 +91,9 @@ RGB_CHANNELS = {
 
 def test_category_selects_the_renderer():
     print("test_category_selects_the_renderer")
-    cases = [
-        (["Pixel Bar"], PixelBarFixture),
-        (["Matrix"], PixelBarFixture),
-        (["Blinder"], BlinderFixture),
-        (["Strobe"], StrobeFixture),
-        (["Color Changer"], ColorChangerFixture),
-        (["Dimmer"], DimmerFixture),
-    ]
-    for categories, expected in cases:
-        _assert(renderer_for(_fdef(categories)) is expected,
-                f"{categories[0]} -> {expected.__name__}")
+    for category, expected in CATEGORY_PROFILES.items():
+        _assert(renderer_for(_fdef([category])) is expected,
+                f"{category} -> {expected.__name__}")
 
 
 def test_the_fixtures_own_category_order_wins():
@@ -83,18 +110,36 @@ def test_the_fixtures_own_category_order_wins():
 
 def test_unknown_categories_fall_back_to_channel_shape():
     print("test_unknown_categories_fall_back_to_channel_shape")
-    # Nothing renders a "Fan" or a "Hazer" yet; such a fixture still has to
-    # appear, drawn from what its channels say it does.
-    _assert(renderer_for(_fdef(["Fan"], RGB_CHANNELS)) is ColorChangerFixture,
-            "colour channels make it a colour changer")
-    _assert(renderer_for(_fdef(["Hazer"])) is DimmerFixture,
-            "a lone intensity channel makes it a dimmer")
+    # "Other" is the only OFL category with no profile of its own, so what a
+    # fixture wearing it looks like has to come from its channels.
     _assert(renderer_for(_fdef(["Other"], matrix={"pixelCount": [4, 2, 1]}))
             is PixelBarFixture,
             "a pixel matrix makes it a bar whatever its category says")
+    _assert(renderer_for(_fdef(["Other"], FOG_CHANNELS)) is HazerFixture,
+            "something that fills the air is a hazer — every other beam "
+            "depends on knowing that")
+    _assert(renderer_for(_fdef(["Other"], PAN_CHANNELS)) is MovingHeadFixture,
+            "something that aims is a mover")
+    _assert(renderer_for(_fdef(["Other"], RGB_CHANNELS)) is ColorChangerFixture,
+            "colour channels make it a colour changer")
+    _assert(renderer_for(_fdef(["Other"])) is DimmerFixture,
+            "a lone intensity channel makes it a dimmer")
     _assert(renderer_for(_fdef(["Other"], {"x": {"capability": {"type": "Maintenance"}}}))
             is GenericStageFixture,
             "a fixture with no light-shaped channel at all still gets a body")
+
+
+def test_every_ofl_category_has_a_profile():
+    print("test_every_ofl_category_has_a_profile")
+    _assert(len(OFL_CATEGORIES) == 17, "OFL 12.5.1 defines 17 categories")
+    claimed = set(registered_categories())
+    _assert(claimed == set(OFL_CATEGORIES) - {"Other"},
+            "every category but Other is claimed by a profile")
+    for category in OFL_CATEGORIES:
+        renderer = renderer_for(_fdef([category]))
+        _assert(renderer is not None, f"{category} resolves to {renderer.__name__}")
+    _assert(renderer_for(_fdef(["Other"])) is DimmerFixture,
+            "and Other falls through to what its channels describe")
 
 
 def test_shipped_fixtures_pick_the_expected_renderers():
@@ -113,9 +158,8 @@ def test_shipped_fixtures_pick_the_expected_renderers():
 def test_registry_is_populated_by_importing_the_package():
     print("test_registry_is_populated_by_importing_the_package")
     categories = registered_categories()
-    _assert({"Pixel Bar", "Matrix", "Blinder", "Strobe", "Color Changer", "Dimmer"}
-            <= set(categories),
-            "every shipped renderer registered its categories on import")
+    _assert(set(CATEGORY_PROFILES) <= set(categories),
+            "every profile registered its categories on import")
     _assert(GenericStageFixture not in categories.values(),
             "the fallback claims no category — it is only reached by fallthrough")
 
@@ -124,6 +168,7 @@ def main():
     test_category_selects_the_renderer()
     test_the_fixtures_own_category_order_wins()
     test_unknown_categories_fall_back_to_channel_shape()
+    test_every_ofl_category_has_a_profile()
     test_shipped_fixtures_pick_the_expected_renderers()
     test_registry_is_populated_by_importing_the_package()
     print("\nALL TESTS PASSED")

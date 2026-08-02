@@ -41,6 +41,10 @@ class WindowConfig:
     # Rows "S" mode: every fixture lane collapsed to one row. Persisted so the
     # section height (fitted to collapsed lanes) stays consistent on reload.
     tracks_collapsed: bool = False
+    # How hazy the virtual stage's air is before any hazer runs, 0..1. Beams are
+    # only visible because there is something for them to scatter off, so this
+    # is what a rig with no hazer patched still gets to see.
+    stage_haze: float = 0.15
 
 
 @dataclass
@@ -302,7 +306,9 @@ class Config:
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
                 timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
-                tracks_collapsed=bool(window_data.get("tracks_collapsed", False))
+                tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
+                stage_haze=cls._validate_float(
+                    window_data.get("stage_haze", 0.15), 0.0, 1.0),
             )
 
         if "artnet" in data:

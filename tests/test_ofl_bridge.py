@@ -28,8 +28,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import ofl
 from core.channel_families import describe_channel
-from core.fixture_library import build_fixture_def, color_slots, dominant_capability
+from core.fixture_library import (
+    all_capability_types, build_fixture_def, capability_types, color_slots,
+    color_sources, dominant_capability,
+)
 from core.fixture_sidecar import parse_sidecar
+import ofl_factory
 
 BLEND, KNOB_LEVEL, KNOB_SPEED = 0x01, 0x02, 0x04
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
@@ -206,6 +210,77 @@ def test_dominant_capability_wins_by_dmx_span():
             "an equal-span colour outranks an effect")
 
 
+def test_two_wheels_on_one_channel_do_not_merge():
+    print("test_two_wheels_on_one_channel_do_not_merge")
+    # A channel that is mostly a dimmer, with a colour wheel and a gobo wheel
+    # sharing the top of its range — 68 values each against the dimmer's 120.
+    # Keyed by type alone the two wheels summed to 136 and stole the channel.
+    split = _one_channel({"capabilities": [
+        {"dmxRange": [0, 119], "type": "Intensity"},
+        {"dmxRange": [120, 187], "type": "WheelSlot", "wheel": "Color Wheel",
+         "slotNumber": 1},
+        {"dmxRange": [188, 255], "type": "WheelSlot", "wheel": "Gobo Wheel",
+         "slotNumber": 1}]})
+    dominant = dominant_capability(split.channels[0].capabilities)
+    _assert(dominant is not None and dominant.type == "Intensity",
+            "two different wheels are two subjects, not one wide wheel channel")
+
+    blades = _one_channel({"capabilities": [
+        {"dmxRange": [0, 119], "type": "Intensity"},
+        {"dmxRange": [120, 187], "type": "BladeInsertion", "blade": "Top",
+         "insertionStart": "out", "insertionEnd": "in"},
+        {"dmxRange": [188, 255], "type": "BladeInsertion", "blade": "Bottom",
+         "insertionStart": "out", "insertionEnd": "in"}]})
+    dominant = dominant_capability(blades.channels[0].capabilities)
+    _assert(dominant is not None and dominant.type == "Intensity",
+            "two blades on one channel are counted separately too")
+
+    # Same shape, but one wheel across both ranges really is one subject.
+    same = _one_channel({"capabilities": [
+        {"dmxRange": [0, 119], "type": "Intensity"},
+        {"dmxRange": [120, 187], "type": "WheelSlot", "wheel": "Gobo Wheel",
+         "slotNumber": 1},
+        {"dmxRange": [188, 255], "type": "WheelSlot", "wheel": "Gobo Wheel",
+         "slotNumber": 2}]})
+    dominant = dominant_capability(same.channels[0].capabilities)
+    _assert(dominant is not None and dominant.type == "WheelSlot",
+            "one wheel over two ranges does still add up")
+
+
+def test_all_capability_types_sees_every_range():
+    print("test_all_capability_types_sees_every_range")
+    fdef = _one_channel({"capabilities": [
+        {"dmxRange": [0, 249], "type": "Effect", "effectName": "Program"},
+        {"dmxRange": [250, 255], "type": "ShutterStrobe",
+         "shutterEffect": "Strobe", "speed": "fast"}]})
+    _assert(capability_types(fdef) == {"Effect"},
+            "the dominant summary reports only what the channel is mostly for")
+    _assert(all_capability_types(fdef) == {"Effect", "ShutterStrobe"},
+            "the full set sees the strobe at the top of the range")
+    _assert("NoFunction" not in all_capability_types(
+        _one_channel({"capabilities": [
+            {"dmxRange": [0, 127], "type": "NoFunction"},
+            {"dmxRange": [128, 255], "type": "Intensity"}]})),
+        "NoFunction is not a thing the fixture can do")
+
+
+def test_color_sources_names_how_a_fixture_takes_colour():
+    print("test_color_sources_names_how_a_fixture_takes_colour")
+    _assert(color_sources(_build(OFL_PAR_RGB)) == {"mix"}, "an RGB par mixes")
+    _assert(color_sources(_one_channel({"capability": {"type": "Intensity"}})) == set(),
+            "a plain dimmer has no colour to set")
+
+    wheeled = ofl_factory.fdef(
+        wheels={"Color Wheel": {"slots": [
+            {"type": "Open"},
+            {"type": "Color", "name": "Red", "colors": ["#ff0000"]}]}},
+        channels={"Color Wheel": ofl_factory.channel("WheelSlot", slotNumber=1)})
+    _assert(color_sources(wheeled) == {"wheel"},
+            "a fixture whose only colour is a physical wheel says so")
+    _assert(wheeled.wheels["Color Wheel"].slots[1].colors == ((255, 0, 0),),
+            "the wheel itself reaches the FixtureDef")
+
+
 # --- flags -------------------------------------------------------------------
 
 def test_blend_is_derived_from_the_capability_kind():
@@ -369,6 +444,9 @@ def main():
     test_every_mixable_colour_is_addressable()
     test_sidecar_label_names_what_capabilities_cannot()
     test_dominant_capability_wins_by_dmx_span()
+    test_two_wheels_on_one_channel_do_not_merge()
+    test_all_capability_types_sees_every_range()
+    test_color_sources_names_how_a_fixture_takes_colour()
     test_blend_is_derived_from_the_capability_kind()
     test_knob_flags_require_a_sidecar()
     test_declared_flags_replace_the_derived_set()

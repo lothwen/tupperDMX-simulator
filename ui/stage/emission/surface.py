@@ -1,0 +1,248 @@
+# ABOUTME: Emissions that ARE a lit surface rather than a beam — matrix cells,
+# ABOUTME: blinder bulbs, strobe panels.
+"""Surfaces.
+
+Some fixtures don't throw light anywhere in particular; you look straight at
+them. A pixel bar is a grid of cells, a blinder is a row of bulbs, a strobe is
+one flat sheet. All three are drawn as what they are, with a glow so they read
+as light rather than as coloured rectangles.
+"""
+
+import glob
+import os
+from typing import Dict, Optional
+
+from PyQt6.QtGui import QBrush, QColor, QMovie
+from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsRectItem
+
+from core.paths import asset_path
+from ui.stage.base import GlowingEllipse
+from ui.stage.emission.base import Emission
+from ui.stage.frame import Frame
+
+MATRIX_GLOW_BLUR = 100
+PANEL_GLOW_BLUR = 60
+BULB_MARGIN = 5          # gap above the first bulb and below the last
+
+# Above this many cells per body the grid is merged: a 64x64 matrix would
+# otherwise put four thousand items on the scene for one fixture.
+MAX_CELLS = 256
+
+# One QMovie per animation file for the whole stage. An eight-body LED bar used
+# to decode eight copies of the same GIF, and every one of them ran its own
+# frame timer.
+_MOVIES: Dict[str, QMovie] = {}
+_MOVIE_USERS: Dict[str, int] = {}
+
+
+class MatrixCells(Emission):
+    """A strip or grid of individually-lit cells.
+
+    Each cell takes its own emitter's colour when the fixture drives its pixels
+    separately, and the fixture's colour when it doesn't — which is what an LED
+    bar with one set of RGB channels for all its pixels does.
+
+    When an effect is running, the animation supplies the *pattern* and the DMX
+    supplies the *colour*: `body_index` picks which column of the animation this
+    body shows, so the eight bars of one bar-set differ.
+    """
+
+    animates = True
+
+    def build(self) -> None:
+        body = self.body
+        matrix = body.fdef.matrix
+        rows = max(1, matrix.pixel_count[1]) if matrix else 1
+        self.rows = min(rows, MAX_CELLS)
+        self.column = body.body_index
+
+        cell_height = body.height / self.rows
+        self.cells = [
+            QGraphicsRectItem(0, row * cell_height, body.width, cell_height, body)
+            for row in range(self.rows)
+        ]
+        for cell in self.cells:
+            cell.setBrush(QColor("darkgrey"))
+
+        glow = QGraphicsDropShadowEffect()
+        glow.setBlurRadius(MATRIX_GLOW_BLUR)
+        glow.setOffset(0)
+        body.setGraphicsEffect(glow)
+
+        self._movie: Optional[QMovie] = None
+        self._asset: Optional[str] = None
+
+    def render(self, frame: Frame) -> None:
+        self._set_animation(self._asset_for(frame.state.program.name),
+                            frame.state.program.speed_hz)
+        if self._movie is not None and self._movie.isValid():
+            self._paint_animation(frame)
+        else:
+            self._paint_flat(frame)
+
+    # -- painting ------------------------------------------------------
+    def _paint_flat(self, frame: Frame) -> None:
+        """No animation: every cell takes its own colour, or the fixture's."""
+        beam = frame.beam
+        emitters = frame.state.emitters
+        per_cell = len(emitters) >= self.rows > 1
+
+        for row, cell in enumerate(self.cells):
+            if per_cell:
+                emitter = emitters[row]
+                cell.setBrush(QBrush(self.body.clamped_color(
+                    emitter.rgb, emitter.intensity * beam.gate)))
+            else:
+                cell.setBrush(QBrush(self.body.clamped_color(beam.rgb, beam.level)))
+        # The glow keeps the unscaled hue, so a dimmed bar still reads as its
+        # colour rather than fading to black.
+        self._set_glow(beam.rgb)
+
+    def _paint_animation(self, frame: Frame) -> None:
+        """Tint this body's column of the animation with the fixture's colour."""
+        image = self._movie.currentImage()
+        if image.isNull() or image.width() <= self.column:
+            return
+
+        beam = frame.beam
+        red, green, blue = beam.rgb
+        totals = [0, 0, 0]
+        lit = 0
+        for row in range(min(self.rows, image.height())):
+            pixel = image.pixelColor(self.column, row)
+            # The animation supplies the pattern, the DMX supplies the colour.
+            mixed = (pixel.red() / 255.0 * red,
+                     pixel.green() / 255.0 * green,
+                     pixel.blue() / 255.0 * blue)
+            for component in range(3):
+                totals[component] += mixed[component]
+            lit += 1
+            self.cells[row].setBrush(self.body.clamped_color(mixed, beam.level))
+
+        if lit:
+            self._set_glow(tuple(int(total / lit) for total in totals))
+
+    def _set_glow(self, rgb) -> None:
+        effect = self.body.graphicsEffect()
+        if effect is not None:
+            effect.setColor(QColor(*(max(0, min(255, int(c))) for c in rgb), 255))
+
+    # -- animation assets ----------------------------------------------
+    def _asset_for(self, effect: str) -> Optional[str]:
+        """The animation file the running effect maps to, if any."""
+        if not effect:
+            return None
+        return self.body.fdef.effects.get(effect, {}).get("gif")
+
+    def _set_animation(self, asset: Optional[str], speed_hz: Optional[float]) -> None:
+        if asset != self._asset:
+            self._release_movie()
+            self._asset = asset
+            if asset is not None:
+                self._movie = _acquire_movie(asset)
+        if self._movie is not None and speed_hz:
+            # The fixture's speed channel finally does something: 1 Hz is the
+            # rate the GIFs were authored at, so that is 100%.
+            self._movie.setSpeed(max(10, min(400, int(speed_hz * 100))))
+
+    def _release_movie(self) -> None:
+        if self._asset is not None:
+            _release_movie(self._asset)
+        self._movie = None
+
+    def cleanup(self) -> None:
+        self._release_movie()
+        self._asset = None
+
+    @property
+    def current_asset(self) -> Optional[str]:
+        """The animation file playing, or None when the bar is a flat colour."""
+        return self._asset
+
+    @property
+    def current_movie(self) -> Optional[QMovie]:
+        return self._movie
+
+
+def _acquire_movie(asset: str) -> Optional[QMovie]:
+    """The shared QMovie for an animation file, started on first use."""
+    movie = _MOVIES.get(asset)
+    if movie is None:
+        matches = glob.glob(os.path.join(asset_path("animations"), asset))
+        if not matches:
+            return None
+        movie = QMovie(matches[0])
+        _MOVIES[asset] = movie
+        _MOVIE_USERS[asset] = 0
+    _MOVIE_USERS[asset] += 1
+    if movie.state() != QMovie.MovieState.Running:
+        movie.start()
+    return movie
+
+
+def _release_movie(asset: str) -> None:
+    """Drop one user; the last one out stops the movie, but leaves it cached.
+
+    Deliberately never destroyed: freeing a QMovie whose decoder is mid-frame
+    aborts the process, and there are only thirty-odd animation files, so
+    keeping the decoded ones around costs far less than the crash.
+    """
+    if asset not in _MOVIE_USERS:
+        return
+    _MOVIE_USERS[asset] = max(0, _MOVIE_USERS[asset] - 1)
+    if _MOVIE_USERS[asset] == 0:
+        movie = _MOVIES.get(asset)
+        if movie is not None:
+            movie.stop()
+
+
+class BulbArray(Emission):
+    """One glowing bulb per emitter, stacked in the housing.
+
+    How many, and which channel feeds which, comes from the resolved state's
+    emitters — the n-th channel of a colour is the n-th cell — so a two-cell
+    warm/cold blinder and a four-cell one both work without special-casing.
+    """
+
+    def build(self) -> None:
+        body = self.body
+        count = self.body.cell_count()
+        # Share the height between the bulbs, keeping them square and centred.
+        slot = (body.height - 2 * BULB_MARGIN) / count
+        size = min(body.width * 0.75, slot)
+        self.bulbs = []
+        for index in range(count):
+            top = BULB_MARGIN + index * slot + (slot - size) / 2
+            self.bulbs.append(GlowingEllipse((body.width - size) / 2, top,
+                                             size, size, body))
+
+    def render(self, frame: Frame) -> None:
+        beam = frame.beam
+        emitters = frame.state.emitters
+        overdrive = self.body.overdrive()
+        for index, bulb in enumerate(self.bulbs):
+            # More bulbs than the state drives: the extras stay dark.
+            rgb = emitters[index].rgb if index < len(emitters) else (0, 0, 0)
+            factor = beam.level * overdrive
+            bulb.setGlowColor(self.body.clamped_color(rgb, factor), min(1.0, factor))
+
+
+class FlatPanel(Emission):
+    """One flat surface that lights up — a strobe, a wall of LED."""
+
+    def build(self) -> None:
+        body = self.body
+        self.panel = QGraphicsRectItem(0, 0, body.width, body.height, body)
+        self.panel.setBrush(QColor(20, 20, 20))
+
+        glow = QGraphicsDropShadowEffect()
+        glow.setBlurRadius(PANEL_GLOW_BLUR)
+        glow.setOffset(0)
+        body.setGraphicsEffect(glow)
+
+    def render(self, frame: Frame) -> None:
+        beam = frame.beam
+        self.panel.setBrush(QBrush(self.body.clamped_color(beam.rgb, beam.level)))
+        effect = self.body.graphicsEffect()
+        if effect is not None:
+            effect.setColor(QColor(*beam.rgb, 255))

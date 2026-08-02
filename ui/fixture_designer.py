@@ -2,8 +2,8 @@
 # ABOUTME: per-selection inspector (name / type / DMX / delete). Placement is by drag.
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QDialog, QVBoxLayout, QHBoxLayout,
-    QPushButton, QComboBox, QSpinBox, QLabel, QLineEdit,
+    QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout,
+    QPushButton, QComboBox, QSlider, QSpinBox, QLabel, QLineEdit,
     QMessageBox,
 )
 
@@ -11,6 +11,14 @@ from tupperlogger import get_logger
 from core.fixture_library import fixture_modes
 from ui import icons
 from ui.add_fixture_dialog import AddFixtureDialog, used_midi_channels
+
+
+def _separator() -> QFrame:
+    """A thin vertical rule between groups of toolbar controls."""
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setObjectName("EditToolbarSeparator")
+    return line
 
 
 class StageEditToolbar(QWidget):
@@ -44,6 +52,23 @@ class StageEditToolbar(QWidget):
         add_button.clicked.connect(self.open_add_fixture)
         layout.addWidget(add_button)
 
+        layout.addWidget(_separator())
+        haze_label = QLabel("HAZE")
+        haze_label.setObjectName("EditToolbarHazeLabel")
+        layout.addWidget(haze_label)
+
+        # How hazy the room is before any hazer runs. Beams are only visible
+        # because there is something in the air for them to scatter off, so a
+        # rig with no hazer patched still needs a way to see its own beams.
+        self._haze = QSlider(Qt.Orientation.Horizontal)
+        self._haze.setObjectName("EditToolbarHaze")
+        self._haze.setRange(0, 100)
+        self._haze.setFixedWidth(90)
+        self._haze.setValue(int(stage_controller.atmosphere.baseline * 100))
+        self._haze.setToolTip("How much haze is in the air before any hazer runs")
+        self._haze.valueChanged.connect(self._on_haze_changed)
+        layout.addWidget(self._haze)
+
         done_button = QPushButton("Done")
         done_button.setObjectName("EditToolbarDone")
         done_button.clicked.connect(lambda: self._on_done())
@@ -53,6 +78,10 @@ class StageEditToolbar(QWidget):
         stage_controller.fixture_moved.connect(lambda _inst: self._notify())
 
         self.adjustSize()
+
+    def _on_haze_changed(self, value: int) -> None:
+        self._stage.set_haze_baseline(value / 100.0)
+        self._notify()
 
     def open_add_fixture(self) -> None:
         """Open the fixture browser and patch what it returns. Public: the

@@ -7,9 +7,11 @@ from tupperlogger import get_logger
 from core.config import Config, FixtureInstance, FixturePosition
 from core.paths import asset_path
 from ui.stage import (
-    BlinderFixture, PixelBarFixture, body_count, body_spacing, renderer_for,
+    CLOCK, Atmosphere, BlinderFixture, PixelBarFixture, body_count,
+    body_spacing, renderer_for,
 )
 from core.fixture_library import resolve_fixture
+from core.fixture_state import resolve_state
 
 
 # Fallback scene size when no background pixmap is loaded; matches the native
@@ -177,6 +179,15 @@ class StageController(QObject):
         # nothing to gain from keeping fixtures sorted into type buckets.
         self.render_objs: List = []
 
+        # The air. Cross-fixture by nature: a hazer downstage is what makes a
+        # moving head's beam visible on the other side of the rig, so the level
+        # belongs to the stage rather than to any body. It drifts on the shared
+        # clock — haze builds in seconds and hangs around for the better part of
+        # a minute, and a beam that appeared and vanished with the hazer's DMX
+        # would read as a bug.
+        self.atmosphere = Atmosphere(config.window.stage_haze)
+        self._haze_token = CLOCK.subscribe(self._advance_atmosphere)
+
         # Scenario-designer state: fixtures are only movable/selectable while
         # design mode is on, so live playback rendering is undisturbed.
         self._design_mode = False
@@ -256,6 +267,7 @@ class StageController(QObject):
         for obj in render_objs:
             obj._instance = fixture
             obj._move_callback = self._on_fixture_moved
+            obj.set_atmosphere(self.atmosphere)
             obj.set_design_mode(self._design_mode)
             self.scene.addItem(obj)
             obj.attach_label(self.scene)
@@ -271,6 +283,7 @@ class StageController(QObject):
         doesn't keep ticking, then detaches it from the scene before its refs
         drop. Safe freeing relies on the scene's NoIndex item method (see
         __init__)."""
+        self._last_slices.pop(id(fixture), None)
         for i, (inst, render_objs) in enumerate(self._render_groups):
             if inst is fixture:
                 for obj in render_objs:
@@ -294,6 +307,8 @@ class StageController(QObject):
         scenario designer can persist drags."""
         # (instance, render-object(s)) pairs, in patch order, for DMX routing.
         self._render_groups: List = []
+        # The last slice each fixture was given, so an unchanged frame is free.
+        self._last_slices: dict = {}
 
         for fixture in self.config.fixtures:
             self._add_render_group(fixture)
@@ -301,18 +316,36 @@ class StageController(QObject):
         self.logger.info(f"Setup {len(self.render_objs)} fixture bodies on stage")
 
     def update_fixtures_with_dmx(self, dmx_data: bytearray) -> None:
-        """Update all fixtures with new DMX data, slicing per fixture instance."""
+        """Update all fixtures with new DMX data, slicing per fixture instance.
+
+        The slice is resolved ONCE per fixture and pushed into each of its
+        bodies: they mirror the same channels and differ only in which part of
+        the fixture they are, so an eight-bar LED set used to resolve the
+        identical seven bytes eight times a frame, sixty times a second.
+
+        No scene-wide repaint at the end either — every item that changed has
+        already invalidated itself, and with the scene's NoIndex a blanket
+        `update()` repaints all 1536x1024 of it whether or not anything moved.
+        """
         for fixture, render_objs in self._render_groups:
+            if not render_objs:
+                continue
             dmx_start = fixture.dmx_start - 1
+            dmx_end = dmx_start + render_objs[0].dmx_channel_count
+            slice_ = bytes(dmx_data[dmx_start:dmx_end])
+            if len(slice_) < render_objs[0].dmx_channel_count:
+                continue
+            # A fixture holding still sends the same bytes twenty times a
+            # second. Anything that moves between frames — a strobe, a spinning
+            # gobo — is redrawn by the shared clock instead, so skipping here
+            # costs it nothing.
+            if self._last_slices.get(id(fixture)) == slice_:
+                continue
+            self._last_slices[id(fixture)] = slice_
+
+            state = resolve_state(render_objs[0].fdef, slice_)
             for obj in render_objs:
-                dmx_end = dmx_start + obj.dmx_channel_count
-                obj.update_dmx(dmx_data[dmx_start:dmx_end])
-
-        # Update the scene
-        self.scene.update()
-
-        # Commented because is too verbose
-        # self.logger.debug(f"Updated fixtures with DMX data ({len(dmx_data)} bytes)")
+                obj.set_state(state)
     
     # ------------------------------------------------------------------
     # Scenario designer
@@ -407,8 +440,25 @@ class StageController(QObject):
         self.logger.info(f"Fixture '{instance.type}' switched to mode "
                          f"'{mode or '(default)'}'")
 
+    def _advance_atmosphere(self) -> None:
+        """Move the haze toward what the patched fog fixtures are asking for."""
+        self.atmosphere.advance(CLOCK.now())
+
+    def set_haze_baseline(self, value: float) -> None:
+        """How hazy the room is before any fixture. Persisted with the window."""
+        self.atmosphere.set_baseline(value)
+        self.config.window.stage_haze = self.atmosphere.baseline
+
     def _on_selection_changed(self) -> None:
-        selected = self.scene.selectedItems()
+        try:
+            selected = self.scene.selectedItems()
+        except RuntimeError:
+            # A QGraphicsScene clears its selection as it is destroyed, and the
+            # connection outlives the C++ object it came from — so this slot can
+            # be entered with nothing left to ask. There is no selection to
+            # report at that point, and raising here would surface as a stray
+            # traceback during shutdown.
+            return
         inst = getattr(selected[0], "_instance", None) if selected else None
         self.fixture_selected.emit(inst)
 
@@ -443,12 +493,40 @@ class StageController(QObject):
         """Every fixture body on the stage."""
         return list(self.render_objs)
 
-    def refresh_from_config(self, config: Config) -> None:
-        """Refresh fixtures from updated configuration."""
-        self.config = config
-        self.clear_all_fixtures()
-        self._setup_fixtures()
-        self.logger.info("Stage refreshed from configuration")
+    def sync_from_config(self, config: Config = None) -> None:
+        """Bring the stage in line with the patch, adding and removing per fixture.
+
+        Opening or restoring a show rebinds `config.fixtures` to a whole new
+        list; without this the previous show's rig stayed on the stage until
+        the app was restarted.
+
+        Incremental on purpose: a fixture that is in both patches keeps the very
+        same body, so nothing it owns is torn down while the DMX loop may be
+        painting it — the same reason add and remove have always been per
+        fixture rather than a rebuild.
+        """
+        if config is not None:
+            self.config = config
+
+        wanted = list(self.config.fixtures)
+        current = [instance for instance, _ in self._render_groups]
+        by_identity = {id(instance) for instance in wanted}
+
+        for instance in current:
+            if id(instance) not in by_identity:
+                self._remove_render_group(instance)
+
+        known = {id(instance) for instance, _ in self._render_groups}
+        for instance in wanted:
+            if id(instance) not in known:
+                self._add_render_group(instance)
+
+        # Match the patch's order, so the per-kind views and any index into
+        # render_objs still read in the order the user sees.
+        order = {id(instance): position for position, instance in enumerate(wanted)}
+        self._render_groups.sort(key=lambda pair: order.get(id(pair[0]), 0))
+        self.render_objs = [obj for _, objs in self._render_groups for obj in objs]
+        self.logger.info(f"Stage synced to {len(self._render_groups)} fixtures")
     
     def set_background_image(self, image_path: str) -> bool:
         """Set a new background image for the stage."""

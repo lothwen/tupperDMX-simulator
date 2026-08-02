@@ -7,7 +7,7 @@ when rendering became category-driven; `BodyFixture` is the new base that turns
 a DMX slice into a `FixtureState` so subclasses only decide how to draw it.
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import (
@@ -17,8 +17,13 @@ from PyQt6.QtGui import (
     QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient,
 )
 
-from core.fixture_library import FixtureDef
+from core.fixture_library import FixtureDef, all_capability_types
 from core.fixture_state import FixtureState, resolve_state
+from ui.stage.atmosphere import DEFAULT_ATMOSPHERE
+from ui.stage.clock import CLOCK
+from ui.stage.features.base import build_features
+from ui.stage.frame import Frame
+from ui.stage.geometry import Aim
 
 # Stage coordinates are background-image pixels (see ui/stage_controller.py), so
 # a real-world size needs a scale to become one. Anchored on the LED bar: 1000mm
@@ -26,6 +31,9 @@ from core.fixture_state import FixtureState, resolve_state
 MM_PER_STAGE_PX = 2.5
 DEFAULT_BODY_MM = (200.0, 200.0, 200.0)   # for a fixture that declares no size
 MIN_BODY_PX, MAX_BODY_PX = 12.0, 640.0
+
+# Capability types that put something in the air.
+_FOG_CAPABILITIES = frozenset({"Fog", "FogOutput", "FogType"})
 DEFAULT_BODY_SPACING_PX = 175             # between bodies of one multi-body fixture
 
 
@@ -294,18 +302,62 @@ class GlowingEllipse(QGraphicsEllipseItem):
             painter.drawEllipse(ellipse_rect)
 
 
+def default_half_angle(fdef: FixtureDef) -> Optional[float]:
+    """The fixture's resting beam half-angle, from its declared lens.
+
+    None when it declares no optics at all, which is how an LED bar ends up
+    drawing no cone. A zoom channel overrides this per frame.
+    """
+    lens = fdef.physical.lens_degrees
+    return max(1.0, sum(lens) / 2.0) / 2.0 if lens is not None else None
+
+
+def declared_cell_count(fdef: FixtureDef) -> int:
+    """How many separately-lit cells this fixture's *definition* implies.
+
+    The resolved state only knows once DMX has arrived, but a body has to be
+    built before that — so this reads a declared cell count, else the most times
+    any one colour repeats across the channels.
+    """
+    declared = fdef.stage.get("cells")
+    if isinstance(declared, int) and declared > 0:
+        return declared
+    repeats: dict = {}
+    for channel in fdef.channels:
+        for capability in channel.capabilities:
+            if capability.type == "ColorIntensity":
+                colour = str(capability.get("color", ""))
+                repeats[colour] = repeats.get(colour, 0) + 1
+                break
+    return max(repeats.values(), default=1)
+
+
 class BodyFixture(DesignableFixture, QGraphicsObject):
     """Base for every stage renderer: one drawable body of one patched fixture.
 
     Owns the geometry, the DMX -> FixtureState step, the selection border and
-    the designer label. Subclasses build their child items in `build_body()` and
-    repaint them in `apply_state()`; nothing below this line knows what kind of
-    light it is.
+    the designer label, and runs the two-stage pipeline every profile shares:
+
+        reset the beam -> let each capability feature shape it -> hand it to the
+        emission to draw -> repaint the chassis.
+
+    A *profile* (the subclass) contributes only three things: the housing items,
+    which emission model draws its light, and how the chassis itself moves. It
+    never reads a capability — that is what the features are for, which is why a
+    gobo works on any fixture that declares one and on no fixture that doesn't.
 
     A fixture with several bodies (an LED bar's bars) gets one instance per
     body, all fed the same DMX slice — they mirror the same channels and differ
     only in `body_index`.
     """
+
+    #: Features to attach whether or not the fixture declares their capability
+    #: types — a moving head aims even if it only has a Tilt channel.
+    forced_features: Tuple[str, ...] = ()
+
+    #: True when the chassis itself moves between DMX frames — a fan's blades,
+    #: a yoke still slewing. Emissions and features declare their own.
+    profile_animates: bool = False
 
     def __init__(self, fdef: FixtureDef, x: float, y: float, *,
                  body_index: int = 0, instance=None):
@@ -317,8 +369,25 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.dmx_channel_count = fdef.channel_count
         self.width, self.height = body_size(fdef)
         self.state = FixtureState()
+        self.atmosphere = DEFAULT_ATMOSPHERE
+        self.aim = Aim(fdef)
+        self.default_half_angle = default_half_angle(fdef)
         self.init_design()
-        self.build_body()
+
+        self.build_housing()
+        self.emission = self.emission_for(fdef)(self)
+        self.features = build_features(fdef, self)
+        self._frame = Frame(state=self.state, body=self)
+
+        # A fixture that fills the air changes what every OTHER fixture's beam
+        # looks like, so it has to publish that however it is categorised.
+        self._makes_fog = bool(all_capability_types(fdef) & _FOG_CAPABILITIES)
+
+        # Only a body with something moving in it keeps the clock running.
+        self._animates = (self.emission.animates or self.profile_animates
+                          or any(f.animates for f in self.features))
+        self._clock_token = (CLOCK.subscribe(self._on_tick)
+                             if self._animates else None)
 
     # -- geometry ------------------------------------------------------
     def boundingRect(self) -> QRectF:
@@ -328,26 +397,104 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         # Child items draw the fixture itself; we only add the edit-mode border.
         self.paint_selection(painter)
 
-    # -- subclass hooks ------------------------------------------------
-    def build_body(self) -> None:
-        """Create the child items. Called once, at construction."""
+    def aim_origin(self) -> Tuple[float, float]:
+        """Where light leaves this body, in its own coordinates."""
+        return self.width / 2.0, self.height
 
-    def apply_state(self, state: FixtureState) -> None:
-        """Repaint the child items for a new state."""
-        raise NotImplementedError
+    def cell_count(self) -> int:
+        return declared_cell_count(self.fdef)
 
-    def cleanup(self) -> None:
-        """Release anything that keeps ticking (timers, movies) before removal."""
+    def overdrive(self) -> float:
+        """A per-instance render multiplier on top of what the fixture emits.
 
-    # -- DMX -----------------------------------------------------------
+        1.0 everywhere but the blinder, whose look is glare rather than colour.
+        """
+        return 1.0
+
+    # -- profile hooks -------------------------------------------------
+    def build_housing(self) -> None:
+        """Create the chassis items. Called once, at construction."""
+
+    @classmethod
+    def emission_for(cls, fdef: FixtureDef):
+        """Which emission model draws this fixture's light."""
+        from ui.stage.emission.base import NoEmission
+        return NoEmission
+
+    def paint_housing(self, frame: Frame) -> None:
+        """Repaint the chassis — a yoke that turned, a mirror that tilted."""
+
+    # -- the pipeline --------------------------------------------------
+    def set_state(self, state: FixtureState) -> None:
+        """Adopt a resolved state and redraw.
+
+        Separate from `update_dmx` so the stage can resolve once per fixture and
+        share the result across its bodies, which all see the same slice.
+        """
+        self.state = state
+        self.render()
+
     def update_dmx(self, data) -> None:
         """Feed this body a DMX slice. Unchanged contract from the stage."""
         if len(data) < self.dmx_channel_count:
             return
-        self.state = resolve_state(self.fdef, data)
-        self.apply_state(self.state)
+        self.set_state(resolve_state(self.fdef, data))
 
-    # -- helpers for subclasses ----------------------------------------
+    def render(self) -> None:
+        """Run the feature chain and repaint."""
+        frame = self._frame
+        frame.state = self.state
+        frame.haze = self.atmosphere.level
+        frame.t = CLOCK.now()
+        frame.beam.reset(self.default_half_angle)
+
+        for feature in self.features:
+            feature.apply(frame)
+        frame.beam.visible = frame.beam.level > 0
+
+        if self._makes_fog:
+            self.atmosphere.contribute(id(self), self.state.atmosphere.output,
+                                       self.state.atmosphere.kind)
+        self.emission.render(frame)
+        self.paint_housing(frame)
+
+    def apply_state(self, state: FixtureState) -> None:
+        """Adopt a state and redraw. The pre-pipeline name for `set_state`."""
+        self.set_state(state)
+
+    def set_atmosphere(self, atmosphere) -> None:
+        """Join a stage's air. Bodies with no stage keep the shared default."""
+        self.atmosphere = atmosphere
+
+    def _on_tick(self) -> None:
+        self.render()
+
+    def cleanup(self) -> None:
+        """Release everything this body holds, before it leaves the scene.
+
+        The back-references matter as much as the timers. A body points at its
+        emission and its features, and both point back at it — a cycle, which
+        means the body would survive until a *cyclic* collection ran, at some
+        arbitrary later moment. Freeing a QGraphicsObject whose children Qt has
+        already deleted, in the middle of some unrelated Qt call, aborts the
+        process. Dropping the back-references lets it go by refcount instead,
+        the moment the scene lets go of it.
+        """
+        if self._clock_token is not None:
+            CLOCK.unsubscribe(self._clock_token)
+            self._clock_token = None
+        self.atmosphere.release(id(self))
+
+        self.emission.cleanup()
+        for feature in self.features:
+            feature.cleanup()
+            feature.body = None
+        self.features = []
+        self.emission.body = None
+        self._frame.body = None
+        self._frame.state = None
+
+    # -- helpers for profiles and emissions ----------------------------
     def intensity_factor(self) -> float:
         """How brightly to draw this body, 0..1 before any renderer overdrive."""
         return self.state.intensity
@@ -360,46 +507,3 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         overdriven colour must be clamped rather than passed through.
         """
         return QColor(*(max(0, min(255, int(c * factor))) for c in rgb))
-
-
-class StrobeGate:
-    """Flashes a fixture on and off while its shutter is strobing.
-
-    Drives a plain on/off flag from a timer rather than animating opacity: a
-    strobe reads as hard flashes, and the renderer just multiplies its intensity
-    by `factor()`. Owned by a renderer, which must call `stop()` from cleanup so
-    a removed fixture stops ticking.
-    """
-
-    MIN_HZ, MAX_HZ = 0.5, 25.0
-
-    def __init__(self, on_toggle):
-        from PyQt6.QtCore import QTimer
-        self._timer = QTimer()
-        self._timer.timeout.connect(self._tick)
-        self._on_toggle = on_toggle
-        self._lit = True
-        self._hz = None
-
-    def apply_state(self, state: FixtureState) -> None:
-        strobing = state.shutter == "Strobe" and bool(state.strobe_hz)
-        hz = max(self.MIN_HZ, min(self.MAX_HZ, state.strobe_hz)) if strobing else None
-        if hz == self._hz:
-            return
-        self._hz = hz
-        if hz is None:
-            self._timer.stop()
-            self._lit = True
-            return
-        # Two timer ticks per flash cycle: one on, one off.
-        self._timer.start(max(1, int(500.0 / hz)))
-
-    def factor(self) -> float:
-        return 1.0 if self._lit else 0.0
-
-    def stop(self) -> None:
-        self._timer.stop()
-
-    def _tick(self) -> None:
-        self._lit = not self._lit
-        self._on_toggle()
