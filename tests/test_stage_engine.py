@@ -191,6 +191,63 @@ def test_every_registered_feature_declares_itself(qapp):
             "level and colour run before the layers that shape them, aiming last")
 
 
+def test_a_matrix_is_one_body_unless_its_pixels_are_separated(qapp):
+    print("test_a_matrix_is_one_body_unless_its_pixels_are_separated")
+    from ui.stage.base import body_count
+
+    _assert(body_count(ofl_factory.fdef(categories=("Pixel Bar",))) == 1,
+            "a fixture with no matrix at all is one body")
+
+    strip = ofl_factory.fdef(categories=("Pixel Bar",),
+                             matrix={"pixelCount": [24, 1, 1]})
+    _assert(body_count(strip) == 1, "a 24-pixel bar is one bar, not 24 fixtures")
+
+    grid = ofl_factory.fdef(categories=("Flower",),
+                            matrix={"pixelCount": [5, 5, 1]})
+    _assert(body_count(grid) == 1, "a 5x5 pixel grid is one housing")
+
+    # The LED bar's own numbers: 50mm-wide pixels sitting 440mm apart are not a
+    # row of cells behind one lens, they are eight bars.
+    apart = ofl_factory.fdef(
+        categories=("Pixel Bar",), matrix={"pixelCount": [8, 40, 1]},
+        physical={"matrixPixels": {"dimensions": [50, 25, 60],
+                                   "spacing": [440, 0, 0]}})
+    _assert(body_count(apart) == 8,
+            "pixels spaced far wider than they are wide are separate bodies")
+
+    hinted = ofl_factory.fdef(
+        categories=("Pixel Bar",), matrix={"pixelCount": [6, 1, 1]},
+        sidecar={"tdmx": 1, "modes": {"*": {"stage": {"bodies": 3}}}})
+    _assert(body_count(hinted) == 3, "a sidecar stage hint overrides outright")
+
+
+def test_matrix_cells_cover_the_whole_grid(qapp):
+    print("test_matrix_cells_cover_the_whole_grid")
+    grid = ofl_factory.fdef(categories=("Matrix",),
+                            matrix={"pixelCount": [4, 3, 1]})
+    body = _body(grid)
+    cells = body.emission
+    _assert((cells.columns, cells.rows) == (4, 3),
+            "one body spans the matrix's own X by Y extent")
+    _assert(len(cells.cells) == 12, "every pixel of the grid gets a cell")
+    _assert({c.rect().width() for c in cells.cells} == {body.width / 4},
+            "the cells divide the body's width between them")
+    body.cleanup()
+
+    # A bar-set shares the columns out instead, one each.
+    apart = ofl_factory.fdef(
+        categories=("Pixel Bar",), matrix={"pixelCount": [8, 40, 1]},
+        physical={"matrixPixels": {"dimensions": [50, 25, 60],
+                                   "spacing": [440, 0, 0]}})
+    bodies = [_body(apart, body_index=i) for i in range(8)]
+    _assert(all(b.emission.columns == 1 and b.emission.rows == 40
+                for b in bodies), "each bar of a bar-set shows one column")
+    _assert([b.emission.column for b in bodies] == list(range(8)),
+            "and starts at its own column of the running animation")
+    for b in bodies:
+        b.cleanup()
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -202,6 +259,8 @@ def main():
     test_emission_reach_answers_for_the_preview(app)
     test_the_shutter_gate_is_a_pure_function_of_time(app)
     test_every_registered_feature_declares_itself(app)
+    test_a_matrix_is_one_body_unless_its_pixels_are_separated(app)
+    test_matrix_cells_cover_the_whole_grid(app)
     print("\nALL TESTS PASSED")
 
 

@@ -20,11 +20,12 @@ HOUSING_COLOR = QColor(20, 20, 20)
 
 @register_renderer("Pixel Bar", "Matrix")
 class PixelBarFixture(BodyFixture):
-    """A strip of cells with a glow, driven per-cell by the running animation.
+    """A strip or grid of cells with a glow, driven per-cell by the animation.
 
-    Its bodies (an LED bar's eight bars) all mirror the same DMX slice, so what
-    makes them differ is which column of the running effect they show —
-    `body_index` is that column.
+    Most are one body showing the whole matrix. The bodies of a bar-set (an LED
+    bar's eight bars) all mirror the same DMX slice, so what makes them differ
+    is which columns of the running effect they show — `column` is where each
+    one starts.
     """
 
     @classmethod
