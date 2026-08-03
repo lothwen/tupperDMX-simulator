@@ -2,11 +2,17 @@
 # ABOUTME: plain dimmers, and the last-resort body for anything unrecognised.
 """Lamps.
 
-The commonest shape on any stage: one housing, one lamp, optionally a cone of
-light. A colour changer takes its hue from the resolved state; a dimmer has no
-colour to take, so it glows white at whatever level its intensity channel says.
-Both are the same body — which of them a fixture is only changes what its
-channels happen to do, and that is the features' business, not the profile's.
+The commonest shape on any stage: one housing, one lamp, and whatever that lamp
+puts in the air. A colour changer takes its hue from the resolved state; a
+dimmer has no colour to take, so it glows white at whatever level its intensity
+channel says. Both are the same body — which of them a fixture is only changes
+what its channels happen to do, and that is the features' business, not the
+profile's.
+
+The same is true of the light itself. This one body covers a 4° beam par, a 25°
+wash and a 120° soft panel, and which of those it draws comes from the fixture's
+optics rather than from anything declared here: no lens tight enough or gate
+fitted means no shaft, and the lamp does the whole job.
 """
 
 from PyQt6.QtGui import QColor
@@ -14,14 +20,14 @@ from PyQt6.QtWidgets import QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
 from ui.stage.base import BodyFixture
-from ui.stage.emission.cone import WashLamp
+from ui.stage.emission.cone import emission_for_kind
 from ui.stage.registry import register_renderer
 
 HOUSING_COLOR = QColor(20, 20, 20)
 
 
 class LampFixture(BodyFixture):
-    """A housing with a single glowing lamp, plus a beam when there's a lens."""
+    """A housing with a glowing lamp, and whatever shaft its optics justify."""
 
     def build_housing(self) -> None:
         self.housing = QGraphicsRectItem(0, 0, self.width, self.height, self)
@@ -29,7 +35,7 @@ class LampFixture(BodyFixture):
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
-        return WashLamp
+        return emission_for_kind(cls.beam_kind(fdef))
 
     @property
     def lamp(self):
@@ -39,6 +45,7 @@ class LampFixture(BodyFixture):
 
     @property
     def beam(self):
+        """The cone, or None on a fixture that throws no shaft."""
         return self.emission.cone
 
 
