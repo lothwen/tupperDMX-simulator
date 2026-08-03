@@ -158,6 +158,23 @@ def test_emission_reach_answers_for_the_preview(qapp):
                                            angleEnd="40deg")})
     _assert(emission_reach(zoomed) > 0.0, "and so does one with a zoom channel")
 
+    # A declared lens angle is not the same claim as a visible shaft: every
+    # emitting fixture has a beam angle, and a flood's is simply very wide.
+    panel = ofl_factory.fdef(categories=("Dimmer", "Color Changer"),
+                             channels={"d": ofl_factory.channel("Intensity")},
+                             physical={"lens": {"degreesMinMax": [115, 115]}})
+    _assert(emission_reach(panel) == 0.0,
+            "a 115 deg panel lights a surface, so it reserves no room either")
+
+    # And the reverse: no lens data is missing data, not a claim of no beam.
+    # A head that aims has to throw something.
+    mover = ofl_factory.fdef(
+        categories=("Moving Head",),
+        channels={"p": ofl_factory.channel("Pan", angleStart="0deg",
+                                           angleEnd="540deg")})
+    _assert(emission_reach(mover) > 0.0,
+            "a mover that declares no optics still reserves room for its beam")
+
 
 def test_the_shutter_gate_is_a_pure_function_of_time(qapp):
     print("test_the_shutter_gate_is_a_pure_function_of_time")

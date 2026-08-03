@@ -190,6 +190,15 @@ def test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam(qapp):
     _assert(renderer_for(spot).emission_for(spot) is HardBeam,
             "the same body with a gobo wheel throws a beam you can see the edge of")
 
+    # A zoom range's tight end is the zoom working, not a gate. Reading
+    # min(lens) as evidence of a hard edge is what drew wash heads as spots.
+    zoom_wash = ofl_factory.fdef(
+        categories=("Moving Head",),
+        channels=dict(MOVER_CHANNELS, **ofl_factory.RGB_CHANNELS),
+        physical={"lens": {"degreesMinMax": [8, 30]}})
+    _assert(renderer_for(zoom_wash).emission_for(zoom_wash) is WashLamp,
+            "a wash head that zooms down to 8 deg is still a wash")
+
 
 def main():
     from PyQt6.QtWidgets import QApplication

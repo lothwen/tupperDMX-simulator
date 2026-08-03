@@ -1,10 +1,13 @@
-# ABOUTME: The cone of light a lensed fixture throws, and the lamp behind it.
+# ABOUTME: The cone of light a fixture throws, the lamp behind it, and the same
+# ABOUTME: lamp with no cone for the fixtures that only light a surface.
 """Cones.
 
-A fixture that declares a lens (or carries a zoom channel) throws a visible
-cone. How visible depends on the air: `frame.haze` scales it, because a beam in
-clean air is not a thing you can see. Fixtures with no optics — an LED bar —
-get no cone at all, which is what they looked like before.
+A fixture whose optics throw a shaft gets a visible cone. How visible depends on
+the air: `frame.haze` scales it, because a beam in clean air is not a thing you
+can see. Which fixtures those are is `ui/stage/optics.py`'s decision, made from
+the fixture's own optics and handed here as a `BeamKind`; a fixture that only
+lights a surface — an LED bar, a flood panel — gets `LampGlow` and no cone item
+at all, so there is nothing for a stray zoom channel to switch back on.
 
 The cone is drawn in the plane of the stage image, aimed by `beam.axis_deg` and
 shortened by `beam.foreshorten` (see `ui/stage/geometry.py`); with no pan or
@@ -25,9 +28,7 @@ from ui.stage import wheelart
 from ui.stage.base import GlowingEllipse
 from ui.stage.emission.base import Emission
 from ui.stage.frame import BEAM_LENGTH_PX, BeamParams, Frame
-
-# Capability types that mean "this fixture has optics", i.e. throws a cone.
-_OPTIC_CAPABILITIES = frozenset({"Zoom", "BeamAngle"})
+from ui.stage.optics import MAX_HALF_ANGLE_DEG, BeamKind
 
 BEAM_MAX_ALPHA = 90        # opacity at the lens, fading to nothing at the end
 BEAM_MIN_INTENSITY = 0.02  # below this the cone is hidden entirely
@@ -47,6 +48,12 @@ HAZE_FLOOR = 0.25
 HARD_BEAM_NARROWING = 0.55
 HARD_BEAM_ALPHA = 150
 
+# How wide a cone may get relative to its own throw. `tan()` climbs steeply near
+# the vertical — 89° is 57x, a 18000px sheet off a 320px beam — and a cone much
+# wider than it is long stopped reading as a shaft long before that. Past this
+# it is a wall of light, so there is nothing to gain by drawing it any wider.
+MAX_SPREAD_RATIO = 2.0
+
 # How far the lamp's glow spreads past the lens. When there is no cone the glow
 # IS the light and has to carry the whole fixture (the LED bar's 20x look);
 # once a beam is drawn the glow is only the flare around the lens, and left at
@@ -54,6 +61,12 @@ HARD_BEAM_ALPHA = 150
 GLOW_WITHOUT_BEAM = 20.0
 GLOW_WITH_WASH = 7.0
 GLOW_WITH_BEAM = 4.0
+
+# A ceiling on the glow in absolute scene units, because the multipliers above
+# are relative to the lamp and a big fixture has a big lamp: 20x on an ARRI
+# SkyPanel S360C is a 2650px radius, which whites out a 1920px stage. Sized
+# against BEAM_LENGTH_PX so the widest glow and the longest beam are comparable.
+MAX_GLOW_RADIUS_PX = 400.0
 
 
 class BeamCone(QGraphicsPolygonItem):
@@ -78,12 +91,12 @@ class BeamCone(QGraphicsPolygonItem):
             self.setVisible(False)
             return
 
-        angle = max(1.0, beam.half_angle_deg)
+        angle = _drawable_angle(beam.half_angle_deg)
         if hard:
             angle *= HARD_BEAM_NARROWING
         length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
         # An iris closes the aperture; frost opens the edge back up.
-        spread = math.tan(math.radians(angle)) * length
+        spread = min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO) * length
         spread *= max(0.05, beam.aperture)
         spread *= 1.0 + beam.softness
         # Pointing at the viewer: what was a shaft becomes a bloom.
@@ -107,6 +120,19 @@ class BeamCone(QGraphicsPolygonItem):
         self.setVisible(True)
 
 
+def _drawable_angle(half_angle_deg: Optional[float]) -> float:
+    """A half-angle the cone geometry can actually use.
+
+    The spread is `tan(half_angle)`, which passes 1.6e16 at 90° and goes
+    negative beyond it — a QPolygonF out at 1e18 scene units. Nothing the
+    classifier returns comes near that (the widest fixture in a 631-strong
+    library rests at 32.5°), but a `Zoom` capability can resolve past 180° and a
+    `stage.beam` hint can force a cone onto a 270° tube, so the wall is held
+    here rather than trusted to every caller.
+    """
+    return max(1.0, min(MAX_HALF_ANGLE_DEG, half_angle_deg or 1.0))
+
+
 def _tip(origin: QPointF, axis_deg: float, length: float) -> QPointF:
     radians = math.radians(axis_deg)
     return QPointF(origin.x() + math.cos(radians) * length,
@@ -127,17 +153,22 @@ def _cone_polygon(origin: QPointF, axis_deg: float, length: float,
 
 
 class WashLamp(Emission):
-    """One glowing lamp per zone, plus the cone when the fixture has optics.
+    """One glowing lamp per zone, plus a soft cone.
 
-    The common case by a distance: pars, washes, plain dimmers, and any moving
-    head whose channels don't describe a hard-edged beam. Nearly all of them are
-    a single lamp, and that is exactly what one zone draws.
+    The common case by a distance: pars, washes, and any moving head whose
+    optics don't describe a hard-edged beam. Nearly all of them are a single
+    lamp, and that is exactly what one zone draws.
 
     A wash whose face is split into independently-driven zones — a segmented
     blinder-wash, anything with a small matrix — gets one lamp per zone, laid
     out across its face the way the segments are. The cone takes their mix:
     by the time the light lands the zones have overlapped into one colour.
     """
+
+    #: How far the lamp's glow spreads, relative to the lamp.
+    GLOW = GLOW_WITH_WASH
+    #: Whether this body puts a shaft in the air as well as lighting its face.
+    DRAWS_CONE = True
 
     def build(self) -> None:
         body = self.body
@@ -151,8 +182,7 @@ class WashLamp(Emission):
         slot = (body.width - 2 * inset_x) / count
         size = min(slot, body.height - 2 * inset_y)
         top = (body.height - size) / 2
-        multiplier = (GLOW_WITH_WASH if self.reach(body.fdef)
-                      else GLOW_WITHOUT_BEAM)
+        multiplier = min(self.GLOW, MAX_GLOW_RADIUS_PX / max(1.0, size / 2.0))
         self.lamps = []
         for index in range(count):
             lamp = GlowingEllipse(inset_x + index * slot + (slot - size) / 2,
@@ -161,7 +191,8 @@ class WashLamp(Emission):
             self.lamps.append(lamp)
 
         origin_x, origin_y = body.aim_origin()
-        self.cone = BeamCone(body, origin_x, origin_y)
+        self.cone = (BeamCone(body, origin_x, origin_y) if self.DRAWS_CONE
+                     else None)
 
     @property
     def lamp(self):
@@ -186,8 +217,9 @@ class WashLamp(Emission):
             lamp.setGlowColor(self.body.clamped_color(rgb, level),
                               min(1.0, level))
 
-        self.cone.apply_beam(beam, frame.haze,
-                             rgb=self._mixed(emitters) if per_zone else None)
+        if self.cone is not None:
+            self.cone.apply_beam(beam, frame.haze,
+                                 rgb=self._mixed(emitters) if per_zone else None)
 
     def _mixed(self, emitters) -> Tuple[int, int, int]:
         """The colour this body's zones make together.
@@ -203,13 +235,30 @@ class WashLamp(Emission):
 
     @classmethod
     def reach(cls, fdef) -> float:
-        """A cone only appears when the fixture has optics to throw it with —
-        a declared lens, or a channel that sets the beam's spread."""
-        if fdef.physical.lens_degrees is not None:
-            return BEAM_LENGTH_PX
-        has_optics = any(cap.type in _OPTIC_CAPABILITIES
-                         for spec in fdef.channels for cap in spec.capabilities)
-        return BEAM_LENGTH_PX if has_optics else 0.0
+        """How far the light gets. A constant, because by the time an emission
+        class has been picked the question is already answered — that IS what
+        picking `WashLamp` over `LampGlow` decided."""
+        return BEAM_LENGTH_PX
+
+
+class LampGlow(WashLamp):
+    """The same lamps with no shaft: a panel, a flood, a strip, a soft box.
+
+    A fixture that lights a surface rather than the air between. It is the same
+    body as a wash — the lamps, the per-zone layout and the colour all behave
+    identically — and the only difference is that no cone is ever built, so a
+    zoom channel on a fixture that shouldn't have a beam cannot conjure one.
+
+    The glow does the whole job here, so it spreads much further than it would
+    around a lens it is only flaring off.
+    """
+
+    GLOW = GLOW_WITHOUT_BEAM
+    DRAWS_CONE = False
+
+    @classmethod
+    def reach(cls, fdef) -> float:
+        return 0.0
 
 
 class GoboPlane(QGraphicsItem):
@@ -266,10 +315,10 @@ class GoboPlane(QGraphicsItem):
 
 def _gobo_radius(beam: BeamParams) -> float:
     """How big the pattern lands, from the beam's own spread."""
-    angle = max(1.0, beam.half_angle_deg or 12.0) * HARD_BEAM_NARROWING
+    angle = _drawable_angle(beam.half_angle_deg or 12.0) * HARD_BEAM_NARROWING
     length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
-    return max(6.0, math.tan(math.radians(angle)) * length * 0.78
-               * max(0.05, beam.aperture))
+    return max(6.0, min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO)
+               * length * 0.78 * max(0.05, beam.aperture))
 
 
 class HardBeam(Emission):
@@ -285,6 +334,8 @@ class HardBeam(Emission):
     #: A prism with more facets than this smears into a disc anyway.
     MAX_COPIES = 8
 
+    GLOW = GLOW_WITH_BEAM
+
     animates = True
 
     def build(self) -> None:
@@ -293,7 +344,8 @@ class HardBeam(Emission):
         size = min(body.width - 2 * inset_x, body.height - 2 * inset_y)
         self.lamp = GlowingEllipse((body.width - size) / 2,
                                    (body.height - size) / 2, size, size, body)
-        self.lamp.glow_radius_multiplier = GLOW_WITH_BEAM
+        self.lamp.glow_radius_multiplier = min(
+            self.GLOW, MAX_GLOW_RADIUS_PX / max(1.0, size / 2.0))
         origin_x, origin_y = body.aim_origin()
         self._origin = QPointF(origin_x, origin_y)
         self.cones = [BeamCone(body, origin_x, origin_y)
@@ -384,3 +436,22 @@ class BeamFan(Emission):
     @classmethod
     def reach(cls, fdef) -> float:
         return BEAM_LENGTH_PX
+
+
+_BY_KIND = {
+    BeamKind.NONE: LampGlow,
+    BeamKind.WASH: WashLamp,
+    BeamKind.HARD: HardBeam,
+}
+
+
+def emission_for_kind(kind: BeamKind):
+    """The emission that draws a given kind of light.
+
+    The join between `ui/stage/optics.py`, which decides what a fixture throws,
+    and the classes here that draw it. A profile whose body is a lamp in a
+    housing goes straight through this; the ones that are a shape of their own —
+    a flower's rosette, a laser's fan, a bar's cells — name their emission
+    directly, because for them the category has already settled it.
+    """
+    return _BY_KIND[kind]

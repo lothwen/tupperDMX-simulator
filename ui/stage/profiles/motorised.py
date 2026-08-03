@@ -8,43 +8,35 @@ it and foreshortens as the fixture turns toward the audience, and the body
 visibly turns with it — a yoke for a head, a mirror for a scanner. See
 `ui/stage/geometry.py` for the mapping.
 
-Which emission a moving head gets is decided by what its channels say it is, not
-by its name: a head with a gobo wheel, a prism or an iris is a spot and gets a
-hard-edged beam; one with none of those is a wash and gets a soft cone. That is
-the whole difference, and it needs no per-fixture code.
+Which emission a moving head gets is decided by what its optics say it is, not
+by its name: a head with a gobo wheel, a prism or an iris — or a lens narrow
+even wide open — is a spot and gets a hard-edged beam; one with none of those is
+a wash and gets a soft cone. `ui/stage/optics.py` makes that call for every
+fixture on the stage, so it needs no per-fixture code here.
+
+What these profiles do add is a floor. A fixture that aims has to emit
+*something* — a yoke swinging a beam that was never drawn is just a moving box —
+so where a lamp body with no declared optics stays dark, a head falls back to a
+wash and a scanner, which is a mirror on the front of a beam, to a hard one.
 """
 
 import math
-from typing import Set
 
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
-from core.fixture_library import FixtureDef, all_capability_types
+from core.fixture_library import FixtureDef
 from ui.stage.base import BodyFixture
-from ui.stage.emission.cone import BeamFan, HardBeam, WashLamp
+from ui.stage.emission.cone import BeamFan, emission_for_kind
 from ui.stage.emission.volumetric import LaserFan
 from ui.stage.frame import Frame
 from ui.stage.geometry import Spinner
+from ui.stage.optics import BeamKind
 from ui.stage.registry import register_renderer
 
 CHASSIS_COLOR = QColor(28, 28, 32)
 YOKE_COLOR = QColor(45, 45, 52)
 MIRROR_COLOR = QColor(150, 160, 175)
-
-# Capabilities that mean "this fixture makes a beam you can see the edge of".
-_HARD_BEAM_CAPABILITIES = frozenset({"WheelSlot", "WheelRotation", "Prism",
-                                     "PrismRotation", "Iris", "IrisEffect",
-                                     "BladeInsertion", "Frost"})
-# A lens this tight is a beam or spot whatever else the fixture declares.
-_HARD_BEAM_MAX_DEGREES = 20.0
-
-
-def _wants_a_hard_beam(fdef: FixtureDef) -> bool:
-    if all_capability_types(fdef) & _HARD_BEAM_CAPABILITIES:
-        return True
-    lens = fdef.physical.lens_degrees
-    return lens is not None and min(lens) <= _HARD_BEAM_MAX_DEGREES
 
 
 @register_renderer("Moving Head")
@@ -53,6 +45,8 @@ class MovingHeadFixture(BodyFixture):
 
     # A head aims even if it only declares one of the two axes.
     forced_features = ("PanTiltFeature",)
+    # A head with no optics declared at all still throws something.
+    beam_fallback = BeamKind.WASH
 
     def build_housing(self) -> None:
         width, height = self.width, self.height
@@ -71,7 +65,7 @@ class MovingHeadFixture(BodyFixture):
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
-        return HardBeam if _wants_a_hard_beam(fdef) else WashLamp
+        return emission_for_kind(cls.beam_kind(fdef))
 
     def aim_origin(self):
         return self.width / 2.0, self.height * 0.4
@@ -97,6 +91,9 @@ class ScannerFixture(BodyFixture):
     """
 
     forced_features = ("PanTiltFeature",)
+    # There is no such thing as a scanner that washes: the mirror is there to
+    # deflect a beam, so one that declares no optics still gets a hard one.
+    beam_fallback = BeamKind.HARD
 
     def build_housing(self) -> None:
         width, height = self.width, self.height
@@ -109,7 +106,7 @@ class ScannerFixture(BodyFixture):
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
-        return HardBeam
+        return emission_for_kind(cls.beam_kind(fdef))
 
     def aim_origin(self):
         return self.width / 2.0, self.height * 0.78

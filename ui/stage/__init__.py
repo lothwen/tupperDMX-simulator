@@ -18,12 +18,12 @@ module under `profiles/`; adding support for a capability is a new module under
 from ui.stage.base import (
     BodyFixture, DesignableFixture, FixtureLabel, GlowingEllipse,
     body_count, body_size, body_spacing, declared_cell_count,
-    default_half_angle,
 )
 from ui.stage.atmosphere import DEFAULT_ATMOSPHERE, Atmosphere
 from ui.stage.clock import CLOCK, AnimationClock
 from ui.stage.frame import BEAM_LENGTH_PX, BeamParams, Frame
 from ui.stage.geometry import Aim, Slew, Spinner
+from ui.stage.optics import BeamKind, beam_kind, resting_half_angle
 from ui.stage.registry import (
     register_renderer, registered_categories, renderer_for,
 )
@@ -41,9 +41,9 @@ from ui.stage.profiles import (
 __all__ = [
     "BodyFixture", "DesignableFixture", "FixtureLabel", "GlowingEllipse",
     "body_count", "body_size", "body_spacing", "declared_cell_count",
-    "default_half_angle",
     "Atmosphere", "DEFAULT_ATMOSPHERE", "AnimationClock", "CLOCK",
     "BEAM_LENGTH_PX", "BeamParams", "Frame", "Aim", "Slew", "Spinner",
+    "BeamKind", "beam_kind", "resting_half_angle",
     "register_renderer", "registered_categories", "renderer_for",
     "FEATURES", "Feature", "build_features",
     "BlinderFixture", "ColorChangerFixture", "DimmerFixture", "FanFixture",

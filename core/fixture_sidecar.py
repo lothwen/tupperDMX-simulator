@@ -27,6 +27,26 @@ at all — it simply has no scene banks.
 Each mode block holds `channels` (per-channel `label`/`flags` overrides, keyed by
 resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
 
+`stage` is render hints, read by `ui/stage/`. Five keys, all optional:
+
+    "stage": {
+        "size_px":      [width, height],   # on-stage body size, overriding mm
+        "bodies":       8,                 # separate housings on one DMX slice
+        "body_spacing": 175,               # gap between them, in scene units
+        "cells":        2,                 # separately-lit zones on one face
+        "beam":  "none" | "wash" | "hard"  # what this fixture puts in the air
+    }
+
+`beam` overrides `ui/stage/optics.beam_kind()`, which otherwise works this out
+from the fixture's own optics. It exists for the fixture whose gate is not a DMX
+channel and so cannot be seen in the data at all — an ETC Source Four's lens tube
+is the standing example: it declares a 5–90° range like any zoom wash, and only
+`"beam": "hard"` can say it is a profile.
+
+Note the mode blocks merge `channels` per key but replace `stage` **wholesale**
+(see `ModeExtras.for_mode`), so a named mode declaring any `stage` key must
+repeat every key it still wants from the shared `"*"` block.
+
 What a channel *does* is never declared here — that is what its OFL capabilities
 say, and the app reads them directly. `flags` carries the two knob behaviours no
 capability implies, and `label` renames a channel whose capabilities describe it

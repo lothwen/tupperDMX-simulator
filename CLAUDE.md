@@ -237,17 +237,52 @@ bundled).
     falling back to the shape of its channels — a fixture that makes fog is a
     hazer, one that pans is a mover — and finally to `GenericStageFixture`
     ("Other" is the only category with no profile of its own).
+  - `optics.py` — **what kind of light a fixture throws**, as a three-valued
+    `BeamKind`: `NONE` (a surface light — a panel, a flood, a strip: no shaft in
+    the air), `WASH` (a soft cone) or `HARD` (a defined edge you can see the end
+    of). Qt-free and may import only from `core`, which keeps it below the
+    `registry`↔`profiles` cycle. `beam_kind(fdef, fallback)` decides **whether**
+    there is a shaft; `resting_half_angle(fdef, kind)` decides **how wide** —
+    kept apart on purpose, because conflating them is what drew an ARRI SkyPanel
+    with a 57.5° beam. Rule order: a `stage.beam` sidecar hint wins outright;
+    then beam-shaping evidence (`Prism`/`Iris`/`Blade…`/`Focus`, or a wheel
+    carrying a `Gobo`/`Prism`/`Iris` **slot**) ⇒ HARD; then the declared lens —
+    narrow even wide open (≤ `HARD_MAX_DEGREES` 12°) ⇒ HARD, wider than
+    `WASH_MAX_DEGREES` (65°) ⇒ NONE, else WASH, with a spread ≥
+    `ZOOM_RANGE_RATIO` (2.5×) read as a **zoom range** whose tight end is the
+    zoom working rather than a gate; then a bare `Zoom`/`BeamAngle` channel ⇒
+    WASH; else the profile's `beam_fallback`. **What is deliberately NOT
+    evidence matters as much**: `Frost` softens an edge (and rides on wash
+    heads), and a bare `WheelSlot` is whatever its slots are — a colour wheel
+    declares it exactly as a gobo wheel does. Reading either as hardness is what
+    drew 32 wash movers as spots. Note OFL's `physical.lens.degreesMinMax` is the
+    *beam angle*, which every emitting fixture has; its mere presence never meant
+    "throws a beam". `tests/test_stage_optics.py` carries the archetype table and
+    fails loudly if OFL gains a wheel-slot type nobody classified.
   - `profiles/` — the body and its chassis animation, one class per kind:
     `lamp.py` (Color Changer / Dimmer / the generic fallback), `array.py`
     (Pixel Bar / Matrix, Blinder, Strobe), `motorised.py` (Moving Head, Scanner /
     Barrel Scanner, Flower / Effect, Laser), `atmospheric.py` (Hazer / Smoke,
     Fan, Stand). A profile declares only its housing, `aim_origin()`,
-    `emission_for(fdef)` and `paint_housing()`; it never reads a capability.
-  - `emission/` — how the light is drawn: `cone.py` (`WashLamp`, `HardBeam` with
-    its gobo plane and prism copies, `BeamFan`), `surface.py` (`MatrixCells`,
-    `BulbArray`, `FlatPanel`), `volumetric.py` (`LaserFan`, `FogPlume`),
-    `NoEmission`. `emission_reach(fdef)` is the one answer to "does this fixture
-    throw a beam, and how far" — the scene preview sizes its viewport from it.
+    `emission_for(fdef)`, `paint_housing()` and `beam_fallback` — what its
+    fixtures throw when the definition declares no optics at all, since the
+    document has no answer and the body shape is the only evidence left. A lamp
+    body stays `NONE` (an unlensed lamp is likelier a panel than a spot); a
+    moving head falls back to `WASH` and a scanner to `HARD`, because a fixture
+    that aims a beam nobody drew is just a moving box. It never reads a
+    capability.
+  - `emission/` — how the light is drawn: `cone.py` (`WashLamp`, `LampGlow` —
+    the same lamps with no cone ever built, so a stray zoom channel cannot
+    conjure one — `HardBeam` with its gobo plane and prism copies, `BeamFan`),
+    `surface.py` (`MatrixCells`, `BulbArray`, `FlatPanel`), `volumetric.py`
+    (`LaserFan`, `FogPlume`), `NoEmission`. `emission_for_kind(kind)` is the join
+    from `optics.py` to these classes, used by every profile whose body is a lamp
+    in a housing; the ones that are a shape of their own (a flower's rosette, a
+    laser's fan, a bar's cells) name their emission directly. `emission_reach(fdef)`
+    answers "how far does this fixture's light get" for the scene preview's
+    viewport, and is now a **per-class constant** — by the time an emission has
+    been picked the question is already settled, which is what picking `WashLamp`
+    over `LampGlow` decided.
     An emission that draws a face draws **one item per zone**, from the state's
     emitters: `MatrixCells` a cell per pixel, `BulbArray` a bulb per emitter and
     `WashLamp` a lamp per `cell_count()` — so a wash whose face is segmented
@@ -261,7 +296,11 @@ bundled).
     `all_capability_types(fdef)`, so a "Moving Head" that is really a wash with
     no gobo wheel simply has no gobo layer — graceful degradation with no
     per-fixture code anywhere.
-  - `frame.py` (`Frame` + `BeamParams`, the contract between the two stages),
+  - `frame.py` (`Frame` + `BeamParams`, the contract between the two stages;
+    `half_angle_deg` is the fixture's **resting** spread from
+    `optics.resting_half_angle` — the mid-point of a fixed lens, the *geometric*
+    mean of a zoom range, `None` only when the kind is `NONE` — and `ZoomFeature`
+    still overwrites it every frame, so a live zoom always wins),
     `geometry.py` (`Aim`: pan/tilt onto a flat front elevation — pan swings the
     beam across the picture, tilt rotates and foreshortens it; **a fixture with
     no pan/tilt comes out straight down at full length**, exactly as before —
@@ -352,7 +391,13 @@ bundled).
   document) plus an optional `fixtures/<x>.tdmx.json` sidecar
   (`core/fixture_sidecar.py`) carrying what OFL has nowhere to put — scene
   `banks`, `chases`, `song_parts` tags, per-channel `label`/`flags` overrides,
-  the effect→animation map and `stage` render hints. What a channel *does* is
+  the effect→animation map and `stage` render hints (five keys, all optional:
+  `size_px`, `bodies`, `body_spacing`, `cells`, and `beam` —
+  `"none"|"wash"|"hard"`, which overrides `ui/stage/optics.beam_kind()` for the
+  fixture whose gate is not a DMX channel and so cannot be read from the data,
+  an ETC Source Four's lens tube being the standing example. Mode blocks merge
+  `channels` per key but replace `stage` **wholesale**, so a named mode's block
+  must repeat every key it still wants from `"*"`). What a channel *does* is
   never declared there — that is what its capabilities say. A fixture taken straight from
   the OFL project works with no sidecar; it simply has no scene banks.
   Loaded in three layers — shipped `fixtures/`, writable
@@ -728,9 +773,12 @@ interpolates present↔future DMX to avoid blackout artifacts.
   the tracks themselves — import it from `.widgets.clip_edit` directly.
 - `tests/` — headless characterization tests (standalone scripts; see above).
   `ofl_factory.py` builds synthetic OFL documents so a capability nobody ships a
-  fixture for can still be exercised; `test_capability_coverage.py` and
-  `test_renderer_registry.py` carry the two tables that fail loudly when OFL
-  gains a capability type or a category nobody handled.
+  fixture for can still be exercised; `test_capability_coverage.py`,
+  `test_renderer_registry.py` and `test_stage_optics.py` carry the three tables
+  that fail loudly when OFL gains a capability type, a category or a wheel-slot
+  type nobody handled. `test_stage_optics.py`'s archetype table is also where
+  the beam classifier's traps are recorded — a narrow zoom, a zero-minimum lens,
+  a colour wheel that is not a gate.
 - `tupperlogger/` — custom logger with file rotation.
 
 ## Timeline Architecture Notes

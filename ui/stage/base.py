@@ -7,7 +7,7 @@ when rendering became category-driven; `BodyFixture` is the new base that turns
 a DMX slice into a `FixtureState` so subclasses only decide how to draw it.
 """
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import (
@@ -24,6 +24,7 @@ from ui.stage.clock import CLOCK
 from ui.stage.features.base import build_features
 from ui.stage.frame import Frame
 from ui.stage.geometry import Aim
+from ui.stage.optics import BeamKind, beam_kind, resting_half_angle
 
 # Stage coordinates are background-image pixels (see ui/stage_controller.py), so
 # a real-world size needs a scale to become one. Anchored on the LED bar: 1000mm
@@ -322,16 +323,6 @@ class GlowingEllipse(QGraphicsEllipseItem):
             painter.drawEllipse(ellipse_rect)
 
 
-def default_half_angle(fdef: FixtureDef) -> Optional[float]:
-    """The fixture's resting beam half-angle, from its declared lens.
-
-    None when it declares no optics at all, which is how an LED bar ends up
-    drawing no cone. A zoom channel overrides this per frame.
-    """
-    lens = fdef.physical.lens_degrees
-    return max(1.0, sum(lens) / 2.0) / 2.0 if lens is not None else None
-
-
 def declared_cell_count(fdef: FixtureDef) -> int:
     """How many separately-lit cells this fixture's *definition* implies.
 
@@ -375,6 +366,12 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     #: types — a moving head aims even if it only has a Tilt channel.
     forced_features: Tuple[str, ...] = ()
 
+    #: What this profile's fixtures throw when their definition declares no
+    #: optics at all. The document has no answer, so the body shape is the only
+    #: evidence left: a moving head that emits nothing is nonsense, while an
+    #: unlensed lamp is far more likely to be a panel than a spot.
+    beam_fallback: BeamKind = BeamKind.NONE
+
     #: True when the chassis itself moves between DMX frames — a fan's blades,
     #: a yoke still slewing. Emissions and features declare their own.
     profile_animates: bool = False
@@ -391,7 +388,8 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.state = FixtureState()
         self.atmosphere = DEFAULT_ATMOSPHERE
         self.aim = Aim(fdef)
-        self.default_half_angle = default_half_angle(fdef)
+        self.default_half_angle = resting_half_angle(
+            fdef, type(self).beam_kind(fdef))
         self.init_design()
 
         self.build_housing()
@@ -434,6 +432,15 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     # -- profile hooks -------------------------------------------------
     def build_housing(self) -> None:
         """Create the chassis items. Called once, at construction."""
+
+    @classmethod
+    def beam_kind(cls, fdef: FixtureDef) -> BeamKind:
+        """What kind of light this fixture throws — no shaft, a wash or a beam.
+
+        The classifier reads the fixture; the profile only supplies what to
+        assume when the fixture says nothing.
+        """
+        return beam_kind(fdef, cls.beam_fallback)
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
