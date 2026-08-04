@@ -24,6 +24,7 @@ from ui.stage.clock import CLOCK
 from ui.stage.features.base import build_features
 from ui.stage.frame import Frame
 from ui.stage.geometry import Aim
+from ui.stage.light import LightList
 from ui.stage.optics import BeamKind, beam_kind, resting_half_angle
 
 # Stage coordinates are background-image pixels (see ui/stage_controller.py), so
@@ -251,6 +252,11 @@ class GlowingEllipse(QGraphicsEllipseItem):
         self.glow_intensity = 0.0
         self.glow_radius_multiplier = 20.0  # How far the glow extends beyond the ellipse
         
+    #: False once the GPU layer owns the light: the bulb still draws, so an
+    #: unlit fixture looks like itself, but the glow is left to the shader
+    #: rather than painted twice — once alpha-stacked here, once added there.
+    draw_glow = True
+
     def setGlowColor(self, color, intensity=1.0):
         """Set the glow color and intensity (0.0-1.0)"""
         self.glow_color = color
@@ -273,7 +279,13 @@ class GlowingEllipse(QGraphicsEllipseItem):
         bulb_radius = ellipse_rect.width() / 2
         glow_radius = bulb_radius * self.glow_radius_multiplier
         
-        if self.glow_intensity > 0:
+        if self.glow_intensity > 0 and not self.draw_glow:
+            # The GPU layer owns the halo, but this is still the lit face of
+            # the lamp — drawing it dark would switch the fixture off.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self.glow_color))
+            painter.drawEllipse(ellipse_rect)
+        elif self.glow_intensity > 0:
             
             # Create smooth radial gradient for seamless glow
             gradient = QRadialGradient(center_x, center_y, glow_radius)
@@ -397,6 +409,12 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.features = build_features(fdef, self)
         self._frame = Frame(state=self.state, body=self)
 
+        # The same frame, described for the GPU layer instead of drawn: linear
+        # float, unbounded intensity, body-local. Refilled in place every
+        # render; nothing reads it unless a light layer is attached.
+        self.lights = LightList()
+        self._light_sink = None
+
         # A fixture that fills the air changes what every OTHER fixture's beam
         # looks like, so it has to publish that however it is categorised.
         self._makes_fog = bool(all_capability_types(fdef) & _FOG_CAPABILITIES)
@@ -485,9 +503,25 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.emission.render(frame)
         self.paint_housing(frame)
 
+        self.lights.clear()
+        self.emission.emit_lights(frame, self.lights)
+        if self._light_sink is not None:
+            self._light_sink()
+
     def apply_state(self, state: FixtureState) -> None:
         """Adopt a state and redraw. The pre-pipeline name for `set_state`."""
         self.set_state(state)
+
+    def set_light_on_gpu(self, on_gpu: bool) -> None:
+        """Hand the light over to the GPU layer, or take it back.
+
+        Only the light moves. The chassis, the unlit bulbs and the dark cells
+        keep being drawn here, because they are the fixture rather than what it
+        emits — and because hit-testing, selection and the designer all still
+        run on these items.
+        """
+        self.emission.set_raster_light_visible(not on_gpu)
+        self.render()
 
     def set_atmosphere(self, atmosphere) -> None:
         """Join a stage's air. Bodies with no stage keep the shared default."""
@@ -511,6 +545,11 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
             CLOCK.unsubscribe(self._clock_token)
             self._clock_token = None
         self.atmosphere.release(id(self))
+
+        # The sink points back at the stage, so it is a back-reference like the
+        # ones below: left in place it would keep a removed body reachable.
+        self._light_sink = None
+        self.lights.clear()
 
         self.emission.cleanup()
         for feature in self.features:

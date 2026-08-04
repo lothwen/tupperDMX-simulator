@@ -25,7 +25,7 @@ Qt-facing only: what a channel *means* comes from `core.channel_families` and
 
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from PyQt6.QtCore import QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter
 from PyQt6.QtWidgets import (
     QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QScrollArea,
@@ -83,6 +83,57 @@ class ScenePreview(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._bodies: List = []
+        self._light_layer = self._attach_light_layer()
+
+    def _attach_light_layer(self):
+        """Preview the light the same way the stage draws it, when it can.
+
+        A look is meant to preview exactly as it will appear on stage, and once
+        the stage is accumulating light in HDR this is the only way that stays
+        true. Gated on the stage having *succeeded*, never on the preference —
+        a preview must not be the thing that discovers the driver is broken.
+        """
+        try:
+            from ui.stage.gpu.layer import LightLayer, stage_gpu_active
+            if not stage_gpu_active():
+                return None
+            from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            self.setViewport(QOpenGLWidget())
+            return LightLayer(lambda: self._bodies)
+        except Exception:
+            return None
+
+    def drawForeground(self, painter, rect):
+        super().drawForeground(painter, rect)
+        if self._light_layer is None:
+            return
+        painter.beginNativePainting()
+        try:
+            ratio = self.viewport().devicePixelRatio()
+            width = int(self.viewport().width() * ratio)
+            height = int(self.viewport().height() * ratio)
+            # The preview fills its own card, so the whole viewport is fair
+            # game — but it still has to be clipped to it, or the halo spills
+            # over the widgets around it.
+            clip = QRect(0, 0, width, height)
+            if not self._light_layer.render(self._scene_to_clip(), width,
+                                            height, clip=clip):
+                self._light_layer = None
+        finally:
+            painter.endNativePainting()
+
+    def _scene_to_clip(self):
+        """Scene units to clip space, mirroring what `fitInView` set up."""
+        from PyQt6.QtGui import QMatrix4x4
+        view = self.viewportTransform()
+        width = max(1, self.viewport().width())
+        height = max(1, self.viewport().height())
+        matrix = QMatrix4x4()
+        matrix.translate(-1.0, 1.0)
+        matrix.scale(2.0 / width, -2.0 / height)
+        matrix.translate(view.dx(), view.dy())
+        matrix.scale(view.m11(), view.m22())
+        return matrix
 
     def drawBackground(self, painter, rect):
         # Anchored to the widget rather than the scene, so the fall stays the
@@ -106,6 +157,9 @@ class ScenePreview(QGraphicsView):
         width, height = body_size(fdef)
         for index in range(count):
             body = renderer(fdef, index * spacing, 0.0, body_index=index)
+            if self._light_layer is not None:
+                body.set_light_on_gpu(True)
+                body._light_sink = self.viewport().update
             self._scene.addItem(body)
             self._bodies.append(body)
 
@@ -129,6 +183,10 @@ class ScenePreview(QGraphicsView):
             body.cleanup()
             self._scene.removeItem(body)
         self._bodies = []
+        if self._light_layer is not None:
+            # The bodies are gone, so the next paint has nothing to pack; make
+            # sure it repaints rather than leaving the last frame's light up.
+            self.viewport().update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

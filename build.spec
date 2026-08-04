@@ -83,7 +83,10 @@ hidden_imports = [
     "PyQt6.QtMultimedia",
     "PyQt6.QtMultimediaWidgets",
     "PyQt6.QtOpenGL",
-    
+    # QOpenGLWidget lives here, NOT in QtOpenGL — without this the GPU stage
+    # path dies with an ImportError in a frozen build only, never in dev.
+    "PyQt6.QtOpenGLWidgets",
+
     # Audio processing
     "librosa",
     "librosa.core",

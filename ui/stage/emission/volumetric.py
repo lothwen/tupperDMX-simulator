@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QGraphicsItem
 
 from ui.stage.emission.base import Emission
 from ui.stage.frame import BEAM_LENGTH_PX, Frame
+from ui.stage.light import LightList, linear_rgb
 
 # A laser projector's fan. More lines than this is a solid sheet anyway.
 MAX_LASER_BEAMS = 24
@@ -29,6 +30,16 @@ LASER_LENGTH_PX = BEAM_LENGTH_PX * 1.4   # lasers throw further than a wash
 PLUME_BLOBS = 5
 PLUME_RISE_PX = 150.0
 PLUME_WIDTH_PX = 120.0
+
+# Half the pen width `_LaserItem` draws with. A laser is a line to the raster
+# path and a very thin quad to the GPU, and this is where they agree.
+LASER_HALF_WIDTH_PX = 1.0
+
+# What a puff of fog is worth as light. Fog does not emit — it scatters
+# whatever is already in the air — so it sits far below a lamp, and the raster
+# path's own alpha ceiling (90/255) is the honest number to carry over.
+PLUME_SCATTER = 90.0 / 255.0
+_PLUME_RGB = (220, 225, 235)
 
 
 class _LaserItem(QGraphicsItem):
@@ -44,6 +55,8 @@ class _LaserItem(QGraphicsItem):
         self._spread = LASER_SPREAD_DEG
         self._count = 0
         self._length = LASER_LENGTH_PX
+        #: False once the GPU layer draws this fan instead.
+        self.enabled = True
 
     def set_fan(self, rgb, level: float, axis_deg: float, spread_deg: float,
                 count: int, length: float) -> None:
@@ -51,7 +64,7 @@ class _LaserItem(QGraphicsItem):
         self._rgb, self._level = rgb, level
         self._axis, self._spread = axis_deg, spread_deg
         self._count, self._length = count, length
-        self.setVisible(level > 0.01 and count > 0)
+        self.setVisible(self.enabled and level > 0.01 and count > 0)
         self.update()
 
     def boundingRect(self) -> QRectF:
@@ -100,6 +113,28 @@ class LaserFan(Emission):
         self.fan.set_fan(beam.rgb, beam.level, beam.axis_deg, spread, count,
                          LASER_LENGTH_PX * max(0.3, beam.foreshorten))
 
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self.fan.enabled = visible
+        if not visible:
+            self.fan.setVisible(False)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        beam = frame.beam
+        if beam.level <= 0.01:
+            return
+        program = frame.state.program
+        count = MAX_LASER_BEAMS if program.name else max(2, MAX_LASER_BEAMS // 3)
+        spread = LASER_SPREAD_DEG * max(0.2, beam.aperture)
+        length = LASER_LENGTH_PX * max(0.3, beam.foreshorten)
+        origin_x, origin_y = self.body.aim_origin()
+        rgb = linear_rgb(beam.rgb)
+
+        step = (spread / (count - 1)) if count > 1 else 0.0
+        first = beam.axis_deg - spread / 2.0
+        for index in range(count):
+            out.add_line(origin_x, origin_y, rgb, beam.level,
+                         first + index * step, length, LASER_HALF_WIDTH_PX)
+
     @classmethod
     def reach(cls, fdef) -> float:
         return LASER_LENGTH_PX
@@ -114,12 +149,14 @@ class _PlumeItem(QGraphicsItem):
         self.setZValue(-1)
         self._output = 0.0
         self._phase = 0.0
+        #: False once the GPU layer draws this plume instead.
+        self.enabled = True
 
     def set_plume(self, output: float, phase: float) -> None:
         self.prepareGeometryChange()
         self._output = output
         self._phase = phase
-        self.setVisible(output > 0.01)
+        self.setVisible(self.enabled and output > 0.01)
         self.update()
 
     def boundingRect(self) -> QRectF:
@@ -167,6 +204,30 @@ class FogPlume(Emission):
     def render(self, frame: Frame) -> None:
         output = frame.state.atmosphere.output
         self.plume.set_plume(output, (frame.t * self.RISE_HZ) % 1.0)
+
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self.plume.enabled = visible
+        if not visible:
+            self.plume.setVisible(False)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        output = frame.state.atmosphere.output
+        if output <= 0.01:
+            return
+        phase = (frame.t * self.RISE_HZ) % 1.0
+        origin_x, origin_y = self.body.aim_origin()
+        origin_y -= self.body.height / 2.0
+        rgb = linear_rgb(_PLUME_RGB)
+        for index in range(PLUME_BLOBS):
+            # Each blob is further along the same rise, so the column looks
+            # continuous rather than like five separate puffs.
+            travel = (phase + index / PLUME_BLOBS) % 1.0
+            # Thins as it rises and spreads — fog does not stay a ball.
+            level = PLUME_SCATTER * output * (1.0 - travel)
+            if level <= 0.0:
+                continue
+            out.add_blob(origin_x, origin_y - travel * PLUME_RISE_PX, rgb,
+                         level, PLUME_WIDTH_PX * (0.25 + 0.75 * travel))
 
     @classmethod
     def reach(cls, fdef) -> float:

@@ -325,6 +325,44 @@ bundled).
     `config.window.stage_haze`, edited by the HAZE slider on the edit toolbar.
   - `FixtureInstance.multiply_factor` (the blinder's overdriven-glare look) is
     still applied by exactly one profile, via `BodyFixture.overdrive()`.
+  - **`light.py` — the third stage, and the GPU's view of the same frame.** A
+    brush is 8-bit sRGB: it cannot hold "twice as bright as white", and two of
+    them overlapping do not add. Both are things a rig does, so every emission
+    also describes its light as data. `Emission.emit_lights(frame, out)` (a
+    fifth hook beside `build`/`render`/`cleanup`/`reach`, no-op by default)
+    appends `LightPrimitive`s — POINT / CONE / QUAD / LINE / BLOB — to a
+    `LightList`: one growable `array('f')`, 16 floats per primitive, cleared by
+    resetting a write index, for the same reason `BeamParams` is reused.
+    Coordinates are **body-local** (the layer adds the body's scene position
+    while packing, so dragging a fixture needs a repaint and not a re-render),
+    colour is **linear** and `intensity` is **unbounded** — which is where
+    `multiply_factor` finally survives instead of being clipped twice on one
+    line. Haze is deliberately NOT baked in: it is stage-wide and reaches the
+    shader as a uniform, so the list stays a statement about the fixture.
+    `cone_geometry()` in `emission/cone.py` is shared by the raster cone and
+    the light list so the two views of one beam cannot drift.
+  - **`gpu/` — the optional HDR renderer** (`config.window.stage_gpu`, off by
+    default; Settings ▸ Logging). `StageView.setViewport(QOpenGLWidget())` and
+    the light composited in `drawForeground` inside `beginNativePainting()`:
+    every primitive accumulates into an RGBA16F FBO with
+    `glBlendFunc(GL_ONE, GL_ONE)` — light **adds** — then exposure
+    (`config.window.stage_exposure`), an ACES filmic tonemap (Stephen Hill's
+    fitted RRT+ODT) and an additive composite over the scene. Both passes are
+    `glScissor`ed to the stage image, and `_restore()` puts blend/scissor/
+    viewport back, because `endNativePainting` only restores what Qt itself
+    tracks. In GPU mode `set_raster_light_visible(False)` stops the raster
+    drawing **spill** (halos, cones, bloom) while faces stay lit — the face is
+    the fixture, the halo is what it emits. Everything fails soft to raster and
+    logs once. Four hard-won constraints, all in `gpu/layer.py`'s docstrings: a
+    `QOpenGLWidget` *parented into* the viewport renders opaque and hides the
+    scene (no attribute rescues it); the surface format must
+    `setRenderableType(OpenGL)` or Wayland/EGL hands out GL ES where nothing
+    compiles; it must NOT set a version/profile or EGL fails outright; and the
+    draw calls come from `QOpenGLFunctions_4_1_Core` (PyOpenGL is not a
+    substitute). `ScenePreview` attaches the same layer, gated on the stage's
+    GL having *succeeded* — which also keeps every offscreen/headless caller on
+    raster, since nothing sets `STAGE_GPU_ACTIVE` there. Note `QWidget.grab()`
+    cannot read back a GL viewport: scripted stage screenshots need raster.
 - **`core/fixture_state.py`**: the Qt-free photometric model, covering **all 43
   OFL capability types** through a dispatch table (`_HANDLERS`) rather than a
   branch chain — "what does this app do with capability X" is one dict lookup.
@@ -496,7 +534,9 @@ Storage splits across three places:
 - **`config.json`** (shipped, read-only): `fixtures` (the *seed* patch for
   brand-new shows), bundled via PyInstaller, resolved at runtime by
   `shipped_config_path()` (`_MEIPASS`).
-- **`userprefs.json`** (user-writable, MACHINE-level only): `window`, `artnet`
+- **`userprefs.json`** (user-writable, MACHINE-level only): `window` — incl.
+  the stage's `stage_haze`/`stage_gpu`/`stage_exposure`, machine-level because
+  whether there is a usable GL driver is a property of the box — `artnet`
   — the controller's Art-Net *output* target — `volume` (audio/metronome/voice
   buses), `logging`, `io` — the explicit I/O routing, `IOConfig` — `audio`
   (`AudioConfig`: output device id, click/voice channel routing mode, global
@@ -778,7 +818,16 @@ interpolates present↔future DMX to avoid blackout artifacts.
   that fail loudly when OFL gains a capability type, a category or a wheel-slot
   type nobody handled. `test_stage_optics.py`'s archetype table is also where
   the beam classifier's traps are recorded — a narrow zoom, a zero-minimum lens,
-  a colour wheel that is not a gate.
+  a colour wheel that is not a gate. `test_light_list.py` pins the photometry
+  the GPU layer consumes (a blinder's overdrive surviving past full scale, a
+  fixture with no optics throwing no cone, a prism dividing by 1/√N) and
+  `test_tonemap.py` mirrors the ACES fit in Python, asserting its properties
+  AND that the shader's matrices are that same published pair transposed
+  exactly once — both GL-free, because CI's offscreen platform cannot make a
+  context at all. NB **`[255] * channel_count` is not a "fixture on" frame**:
+  on anything with a shutter it selects a strobe, and any assertion about
+  brightness then depends on when the test ran (`_lit_frame()` raises only the
+  level channels).
 - `tupperlogger/` — custom logger with file rotation.
 
 ## Timeline Architecture Notes

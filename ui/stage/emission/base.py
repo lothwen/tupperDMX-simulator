@@ -16,6 +16,7 @@ on any fixture that has one.
 from typing import Optional
 
 from ui.stage.frame import Frame
+from ui.stage.light import LightList
 
 
 class Emission:
@@ -35,6 +36,31 @@ class Emission:
 
     def render(self, frame: Frame) -> None:
         """Repaint for one frame."""
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        """Append the light this emission is making, for the GPU layer.
+
+        The second view of the same frame: `render` flattens the light into
+        8-bit brushes, this describes it in linear float with unbounded
+        intensity so it can be accumulated in an HDR buffer instead. Optional —
+        an emission that makes no light (a stand, a fan) leaves `out` alone.
+
+        Coordinates are body-local, the same frame `render` draws in; the layer
+        adds the body's scene position while packing. What the *air* does with
+        the light is not described here: haze is stage-wide and reaches the
+        shader as a uniform, so this stays a statement about the fixture.
+
+        Always called immediately after `render` for the same frame.
+        """
+
+    def set_raster_light_visible(self, visible: bool) -> None:
+        """Stop (or resume) painting the light in the raster scene.
+
+        Turned off when the GPU layer takes the light over, so a beam is not
+        drawn twice — alpha-stacked here and additively there. Only the *light*
+        goes: the chassis, the unlit bulbs and the dark cells stay, because a
+        fixture that is switched off still has to look like a fixture.
+        """
 
     def cleanup(self) -> None:
         """Release anything that keeps ticking before the body is removed."""
