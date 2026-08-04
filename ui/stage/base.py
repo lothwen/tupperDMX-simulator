@@ -389,12 +389,11 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     profile_animates: bool = False
 
     def __init__(self, fdef: FixtureDef, x: float, y: float, *,
-                 body_index: int = 0, instance=None):
+                 body_index: int = 0):
         super().__init__()
         self.setPos(x, y)
         self.fdef = fdef
         self.body_index = body_index
-        self.instance = instance
         self.dmx_channel_count = fdef.channel_count
         self.width, self.height = body_size(fdef)
         self.state = FixtureState()
@@ -439,13 +438,6 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
 
     def cell_count(self) -> int:
         return declared_cell_count(self.fdef)
-
-    def overdrive(self) -> float:
-        """A per-instance render multiplier on top of what the fixture emits.
-
-        1.0 everywhere but the blinder, whose look is glare rather than colour.
-        """
-        return 1.0
 
     # -- profile hooks -------------------------------------------------
     def build_housing(self) -> None:
@@ -562,14 +554,14 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
 
     # -- helpers for profiles and emissions ----------------------------
     def intensity_factor(self) -> float:
-        """How brightly to draw this body, 0..1 before any renderer overdrive."""
+        """How brightly to draw this body, 0..1."""
         return self.state.intensity
 
     @staticmethod
     def clamped_color(rgb, factor: float) -> QColor:
         """`rgb` scaled by `factor`, clamped per channel.
 
-        QColor rejects out-of-range components and renders as nothing, so an
-        overdriven colour must be clamped rather than passed through.
+        QColor rejects out-of-range components and renders as nothing, so a
+        colour mixed past full must be clamped rather than passed through.
         """
         return QColor(*(max(0, min(255, int(c * factor))) for c in rgb))

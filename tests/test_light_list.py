@@ -7,9 +7,9 @@ accumulate in an HDR buffer. This covers the second one: that each emission
 describes what it is emitting, in body-local coordinates, with intensity that
 is allowed to exceed 1.0.
 
-The blinder is the reason this exists. `multiply_factor` (2.0 by default) is
-clipped twice on one line in the raster path, so an overdriven blinder draws
-exactly like a normal one; here it has to survive.
+The raster path is the reason this exists: it flattens every emission into an
+8-bit brush, so two lights on the same patch make mud rather than something
+brighter. Here they stay separate, in float, for the HDR buffer to add up.
 
 Deliberately Qt-light and GL-free: no context, no framebuffer, no pixels. What
 is asserted is the description of the light, which is the thing that has to be
@@ -24,7 +24,6 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.config import FixtureInstance
 from core.fixture_library import resolve_fixture
 from ui.stage import renderer_for
 from ui.stage.emission.cone import HardBeam
@@ -103,27 +102,21 @@ def test_colour_is_linear_not_srgb(qapp):
 
 
 # ------------------------------------------------------------- emissions ---
-def test_a_blinder_keeps_its_overdrive(qapp):
-    """The whole point. The raster path clips this away twice."""
-    print("test_a_blinder_keeps_its_overdrive")
+def test_a_lit_blinder_emits_a_point_per_bulb(qapp):
+    """The counterpart to the dark case: glare, one primitive per bulb."""
+    print("test_a_lit_blinder_emits_a_point_per_bulb")
     fdef = resolve_fixture("blinder", "")
     if fdef is None:
         print("  skip: no shipped blinder definition")
         return
-    # multiply_factor lives on the patched instance, not the type, so a body
-    # built without one is not overdriven at all.
-    body = _body(fdef, instance=FixtureInstance(type="blinder", dmx_start=1))
+    body = _body(fdef)
     try:
-        overdrive = body.overdrive()
-        _assert(overdrive > 1.0,
-                f"a patched blinder is overdriven ({overdrive})")
         points = _lights(body, _lit_frame(fdef)).of_kind(POINT)
-        _assert(points, "a lit blinder emits point light")
+        _assert(len(points) == len(body.bulbs),
+                f"a lit blinder emits one point per bulb ({len(points)})")
         peak = max(p.intensity for p in points)
-        _assert(peak > 1.0,
-                f"and its intensity exceeds full scale ({peak:.2f}) — HDR")
-        _assert(abs(peak - overdrive) < 1e-4,
-                "by exactly its multiply_factor, unclamped")
+        _assert(abs(peak - 1.0) < 1e-4,
+                f"at the level its DMX asks for, unclamped ({peak:.2f})")
     finally:
         body.cleanup()
 
@@ -319,7 +312,7 @@ def main():
     app = QApplication.instance() or QApplication([])
     test_the_buffer_is_reused_across_frames(app)
     test_colour_is_linear_not_srgb(app)
-    test_a_blinder_keeps_its_overdrive(app)
+    test_a_lit_blinder_emits_a_point_per_bulb(app)
     test_a_dark_fixture_emits_nothing(app)
     test_only_a_fixture_with_optics_throws_a_cone(app)
     test_a_prism_divides_the_light_it_splits(app)

@@ -323,8 +323,6 @@ bundled).
     exceeding full, and the level drifts on the shared clock with a ~1.5 s
     attack and ~12 s decay because haze hangs in a room. The manual baseline is
     `config.window.stage_haze`, edited by the HAZE slider on the edit toolbar.
-  - `FixtureInstance.multiply_factor` (the blinder's overdriven-glare look) is
-    still applied by exactly one profile, via `BodyFixture.overdrive()`.
   - **`light.py` — the third stage, and the GPU's view of the same frame.** A
     brush is 8-bit sRGB: it cannot hold "twice as bright as white", and two of
     them overlapping do not add. Both are things a rig does, so every emission
@@ -335,9 +333,10 @@ bundled).
     resetting a write index, for the same reason `BeamParams` is reused.
     Coordinates are **body-local** (the layer adds the body's scene position
     while packing, so dragging a fixture needs a repaint and not a re-render),
-    colour is **linear** and `intensity` is **unbounded** — which is where
-    `multiply_factor` finally survives instead of being clipped twice on one
-    line. Haze is deliberately NOT baked in: it is stage-wide and reaches the
+    colour is **linear** and `intensity` is **unbounded** — which is how two
+    lights on one patch add past full instead of both clipping to white, and
+    what `config.window.stage_exposure` then scales. Haze is deliberately NOT
+    baked in: it is stage-wide and reaches the
     shader as a uniform, so the list stays a statement about the fixture.
     `cone_geometry()` in `emission/cone.py` is shared by the raster cone and
     the light list so the two views of one beam cannot drift.
@@ -819,8 +818,8 @@ interpolates present↔future DMX to avoid blackout artifacts.
   type nobody handled. `test_stage_optics.py`'s archetype table is also where
   the beam classifier's traps are recorded — a narrow zoom, a zero-minimum lens,
   a colour wheel that is not a gate. `test_light_list.py` pins the photometry
-  the GPU layer consumes (a blinder's overdrive surviving past full scale, a
-  fixture with no optics throwing no cone, a prism dividing by 1/√N) and
+  the GPU layer consumes (a blinder's glare as one point per bulb, a fixture
+  with no optics throwing no cone, a prism dividing by 1/√N) and
   `test_tonemap.py` mirrors the ACES fit in Python, asserting its properties
   AND that the shader's matrices are that same published pair transposed
   exactly once — both GL-free, because CI's offscreen platform cannot make a

@@ -45,7 +45,7 @@ def _restore_config_paths():
 SHIPPED = {
     "fixtures": [
         {"type": "ledbar", "dmx_start": 1, "bars": [{"x": 10, "y": 20}]},
-        {"type": "blinder", "dmx_start": 33, "x": 100, "y": 200, "multiply_factor": 2.0},
+        {"type": "blinder", "dmx_start": 33, "x": 100, "y": 200},
     ],
 }
 

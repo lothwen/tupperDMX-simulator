@@ -9,10 +9,6 @@ The parity block is the important part: it reproduces, from capabilities alone,
 the exact colours the three hand-written renderers produced. Everything else
 covers capability kinds the old renderers had no concept of.
 
-One thing deliberately NOT modelled here: the blinder's `multiply_factor`
-overdrive. That is a per-instance render property, not something the fixture
-emits, so it stays in the renderer.
-
 Run with:
     uv run python tests/test_fixture_state.py
 """

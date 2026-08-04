@@ -12,9 +12,9 @@ Three behaviours here are easy to lose in a rewrite and are called out:
   * the ledbar's channel order is B, G, R (`fixtures/ledbar.json`), so
     `data[1..3]` is blue, green, red. Reading it as RGB silently swaps every
     colour in every show.
-  * the blinder's `multiply_factor` (2.0 by default) is applied AFTER mixing and
-    then clamped, so a full warm bulb saturates to (255, 255, 200) rather than
-    the (255, 200, 100) warm tint it mixes from. The overdrive is the look.
+  * a blinder is drawn at the level its DMX asks for, like every other fixture:
+    a full warm bulb is the (255, 200, 100) tint it mixes from. Pushing the
+    stage past full is the exposure's job, not a per-fixture multiplier's.
   * animation DMX maps to a GIF by `value // 4 + 1`, and values >= 140 select a
     number past the 35 shipped GIFs, which falls back to a flat colour fill.
 
@@ -30,7 +30,6 @@ import glob
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.config import FixtureInstance
 from core.paths import asset_path
 from core.fixture_library import resolve_fixture
 from ui.stage import renderer_for
@@ -72,12 +71,12 @@ GOLDEN_GENERIC = {
     (WILD_WASH, (0, 0, 0, 255)): ((200, 220, 255), 1.0),
 }
 
-# dmx -> (bulb1 rgb, bulb2 rgb, intensity), with multiply_factor 2.0
+# dmx -> (bulb1 rgb, bulb2 rgb, intensity)
 GOLDEN_BLINDER = {
-    # Both bulbs warm at full: mixes to (255, 200, 100), then x2 and clamps.
-    (255, 0, 0, 255, 255, 0, 0, 0): ((255, 255, 200), (255, 255, 200), 1.0),
-    # Top bulb cool only, bottom warm only — the per-bulb split.
-    (128, 255, 0, 0, 255, 0, 0, 0): ((200, 220, 255), (255, 200, 100), 128 / 255 * 2.0),
+    # Both bulbs warm at full: the warm tint they mix to.
+    (255, 0, 0, 255, 255, 0, 0, 0): ((255, 200, 100), (255, 200, 100), 1.0),
+    # Top bulb cool only, bottom warm only — the per-bulb split, at half master.
+    (128, 255, 0, 0, 255, 0, 0, 0): ((100, 110, 128), (128, 100, 50), 128 / 255),
     # Warm + cool together saturate to white.
     (255, 255, 255, 255, 255, 0, 0, 0): ((255, 255, 255), (255, 255, 255), 1.0),
     # Master brightness at 0 blacks out regardless of the colour channels.
@@ -94,29 +93,15 @@ def test_lamp_fixture_colours(qapp):
                 f"{type_name} {data} -> intensity {min(1.0, intensity):.3f}")
 
 
-def test_blinder_bulbs_and_overdrive(qapp):
-    print("test_blinder_bulbs_and_overdrive")
-    instance = FixtureInstance(type="blinder", dmx_start=1, multiply_factor=2.0)
+def test_blinder_bulbs(qapp):
+    print("test_blinder_bulbs")
     for data, (rgb1, rgb2, intensity) in GOLDEN_BLINDER.items():
-        fx = _render("blinder", data, instance=instance)
+        fx = _render("blinder", data)
         _assert(len(fx.bulbs) == 2, "the blinder builds two bulbs")
         _assert(_rgb(fx.bulbs[0].glow_color) == rgb1, f"blinder {data} -> top bulb {rgb1}")
         _assert(_rgb(fx.bulbs[1].glow_color) == rgb2, f"blinder {data} -> bottom bulb {rgb2}")
-        # setGlowColor clamps intensity to 0..1; multiply_factor can exceed it.
-        _assert(abs(fx.bulbs[0].glow_intensity - min(1.0, intensity)) < 1e-6,
-                f"blinder {data} -> intensity {min(1.0, intensity):.3f}")
-
-
-def test_overdrive_is_blinder_only(qapp):
-    print("test_overdrive_is_blinder_only")
-    # multiply_factor defaults to 2.0 on EVERY FixtureInstance, but only the
-    # blinder renderer applies it. Drawing a par through a real instance must
-    # give the same result as its DMX asks for, not twice as bright.
-    instance = FixtureInstance(type="par_rgb", dmx_start=1)
-    _assert(instance.multiply_factor == 2.0, "the default instance carries the multiplier")
-    fx = _render("par_rgb", (255, 10, 20, 30), instance=instance)
-    _assert(_rgb(fx.lamp.glow_color) == (10, 20, 30),
-            "a par is drawn at its DMX level, not overdriven")
+        _assert(abs(fx.bulbs[0].glow_intensity - intensity) < 1e-6,
+                f"blinder {data} -> intensity {intensity:.3f}")
 
 
 def test_ledbar_channel_order_is_bgr(qapp):
@@ -205,8 +190,7 @@ def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     test_lamp_fixture_colours(app)
-    test_blinder_bulbs_and_overdrive(app)
-    test_overdrive_is_blinder_only(app)
+    test_blinder_bulbs(app)
     test_ledbar_channel_order_is_bgr(app)
     test_ledbar_brightness_scales_pixels(app)
     test_animation_dmx_to_gif_mapping(app)
