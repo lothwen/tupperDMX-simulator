@@ -45,6 +45,13 @@ class WindowConfig:
     # only visible because there is something for them to scatter off, so this
     # is what a rig with no hazer patched still gets to see.
     stage_haze: float = 0.15
+    # Draw the stage's light on the GPU: one HDR buffer everything adds into,
+    # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
+    # Off by default — it needs a working OpenGL context, and the raster path
+    # is the one that survives a venue machine with no usable driver.
+    stage_gpu: bool = False
+    # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
+    stage_exposure: float = 1.0
 
 
 @dataclass
@@ -309,6 +316,9 @@ class Config:
                 tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
                 stage_haze=cls._validate_float(
                     window_data.get("stage_haze", 0.15), 0.0, 1.0),
+                stage_gpu=bool(window_data.get("stage_gpu", False)),
+                stage_exposure=cls._validate_float(
+                    window_data.get("stage_exposure", 1.0), 0.1, 4.0),
             )
 
         if "artnet" in data:

@@ -69,6 +69,27 @@ class StageEditToolbar(QWidget):
         self._haze.valueChanged.connect(self._on_haze_changed)
         layout.addWidget(self._haze)
 
+        # Exposure only means anything with the HDR buffer behind it: on the
+        # raster path there is no headroom to expose down into, so the control
+        # is only offered when the GPU layer is actually running.
+        if getattr(stage_controller, "light_layer", None) is not None:
+            layout.addWidget(_separator())
+            exposure_label = QLabel("EXPOSURE")
+            exposure_label.setObjectName("EditToolbarHazeLabel")
+            layout.addWidget(exposure_label)
+
+            self._exposure = QSlider(Qt.Orientation.Horizontal)
+            self._exposure.setObjectName("EditToolbarHaze")
+            self._exposure.setRange(10, 400)          # 0.1x .. 4.0x
+            self._exposure.setFixedWidth(90)
+            self._exposure.setValue(
+                int(stage_controller.config.window.stage_exposure * 100))
+            self._exposure.setToolTip(
+                "Exposure before the filmic tonemap — how hard the rig is "
+                "driven before highlights roll off to white")
+            self._exposure.valueChanged.connect(self._on_exposure_changed)
+            layout.addWidget(self._exposure)
+
         done_button = QPushButton("Done")
         done_button.setObjectName("EditToolbarDone")
         done_button.clicked.connect(lambda: self._on_done())
@@ -81,6 +102,10 @@ class StageEditToolbar(QWidget):
 
     def _on_haze_changed(self, value: int) -> None:
         self._stage.set_haze_baseline(value / 100.0)
+        self._notify()
+
+    def _on_exposure_changed(self, value: int) -> None:
+        self._stage.set_exposure(value / 100.0)
         self._notify()
 
     def open_add_fixture(self) -> None:

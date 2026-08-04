@@ -1,6 +1,6 @@
 from typing import List, Optional
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF, QRect, QLineF
 
 from tupperlogger import get_logger
@@ -40,6 +40,7 @@ class StageView(QGraphicsView):
         self._overlays: List[tuple] = []
         self._grid_visible = False
         self._background_item: Optional[QGraphicsPixmapItem] = None
+        self._light_layer = None
 
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -111,6 +112,65 @@ class StageView(QGraphicsView):
             y = rect.top() + margin
             widget.move(x, y)
 
+    def attach_light_layer(self, layer) -> bool:
+        """Draw the stage's light on the GPU, over the scene this view renders.
+
+        The viewport itself becomes the GL surface. That is not a preference —
+        a `QOpenGLWidget` parented *into* the viewport renders opaque and hides
+        the scene entirely, whatever transparency attributes it is given, so
+        this is the only placement that works.
+
+        Returns False if the widget can't be created at all (no GL on this
+        platform: the offscreen plugin, for one, refuses outright), leaving the
+        view exactly as it was.
+        """
+        try:
+            from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            self.setViewport(QOpenGLWidget())
+        except Exception as exc:
+            from tupperlogger import get_logger
+            get_logger("ui.stage").warning(
+                "No OpenGL viewport (%s); staying on the raster path", exc)
+            return False
+        self._light_layer = layer
+        # A GL viewport hands us an undefined back buffer every frame, so the
+        # letterbox has to be painted rather than assumed clear — otherwise it
+        # shows whatever was last in that memory, which reads as the window
+        # freezing chunks of some other window around the stage.
+        self.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        self.viewport().setAutoFillBackground(True)
+
+        # Overlays were parented to the OLD viewport, which setViewport has
+        # just replaced and destroyed.
+        for widget, _anchor, _reference, _margin in self._overlays:
+            widget.setParent(self.viewport())
+            widget.raise_()
+            widget.show()
+        self.reposition_overlays()
+        return True
+
+    def detach_light_layer(self) -> None:
+        self._light_layer = None
+
+    def _scene_to_clip(self):
+        """The matrix the light layer draws with.
+
+        `fitInView` letterboxes the scene into the viewport, and native GL
+        painting bypasses the QPainter that would otherwise carry that for us,
+        so the same mapping is rebuilt here: scene -> viewport pixels -> clip.
+        """
+        from PyQt6.QtGui import QMatrix4x4
+        view = self.viewportTransform()
+        width = max(1, self.viewport().width())
+        height = max(1, self.viewport().height())
+
+        matrix = QMatrix4x4()
+        matrix.translate(-1.0, 1.0)              # clip origin is the centre
+        matrix.scale(2.0 / width, -2.0 / height)  # y grows downward on screen
+        matrix.translate(view.dx(), view.dy())
+        matrix.scale(view.m11(), view.m22())
+        return matrix
+
     def set_grid_visible(self, visible: bool) -> None:
         """Show/hide the designer grid drawn over the stage image."""
         if self._grid_visible == visible:
@@ -120,6 +180,7 @@ class StageView(QGraphicsView):
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         super().drawForeground(painter, rect)
+        self._draw_light(painter)
         if not self._grid_visible:
             return
         area = rect.intersected(self.scene().sceneRect())
@@ -136,6 +197,35 @@ class StageView(QGraphicsView):
         while y <= area.bottom():
             painter.drawLine(QLineF(area.left(), y, area.right(), y))
             y += GRID_SPACING
+
+    def _draw_light(self, painter: QPainter) -> None:
+        """Hand the surface to the light layer for one HDR pass.
+
+        Native painting on purpose: Qt's own compositing is `SourceOver`, and
+        light does not cover what is behind it — it adds to it. Inside this
+        block the layer gets `glBlendFunc(GL_ONE, GL_ONE)` and real float
+        accumulation, which is the entire reason for the GPU path.
+        """
+        layer = self._light_layer
+        if layer is None:
+            return
+        painter.beginNativePainting()
+        try:
+            ratio = self.viewport().devicePixelRatio()
+            # Confine the light to the stage image. The view letterboxes, and
+            # the bars either side are not stage — a glow reaching into them
+            # lands on whatever the window is sitting on.
+            clip = self._background_rect().intersected(self.viewport().rect())
+            device_clip = QRect(int(clip.x() * ratio), int(clip.y() * ratio),
+                                int(clip.width() * ratio),
+                                int(clip.height() * ratio))
+            if not layer.render(self._scene_to_clip(),
+                                int(self.viewport().width() * ratio),
+                                int(self.viewport().height() * ratio),
+                                clip=device_clip):
+                self._light_layer = None      # it logged; don't ask again
+        finally:
+            painter.endNativePainting()
 
     def _fit_scene(self) -> None:
         scene = self.scene()
@@ -218,8 +308,52 @@ class StageController(QObject):
         
         # Setup fixtures
         self._setup_fixtures()
-        
+
+        self.light_layer = None
+        if config.window.stage_gpu:
+            self._enable_gpu_light()
+
         self.logger.info("Stage controller initialized")
+
+    # ------------------------------------------------------------------
+    # GPU light
+    # ------------------------------------------------------------------
+    def _enable_gpu_light(self) -> bool:
+        """Move the stage's light onto the GPU, or quietly stay as we are."""
+        try:
+            from ui.stage.gpu.layer import LightLayer
+        except Exception as exc:
+            self.logger.warning("GPU light layer unavailable (%s)", exc)
+            return False
+
+        layer = LightLayer(lambda: self.render_objs)
+        layer.exposure = self.config.window.stage_exposure
+        layer.haze = self.atmosphere.level
+        if not self.stage_view.attach_light_layer(layer):
+            return False
+
+        self.light_layer = layer
+        for obj in self.render_objs:
+            obj._light_sink = self._on_light_changed
+            obj.set_light_on_gpu(True)
+
+        # Tell the scene preview it can do the same. Set only once the stage's
+        # own context is up, so the preview never gambles on GL the stage has
+        # already found to be missing.
+        from ui.stage.gpu import layer as gpu_layer
+        gpu_layer.STAGE_GPU_ACTIVE = True
+        return True
+
+    def _on_light_changed(self) -> None:
+        """A body's light list changed; ask for one repaint.
+
+        Qt coalesces `update()` per event-loop turn, so a rig where every
+        fixture moves costs the same as one where a single fixture does — and a
+        rig where nothing moves costs nothing, which is what keeps the idle
+        cost where the raster path put it.
+        """
+        if self.light_layer is not None:
+            self.stage_view.viewport().update()
     
     def get_stage_view(self) -> StageView:
         """Get the stage view widget."""
@@ -271,6 +405,9 @@ class StageController(QObject):
             obj._move_callback = self._on_fixture_moved
             obj.set_atmosphere(self.atmosphere)
             obj.set_design_mode(self._design_mode)
+            if getattr(self, "light_layer", None) is not None:
+                obj._light_sink = self._on_light_changed
+                obj.set_light_on_gpu(True)
             self.scene.addItem(obj)
             obj.attach_label(self.scene)
             self.render_objs.append(obj)
@@ -444,12 +581,27 @@ class StageController(QObject):
 
     def _advance_atmosphere(self) -> None:
         """Move the haze toward what the patched fog fixtures are asking for."""
-        self.atmosphere.advance(CLOCK.now())
+        level = self.atmosphere.advance(CLOCK.now())
+        layer = self.light_layer
+        # This runs at 30 Hz for as long as the stage exists — it is the one
+        # clock subscription that is never conditional — so it must not ask for
+        # a repaint unless the air has actually changed, or a rig standing
+        # perfectly still would redraw forever.
+        if layer is not None and abs(level - layer.haze) > 1e-4:
+            layer.haze = level
+            self._on_light_changed()
 
     def set_haze_baseline(self, value: float) -> None:
         """How hazy the room is before any fixture. Persisted with the window."""
         self.atmosphere.set_baseline(value)
         self.config.window.stage_haze = self.atmosphere.baseline
+
+    def set_exposure(self, value: float) -> None:
+        """Exposure before the tonemap. Only the GPU path has one."""
+        self.config.window.stage_exposure = max(0.1, min(4.0, float(value)))
+        if self.light_layer is not None:
+            self.light_layer.exposure = self.config.window.stage_exposure
+            self._on_light_changed()
 
     def _on_selection_changed(self) -> None:
         try:

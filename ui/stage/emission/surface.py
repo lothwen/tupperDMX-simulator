@@ -19,6 +19,7 @@ from core.paths import asset_path
 from ui.stage.base import GlowingEllipse, body_count
 from ui.stage.emission.base import Emission
 from ui.stage.frame import Frame
+from ui.stage.light import LightList, linear_rgb
 
 MATRIX_GLOW_BLUR = 100
 PANEL_GLOW_BLUR = 60
@@ -27,6 +28,28 @@ BULB_MARGIN = 5          # gap above the first bulb and below the last
 # Above this many cells per body the grid is merged: a 64x64 matrix would
 # otherwise put four thousand items on the scene for one fixture.
 MAX_CELLS = 256
+
+# Two independent knobs, and they have to stay independent: the light a pixel
+# throws is the product of how FAR it carries and how BRIGHT it is on the way.
+# Tying them together is why a bar could only ever be dim-and-tight or
+# far-and-blinding, with nothing in between.
+
+# HOW FAR one lit pixel throws light past its own face, as a multiple of the
+# cell. Can be generous — reaching further costs no extra brightness now.
+# Each cell carries its OWN colour, so a bar running an animation spills the
+# pattern rather than an averaged wash, which is the point of a pixel bar.
+CELL_HALO = 50.0
+
+# HOW BRIGHT that spill is, against the pixel's own face. Small on purpose:
+# the face itself is drawn by the scene underneath, so this is only what
+# reaches the air, and forty stacked cells all contribute to the same patch of
+# it. Raise it for a hazier room, not to make the bar reach further.
+CELL_GLOW = 0.0004
+
+# A panel is one big soft source rather than a grid of small ones, so nothing
+# stacks and it can afford to be a little stronger per unit of face.
+PANEL_HALO = 2.0
+PANEL_GLOW = 0.22
 
 
 def _fit_grid(columns: int, rows: int) -> Tuple[int, int]:
@@ -106,6 +129,11 @@ class MatrixCells(Emission):
 
         self._movie: Optional[QMovie] = None
         self._asset: Optional[str] = None
+        # What each cell resolved to this frame, so `emit_lights` doesn't have
+        # to sample the animation a second time — 256 cells per body at 30 Hz
+        # is the one place in the engine where that would actually show.
+        self._lit: list = [((0.0, 0.0, 0.0), 0.0)] * len(self.cells)
+        self._raster_light = True
 
     def render(self, frame: Frame) -> None:
         self._set_animation(self._asset_for(frame.state.program.name),
@@ -114,6 +142,19 @@ class MatrixCells(Emission):
             self._paint_animation(frame)
         else:
             self._paint_flat(frame)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        for cell, (rgb, level) in zip(self.cells, self._lit):
+            # An animation leaves most of the grid dark, and a black cell
+            # contributes nothing to an additive buffer — so it is pure fill
+            # cost, over a halo several times its own size, per body, per
+            # frame. A pixel bar is where that adds up.
+            if level <= 0.0 or not any(rgb):
+                continue
+            rect = cell.rect()
+            out.add_quad(rect.x(), rect.y(), rect.width(), rect.height(),
+                         linear_rgb(rgb), level * CELL_GLOW,
+                         halo=max(rect.width(), rect.height()) * CELL_HALO)
 
     # -- painting ------------------------------------------------------
     def _paint_flat(self, frame: Frame) -> None:
@@ -128,10 +169,13 @@ class MatrixCells(Emission):
         for index, cell in enumerate(self.cells):
             if per_cell:
                 emitter = emitters[self.emitter_index[index]]
-                cell.setBrush(QBrush(self.body.clamped_color(
-                    emitter.rgb, emitter.intensity * beam.gate)))
+                rgb, level = emitter.rgb, emitter.intensity * beam.gate
             else:
-                cell.setBrush(QBrush(self.body.clamped_color(beam.rgb, beam.level)))
+                rgb, level = beam.rgb, beam.level
+            # The cells stay lit whoever owns the light: they are the bar's
+            # face. Only its bloom (the drop shadow) moves to the GPU.
+            cell.setBrush(QBrush(self.body.clamped_color(rgb, level)))
+            self._lit[index] = (rgb, level)
         # The glow keeps the unscaled hue, so a dimmed bar still reads as its
         # colour rather than fading to black.
         self._set_glow(beam.rgb)
@@ -162,9 +206,17 @@ class MatrixCells(Emission):
                 totals[component] += mixed[component]
             lit += 1
             cell.setBrush(self.body.clamped_color(mixed, beam.level))
+            self._lit[index] = (mixed, beam.level)
 
         if lit:
             self._set_glow(tuple(int(total / lit) for total in totals))
+
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self._raster_light = visible
+        effect = self.body.graphicsEffect()
+        if effect is not None:
+            # The blur is the matrix's bloom; the shader draws that now.
+            effect.setEnabled(visible)
 
     def _set_glow(self, rgb) -> None:
         effect = self.body.graphicsEffect()
@@ -270,6 +322,32 @@ class BulbArray(Emission):
             factor = beam.level * overdrive
             bulb.setGlowColor(self.body.clamped_color(rgb, factor), min(1.0, factor))
 
+    def set_raster_light_visible(self, visible: bool) -> None:
+        for bulb in self.bulbs:
+            bulb.draw_glow = visible
+            bulb.update()
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        """The blinder's glare, at the intensity it actually asks for.
+
+        `overdrive` is the whole reason this differs from the raster path: there
+        it is clipped twice on one line — once to 255 by `clamped_color`, once
+        to 1.0 by the glow — so a blinder at `multiply_factor` 2.0 draws exactly
+        like one at 1.0. Here it multiplies an unbounded intensity, which is
+        what makes it blow out and bloom instead of just reading white.
+        """
+        beam = frame.beam
+        emitters = frame.state.emitters
+        overdrive = self.body.overdrive()
+        for index, bulb in enumerate(self.bulbs):
+            rgb = emitters[index].rgb if index < len(emitters) else (0, 0, 0)
+            level = beam.level * overdrive
+            if level <= 0.0:
+                continue
+            rect = bulb.rect()
+            out.add_point(rect.center().x(), rect.center().y(),
+                          linear_rgb(rgb), level, rect.width() / 2.0)
+
 
 class FlatPanel(Emission):
     """One flat surface that lights up — a strobe, a wall of LED."""
@@ -278,6 +356,7 @@ class FlatPanel(Emission):
         body = self.body
         self.panel = QGraphicsRectItem(0, 0, body.width, body.height, body)
         self.panel.setBrush(QColor(20, 20, 20))
+        self._raster_light = True
 
         glow = QGraphicsDropShadowEffect()
         glow.setBlurRadius(PANEL_GLOW_BLUR)
@@ -290,3 +369,18 @@ class FlatPanel(Emission):
         effect = self.body.graphicsEffect()
         if effect is not None:
             effect.setColor(QColor(*beam.rgb, 255))
+
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self._raster_light = visible
+        effect = self.body.graphicsEffect()
+        if effect is not None:
+            effect.setEnabled(visible)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        beam = frame.beam
+        if beam.level <= 0.0:
+            return
+        rect = self.panel.rect()
+        out.add_quad(rect.x(), rect.y(), rect.width(), rect.height(),
+                     linear_rgb(beam.rgb), beam.level * PANEL_GLOW,
+                     halo=max(rect.width(), rect.height()) * PANEL_HALO)

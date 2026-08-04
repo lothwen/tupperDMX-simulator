@@ -569,6 +569,27 @@ class SettingsDialog(QDialog):
         hint = QLabel("Level changes apply on the next launch.")
         hint.setObjectName("SettingsDimLabel")
         layout.addWidget(hint)
+
+        layout.addSpacing(18)
+        stage_title = QLabel("VIRTUAL STAGE")
+        stage_title.setObjectName("SettingsDimLabel")
+        layout.addWidget(stage_title)
+
+        self.stage_gpu_check = QCheckBox("Render the stage light on the GPU")
+        self.stage_gpu_check.setChecked(self.config.window.stage_gpu)
+        self.stage_gpu_check.setToolTip(
+            "Accumulate every fixture's light in one high-dynamic-range buffer "
+            "and tonemap it with the ACES filmic curve.\n"
+            "Beams add where they cross and overdriven fixtures blow out "
+            "instead of flattening to white.\n"
+            "Needs a working OpenGL driver; falls back to the normal renderer "
+            "if there isn't one.")
+        layout.addWidget(self.stage_gpu_check)
+
+        gpu_hint = QLabel("Applies on the next launch.")
+        gpu_hint.setObjectName("SettingsDimLabel")
+        layout.addWidget(gpu_hint)
+
         layout.addStretch(1)
         return page
 
@@ -766,6 +787,7 @@ class SettingsDialog(QDialog):
         self.config.artnet.universe = self.universe_spin.value()
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
+        self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
         self.config.webremote.enabled = self.webremote_toggle.isChecked()
         self.config.webremote.port = self.webremote_port_spin.value()
         self.config.audio.output_device = self.audio_device_combo.currentData() or ""

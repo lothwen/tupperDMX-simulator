@@ -28,6 +28,7 @@ from ui.stage import wheelart
 from ui.stage.base import GlowingEllipse
 from ui.stage.emission.base import Emission
 from ui.stage.frame import BEAM_LENGTH_PX, BeamParams, Frame
+from ui.stage.light import LightList, linear_rgb
 from ui.stage.optics import MAX_HALF_ANGLE_DEG, BeamKind
 
 BEAM_MAX_ALPHA = 90        # opacity at the lens, fading to nothing at the end
@@ -78,6 +79,8 @@ class BeamCone(QGraphicsPolygonItem):
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setZValue(-1)     # behind the fixture body
         self.setVisible(False)
+        #: False once the GPU layer draws this beam instead.
+        self.enabled = True
 
     def apply_beam(self, beam: BeamParams, haze: float = 1.0,
                    hard: bool = False,
@@ -87,20 +90,12 @@ class BeamCone(QGraphicsPolygonItem):
 
         `rgb` overrides the beam's colour, for a fixture whose face is several
         colours at once: what it throws is their mix."""
-        if beam.half_angle_deg is None or beam.level <= BEAM_MIN_INTENSITY:
+        if (not self.enabled or beam.half_angle_deg is None
+                or beam.level <= BEAM_MIN_INTENSITY):
             self.setVisible(False)
             return
 
-        angle = _drawable_angle(beam.half_angle_deg)
-        if hard:
-            angle *= HARD_BEAM_NARROWING
-        length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
-        # An iris closes the aperture; frost opens the edge back up.
-        spread = min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO) * length
-        spread *= max(0.05, beam.aperture)
-        spread *= 1.0 + beam.softness
-        # Pointing at the viewer: what was a shaft becomes a bloom.
-        spread /= max(0.3, 0.3 + 0.7 * beam.foreshorten)
+        length, spread = cone_geometry(beam, hard)
 
         self.prepareGeometryChange()
         self.setPolygon(_cone_polygon(self._origin, beam.axis_deg, length, spread))
@@ -131,6 +126,51 @@ def _drawable_angle(half_angle_deg: Optional[float]) -> float:
     here rather than trusted to every caller.
     """
     return max(1.0, min(MAX_HALF_ANGLE_DEG, half_angle_deg or 1.0))
+
+
+def cone_geometry(beam: BeamParams, hard: bool = False) -> Tuple[float, float]:
+    """How long this beam reaches, and how wide it is at the far end.
+
+    The one place the shaft's shape is worked out. The raster cone draws a
+    polygon from it and the light list hands the same two numbers to the GPU, so
+    the two views of one beam cannot drift apart.
+    """
+    angle = _drawable_angle(beam.half_angle_deg)
+    if hard:
+        angle *= HARD_BEAM_NARROWING
+    length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
+    # An iris closes the aperture; frost opens the edge back up.
+    spread = min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO) * length
+    spread *= max(0.05, beam.aperture)
+    spread *= 1.0 + beam.softness
+    # Pointing at the viewer: what was a shaft becomes a bloom.
+    spread /= max(0.3, 0.3 + 0.7 * beam.foreshorten)
+    return length, spread
+
+
+def _emit_cone(out: LightList, body, beam: BeamParams,
+               rgb: Tuple[int, int, int], hard: bool = False,
+               level: Optional[float] = None,
+               axis_deg: Optional[float] = None) -> None:
+    """Put one shaft on the light list, shaped exactly as `BeamCone` draws it.
+
+    `level` and `axis_deg` override the beam's own for the callers that fan a
+    beam into several — a prism's copies, a flower's rosette — so the shared
+    `BeamParams` never has to be mutated to describe them.
+    """
+    if beam.half_angle_deg is None:
+        return
+    level = beam.level if level is None else level
+    if level <= BEAM_MIN_INTENSITY:
+        return
+    length, spread = cone_geometry(beam, hard)
+    origin_x, origin_y = body.aim_origin()
+    out.add_cone(origin_x, origin_y, linear_rgb(rgb), level,
+                 beam.axis_deg if axis_deg is None else axis_deg,
+                 length, spread,
+                 softness=beam.softness,
+                 hardness=1.0 if hard else 0.0,
+                 foreshorten=beam.foreshorten)
 
 
 def _tip(origin: QPointF, axis_deg: float, length: float) -> QPointF:
@@ -200,6 +240,15 @@ class WashLamp(Emission):
         the profile, the scene preview and the parity tests reach for."""
         return self.lamps[0]
 
+    def set_raster_light_visible(self, visible: bool) -> None:
+        for lamp in self.lamps:
+            lamp.draw_glow = visible
+            lamp.update()
+        if self.cone is not None:
+            self.cone.enabled = visible
+            if not visible:
+                self.cone.setVisible(False)
+
     def render(self, frame: Frame) -> None:
         beam = frame.beam
         emitters = frame.state.emitters
@@ -220,6 +269,27 @@ class WashLamp(Emission):
         if self.cone is not None:
             self.cone.apply_beam(beam, frame.haze,
                                  rgb=self._mixed(emitters) if per_zone else None)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        beam = frame.beam
+        emitters = frame.state.emitters
+        per_zone = len(self.lamps) > 1 and len(emitters) > self.emitter_index[-1]
+
+        for index, lamp in enumerate(self.lamps):
+            if per_zone:
+                emitter = emitters[self.emitter_index[index]]
+                rgb, level = emitter.rgb, emitter.intensity * beam.gate
+            else:
+                rgb, level = beam.rgb, beam.level
+            if level <= 0.0:
+                continue
+            rect = lamp.rect()
+            out.add_point(rect.center().x(), rect.center().y(),
+                          linear_rgb(rgb), level, rect.width() / 2.0)
+
+        if self.cone is not None:
+            _emit_cone(out, self.body, beam,
+                       self._mixed(emitters) if per_zone else beam.rgb)
 
     def _mixed(self, emitters) -> Tuple[int, int, int]:
         """The colour this body's zones make together.
@@ -375,6 +445,29 @@ class HardBeam(Emission):
             cone.apply_beam(beam, frame.haze, hard=True)
         beam.axis_deg, beam.level = base_axis, base_level
 
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self.lamp.draw_glow = visible
+        self.lamp.update()
+        for cone in self.cones:
+            cone.enabled = visible
+            if not visible:
+                cone.setVisible(False)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        beam = frame.beam
+        if beam.level > 0.0:
+            size = self.lamp.rect()
+            out.add_point(size.center().x(), size.center().y(),
+                          linear_rgb(beam.rgb), beam.level, size.width() / 2.0)
+
+        copies = beam.copies[:self.MAX_COPIES] or (0.0,)
+        # A prism divides the light it splits rather than multiplying it.
+        share = 1.0 if len(copies) == 1 else 1.0 / len(copies) ** 0.5
+        for index in range(len(copies)):
+            _emit_cone(out, self.body, beam, beam.rgb, hard=True,
+                       level=beam.level * share,
+                       axis_deg=beam.axis_deg + _prism_spread(copies, index))
+
     @classmethod
     def reach(cls, fdef) -> float:
         return BEAM_LENGTH_PX
@@ -432,6 +525,35 @@ class BeamFan(Emission):
             beam.axis_deg = base_axis + ((spin + index * step) % 360.0 - 180.0) * 0.35
             cone.apply_beam(beam, frame.haze, hard=True)
         beam.axis_deg, beam.half_angle_deg = base_axis, base_angle
+
+    def set_raster_light_visible(self, visible: bool) -> None:
+        self.lamp.draw_glow = visible
+        self.lamp.update()
+        for cone in self.cones:
+            cone.enabled = visible
+            if not visible:
+                cone.setVisible(False)
+
+    def emit_lights(self, frame: Frame, out: LightList) -> None:
+        beam = frame.beam
+        if beam.level > 0.0:
+            rect = self.lamp.rect()
+            out.add_point(rect.center().x(), rect.center().y(),
+                          linear_rgb(beam.rgb), beam.level, rect.width() / 2.0)
+
+        # The rosette's own half-angle, not the fixture's: these are always the
+        # same narrow beams however the body is classified.
+        base_angle = beam.half_angle_deg
+        beam.half_angle_deg = self.HALF_ANGLE_DEG
+        spin = self.body.rosette_angle(frame)
+        step = 360.0 / self.BEAMS
+        try:
+            for index in range(self.BEAMS):
+                offset = ((spin + index * step) % 360.0 - 180.0) * 0.35
+                _emit_cone(out, self.body, beam, beam.rgb, hard=True,
+                           axis_deg=beam.axis_deg + offset)
+        finally:
+            beam.half_angle_deg = base_angle
 
     @classmethod
     def reach(cls, fdef) -> float:
