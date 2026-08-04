@@ -154,7 +154,6 @@ class FixtureInstance:
     x: int = 0
     y: int = 0
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
-    multiply_factor: float = 2.0                               # blinder render
 
 
 @dataclass
@@ -562,7 +561,6 @@ class Config:
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
                 bars=bars,
-                multiply_factor=Config._validate_float(entry.get("multiply_factor", 2.0), 0.1, 10.0),
             ))
 
         # Assign a stable MIDI channel to any fixture that lacks one. Scanning in

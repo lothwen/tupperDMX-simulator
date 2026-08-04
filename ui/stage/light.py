@@ -9,9 +9,9 @@ the GPU layer needs the light described *before* it was flattened into a brush.
 
 That is this: each emission appends what it is emitting, in **linear** float with
 **unbounded** intensity, and the GPU layer accumulates the lot in an HDR buffer
-and tonemaps once at the end. `FixtureInstance.multiply_factor` — the blinder's
-overdrive, which the raster path clips away twice on one line — finally means
-something here.
+and tonemaps once at the end. Beams crossing therefore add past full scale, and
+`config.window.stage_exposure` decides how much of that headroom is visible —
+neither of which survives being flattened into a brush.
 
 Two deliberate choices:
 

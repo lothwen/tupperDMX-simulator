@@ -5,8 +5,8 @@
 Two programs. The first draws one quad per `LightPrimitive` into a float
 framebuffer with `GL_ONE, GL_ONE`, so **light adds** — the thing the raster path
 cannot do, and the reason two beams crossing there make mud instead of a
-brighter patch. Nothing is clamped on the way in; a blinder at `multiply_factor`
-2.0 really does land at twice full scale.
+brighter patch. Nothing is clamped on the way in; two blinders lighting the same
+patch really do land at twice full scale.
 
 The second resolves that buffer to something a screen can show: exposure, then
 the ACES filmic curve, which is what turns "brighter than white" into a

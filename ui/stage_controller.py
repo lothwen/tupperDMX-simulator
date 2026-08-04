@@ -381,8 +381,7 @@ class StageController(QObject):
 
         objs = []
         for index, position in enumerate(positions):
-            obj = renderer(fdef, position.x, position.y,
-                           body_index=index, instance=fixture)
+            obj = renderer(fdef, position.x, position.y, body_index=index)
             # None for a single-body fixture, so it owns its label and its drag
             # writes back to the instance rather than to a bars[] entry.
             obj._bar_index = index if multi_body else None

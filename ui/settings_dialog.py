@@ -580,8 +580,8 @@ class SettingsDialog(QDialog):
         self.stage_gpu_check.setToolTip(
             "Accumulate every fixture's light in one high-dynamic-range buffer "
             "and tonemap it with the ACES filmic curve.\n"
-            "Beams add where they cross and overdriven fixtures blow out "
-            "instead of flattening to white.\n"
+            "Beams add where they cross and blow out instead of flattening "
+            "to white.\n"
             "Needs a working OpenGL driver; falls back to the normal renderer "
             "if there isn't one.")
         layout.addWidget(self.stage_gpu_check)

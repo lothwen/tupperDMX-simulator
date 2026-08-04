@@ -315,12 +315,11 @@ class BulbArray(Emission):
     def render(self, frame: Frame) -> None:
         beam = frame.beam
         emitters = frame.state.emitters
-        overdrive = self.body.overdrive()
         for index, bulb in enumerate(self.bulbs):
             # More bulbs than the state drives: the extras stay dark.
             rgb = emitters[index].rgb if index < len(emitters) else (0, 0, 0)
-            factor = beam.level * overdrive
-            bulb.setGlowColor(self.body.clamped_color(rgb, factor), min(1.0, factor))
+            bulb.setGlowColor(self.body.clamped_color(rgb, beam.level),
+                              min(1.0, beam.level))
 
     def set_raster_light_visible(self, visible: bool) -> None:
         for bulb in self.bulbs:
@@ -330,18 +329,15 @@ class BulbArray(Emission):
     def emit_lights(self, frame: Frame, out: LightList) -> None:
         """The blinder's glare, at the intensity it actually asks for.
 
-        `overdrive` is the whole reason this differs from the raster path: there
-        it is clipped twice on one line — once to 255 by `clamped_color`, once
-        to 1.0 by the glow — so a blinder at `multiply_factor` 2.0 draws exactly
-        like one at 1.0. Here it multiplies an unbounded intensity, which is
-        what makes it blow out and bloom instead of just reading white.
+        Unlike the raster path, nothing here is clipped on the way out: two
+        blinders lighting the same patch of air add, and the stage exposure
+        decides how far past full that reads.
         """
         beam = frame.beam
         emitters = frame.state.emitters
-        overdrive = self.body.overdrive()
         for index, bulb in enumerate(self.bulbs):
             rgb = emitters[index].rgb if index < len(emitters) else (0, 0, 0)
-            level = beam.level * overdrive
+            level = beam.level
             if level <= 0.0:
                 continue
             rect = bulb.rect()

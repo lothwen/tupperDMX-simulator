@@ -66,18 +66,6 @@ class BlinderFixture(BodyFixture):
     def bulbs(self):
         return self.emission.bulbs
 
-    def overdrive(self) -> float:
-        """Blinders are drawn overdriven.
-
-        `multiply_factor` (2.0 on the patched blinders) pushes the mix past full
-        so a half-open bulb already saturates — blinders read as glare, not as a
-        colour. It is a per-instance look rather than something the fixture
-        emits, so it is applied here and nowhere else; every other renderer
-        draws its fixture at the level the DMX asks for.
-        """
-        multiplier = getattr(self.instance, "multiply_factor", 1.0) or 1.0
-        return float(multiplier)
-
 
 @register_renderer("Strobe")
 class StrobeFixture(BodyFixture):

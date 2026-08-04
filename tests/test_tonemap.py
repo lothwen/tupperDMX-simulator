@@ -91,10 +91,11 @@ def test_it_never_exceeds_full_scale():
     _assert(True, "however overdriven the input, the output stays displayable")
 
 
-def test_a_blinder_at_double_full_reads_brighter_than_one_at_full():
-    """The whole reason for the HDR buffer: overdrive has to survive as a
-    visible difference, not clip to the same white."""
-    print("test_a_blinder_at_double_full_reads_brighter_than_one_at_full")
+def test_double_full_reads_brighter_than_full():
+    """The whole reason for the HDR buffer: two lights on one patch — or the
+    exposure raised — have to survive as a visible difference, not clip to the
+    same white."""
+    print("test_double_full_reads_brighter_than_full")
     at_full = aces_fitted((1.0, 1.0, 1.0))[0]
     overdriven = aces_fitted((2.0, 2.0, 2.0))[0]
     _assert(overdriven > at_full + 0.05,
@@ -160,7 +161,7 @@ def main():
     test_black_stays_black()
     test_the_curve_is_monotonic()
     test_it_never_exceeds_full_scale()
-    test_a_blinder_at_double_full_reads_brighter_than_one_at_full()
+    test_double_full_reads_brighter_than_full()
     test_a_saturated_colour_rolls_toward_white()
     test_the_mirror_matches_the_shader()
     print("\nALL TESTS PASSED")
