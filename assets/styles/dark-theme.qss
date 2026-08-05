@@ -1333,6 +1333,48 @@ QWidget#StageEditToolbar QPushButton#EditToolbarDone:hover {
     background-color: #8fd6f3;
 }
 
+/* The fog row. Every caption on it is a quiet label over a plain slider,
+   except TEXTURE — which decides whether the stage reads as air or as a white
+   filter laid over the picture, while the rest only tune air you already have.
+   It leads the row, gets nearly twice the travel, and is coloured and sized to
+   say so. */
+QLabel#EditToolbarFogCaption {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+QLabel#EditToolbarTextureCaption {
+    color: #cfe6f3;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QSlider#EditToolbarFogTexture::groove:horizontal {
+    height: 6px;
+    background-color: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 3px;
+}
+
+QSlider#EditToolbarFogTexture::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #3c6e8a, stop:1 #79cdf0);
+    border-radius: 3px;
+}
+
+QSlider#EditToolbarFogTexture::handle:horizontal {
+    width: 12px;
+    margin: -5px 0;
+    background-color: #cfe6f3;
+    border: 1px solid #5fb4d8;
+    border-radius: 6px;
+}
+
+QSlider#EditToolbarFogTexture::handle:horizontal:hover {
+    background-color: #ffffff;
+}
+
 /* Fixture inspector — floating card for the selected fixture */
 QWidget#FixtureInspector {
     background-color: rgba(28, 28, 28, 240);

@@ -1,8 +1,10 @@
 # ABOUTME: Stage scenario designer UI — a top-left toolbar (add / done) plus a
 # ABOUTME: per-selection inspector (name / type / DMX / delete). Placement is by drag.
+from contextlib import contextmanager
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout,
+    QWidget, QCheckBox, QDialog, QFrame, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QSlider, QSpinBox, QLabel, QLineEdit,
     QMessageBox,
 )
@@ -19,6 +21,16 @@ def _separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.VLine)
     line.setObjectName("EditToolbarSeparator")
     return line
+
+
+@contextmanager
+def _blocked(widget):
+    """Set a widget's value without it reporting the change back as an edit."""
+    previous = widget.blockSignals(True)
+    try:
+        yield widget
+    finally:
+        widget.blockSignals(previous)
 
 
 class StageEditToolbar(QWidget):
@@ -39,9 +51,16 @@ class StageEditToolbar(QWidget):
         self._on_done = on_done
         self.logger = get_logger("ui.fixture_designer")
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        # Two rows: the patch and the air on top, the fog's look underneath.
+        # The fog controls only exist on the GPU path, so on a machine without
+        # one the toolbar is exactly the single row it always was.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 6, 10, 6)
+        outer.setSpacing(6)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+        outer.addLayout(layout)
 
         title = QLabel('<span style="color:#4aa3df">●</span> EDIT MODE')
         title.setObjectName("EditModeLabel")
@@ -69,6 +88,14 @@ class StageEditToolbar(QWidget):
         self._haze.valueChanged.connect(self._on_haze_changed)
         layout.addWidget(self._haze)
 
+        # A read-out, because a slider whose effect is subtle needs to say it
+        # moved. Half the "it does nothing" reports about air are about not
+        # being sure anything was sent.
+        self._haze_value = QLabel(f"{self._haze.value()}%")
+        self._haze_value.setObjectName("EditToolbarFogCaption")
+        self._haze_value.setFixedWidth(34)
+        layout.addWidget(self._haze_value)
+
         # Exposure only means anything with the HDR buffer behind it: on the
         # raster path there is no headroom to expose down into, so the control
         # is only offered when the GPU layer is actually running.
@@ -95,13 +122,172 @@ class StageEditToolbar(QWidget):
         done_button.clicked.connect(lambda: self._on_done())
         layout.addWidget(done_button)
 
+        self._build_fog_row(outer)
+
         # Drags only fire in design mode, so persist them straight through.
         stage_controller.fixture_moved.connect(lambda _inst: self._notify())
 
         self.adjustSize()
 
+    # -- the air -------------------------------------------------------
+    def _build_fog_row(self, outer: QVBoxLayout) -> None:
+        """The volumetric fog's look, live while the stage is in front of you.
+
+        The switch is here rather than only in Settings, and that is the whole
+        point of the row. With it hidden two rooms away, every slider on this
+        line silently did nothing: they moved, they were saved, and the stage
+        never changed — which is indistinguishable from a broken control, and
+        was duly reported as one.
+
+        Only what changes the *look* lives here — how much fog there is is the
+        HAZE slider on the row above, and what the march costs is in Settings,
+        because neither is something anyone tunes by eye against a rig.
+        """
+        self._fog_widgets = []
+        self._fog_switch = None
+        if getattr(self._stage, "light_layer", None) is None:
+            return
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        outer.addLayout(row)
+
+        fog = self._stage.config.window.fog
+
+        self._fog_switch = QCheckBox("FOG")
+        self._fog_switch.setObjectName("EditToolbarFogSwitch")
+        self._fog_switch.setChecked(fog.enabled)
+        self._fog_switch.setToolTip(
+            "March every view ray through the air instead of scaling each "
+            "beam by one stage-wide haze number.\n"
+            "Shafts are integrated through the fog that is actually there, so "
+            "a beam brightens crossing a bank of smoke.")
+        self._fog_switch.toggled.connect(self._on_fog_toggled)
+        row.addWidget(self._fog_switch)
+
+        # (key, caption, slider range, scale, width, tooltip)
+        #
+        # TEXTURE leads, is captioned like a heading and is given nearly twice
+        # the travel of the rest, because it is the one control on this row that
+        # decides whether the stage reads as air or as a filter laid over the
+        # picture — the others tune air you have already got. A slider that
+        # matters more is worth more of the toolbar.
+        for key, caption, low, high, scale, width, tip in (
+            ("texture", "TEXTURE", 0, 300, 100.0, 130,
+             "How ragged the air is, and the difference between fog and a "
+             "white filter.\n"
+             "At 0 the march integrates a perfectly smooth medium — the "
+             "translucent-sheet look. Around 1 a pocket of air can be "
+             "completely empty, which is what gives a shaft its billows. Past "
+             "that the billows separate into banks with clear air between "
+             "them: a stage under a smoke machine rather than under a hazer.\n"
+             "The air drifts across the stage as it churns, and the bigger "
+             "this is the more plainly you can see it move."),
+            ("height", "height", 50, 2000, 1.0, 70,
+             "How far up from the floor the fog reaches"),
+            ("height_falloff", "falloff", 0, 120, 10.0, 70,
+             "How sharply it thins with height — haze settles, so a slab of "
+             "even density reads as a bug"),
+            ("scattering", "scatter", 0, 800, 100.0, 70,
+             "How much of the light passing through the fog comes back to you"),
+            ("anisotropy", "g", -95, 95, 100.0, 70,
+             "Henyey-Greenstein g: forward-scattering, which is why a beam "
+             "aimed at you is blinding and the same beam across the stage is "
+             "a shaft"),
+            ("light_intensity", "ambient", 0, 400, 100.0, 70,
+             "A stage-wide key on the medium itself, so smoke is visible "
+             "before any fixture is"),
+        ):
+            lead = key == "texture"
+            caption_label = QLabel(caption)
+            caption_label.setObjectName(
+                "EditToolbarTextureCaption" if lead
+                else "EditToolbarFogCaption")
+            caption_label.setToolTip(tip)
+            row.addWidget(caption_label)
+
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setObjectName(
+                "EditToolbarFogTexture" if lead else "EditToolbarHaze")
+            slider.setRange(low, high)
+            slider.setFixedWidth(width)
+            slider.setValue(int(round(getattr(fog, key) * scale)))
+            slider.setToolTip(tip)
+            slider.valueChanged.connect(
+                lambda value, k=key, s=scale: self._on_fog_changed(k, value / s))
+            row.addWidget(slider)
+            self._fog_widgets += [caption_label, slider]
+
+        self._fog_color = QPushButton()
+        self._fog_color.setObjectName("EditToolbarFogColor")
+        self._fog_color.setFixedWidth(28)
+        self._fog_color.setToolTip("What colour the air scatters")
+        self._fog_color.clicked.connect(self._pick_fog_color)
+        self._paint_fog_swatch(fog.color)
+        row.addWidget(self._fog_color)
+        self._fog_widgets.append(self._fog_color)
+
+        row.addStretch(1)
+        self._sync_fog_enabled()
+
+    def _sync_fog_enabled(self) -> None:
+        """Grey the shaping controls out while the march is off.
+
+        A control that does nothing has to *say* it does nothing. The switch
+        itself stays live, because it is the way back.
+        """
+        if self._fog_switch is None:
+            return
+        enabled = self._stage.config.window.fog.enabled
+        for widget in self._fog_widgets:
+            widget.setEnabled(enabled)
+        self._fog_switch.setToolTip(
+            self._fog_switch.toolTip().split("\n\n")[0]
+            + ("" if enabled else "\n\nOff: the sliders beside this do nothing "
+                                  "until it is on."))
+
+    def showEvent(self, event):
+        """Re-read the settings the toolbar mirrors.
+
+        Fog can also be switched from Settings, and the toolbar outlives that
+        dialog — so a row that only ever greyed itself once, at construction,
+        would go on showing the wrong state for the rest of the session.
+        """
+        super().showEvent(event)
+        if self._fog_switch is not None:
+            fog = self._stage.config.window.fog
+            with _blocked(self._fog_switch):
+                self._fog_switch.setChecked(fog.enabled)
+            self._sync_fog_enabled()
+
+    def _paint_fog_swatch(self, color: str) -> None:
+        self._fog_color.setStyleSheet(
+            f"background-color: {color}; border: 1px solid #555; min-height: 16px;")
+
+    def _pick_fog_color(self) -> None:
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtWidgets import QColorDialog
+
+        current = QColor(self._stage.config.window.fog.color)
+        chosen = QColorDialog.getColor(current, self, "Scattering colour")
+        if not chosen.isValid():
+            return
+        self._on_fog_changed("color", chosen.name())
+        self._paint_fog_swatch(self._stage.config.window.fog.color)
+
+    def _on_fog_toggled(self, on: bool) -> None:
+        self._stage.set_fog(enabled=on)
+        self._sync_fog_enabled()
+        self._notify()
+
+    def _on_fog_changed(self, key: str, value) -> None:
+        self._stage.set_fog(**{key: value})
+        self._notify()
+
     def _on_haze_changed(self, value: int) -> None:
         self._stage.set_haze_baseline(value / 100.0)
+        self._haze_value.setText(f"{value}%")
         self._notify()
 
     def _on_exposure_changed(self, value: int) -> None:

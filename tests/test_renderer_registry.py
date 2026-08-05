@@ -21,8 +21,8 @@ from core.fixture_library import build_fixture_def, resolve_fixture
 from ui.stage import (
     BlinderFixture, ColorChangerFixture, DimmerFixture, FanFixture,
     FlowerFixture, GenericStageFixture, HazerFixture, LaserFixture,
-    MovingHeadFixture, PixelBarFixture, ScannerFixture, StandFixture,
-    StrobeFixture, registered_categories, renderer_for,
+    MovingHeadFixture, PixelBarFixture, ScannerFixture, SmokeFixture,
+    StandFixture, StrobeFixture, registered_categories, renderer_for,
 )
 
 SCHEMA = "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json"
@@ -66,7 +66,10 @@ CATEGORY_PROFILES = {
     "Moving Head": MovingHeadFixture,
     "Pixel Bar": PixelBarFixture,
     "Scanner": ScannerFixture,
-    "Smoke": HazerFixture,
+    # Same housing, and deliberately NOT the same profile: a smoke machine's
+    # parcels are dense, local and short-lived where a hazer's are a thin layer
+    # that fills the room (see ui/stage/puffs.py).
+    "Smoke": SmokeFixture,
     "Stand": StandFixture,
     "Strobe": StrobeFixture,
 }
@@ -149,6 +152,8 @@ def test_shipped_fixtures_pick_the_expected_renderers():
         "blinder": BlinderFixture,
         "par_rgb": ColorChangerFixture,
         WILD_WASH: ColorChangerFixture,
+        "hazer": HazerFixture,
+        "smoke-machine": SmokeFixture,
     }
     for type_name, renderer in expected.items():
         _assert(renderer_for(resolve_fixture(type_name)) is renderer,

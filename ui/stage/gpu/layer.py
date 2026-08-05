@@ -25,12 +25,15 @@ drawing exactly as it did before.
 """
 
 import ctypes
+from dataclasses import astuple
 from typing import Callable, Iterable, Optional
 
 from PyQt6.QtGui import QMatrix4x4, QOpenGLContext, QSurfaceFormat
 
 from tupperlogger import get_logger
+from ui.stage.clock import CLOCK
 from ui.stage.light import BLOB, CONE, LINE, POINT, QUAD, STRIDE
+from ui.stage.gpu import fog as fog_module
 from ui.stage.gpu import shaders
 
 logger = get_logger("ui.stage.gpu")
@@ -42,6 +45,7 @@ _ONE = 1
 _RGBA16F = 0x881A
 _TEXTURE_2D = 0x0DE1
 _TEXTURE0 = 0x84C0
+_TEXTURE1 = 0x84C1
 _COLOR_BUFFER_BIT = 0x00004000
 _SCISSOR_TEST = 0x0C11
 
@@ -107,9 +111,24 @@ class LightLayer:
         self._size = (0, 0)
         self._failed = False
         self._packed = None
+        self._light_count = 0
+        self._medium_count = 0
+        self._fog = None
+        self._fog_texture = None
+        self._converge = 0
+        self._last_signature = None
         self.available = False
         self.exposure = 1.0
         self.haze = 0.0
+        #: A `core.config.StageFogConfig`, or None for no volumetric fog.
+        self.fog = None
+        #: The stage image's rectangle, `(x, y, w, h)` in scene units. The fog
+        #: needs it to know where the floor is and how big its density map is.
+        self.scene_rect = (0.0, 0.0, 1536.0, 1024.0)
+        #: Called when the fog march needs another frame to settle. Set by the
+        #: stage; nothing else here ever asks for a repaint it was not given a
+        #: reason for.
+        self.request_repaint = None
         self.last_primitive_count = 0
 
     # -- setup ---------------------------------------------------------
@@ -163,20 +182,44 @@ class LightLayer:
         self._instances.create()
         self._instances.setUsagePattern(QOpenGLBuffer.UsagePattern.DynamicDraw)
 
+        # The fog march is optional: if its programs will not compile, the stage
+        # keeps its light and simply has no volumetric air.
+        from functools import partial
+
+        from ui.stage.gpu.fog import FogPass
+        fog = FogPass(self._fns, self._quad, self._instances, self._vao)
+        self._fog = fog if fog.build(
+            QOpenGLShaderProgram, QOpenGLShader,
+            partial(self._build, optional=True)) else None
+
         self.available = True
         version = context.format()
         logger.info("GPU light layer ready (OpenGL %d.%d)",
                     version.majorVersion(), version.minorVersion())
         return True
 
-    def _build(self, program_cls, shader_cls, vert, frag, name):
+    def _build(self, program_cls, shader_cls, vert, frag, name,
+               optional: bool = False):
+        """Compile and link one program, or None.
+
+        `optional` marks a program the layer can do without — the fog march.
+        A failure there costs the stage its volumetric air; a failure in the
+        light or resolve programs costs it everything, so only the second kind
+        takes the whole layer down with it.
+        """
+        def fail(why: str):
+            if optional:
+                logger.warning("no volumetric fog on this context: %s", why)
+                return None
+            return self._give_up(why) or None
+
         program = program_cls()
         if not program.addShaderFromSourceCode(shader_cls.ShaderTypeBit.Vertex, vert):
-            return self._give_up(f"{name} vertex shader: {program.log()}") or None
+            return fail(f"{name} vertex shader: {program.log()}")
         if not program.addShaderFromSourceCode(shader_cls.ShaderTypeBit.Fragment, frag):
-            return self._give_up(f"{name} fragment shader: {program.log()}") or None
+            return fail(f"{name} fragment shader: {program.log()}")
         if not program.link():
-            return self._give_up(f"{name} link: {program.log()}") or None
+            return fail(f"{name} link: {program.log()}")
         return program
 
     def _give_up(self, why: str) -> bool:
@@ -207,19 +250,99 @@ class LightLayer:
 
         count = self._pack()
         self.last_primitive_count = count
-        if count == 0:
+        if count == 0 and not self._air_worth_drawing():
             return True          # nothing lit is a perfectly good frame
+
+        signature = self._frame_signature() if self._fog_wanted() else None
+        changed = signature != self._last_signature
+        self._last_signature = signature
 
         try:
             self._ensure_fbo(width, height)
             self._set_clip(clip, height)
-            self._accumulate(scene_to_clip, count)
+            self._accumulate(scene_to_clip, self._light_count)
+            self._march_fog(scene_to_clip, width, height, clip)
             self._resolve(width, height)
         except Exception as exc:                       # pragma: no cover
             return self._give_up(f"draw failed: {exc!r}")
         finally:
             self._restore(width, height)
+        if signature is not None:
+            self._settle(changed)
         return True
+
+    def _march_fog(self, scene_to_clip: QMatrix4x4, width: int,
+                   height: int, clip) -> None:
+        """Integrate every beam through the air, into a half-size buffer.
+
+        Unscissored — and it has to be **turned off** to be so, which is the
+        whole reason this is not just a call.
+
+        `clip` is a box in surface pixels, and every target the fog renders into
+        is a different size: the march is `fog.resolution` of the surface and
+        the medium map an eighth of the *scene*. GL's scissor is in absolute
+        framebuffer pixels, so left enabled it cuts each of them at the same
+        absolute column — which is one bug wearing two faces, and both were
+        reported as such. At half resolution the march loses everything left of
+        `clip.x`, and `_resolve` then stretches that boundary to twice the bar
+        width: a hard vertical line across the stage with fog only to the right
+        of it. The medium map is worse, because it is only ~192 texels wide: a
+        clip starting past that misses it entirely, nothing is rasterised into
+        the air, and a hazer running flat out puts no smoke on stage at all.
+
+        Confining the fog to the stage image is `_resolve`'s job, and it is
+        scissored — so the clip goes back on the way out.
+        """
+        self._fog_texture = None
+        if not self._fog_wanted():
+            return
+        gl = self._fns
+        gl.glDisable(_SCISSOR_TEST)
+        try:
+            self._fog_texture = self._fog.render(
+                packed=self._packed, light_count=self._light_count,
+                medium_count=self._medium_count, scene_to_clip=scene_to_clip,
+                width=width, height=height, scene_rect=self.scene_rect,
+                fog=self.fog, haze=self.haze, seconds=CLOCK.now())
+        finally:
+            self._set_clip(clip, height)
+
+    def _settle(self, changed: bool) -> None:
+        """Ask for one more frame while the fog is still converging.
+
+        The march dithers each ray's start and averages the result with the last
+        few frames, so a frame drawn on its own is noisy: after the picture
+        stops changing it needs `CONVERGE_FRAMES` more to settle. This is the
+        only place anything here asks for a repaint it was not given a reason
+        for, so it is also the only place that could spin forever — and the
+        countdown is what stops it. Resetting it every frame the march ran
+        (rather than every frame the picture *changed*) is exactly that bug: the
+        counter never reaches zero, every frame asks for another, and the stage
+        redraws flat out for as long as fog is switched on.
+        """
+        if changed:
+            self._converge = fog_module.CONVERGE_FRAMES
+        if self._converge <= 0 or self.request_repaint is None:
+            return
+        self._converge -= 1
+        self.request_repaint()
+
+    def _frame_signature(self) -> tuple:
+        """What the fog is a picture of, cheaply.
+
+        Everything the march reads: the primitives themselves, the air they are
+        in, and the settings shaping it. If none of it moved, the only thing
+        left changing between frames is the dither — which is what converges.
+        Smoke drifts every frame, so a running machine keeps this changing and
+        the fog keeps being redrawn, which is correct: the picture really is
+        different.
+        """
+        fog = self.fog
+        return (
+            bytes(self._packed) if self._packed is not None else b"",
+            self._light_count, self._medium_count, round(self.haze, 4),
+            self.scene_rect, None if fog is None else astuple(fog),
+        )
 
     def _set_clip(self, clip, surface_height: int) -> None:
         """Confine every pass to the stage image."""
@@ -252,29 +375,97 @@ class LightLayer:
             pass
 
     def _pack(self) -> int:
-        """Every body's light, offset into scene coordinates, in one buffer.
+        """Every body's primitives, offset into scene coordinates, in one buffer.
 
         The lists themselves are body-local — that is what lets a fixture be
         dragged without re-rendering — so the body's position is added here.
+
+        Light and medium are separated on the way through, lights first: a BLOB
+        is a parcel of smoke rather than something that glows, and the fog pass
+        rasterises it into a density map instead of drawing it. One walk and one
+        upload still, with the two ranges back to back — which is why the fog
+        pass only has to move an offset rather than keep a buffer of its own.
+
+        With fog off there is nothing to separate them for, so they stay
+        together and a blob draws as the faint puff it always was.
         """
-        chunks = []
-        total = 0
+        split = self._fog_wanted()
+        lights = []
+        media = []
+        light_count = 0
+        medium_count = 0
         for body in self._bodies():
-            lights = getattr(body, "lights", None)
-            if lights is None or len(lights) == 0:
+            primitives = getattr(body, "lights", None)
+            if primitives is None or len(primitives) == 0:
                 continue
-            values = list(lights.buffer())
+            values = list(primitives.buffer())
             offset_x, offset_y = body.x(), body.y()
-            for index in range(len(lights)):
+            for index in range(len(primitives)):
                 base = index * STRIDE
                 values[base + 1] += offset_x
                 values[base + 2] += offset_y
-            chunks.extend(values)
-            total += len(lights)
+                if split and values[base] == BLOB:
+                    media.extend(values[base:base + STRIDE])
+                    medium_count += 1
+                else:
+                    lights.extend(values[base:base + STRIDE])
+                    light_count += 1
 
-        if total:
-            self._packed = (ctypes.c_float * len(chunks))(*chunks)
+        total = light_count + medium_count
+        # Dropped rather than left standing when the rig goes dark: the frame
+        # carries on being drawn for the air alone, and `_frame_signature` would
+        # otherwise describe an empty stage with the last lit one's primitives.
+        chunks = lights + media
+        self._packed = (ctypes.c_float * len(chunks))(*chunks) if chunks else None
+        self._light_count = light_count
+        self._medium_count = medium_count
         return total
+
+    def _fog_wanted(self) -> bool:
+        """Whether the volumetric march runs this frame."""
+        return bool(self._fog is not None and self.fog is not None
+                    and self.fog.enabled)
+
+    def _air_worth_drawing(self) -> bool:
+        """Whether the air alone earns a frame, with nothing emitting at all.
+
+        A dark rig is not an empty frame once there is fog. The march's ambient
+        pass lights the room's own baseline haze, and that is stage-wide: it
+        needs no fixture, no parcel of smoke, nothing in the light list. So
+        `count == 0` is not the same question as "is there anything to draw",
+        and treating it as one is why the haze vanished the instant the last
+        beam went out and the last puff aged away — which is the one moment a
+        hazy room should read as most obviously hazy.
+
+        Both halves of what the ambient pass needs are asked for, because
+        without either it marches a fullscreen quad through nothing: `haze` is
+        the medium it lights, and `light_intensity` is the light it lights it
+        with.
+        """
+        return bool(self._fog_wanted() and self.haze > 0.0
+                    and self.fog.light_intensity > 0.0)
+
+    def air_is_drifting(self) -> bool:
+        """Whether the air is a moving picture, and so owed frames of its own.
+
+        The march's noise flows with the clock, so textured air genuinely looks
+        different every frame with the whole rig standing perfectly still — and
+        `_frame_signature` cannot see that, because time is not in it and must
+        not be: putting it there would make `_settle` reset its own countdown
+        every frame, which is precisely the spin that countdown exists to stop.
+
+        So the drift is driven from outside instead, by the stage's shared 30 Hz
+        clock, exactly like every other animation here. This is the question it
+        asks, and all three parts of it are load-bearing: fog that is switched
+        off has no noise, `texture` at 0 makes `turbulence()` return a constant,
+        and air with nothing in it and nothing lighting it draws nothing to
+        move. Any of those and the stage goes back to costing nothing at rest,
+        which is the invariant the whole repaint scheme rests on.
+        """
+        if not self._fog_wanted() or self.fog.texture <= 0.0:
+            return False
+        return bool(self._light_count > 0 or self._medium_count > 0
+                    or self._air_worth_drawing())
 
     def _ensure_fbo(self, width: int, height: int) -> None:
         from PyQt6.QtOpenGL import (
@@ -295,6 +486,13 @@ class LightLayer:
         gl.glViewport(0, 0, self._size[0], self._size[1])
         gl.glClearColor(0.0, 0.0, 0.0, 0.0)
         gl.glClear(_COLOR_BUFFER_BIT)
+        if count == 0:
+            # A dark rig, reached because the air is still worth a frame. The
+            # clear is the part that had to happen anyway — this buffer is what
+            # `_resolve` reads, and left alone it would hold the last frame's
+            # light for as long as the fog kept the layer running.
+            self._fbo.release()
+            return
         gl.glEnable(_BLEND)
         gl.glBlendFunc(_ONE, _ONE)          # light adds; this is the whole idea
 
@@ -304,6 +502,10 @@ class LightLayer:
         program.setUniformValue("u_glow_reach", float(GLOW_REACH))
         program.setUniformValue("u_max_glow", float(MAX_GLOW_RADIUS_PX))
         program.setUniformValue("u_haze", float(self.haze))
+        # With the march running it owns the shaft, and this pass keeps only the
+        # lens — otherwise one beam would be drawn twice, once each way.
+        program.setUniformValue("u_fog_active",
+                                1.0 if self._fog_wanted() else 0.0)
         program.setUniformValue("u_scene_to_clip", scene_to_clip)
 
         self._quad.bind()
@@ -354,6 +556,18 @@ class LightLayer:
         program.setUniformValue("u_hdr", 0)
         program.setUniformValue("u_exposure", float(self.exposure))
 
+        # The fog rides in on a second sampler and is added before the tonemap,
+        # so exposure and ACES cover it too — fog is just more light. Sampling
+        # a smaller texture with a linear filter IS the upsample. With no march
+        # this frame, unit 1 still needs a valid binding, so it gets the HDR
+        # buffer with an amount of zero rather than a dangling sampler.
+        gl.glActiveTexture(_TEXTURE1)
+        gl.glBindTexture(_TEXTURE_2D, self._fog_texture or self._fbo.texture())
+        program.setUniformValue("u_fog", 1)
+        program.setUniformValue("u_fog_amount",
+                                1.0 if self._fog_texture else 0.0)
+        gl.glActiveTexture(_TEXTURE0)
+
         self._quad.bind()
         corner = program.attributeLocation("a_corner")
         program.enableAttributeArray(corner)
@@ -365,6 +579,9 @@ class LightLayer:
 
         program.disableAttributeArray(corner)
         program.release()
+        gl.glActiveTexture(_TEXTURE1)
+        gl.glBindTexture(_TEXTURE_2D, 0)
+        gl.glActiveTexture(_TEXTURE0)
         gl.glBindTexture(_TEXTURE_2D, 0)
         self._vao.release()
 
@@ -375,8 +592,12 @@ class LightLayer:
                 buffer.destroy()
         if self._vao is not None:
             self._vao.destroy()
+        if self._fog is not None:
+            self._fog.cleanup()
+            self._fog = None
         self._quad = self._instances = self._vao = None
         self._fbo = None
+        self._fog_texture = None
         self._light_program = self._resolve_program = None
         self._fns = None
         self.available = False

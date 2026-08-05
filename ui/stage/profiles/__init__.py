@@ -10,7 +10,7 @@ from ui.stage.profiles.array import (
     BlinderFixture, PixelBarFixture, StrobeFixture,
 )
 from ui.stage.profiles.atmospheric import (
-    FanFixture, HazerFixture, StandFixture,
+    FanFixture, HazerFixture, SmokeFixture, StandFixture,
 )
 from ui.stage.profiles.lamp import (
     ColorChangerFixture, DimmerFixture, GenericStageFixture, LampFixture,
@@ -23,5 +23,5 @@ __all__ = [
     "BlinderFixture", "ColorChangerFixture", "DimmerFixture", "FanFixture",
     "FlowerFixture", "GenericStageFixture", "HazerFixture", "LampFixture",
     "LaserFixture", "MovingHeadFixture", "PixelBarFixture", "ScannerFixture",
-    "StandFixture", "StrobeFixture",
+    "SmokeFixture", "StandFixture", "StrobeFixture",
 ]

@@ -575,10 +575,16 @@ class MainWindow(QMainWindow):
         old_artnet = asdict(self.config.artnet)
         old_webremote = asdict(self.config.webremote)
         old_audio = asdict(self.config.audio)
+        old_fog = asdict(self.config.window.fog)
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+
+        # The dialog hands back a NEW fog object, so the light layer is still
+        # holding the old one until it is told otherwise.
+        if asdict(self.config.window.fog) != old_fog:
+            self.stage_controller.apply_stage_config()
 
         # Re-apply the routing when it (or the Art-Net target the sinks and
         # listener read from) changed.

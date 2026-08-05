@@ -31,6 +31,65 @@ def userprefs_path() -> Path:
 
 
 @dataclass
+class StageFogConfig:
+    """Volumetric fog on the virtual stage. GPU path only, off by default.
+
+    How *much* fog there is is deliberately NOT here: that is
+    `WindowConfig.stage_haze`, which already exists and already has a slider.
+    One density control, not two. These are the things that decide what that
+    density then looks like, and how expensive it is to draw.
+    """
+
+    # Needs `stage_gpu` as well — a ray march has nowhere to run on the raster
+    # path. Off by default for the same reason `stage_gpu` is.
+    enabled: bool = False
+
+    # -- the look ------------------------------------------------------
+    # How far up from the floor the fog reaches, in scene units, and how sharply
+    # it thins on the way. Haze settles: there is more of it round the ankles
+    # than in the truss, and a slab of even density reads as a bug.
+    height: float = 520.0
+    height_falloff: float = 1.6
+    # What colour the air scatters. Not white: real haze is very slightly cool.
+    color: str = "#dfe4ee"
+    # How much of the light that passes through the fog comes back to the eye.
+    scattering: float = 1.0
+    # Henyey-Greenstein g. Positive is forward-scattering, which is why a beam
+    # aimed at you is blinding and the same beam crossing the stage is a shaft.
+    anisotropy: float = 0.55
+    # How ragged the air is, 0..3. 0 is a perfectly smooth medium, which
+    # integrates to a translucent sheet laid over the picture — the "white
+    # filter" look. Real haze has structure at every scale and drifts, and this
+    # is that structure: how far the density swings either side of the smooth
+    # field. 1 is "a pocket of air can be completely empty"; past that the
+    # billows separate into distinct banks with clear air between them, which is
+    # a real stage under a smoke machine rather than one under a hazer.
+    texture: float = 1.1
+    # How big those features are, in scene units. Around a third of the stage's
+    # height is what reads as billows rather than as grain.
+    texture_scale: float = 260.0
+    # A stage-wide key light for the medium itself, so smoke is visible before
+    # any fixture is. `light_dir_deg` is measured the way every other axis on
+    # this stage is: 90 is straight down the picture.
+    light_intensity: float = 0.35
+    light_dir_deg: float = 255.0
+
+    # -- what it costs -------------------------------------------------
+    # Samples along each view ray. The single biggest cost, and the single
+    # biggest difference between smooth shafts and visible banding.
+    march_steps: int = 24
+    # How deep the marched slab is, in scene units.
+    max_distance: float = 1400.0
+    # How far each ray's start is dithered, to trade banding for noise the
+    # temporal pass then averages away. 0 disables it and the bands come back.
+    jitter: float = 0.8
+    # Fraction of the viewport the fog is marched at, upsampled on resolve.
+    # Half is the shipped default: fog is low-frequency, so the resolution it
+    # is computed at is much cheaper to give up than the step count.
+    resolution: float = 0.5
+
+
+@dataclass
 class WindowConfig:
     width: int = 1280
     height: int = 720
@@ -52,6 +111,9 @@ class WindowConfig:
     stage_gpu: bool = False
     # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
     stage_exposure: float = 1.0
+    # Volumetric fog: what `stage_haze` looks like once it is marched through
+    # rather than multiplied into a beam's alpha. Needs `stage_gpu`.
+    fog: StageFogConfig = field(default_factory=StageFogConfig)
 
 
 @dataclass
@@ -318,6 +380,7 @@ class Config:
                 stage_gpu=bool(window_data.get("stage_gpu", False)),
                 stage_exposure=cls._validate_float(
                     window_data.get("stage_exposure", 1.0), 0.1, 4.0),
+                fog=cls._parse_fog(window_data.get("fog")),
             )
 
         if "artnet" in data:
@@ -513,6 +576,65 @@ class Config:
         if isinstance(value, str) and value:
             return value
         return None
+
+    @classmethod
+    def _parse_fog(cls, fog_data: Any) -> StageFogConfig:
+        """The stage's volumetric-fog settings, clamped to what can be drawn.
+
+        Every bound here is a real limit rather than taste: a march of 0 steps
+        draws nothing, one of 512 stalls the frame, and a resolution above 1
+        would render more fog pixels than there are screen pixels to show them.
+        """
+        if not isinstance(fog_data, dict):
+            return StageFogConfig()
+        defaults = StageFogConfig()
+        return StageFogConfig(
+            enabled=bool(fog_data.get("enabled", defaults.enabled)),
+            height=cls._validate_float(
+                fog_data.get("height", defaults.height), 1.0, 4000.0),
+            height_falloff=cls._validate_float(
+                fog_data.get("height_falloff", defaults.height_falloff), 0.0, 12.0),
+            color=cls._validate_hex_color(
+                fog_data.get("color", defaults.color), defaults.color),
+            scattering=cls._validate_float(
+                fog_data.get("scattering", defaults.scattering), 0.0, 8.0),
+            # Fully forward or fully backward scattering is a singularity in the
+            # Henyey-Greenstein phase function, so it stops just short of both.
+            anisotropy=cls._validate_float(
+                fog_data.get("anisotropy", defaults.anisotropy), -0.95, 0.95),
+            # Past 1 the thin side of the noise clamps against empty air, which
+            # is the point rather than a limit: that is what separates billows
+            # into banks with clear air between them. The ceiling is where the
+            # structure stops getting coarser and starts being two-tone.
+            texture=cls._validate_float(
+                fog_data.get("texture", defaults.texture), 0.0, 3.0),
+            texture_scale=cls._validate_float(
+                fog_data.get("texture_scale", defaults.texture_scale),
+                20.0, 2000.0),
+            light_intensity=cls._validate_float(
+                fog_data.get("light_intensity", defaults.light_intensity), 0.0, 4.0),
+            light_dir_deg=cls._validate_float(
+                fog_data.get("light_dir_deg", defaults.light_dir_deg), 0.0, 360.0),
+            march_steps=cls._validate_int(
+                fog_data.get("march_steps", defaults.march_steps), 4, 128),
+            max_distance=cls._validate_float(
+                fog_data.get("max_distance", defaults.max_distance), 100.0, 8000.0),
+            jitter=cls._validate_float(
+                fog_data.get("jitter", defaults.jitter), 0.0, 2.0),
+            resolution=cls._validate_float(
+                fog_data.get("resolution", defaults.resolution), 0.125, 1.0),
+        )
+
+    @staticmethod
+    def _validate_hex_color(value: Any, fallback: str) -> str:
+        """A `#rrggbb` string, or the default. Nothing else reaches a shader."""
+        if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
+            try:
+                int(value[1:], 16)
+            except ValueError:
+                return fallback
+            return value.lower()
+        return fallback
 
     @staticmethod
     def _parse_fixtures(fixtures_data: Any) -> List[FixtureInstance]:

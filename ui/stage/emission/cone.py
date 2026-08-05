@@ -27,7 +27,9 @@ from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPolygonItem
 from ui.stage import wheelart
 from ui.stage.base import GlowingEllipse
 from ui.stage.emission.base import Emission
-from ui.stage.frame import BEAM_LENGTH_PX, BeamParams, Frame
+from ui.stage.frame import (
+    BEAM_LENGTH_PX, FORESHORTEN_FLOOR, BeamParams, Frame,
+)
 from ui.stage.light import LightList, linear_rgb
 from ui.stage.optics import MAX_HALF_ANGLE_DEG, BeamKind
 
@@ -128,6 +130,15 @@ def _drawable_angle(half_angle_deg: Optional[float]) -> float:
     return max(1.0, min(MAX_HALF_ANGLE_DEG, half_angle_deg or 1.0))
 
 
+def _foreshortened(foreshorten: float) -> float:
+    """How much of its length a beam keeps once it is aimed at the viewer.
+
+    The fog march inverts this to recover the throw the fixture actually has,
+    which is why the constant is in `frame.py` where both can reach it.
+    """
+    return FORESHORTEN_FLOOR + (1.0 - FORESHORTEN_FLOOR) * foreshorten
+
+
 def cone_geometry(beam: BeamParams, hard: bool = False) -> Tuple[float, float]:
     """How long this beam reaches, and how wide it is at the far end.
 
@@ -138,7 +149,7 @@ def cone_geometry(beam: BeamParams, hard: bool = False) -> Tuple[float, float]:
     angle = _drawable_angle(beam.half_angle_deg)
     if hard:
         angle *= HARD_BEAM_NARROWING
-    length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
+    length = beam.length_px * _foreshortened(beam.foreshorten)
     # An iris closes the aperture; frost opens the edge back up.
     spread = min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO) * length
     spread *= max(0.05, beam.aperture)
@@ -359,7 +370,7 @@ class GoboPlane(QGraphicsItem):
         self._radius = _gobo_radius(beam)
         self._rgb, self._level = beam.rgb, beam.level
         # Sit at the far end of the beam, where the pattern would be in focus.
-        length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
+        length = beam.length_px * _foreshortened(beam.foreshorten)
         radians = math.radians(beam.axis_deg)
         self.setPos(origin.x() + math.cos(radians) * length * 0.78,
                     origin.y() + math.sin(radians) * length * 0.78)
@@ -386,7 +397,7 @@ class GoboPlane(QGraphicsItem):
 def _gobo_radius(beam: BeamParams) -> float:
     """How big the pattern lands, from the beam's own spread."""
     angle = _drawable_angle(beam.half_angle_deg or 12.0) * HARD_BEAM_NARROWING
-    length = beam.length_px * (0.15 + 0.85 * beam.foreshorten)
+    length = beam.length_px * _foreshortened(beam.foreshorten)
     return max(6.0, min(math.tan(math.radians(angle)), MAX_SPREAD_RATIO)
                * length * 0.78 * max(0.05, beam.aperture))
 
