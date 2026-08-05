@@ -209,6 +209,12 @@ class StageView(QGraphicsView):
         layer = self._light_layer
         if layer is None:
             return
+        # The fog needs the stage's own rectangle — where the floor is, and how
+        # big a density map to cover it with. Read per frame rather than cached:
+        # swapping the backdrop resizes the scene.
+        rect = self.scene().sceneRect()
+        layer.scene_rect = (rect.x(), rect.y(), rect.width(), rect.height())
+
         painter.beginNativePainting()
         try:
             ratio = self.viewport().devicePixelRatio()
@@ -329,6 +335,12 @@ class StageController(QObject):
         layer = LightLayer(lambda: self.render_objs)
         layer.exposure = self.config.window.stage_exposure
         layer.haze = self.atmosphere.level
+        layer.fog = self.config.window.fog
+        # The fog march is dithered per frame and averaged over several of them,
+        # so it needs a few repaints after the rig has stopped changing to
+        # settle. Nothing else on the stage asks for a repaint it was not given
+        # a reason for, so the layer has to ask for these itself — and stop.
+        layer.request_repaint = self._on_light_changed
         if not self.stage_view.attach_light_layer(layer):
             return False
 
@@ -579,27 +591,107 @@ class StageController(QObject):
                          f"'{mode or '(default)'}'")
 
     def _advance_atmosphere(self) -> None:
-        """Move the haze toward what the patched fog fixtures are asking for."""
+        """Move the haze toward what the patched fog fixtures are asking for,
+        and give the air its own frames while it is drifting.
+
+        This runs at 30 Hz for as long as the stage exists — it is the one clock
+        subscription that is never conditional — so it must not ask for a
+        repaint unless something has actually changed, or a rig standing
+        perfectly still would redraw forever.
+
+        Two things can have changed. The haze level, which is the drift a hazer
+        coming on produces. And, once the volumetric march is on with any
+        texture at all, the air itself: its noise flows with this same clock, so
+        the picture really is different every tick even with nothing on stage
+        moving. Nobody else can notice that — the light layer's own frame
+        signature deliberately has no time in it — so it is driven from here,
+        which also paces it at the rate everything else on the stage animates at
+        instead of as fast as the compositor will take frames.
+        """
         level = self.atmosphere.advance(CLOCK.now())
         layer = self.light_layer
-        # This runs at 30 Hz for as long as the stage exists — it is the one
-        # clock subscription that is never conditional — so it must not ask for
-        # a repaint unless the air has actually changed, or a rig standing
-        # perfectly still would redraw forever.
-        if layer is not None and abs(level - layer.haze) > 1e-4:
+        if layer is None:
+            return
+        if abs(level - layer.haze) > 1e-4:
             layer.haze = level
+            self._on_light_changed()
+        elif layer.air_is_drifting():
             self._on_light_changed()
 
     def set_haze_baseline(self, value: float) -> None:
-        """How hazy the room is before any fixture. Persisted with the window."""
+        """How hazy the room is before any fixture. Persisted with the window.
+
+        Redraws. The air is not something a body is told about — every body
+        reads `atmosphere.level` on the frame it happens to be drawing — so
+        without this the slider did nothing at all until the next DMX frame
+        arrived, and on a stage standing still it did nothing full stop. That
+        is what "the haze slider does not work" was.
+        """
+        before = self.atmosphere.level
         self.atmosphere.set_baseline(value)
         self.config.window.stage_haze = self.atmosphere.baseline
+        # Straight to the new level rather than drifting to it: the drift is
+        # there so a *hazer* coming on reads as haze filling a room, and nobody
+        # dragging a slider wants to wait twelve seconds to see what they did.
+        self.atmosphere.settle()
+        if self.atmosphere.level != before:
+            self.refresh_air()
+
+    def refresh_air(self) -> None:
+        """Redraw every body against the air as it is now.
+
+        Both paths need it and for different reasons: on the raster path the
+        haze is baked into each cone's own brush, and on the GPU path it is a
+        uniform the light layer has to be handed.
+        """
+        for obj in self.render_objs:
+            obj.render()
+        if self.light_layer is not None:
+            self.light_layer.haze = self.atmosphere.level
+            self._on_light_changed()
 
     def set_exposure(self, value: float) -> None:
         """Exposure before the tonemap. Only the GPU path has one."""
         self.config.window.stage_exposure = max(0.1, min(4.0, float(value)))
         if self.light_layer is not None:
             self.light_layer.exposure = self.config.window.stage_exposure
+            self._on_light_changed()
+
+    def apply_stage_config(self) -> None:
+        """Re-read the stage settings from the config and redraw.
+
+        Settings **replaces** `config.window.fog` with a new object rather than
+        editing the one that is there, so the light layer went on holding the
+        old one: ticking "Volumetric fog" did nothing at all until the app was
+        restarted, which is not what the dialog says and not what anyone
+        expects of a switch. `stage_gpu` genuinely does need a relaunch — there
+        is a GL context to build — and the dialog says so.
+        """
+        if self.light_layer is None:
+            return
+        self.light_layer.fog = self.config.window.fog
+        self.light_layer.exposure = self.config.window.stage_exposure
+        self._on_light_changed()
+
+    def set_fog(self, **values) -> None:
+        """Edit the volumetric-fog settings and redraw.
+
+        One writer for all of them, because they are all the same kind of thing:
+        a field on `config.window.fog` that the light layer reads. Validated
+        through the config's own parser rather than by each caller, so a slider
+        and a prefs file cannot disagree about what is in range.
+
+        Note there is no `density` here — that is `stage_haze`, which the fog
+        pass reads as the amount of medium in clean air. One density control.
+        """
+        from dataclasses import asdict
+        from core.config import Config
+
+        current = asdict(self.config.window.fog)
+        current.update(values)
+        self.config.window.fog = Config._parse_fog(current)
+        if self.light_layer is not None:
+            self.light_layer.fog = self.config.window.fog
             self._on_light_changed()
 
     def _on_selection_changed(self) -> None:

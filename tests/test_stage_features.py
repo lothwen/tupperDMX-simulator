@@ -240,6 +240,103 @@ def test_two_hazers_combine_without_exceeding_full():
             "fog is denser but stays low, so it helps the beams less than haze")
 
 
+def test_the_haze_slider_takes_effect_at_once(qapp):
+    print("test_the_haze_slider_takes_effect_at_once")
+    # The reported bug: "sliders on the stage editor seem to be not working at
+    # all". The air is not something a body is told about — every body reads
+    # `atmosphere.level` on the frame it happens to be drawing — so the slider
+    # needed two things it did not have: the level had to move without waiting
+    # out a twelve-second drift, and something had to ask for a redraw.
+    from core.config import Config
+    from ui.stage_controller import StageController
+
+    config = Config()
+    config.fixtures = []
+    config.window.stage_haze = 0.0
+    stage = StageController(config)
+    try:
+        _assert(stage.atmosphere.level == 0.0, "a clear room to start")
+
+        stage.set_haze_baseline(0.8)
+        _assert(abs(stage.atmosphere.level - 0.8) < 1e-9,
+                f"the room is hazy the moment the slider moves, not twelve "
+                f"seconds later ({stage.atmosphere.level:.3f})")
+        _assert(abs(config.window.stage_haze - 0.8) < 1e-9,
+                "and it is what gets persisted")
+
+        # Every body has to be redrawn against it: on the raster path the haze
+        # is baked into each cone's own brush, so a body nobody re-rendered is
+        # still drawing last frame's air.
+        drawn = []
+        stage.render_objs = [_Recorder(drawn)]
+        stage.set_haze_baseline(0.2)
+        _assert(drawn == ["render"],
+                "and every body on the stage is redrawn against it")
+    finally:
+        stage.render_objs = []
+
+
+class _Recorder:
+    """Stands in for a body: all `refresh_air` is allowed to want from one."""
+
+    def __init__(self, log):
+        self._log = log
+
+    def render(self):
+        self._log.append("render")
+
+
+class _FakeLayer:
+    """Stands in for the GPU light layer, which needs a GL context CI has not."""
+
+    def __init__(self, drifting):
+        self.haze = 0.0
+        self._drifting = drifting
+
+    def air_is_drifting(self):
+        return self._drifting
+
+
+def test_drifting_air_gets_frames_of_its_own(qapp):
+    print("test_drifting_air_gets_frames_of_its_own")
+    # Fog that does not move is a dirty lens rather than air, and the march's
+    # noise flows with the shared clock — so with the volumetric pass on, the
+    # picture is genuinely different every tick even with the whole rig
+    # standing still. Nothing else can notice: the light layer's frame
+    # signature has no time in it on purpose. So the stage's own 30 Hz
+    # subscription is what asks for those frames.
+    #
+    # And it is the one subscription that is never conditional, so the other
+    # half matters just as much: with nothing to animate it must stay silent,
+    # or a stage sitting idle redraws forever.
+    from core.config import Config
+    from ui.stage_controller import StageController
+
+    config = Config()
+    config.fixtures = []
+    config.window.stage_haze = 0.3
+    stage = StageController(config)
+    try:
+        painted = []
+        stage._on_light_changed = lambda: painted.append(1)
+
+        stage.light_layer = _FakeLayer(drifting=False)
+        stage.light_layer.haze = stage.atmosphere.level
+        stage._advance_atmosphere()
+        _assert(painted == [],
+                f"still air on a still rig costs nothing ({len(painted)})")
+
+        stage.light_layer = _FakeLayer(drifting=True)
+        stage.light_layer.haze = stage.atmosphere.level
+        for _ in range(5):
+            stage._advance_atmosphere()
+        _assert(len(painted) == 5,
+                f"drifting air is redrawn every tick, because it really does "
+                f"look different every tick ({len(painted)})")
+    finally:
+        stage.light_layer = None
+
+
 def test_a_hazer_lights_up_the_whole_rig(qapp):
     print("test_a_hazer_lights_up_the_whole_rig")
     air = Atmosphere(baseline=0.0)
@@ -271,6 +368,8 @@ def main():
     test_the_shutter_waveforms_differ(app)
     test_haze_builds_and_hangs_around()
     test_two_hazers_combine_without_exceeding_full()
+    test_the_haze_slider_takes_effect_at_once(app)
+    test_drifting_air_gets_frames_of_its_own(app)
     test_a_hazer_lights_up_the_whole_rig(app)
     print("\nALL TESTS PASSED")
 

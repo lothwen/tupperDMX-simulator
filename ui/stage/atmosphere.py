@@ -52,6 +52,16 @@ class Atmosphere:
         """The manual floor — a room that is already hazy before any fixture."""
         self._baseline = _clamp(value)
 
+    def settle(self) -> None:
+        """Jump straight to the target instead of drifting to it.
+
+        The drift exists so a hazer coming on reads as haze filling a room. A
+        hand on the baseline slider is not that: it is someone asking what the
+        stage looks like at this much air, and making them wait out a twelve
+        second decay to find out is how a working control reads as a broken one.
+        """
+        self._level = self.target
+
     # -- what fixtures write -------------------------------------------
     def contribute(self, key: int, output: float, kind: str = "") -> None:
         amount = _clamp(output) * _KIND_WEIGHT.get(kind, 1.0)

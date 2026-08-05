@@ -15,9 +15,10 @@ import math
 from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QRadialGradient
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsItem
 
+from ui.stage import puffs
 from ui.stage.emission.base import Emission
 from ui.stage.frame import BEAM_LENGTH_PX, Frame
 from ui.stage.light import LightList, linear_rgb
@@ -27,19 +28,43 @@ MAX_LASER_BEAMS = 24
 LASER_SPREAD_DEG = 50.0
 LASER_LENGTH_PX = BEAM_LENGTH_PX * 1.4   # lasers throw further than a wash
 
-PLUME_BLOBS = 5
-PLUME_RISE_PX = 150.0
-PLUME_WIDTH_PX = 120.0
-
 # Half the pen width `_LaserItem` draws with. A laser is a line to the raster
 # path and a very thin quad to the GPU, and this is where they agree.
 LASER_HALF_WIDTH_PX = 1.0
 
-# What a puff of fog is worth as light. Fog does not emit — it scatters
-# whatever is already in the air — so it sits far below a lamp, and the raster
-# path's own alpha ceiling (90/255) is the honest number to carry over.
-PLUME_SCATTER = 90.0 / 255.0
-_PLUME_RGB = (220, 225, 235)
+#: How much room the scene preview reserves for a plume. It is a single number
+#: for both machines because the emission is shared; the exact reach is a
+#: property of the profile's `PuffSpec`, which `reach()` cannot see.
+PLUME_REACH_PX = 520.0
+
+#: A parcel's density as a raster alpha ceiling.
+#:
+#: Not 255, and the difference matters more than it looks. Qt composites
+#: `SourceOver`, so overlapping parcels do not add — they saturate: a dozen of
+#: them at alpha 0.3 leave 1 - 0.7^12 = 0.99, which is white, opaque, and
+#: exactly the "filter over the stage" this is meant to be the opposite of.
+#: Kept low enough that a bank of smoke reads as *thickening* rather than as a
+#: lid, and thin enough that the stage stays visible through it.
+PLUME_ALPHA = 78.0
+
+#: Most parcels the raster path paints. The field carries a hundred or so, which
+#: the GPU rasterises for nothing but which would be a hundred large alpha-
+#: blended blits per frame here. Sampling them evenly and compensating the alpha
+#: keeps the shape of the bank while bounding the fill rate.
+PLUME_MAX_ITEMS = 30
+
+#: Below this a parcel is not worth its fill rate. See `_PlumeItem.paint`.
+PLUME_MIN_ALPHA = 0.02
+
+_PLUME_RGB = (216, 222, 233)
+_PLUME_ARGB = (_PLUME_RGB[0] << 16) | (_PLUME_RGB[1] << 8) | _PLUME_RGB[2]
+
+#: The sprite sheet a parcel is drawn with — see `_plume_sprites`. Small: a
+#: parcel is drawn several times this size, and every pixel of it costs a `sin`
+#: in the one-off build. Detail past this is invisible under the magnification
+#: and the noise it carries is soft by construction.
+SPRITE_PX = 64
+SPRITE_VARIANTS = 5
 
 
 class _LaserItem(QGraphicsItem):
@@ -140,70 +165,193 @@ class LaserFan(Emission):
         return LASER_LENGTH_PX
 
 
-class _PlumeItem(QGraphicsItem):
-    """A column of soft blobs drifting upward out of a nozzle."""
+#: The sprite sheet, once something has asked for it. See `_plume_sprites`.
+_SPRITE_CACHE: Optional[List] = None
 
-    def __init__(self, parent, origin_x: float, origin_y: float):
+
+def _plume_sprites() -> List["QPixmap"]:
+    """The shapes a parcel is drawn with, built once and then reused.
+
+    A parcel painted as a radial gradient is a *ball*, and a field of balls is
+    the thing everybody recognises as "not smoke" — no matter how many you
+    stack, the eye finds the circles. Smoke has structure at every scale, so
+    each sprite here is a soft disc multiplied by two octaves of value noise:
+    the outline goes ragged, the inside goes blotchy, and the same field of
+    parcels reads as billows.
+
+    Several of them, because one sprite repeated a hundred times is a wallpaper
+    pattern; a parcel picks one for life and turns slowly, so a bank of smoke
+    never shows the same shape twice in the same orientation.
+
+    Built lazily and cached. It is ~45 ms of Python — a `sin` per lattice
+    corner per pixel — which is why the sprites are small and why there are five
+    rather than fifty; and it cannot be done at import time anyway, because
+    `QPixmap` needs a QGuiApplication and this module is imported long before
+    there is one.
+    """
+    global _SPRITE_CACHE
+    if _SPRITE_CACHE is not None:
+        return _SPRITE_CACHE
+
+    from PyQt6.QtGui import QImage, QPixmap
+
+    sprites = []
+    half = SPRITE_PX / 2.0
+    for variant in range(SPRITE_VARIANTS):
+        image = QImage(SPRITE_PX, SPRITE_PX, QImage.Format.Format_ARGB32)
+        image.fill(0)
+        seed = variant * 977 + 13
+        for y in range(SPRITE_PX):
+            dy = (y + 0.5 - half) / half
+            for x in range(SPRITE_PX):
+                dx = (x + 0.5 - half) / half
+                r = math.hypot(dx, dy)
+                if r >= 1.0:
+                    continue
+                # A soft disc, gone well before the edge so no sprite can ever
+                # show its own square.
+                falloff = math.exp(-2.6 * r * r) * (1.0 - _smoothstep(0.62, 1.0, r))
+                if falloff <= 0.0:
+                    continue
+                # Two octaves: one that shapes the outline, one that mottles it.
+                noise = (0.66 * _noise2(dx * 2.1, dy * 2.1, seed)
+                         + 0.34 * _noise2(dx * 5.3, dy * 5.3, seed + 41))
+                alpha = falloff * (0.30 + 1.40 * noise)
+                value = int(max(0.0, min(1.0, alpha)) * 255)
+                if value:
+                    image.setPixel(x, y, (value << 24) | _PLUME_ARGB)
+        sprites.append(QPixmap.fromImage(image))
+    _SPRITE_CACHE = sprites
+    return sprites
+
+
+def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+    t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _noise2(x: float, y: float, seed: int) -> float:
+    """Value noise in 0..1. Small, self-contained, and only ever run while the
+    sprite sheet is being built — never per frame."""
+    ix, iy = math.floor(x), math.floor(y)
+    fx, fy = x - ix, y - iy
+    fx = fx * fx * (3.0 - 2.0 * fx)
+    fy = fy * fy * (3.0 - 2.0 * fy)
+    def corner(cx, cy):
+        h = math.sin((cx * 127.1 + cy * 311.7 + seed) * 0.7548) * 43758.5453
+        return h - math.floor(h)
+    top = corner(ix, iy) + (corner(ix + 1, iy) - corner(ix, iy)) * fx
+    bottom = (corner(ix, iy + 1)
+              + (corner(ix + 1, iy + 1) - corner(ix, iy + 1)) * fx)
+    return top + (bottom - top) * fy
+
+
+class _PlumeItem(QGraphicsItem):
+    """The machine's live parcels, painted.
+
+    Reads the same `PuffField` the GPU density map is built from, so the two
+    paths cannot disagree about where the smoke is — and so the hang after the
+    channel closes is visible on a machine with no usable GL driver too.
+    """
+
+    def __init__(self, parent):
         super().__init__(parent)
-        self._origin = QPointF(origin_x, origin_y)
         self.setZValue(-1)
-        self._output = 0.0
-        self._phase = 0.0
+        # Smoke is not a thing you can click on, and a bank of it covers most of
+        # the stage — left hit-testable it would swallow every press meant for
+        # the fixture underneath, or for the stage behind it.
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._puffs = ()
+        self._bounds = QRectF()
+        self._stride = 1
         #: False once the GPU layer draws this plume instead.
         self.enabled = True
 
-    def set_plume(self, output: float, phase: float) -> None:
+    def set_puffs(self, field) -> None:
+        """Adopt the field. Held by reference: it is refilled in place every
+        frame, and `set_puffs` is called right after it was."""
         self.prepareGeometryChange()
-        self._output = output
-        self._phase = phase
-        self.setVisible(self.enabled and output > 0.01)
+        self._puffs = field
+        self._bounds = _bounds_of(field)
+        # Paint every n-th parcel, so the fill rate is bounded by the sprite
+        # count rather than by how long the machine has been running.
+        self._stride = max(1, (len(field) + PLUME_MAX_ITEMS - 1)
+                           // PLUME_MAX_ITEMS)
+        self.setVisible(self.enabled and len(field) > 0)
         self.update()
 
     def boundingRect(self) -> QRectF:
-        return QRectF(self._origin.x() - PLUME_WIDTH_PX,
-                      self._origin.y() - PLUME_RISE_PX - PLUME_WIDTH_PX,
-                      PLUME_WIDTH_PX * 2, PLUME_RISE_PX + PLUME_WIDTH_PX * 2)
+        # Derived from what is actually in the air rather than from the spec's
+        # worst case: a parcel at the end of its life is enormous and invisible,
+        # and reserving room for it would repaint a quarter of the stage.
+        return self._bounds
 
     def paint(self, painter: QPainter, option, widget) -> None:
-        if self._output <= 0.01:
-            return
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        for index in range(PLUME_BLOBS):
-            # Each blob is further along the same rise, so the column looks
-            # continuous rather than like five separate puffs.
-            travel = ((self._phase + index / PLUME_BLOBS) % 1.0)
-            centre = QPointF(self._origin.x(),
-                             self._origin.y() - travel * PLUME_RISE_PX)
-            radius = PLUME_WIDTH_PX * (0.25 + 0.75 * travel)
-            # Thins as it rises and spreads — fog does not stay a ball.
-            alpha = int(90 * self._output * (1.0 - travel))
-            if alpha <= 0:
+        sprites = _plume_sprites()
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        # Skipping parcels thins the bank, so what is drawn carries their share.
+        share = min(2.5, float(self._stride))
+        for index, puff in enumerate(self._puffs):
+            if index % self._stride:
                 continue
-            gradient = QRadialGradient(centre, radius)
-            near = QColor(220, 225, 235, alpha)
-            far = QColor(220, 225, 235, 0)
-            gradient.setColorAt(0.0, near)
-            gradient.setColorAt(1.0, far)
-            painter.setBrush(QBrush(gradient))
-            painter.drawEllipse(centre, radius, radius)
+            alpha = PLUME_ALPHA * min(1.0, puff.density) * share / 255.0
+            # The parcels at the end of their life are both the faintest and by
+            # far the largest, so this floor drops what costs the most fill rate
+            # and contributes the least. It is the whole difference between a
+            # bank of smoke costing a few milliseconds and costing twenty.
+            if alpha <= PLUME_MIN_ALPHA:
+                continue
+            sprite = sprites[puff.variant % len(sprites)]
+            painter.save()
+            painter.translate(puff.x, puff.y)
+            painter.rotate(math.degrees(puff.spin))
+            painter.setOpacity(min(1.0, alpha))
+            painter.drawPixmap(
+                QRectF(-puff.radius, -puff.radius,
+                       puff.radius * 2.0, puff.radius * 2.0),
+                sprite, QRectF(0, 0, SPRITE_PX, SPRITE_PX))
+            painter.restore()
+
+
+def _bounds_of(field) -> QRectF:
+    """The rectangle the live parcels occupy, in body-local coordinates."""
+    left = top = right = bottom = None
+    for puff in field:
+        if left is None:
+            left, top = puff.x - puff.radius, puff.y - puff.radius
+            right, bottom = puff.x + puff.radius, puff.y + puff.radius
+            continue
+        left = min(left, puff.x - puff.radius)
+        top = min(top, puff.y - puff.radius)
+        right = max(right, puff.x + puff.radius)
+        bottom = max(bottom, puff.y + puff.radius)
+    if left is None:
+        return QRectF()
+    return QRectF(left, top, right - left, bottom - top)
 
 
 class FogPlume(Emission):
-    """What comes out of a hazer or a smoke machine."""
+    """What comes out of a hazer or a smoke machine.
+
+    The parcels live in a `PuffField`, not in this frame's DMX: a smoke machine
+    that has just been closed is still full of smoke, and that hang is the whole
+    difference between smoke and an effect switching off. Which machine this is
+    comes from the profile's `fog_spec` — a hazer's ceiling is low and its
+    parcels are thin, a smoke machine's are dense and short-lived.
+    """
 
     animates = True
 
-    # How fast the column climbs, in plume-lengths per second.
-    RISE_HZ = 0.25
-
     def build(self) -> None:
         origin_x, origin_y = self.body.aim_origin()
-        self.plume = _PlumeItem(self.body, origin_x, origin_y - self.body.height / 2)
+        self.origin = (origin_x, origin_y - self.body.height / 2.0)
+        self.field = puffs.PuffField(
+            getattr(self.body, "fog_spec", puffs.HAZER))
+        self.plume = _PlumeItem(self.body)
 
     def render(self, frame: Frame) -> None:
-        output = frame.state.atmosphere.output
-        self.plume.set_plume(output, (frame.t * self.RISE_HZ) % 1.0)
+        self.field.update(frame.t, frame.state.atmosphere.output, self.origin)
+        self.plume.set_puffs(self.field)
 
     def set_raster_light_visible(self, visible: bool) -> None:
         self.plume.enabled = visible
@@ -211,24 +359,17 @@ class FogPlume(Emission):
             self.plume.setVisible(False)
 
     def emit_lights(self, frame: Frame, out: LightList) -> None:
-        output = frame.state.atmosphere.output
-        if output <= 0.01:
-            return
-        phase = (frame.t * self.RISE_HZ) % 1.0
-        origin_x, origin_y = self.body.aim_origin()
-        origin_y -= self.body.height / 2.0
+        # Medium, not light: what the fog pass integrates other fixtures' beams
+        # through. `render` has already advanced the field for this frame.
         rgb = linear_rgb(_PLUME_RGB)
-        for index in range(PLUME_BLOBS):
-            # Each blob is further along the same rise, so the column looks
-            # continuous rather than like five separate puffs.
-            travel = (phase + index / PLUME_BLOBS) % 1.0
-            # Thins as it rises and spreads — fog does not stay a ball.
-            level = PLUME_SCATTER * output * (1.0 - travel)
-            if level <= 0.0:
-                continue
-            out.add_blob(origin_x, origin_y - travel * PLUME_RISE_PX, rgb,
-                         level, PLUME_WIDTH_PX * (0.25 + 0.75 * travel))
+        for puff in self.field:
+            out.add_blob(puff.x, puff.y, rgb, puff.density, puff.radius,
+                         z=puff.z, z_extent=puff.z_extent)
+
+    def cleanup(self) -> None:
+        self.field.clear()
+        self.plume.set_puffs(self.field)
 
     @classmethod
     def reach(cls, fdef) -> float:
-        return PLUME_RISE_PX
+        return PLUME_REACH_PX

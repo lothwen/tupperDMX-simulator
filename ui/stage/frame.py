@@ -20,11 +20,18 @@ from core.fixture_state import FixtureState
 
 # How far a beam reaches into the stage image, in scene units. Kept here rather
 # than in the cone that draws it because the scene preview reserves room for it.
-BEAM_LENGTH_PX = 320
+BEAM_LENGTH_PX = 1220
 
 # 90 degrees is straight down the image — where every cone pointed before
 # fixtures could aim, so a fixture with no pan/tilt draws exactly as it did.
 STRAIGHT_DOWN_DEG = 90.0
+
+#: How much of its length a beam keeps when it is aimed straight at the viewer.
+#: A shaft coming at you is short on the picture and long in the room, and this
+#: is the split: the drawn length is `length_px * (FLOOR + (1 - FLOOR) *
+#: foreshorten)`. The fog march inverts it to recover the throw the fixture
+#: actually has, so the two views of one beam agree about where it ends.
+FORESHORTEN_FLOOR = 0.15
 
 _EMPTY: Mapping = {}
 

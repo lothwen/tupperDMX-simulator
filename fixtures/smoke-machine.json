@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "smoke-machine",
+  "categories": [
+    "Smoke"
+  ],
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2026-08-04",
+    "lastModifyDate": "2026-08-04"
+  },
+  "comment": "A generic smoke machine: dense, local puffs that rise, spread and keep hanging long after the channel closes.",
+  "physical": {
+    "dimensions": [
+      420,
+      240,
+      320
+    ]
+  },
+  "availableChannels": {
+    "Fog Output": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 7],
+          "type": "NoFunction"
+        },
+        {
+          "dmxRange": [8, 255],
+          "type": "FogOutput",
+          "fogOutputStart": "weak",
+          "fogOutputEnd": "strong"
+        }
+      ]
+    },
+    "Fog Type": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 127],
+          "type": "FogType",
+          "fogType": "Fog"
+        },
+        {
+          "dmxRange": [128, 255],
+          "type": "FogType",
+          "fogType": "Haze"
+        }
+      ]
+    }
+  },
+  "modes": [
+    {
+      "name": "1ch",
+      "shortName": "1ch",
+      "channels": [
+        "Fog Output"
+      ]
+    },
+    {
+      "name": "2ch",
+      "shortName": "2ch",
+      "channels": [
+        "Fog Output",
+        "Fog Type"
+      ]
+    }
+  ]
+}

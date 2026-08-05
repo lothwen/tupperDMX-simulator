@@ -518,6 +518,74 @@ def test_stage_render_prefs_roundtrip():
                 "an absurd exposure clamps to the top of the range")
 
 
+def test_volumetric_fog_prefs_roundtrip():
+    print("test_volumetric_fog_prefs_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        _assert(cfg.window.fog.enabled is False,
+                "volumetric fog is off until asked for, like the GPU stage")
+        _assert(cfg.window.fog.march_steps == 24,
+                "and the shipped step count targets integrated graphics")
+
+        _assert(cfg.window.fog.texture > 0.0,
+                "and the air is ragged out of the box — a perfectly smooth "
+                "medium integrates to a translucent sheet over the picture, "
+                "which is the one look this feature exists to avoid")
+
+        cfg.window.fog.enabled = True
+        cfg.window.fog.anisotropy = -0.4
+        cfg.window.fog.color = "#112233"
+        cfg.window.fog.march_steps = 48
+        cfg.window.fog.resolution = 0.25
+        cfg.window.fog.texture = 0.4
+        cfg.window.fog.texture_scale = 500.0
+        cfg.save()
+
+        again = Config.load().window.fog
+        _assert(again.enabled is True, "the whole block survives a save/load")
+        _assert(abs(again.anisotropy + 0.4) < 1e-9, "including a backward g")
+        _assert(again.color == "#112233", "and the scattering colour")
+        _assert(again.march_steps == 48 and abs(again.resolution - 0.25) < 1e-9,
+                "and the quality settings")
+        _assert(abs(again.texture - 0.4) < 1e-9
+                and abs(again.texture_scale - 500.0) < 1e-9,
+                "and how ragged the air is, and at what size")
+
+        # Nothing reaching a shader may be out of range: a march of 0 steps
+        # draws nothing and a g of exactly 1 is a division by zero.
+        prefs.write_text(json.dumps({"window": {"fog": {
+            "march_steps": 0, "anisotropy": 1.0, "resolution": 8.0,
+            "color": "rgb(1,2,3)", "max_distance": -50, "texture": 4.0,
+        }}}))
+        fog = Config.load().window.fog
+        _assert(fog.march_steps >= 4, f"steps clamp up ({fog.march_steps})")
+        _assert(fog.texture <= 3.0,
+                f"raggedness has a ceiling — past it the noise has stopped "
+                f"getting coarser and gone two-tone ({fog.texture})")
+        _assert(fog.texture > 1.0,
+                f"but the ceiling is well past 1: clamping the thin side of "
+                f"the noise against empty air is what separates billows into "
+                f"banks, so it is the exaggerated end of the control rather "
+                f"than the broken end ({fog.texture})")
+        _assert(abs(fog.anisotropy) < 1.0,
+                f"g stops short of the singularity ({fog.anisotropy})")
+        _assert(fog.resolution <= 1.0,
+                f"fog is never marched above screen resolution ({fog.resolution})")
+        _assert(fog.color == "#dfe4ee",
+                f"an unparseable colour falls back rather than reaching GLSL "
+                f"({fog.color})")
+        _assert(fog.max_distance > 0.0, "and the slab has depth")
+
+        # A prefs file written before this feature existed must still load.
+        prefs.write_text(json.dumps({"window": {"stage_gpu": True}}))
+        older = Config.load().window
+        _assert(older.stage_gpu is True and older.fog.enabled is False,
+                "prefs from before volumetric fog load with it simply off")
+
+
 def test_the_launcher_reads_the_stage_gpu_pref():
     """The launcher decides whether to ask Qt for a desktop-GL surface, and it
     has to do that BEFORE QApplication exists — so it reads userprefs directly
@@ -572,6 +640,7 @@ def main():
     test_audio_config_validation()
     test_next_free_channel()
     test_stage_render_prefs_roundtrip()
+    test_volumetric_fog_prefs_roundtrip()
     test_the_launcher_reads_the_stage_gpu_pref()
     print("\nALL TESTS PASSED")
 

@@ -14,6 +14,7 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
+from ui.stage import puffs
 from ui.stage.base import BodyFixture
 from ui.stage.emission.base import NoEmission
 from ui.stage.emission.volumetric import FogPlume
@@ -26,7 +27,7 @@ NOZZLE_COLOR = QColor(60, 60, 68)
 STAND_COLOR = QColor(38, 38, 42)
 
 
-@register_renderer("Hazer", "Smoke")
+@register_renderer("Hazer")
 class HazerFixture(BodyFixture):
     """A box with a nozzle, and the plume coming out of it.
 
@@ -34,7 +35,19 @@ class HazerFixture(BodyFixture):
     fixture's beam visible. Any fixture resolving a fog output contributes, not
     just this profile — plenty of movers have a hazer built in — but this is the
     one that draws a plume.
+
+    A hazer's ceiling is low on purpose (`puffs.HAZER.max_output`): what it
+    makes is a thin, even layer that fills a room, and a hazer that could put
+    out a smoke machine's density would be a smoke machine.
     """
+
+    #: Which machine this is, for the plume's parcels.
+    fog_spec = puffs.HAZER
+
+    #: What to weigh this fixture's output as when its definition declares no
+    #: OFL `fogType`. Without it a machine's *category* — the one thing every
+    #: definition does declare — was never consulted at all.
+    default_fog_kind = "Haze"
 
     def build_housing(self) -> None:
         width, height = self.width, self.height
@@ -52,6 +65,21 @@ class HazerFixture(BodyFixture):
 
     def aim_origin(self):
         return self.width / 2.0, self.height * 0.25
+
+
+@register_renderer("Smoke")
+class SmokeFixture(HazerFixture):
+    """The same box, making something else entirely.
+
+    A smoke machine puts out dense, local parcels that rise, spread and take the
+    better part of a minute to thin out — so closing its channel does not clear
+    the stage, and that hang is what reads as smoke rather than as an effect
+    being switched off. It is the *lower* contributor to stage-wide haze for the
+    same reason: fog stays where it was made instead of filling the room.
+    """
+
+    fog_spec = puffs.SMOKE
+    default_fog_kind = "Fog"
 
 
 @register_renderer("Fan")

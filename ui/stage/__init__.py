@@ -35,7 +35,7 @@ from ui.stage.profiles import (
     BlinderFixture, ColorChangerFixture, DimmerFixture, FanFixture,
     FlowerFixture, GenericStageFixture, HazerFixture, LampFixture,
     LaserFixture, MovingHeadFixture, PixelBarFixture, ScannerFixture,
-    StandFixture, StrobeFixture,
+    SmokeFixture, StandFixture, StrobeFixture,
 )
 
 __all__ = [
@@ -49,5 +49,5 @@ __all__ = [
     "BlinderFixture", "ColorChangerFixture", "DimmerFixture", "FanFixture",
     "FlowerFixture", "GenericStageFixture", "HazerFixture", "LampFixture",
     "LaserFixture", "MovingHeadFixture", "PixelBarFixture", "ScannerFixture",
-    "StandFixture", "StrobeFixture",
+    "SmokeFixture", "StandFixture", "StrobeFixture",
 ]

@@ -322,7 +322,57 @@ bundled).
     profile — plenty of movers have one built in), sources combine without ever
     exceeding full, and the level drifts on the shared clock with a ~1.5 s
     attack and ~12 s decay because haze hangs in a room. The manual baseline is
-    `config.window.stage_haze`, edited by the HAZE slider on the edit toolbar.
+    `config.window.stage_haze`, edited by the HAZE slider on the edit toolbar —
+    which goes through `StageController.set_haze_baseline` → `Atmosphere.settle`
+    (**straight to the target, no drift**: the drift exists so a hazer coming on
+    reads as haze filling a room, and a hand on a slider is not that) →
+    `refresh_air()`, which re-renders every body. Both halves are load-bearing:
+    the air is not something a body is *told* about — each reads
+    `atmosphere.level` on the frame it happens to be drawing — so without the
+    redraw the slider did nothing at all on a stage standing still, which is
+    exactly how it was reported.
+    `Fog` is weighed **below** `Haze` (0.6 vs 1.0) — fog stays where it was made,
+    haze fills the room, and it is the room that makes everyone's beam visible.
+    A definition that declares no OFL `fogType` falls back to its profile's
+    `BodyFixture.default_fog_kind`, so the *category* is finally consulted.
+  - **`puffs.py` — smoke that outlives its channel.** A hazer and a smoke machine
+    make the same stuff and differ in how much, how local and for how long, so a
+    `PuffField` holds discrete parcels with a birth time, and a machine switched
+    off does not clear the stage. That hang is the whole difference between smoke
+    and an effect being switched off, and it cannot be a function of the current
+    DMX value — which is what the five procedural blobs it replaced were.
+    **Every quantity is derived from a parcel's age, never integrated**, so the
+    field can be updated at 30 Hz, at 3 Hz or twice with an hour between and look
+    the same; there is no accumulated state to drift. What it derives is meant to
+    be recognisable as smoke: a parcel **rises and stops rising** (buoyancy
+    decaying over `rise_decay_s` — fog is a cold heavy fluid being pushed by a
+    fan, and a column that climbed at a constant rate filed off the top of the
+    picture in formation, which is the most obvious tell there is); it **spreads
+    outward and downwind** (its own `spread_px_s` either side plus the room's
+    shared `wind_px_s`, which is what turns a column into a layer that reaches
+    the wings); it **curls** (`turbulence_px`, growing as it slows); it **grows by
+    diffusion** (`radius = sqrt(r0² + 2·D·age)` — fast then slowing); and it
+    **thins because it grew**, density diluted by `(r0/r)²`, with the lifetime
+    only trimming a tail nobody can see. Two specs: `HAZER` (`max_output`
+    **0.35** — the low ceiling is what "a thin layer" means — 110 parcels over
+    28 s, each almost nothing, travelling ±1700 px so it really does fill the
+    room) and `SMOKE` (1.0, 84 over 17 s, dense, ±750 px: a bank, not the whole
+    stage). A ring, so a machine left running for an hour holds a fixed number of
+    parcels. Qt-free, and **both** renderers read the same field, so `_PlumeItem`
+    and the GPU density map cannot disagree about where the smoke is.
+    `HazerFixture`/`SmokeFixture` are separate profiles now (they shared one
+    class); the spec is the only thing that differs.
+    On the raster path `_PlumeItem` draws each parcel as one of five **noisy
+    sprites** (`_plume_sprites`, a soft disc times two octaves of value noise,
+    built once, ~45 ms) rotated by the parcel's own `spin` — a parcel drawn as a
+    radial gradient is a *ball*, and the eye finds the circles however many are
+    stacked. It paints at most `PLUME_MAX_ITEMS` of them and skips any below
+    `PLUME_MIN_ALPHA`: the oldest parcels are both the faintest and by far the
+    largest, so that floor is the difference between a bank of smoke costing
+    ~4 ms a frame and costing twenty. `PLUME_ALPHA` is deliberately well under
+    255 because Qt composites `SourceOver` — overlapping parcels *saturate*
+    rather than add, and a dozen at 0.3 leave 0.99, which is the opaque white
+    lid this is meant to be the opposite of.
   - **`light.py` — the third stage, and the GPU's view of the same frame.** A
     brush is 8-bit sRGB: it cannot hold "twice as bright as white", and two of
     them overlapping do not add. Both are things a rig does, so every emission
@@ -362,6 +412,146 @@ bundled).
     GL having *succeeded* — which also keeps every offscreen/headless caller on
     raster, since nothing sets `STAGE_GPU_ACTIVE` there. Note `QWidget.grab()`
     cannot read back a GL viewport: scripted stage screenshots need raster.
+  - **`gpu/fog.py` — volumetric fog** (`config.window.fog.enabled`, off by
+    default, needs `stage_gpu`). The switch is on the **stage's edit toolbar**,
+    beside the sliders it gates, as well as in Settings ▸ VIRTUAL STAGE — with it
+    only in Settings, every slider on that FOG row silently did nothing, which is
+    indistinguishable from a broken control and was duly reported as one. The row
+    greys itself while the march is off and re-reads the setting on `showEvent`,
+    because Settings can change it and the toolbar outlives that dialog; and
+    `MainWindow` calls `StageController.apply_stage_config()` after Settings,
+    because the dialog hands back a **new** `StageFogConfig` object and the light
+    layer would otherwise go on holding the old one (ticking the box did nothing
+    until a relaunch). Inserted between the
+    accumulate and the resolve, so fog lands in the HDR buffer *before* the
+    tonemap and is simply more light. Three passes: a **medium map** (BLOB
+    instances additively rasterised into a 1/8-scale RG16F picture of the air —
+    density, and its depth extent stored density-**weighted** so it averages
+    rather than sums), the **march**, and a **temporal** average.
+    `_pack()` partitions lights from media in one walk, back to back in one
+    upload, so the fog pass only moves an attribute offset.
+    - **The renderer has no depth buffer and no camera, and needs neither.** The
+      projection is genuinely orthographic (`u_scene_to_clip` is affine, no
+      perspective divide), so a pixel's view ray is exactly
+      `(scene_x, scene_y, −camera_z + t)`: the scene coordinate under a pixel
+      *is* its world XY, exactly rather than approximately. Depth is an analytic
+      plane, not a buffer. `foreshorten` is already `|cos(tilt)|`, so with
+      `axis_deg` it gives a real 3D beam direction — **`STRIDE` stays 16 and no
+      instance attribute was added.**
+    - **One bounded quad per light, not a fullscreen light loop**, which is why
+      the cost follows lit screen area and the light count stops mattering. The
+      one fullscreen draw is the ambient term (same program, `u_ambient_pass`).
+    - **The segment is solved, not swept, and that is a correctness fix.** A beam
+      is a thin sheet in depth (a 25° par is ~66 units thick) while an even march
+      over a 1400-unit slab steps ~58 at a time: two samples of twenty-four
+      landed inside the cone and the shaft did not appear at all. Each ray is
+      clipped to the light's bounding-sphere chord and then, for a cone, to the
+      cone itself (a quadratic; `a <= 0` means the ray is inside the opening
+      angle — a beam down the lens — and keeps the sphere). Pinned by
+      `tests/test_fog_math.py`.
+    - **Two calibrations that are not fudges.** `scatter_gain` divides
+      Henyey-Greenstein by its **broadside** value, so `scattering = 1.0` means
+      "as bright as the beam always looked" instead of a physical unit nothing
+      else here uses — the same choice `forward_scatter` already made.
+      `BEAM_RADIANCE` quotes a lamp's brightness in the units `density` uses,
+      because density is a 0..1 number rather than a concentration. Without them
+      the integral is right and invisible (~0.01 against a lamp's 0.06).
+    - `FOG_POINT_REACH` is 10 lamp-radii, **not** the sprite's `GLOW_REACH` of
+      60: a flat 2D halo and the same halo integrated along a 1400-unit ray are
+      not the same quantity, and using 60 washed the whole stage out and showed
+      each quad's own edges as seams.
+    - **The air is ragged, and it drifts** (`fog.texture` 0..3,
+      `fog.texture_scale`, the `turbulence()` fbm in `_FOG_COMMON` flowing at
+      `FLOW_PX_S`). This is the difference between fog and a filter: a medium map
+      of soft round parcels over a baseline that varies only with height is, at
+      every scale anyone looks at, flat — so the shaft through it is flat too,
+      and the whole thing reads as a translucent sheet laid over the picture,
+      which is what it looked like. Two octaves, one for the billows and one for
+      their edges, clamped at zero so the thin side can empty a pocket of air
+      completely; the holes are what make it read as volume. `texture` is the
+      headline control of the whole feature and the toolbar says so — it leads
+      the FOG row, captioned and coloured as a heading, with nearly twice the
+      travel of the rest. Three things make it *land*, all pinned by
+      `tests/test_fog_math.py` against a Python mirror of the GLSL:
+      - **`TEXTURE_CONTRAST` stretches the noise before `texture` scales it.**
+        Value noise is a weighted average of eight lattice hashes, so it crowds
+        its own middle: two raw octaves swing about a fifth either side of the
+        smooth field, and modulating a density by ±20% is a faint dirtying of a
+        flat sheet however far the slider goes — which is exactly how "the
+        texture slider does nothing much" was reported. Stretched, the shipped
+        setting runs the air from ~0.2× to ~1.8× and the top of the range leaves
+        a quarter of it completely clear: banks of smoke, not more haze.
+      - **The fine octave is domain-warped by the coarse one** (`FINE_WARP`),
+        which costs no extra noise lookup — the displacement is a value already
+        in hand — and is the whole difference between smoke that curls and a
+        field of round blobs.
+      - **The two octaves drift at different speeds** (`FINE_DRIFT`). One rigid
+        field sliding past reads as a texture behind the picture; two shearing
+        past each other read as air churning while it travels. The flow is in
+        scene units per second and deliberately NOT scaled by feature size, so
+        big billows are the ones whose travel you can follow across the stage.
+    - **Drifting air is a moving picture, and is owed frames.** The noise flows
+      with the clock, so the march looks different every tick with the rig
+      standing perfectly still — and `_frame_signature` cannot see that, because
+      time is deliberately not in it: putting it there would make `_settle` reset
+      its own countdown every frame, which is the spin that countdown exists to
+      stop. So `LightLayer.air_is_drifting()` answers the question and
+      `StageController._advance_atmosphere` — the one clock subscription that is
+      never conditional — acts on it, which also paces the redraw at the 30 Hz
+      everything else on the stage animates at instead of as fast as the
+      compositor will take frames. Fog off, `texture` at 0, or a march that would
+      draw nothing all say no, and the stage goes back to costing nothing at
+      rest. Pinned by `tests/test_light_list.py` and `test_stage_features.py`.
+    - The **ambient** term lights the baseline haze at `AMBIENT_HAZE_WEIGHT`
+      (0.09), not at full and not at zero. Not full because the backdrop is a
+      photograph of an already-lit room whose air is already in the picture, and
+      lighting it a second time lifts the frame into flat grey. Not zero — which
+      it was — because then the HAZE slider did nothing you could see unless a
+      fixture happened to be throwing a shaft through it, and "is the room hazy"
+      is the first question that control gets asked. Machine-made smoke is *not*
+      scaled by it: nothing put that in the photograph.
+    - With fog on, the march owns the shaft and `LIGHT_FRAG`'s CONE keeps only
+      its near-field lens core (`u_fog_active`), or one beam would be drawn twice.
+    - **Three** fog framebuffers, not two: averaging A into B while sampling B is
+      a feedback loop — undefined in GL, and on the driver this was written
+      against it compounded instead of averaging, ramping the fog to white over
+      four frames. The march gets its own buffer; the history ping-pongs.
+    - `QOpenGLFramebufferObject` hands out a **GL_NEAREST** texture. Every target
+      here is magnified or sampled along a ray, so `_smooth()` sets GL_LINEAR —
+      the "free bilinear upsample" is only free if it is asked for.
+    - **An empty light list is not an empty frame.** `LightLayer.render` bails
+      on `count == 0`, which is right until there is fog: the ambient pass
+      lights the room's baseline haze and is stage-wide, needing no fixture and
+      no parcel of smoke. So the guard asks `_air_worth_drawing()` as well
+      (fog on, `stage_haze` > 0 **and** `light_intensity` > 0 — the medium and
+      the light that shows it), and `_accumulate` still clears the HDR buffer on
+      the way through, or a dark stage would keep the last lit frame's light for
+      as long as the fog kept the layer running. Without this the haze vanished
+      the instant the last beam went out and the last puff aged away, which is
+      the one moment a hazy room should read as most obviously hazy.
+    - **The stage clip is switched OFF for the march** (`LightLayer._march_fog`),
+      because GL scissors in absolute framebuffer pixels while the clip is a box
+      in *surface* pixels — and every fog target is a different size. Left
+      enabled it cuts each of them at the same absolute column, which is one bug
+      wearing two faces: the half-res march loses everything left of the
+      letterbox bar and `_resolve` stretches that boundary to twice the bar
+      width (a hard vertical line across the stage, fog only to the right of
+      it), while the medium map, all of ~192 texels wide, is missed *entirely*
+      by a clip starting past it — so a hazer at full puts no smoke on stage at
+      all. Confining the fog to the stage image is `_resolve`'s job; it is
+      scissored, and the clip goes back on for it. Pinned by
+      `tests/test_light_list.py`.
+    - The march is dithered per frame, so `LightLayer.request_repaint` asks for
+      `CONVERGE_FRAMES` more repaints after the rig settles **and then stops** —
+      a still rig still costs nothing. This is the only thing on the stage that
+      asks for a repaint it was not given a reason for, so it is also the only
+      thing that can spin, and the countdown is the whole safety: it is reset by
+      `_frame_signature()` changing (the packed primitives, the haze, the fog
+      settings), **not** by the march having run. Resetting it per march — which
+      is what it did — means it never reaches zero, every frame asks for another,
+      and the stage redraws flat out for as long as fog is switched on. Pinned by
+      `tests/test_light_list.py`. Smoke drifting every frame does keep it
+      redrawing, which is correct: the picture really is different.
 - **`core/fixture_state.py`**: the Qt-free photometric model, covering **all 43
   OFL capability types** through a dispatch table (`_HANDLERS`) rather than a
   branch chain — "what does this app do with capability X" is one dict lookup.
@@ -534,8 +724,12 @@ Storage splits across three places:
   brand-new shows), bundled via PyInstaller, resolved at runtime by
   `shipped_config_path()` (`_MEIPASS`).
 - **`userprefs.json`** (user-writable, MACHINE-level only): `window` — incl.
-  the stage's `stage_haze`/`stage_gpu`/`stage_exposure`, machine-level because
-  whether there is a usable GL driver is a property of the box — `artnet`
+  the stage's `stage_haze`/`stage_gpu`/`stage_exposure` and the nested
+  `fog` (`StageFogConfig`: volumetric fog's look — incl. `texture`/
+  `texture_scale`, how ragged the air is and at what size — and what it costs;
+  note there is deliberately no `fog_density`, because that IS `stage_haze`, and
+  one density control beats two), machine-level because whether there is a usable
+  GL driver is a property of the box — `artnet`
   — the controller's Art-Net *output* target — `volume` (audio/metronome/voice
   buses), `logging`, `io` — the explicit I/O routing, `IOConfig` — `audio`
   (`AudioConfig`: output device id, click/voice channel routing mode, global
@@ -746,7 +940,10 @@ interpolates present↔future DMX to avoid blackout artifacts.
 - `fixtures/` (repo root) — shipped fixture-type definitions: a strict OFL
   `*.json` per type plus its optional `*.tdmx.json` sidecar. A **subfolder is a
   manufacturer** and namespaces the type key (`ADJ/Focus Spot 4Z`); files at the
-  root keep their bare key and show as "Generic" in the browser.
+  root keep their bare key and show as "Generic" in the browser. `hazer` and
+  `smoke-machine` are the two generic fog machines: nothing shipped declared a
+  `Fog`/`FogOutput`/`FogType` capability before them, so the whole fixture-driven
+  half of the atmosphere was unreachable out of the box.
 - `audio/` — the audio engine package (no eager re-exports): `mixer.py`
   (Qt-free three-bus stereo mixer + routing modes + beep synthesis),
   `engine.py` (`AudioEngine`: the push-mode QAudioSink bridge on the
@@ -762,9 +959,11 @@ interpolates present↔future DMX to avoid blackout artifacts.
   `DesignableFixture` design-mode move/select + drag-release write-back,
   `FixtureLabel`, `GlowingEllipse`, geometry helpers and the `BodyFixture`
   pipeline — `registry.py`, `frame.py`, `geometry.py`, `clock.py`,
-  `atmosphere.py`, `wheelart.py`, `profiles/` (`lamp.py`, `array.py`,
+  `atmosphere.py`, `puffs.py` (the Qt-free `PuffField`: smoke with a lifetime),
+  `wheelart.py`, `profiles/` (`lamp.py`, `array.py`,
   `motorised.py`, `atmospheric.py`), `emission/` (`cone.py`, `surface.py`,
-  `volumetric.py`), `features/` (`level.py`, `beamshape.py`, `wheels.py`), and
+  `volumetric.py`), `features/` (`level.py`, `beamshape.py`, `wheels.py`),
+  `gpu/` (`layer.py`, `shaders.py`, `fog.py` — the volumetric march), and
   `beam.py`/`pixelbar.py`/`blinder.py`/`wash.py`/`strobe.py`/`generic.py` as
   shims for the names that moved),
   `fixture_designer.py` (edit-mode toolbar + the per-selection inspector,
@@ -822,8 +1021,21 @@ interpolates present↔future DMX to avoid blackout artifacts.
   with no optics throwing no cone, a prism dividing by 1/√N) and
   `test_tonemap.py` mirrors the ACES fit in Python, asserting its properties
   AND that the shader's matrices are that same published pair transposed
-  exactly once — both GL-free, because CI's offscreen platform cannot make a
-  context at all. NB **`[255] * channel_count` is not a "fixture on" frame**:
+  exactly once. `test_fog_math.py` does the same for the fog: Henyey-Greenstein
+  integrating to 1 over the sphere, Beer-Lambert, exponential height fog, and —
+  the one most worth having — that every march sample lands inside the beam,
+  which is the bug that made the whole feature invisible. `test_fog_medium.py`
+  pins smoke outliving the channel that made it, the hazer's ceiling, the
+  category naming the fog a definition does not, and the three things that make
+  a field of parcels read as smoke rather than as blobs: that a machine covers
+  the stage rather than drawing a column, that a parcel stops rising instead of
+  filing off the top of the picture, and that no two parcels wear the same shape
+  in the same orientation. `test_light_list.py` also pins the one thing on the
+  stage that can spin — that the fog stops asking for repaints once the rig
+  stands still — and `test_stage_features.py` that the HAZE slider takes effect
+  at once and redraws every body. All GL-free, because CI's
+  offscreen platform cannot make a context at all — a dev box with a real
+  driver can compile and run the shaders, and that is where a look is judged. NB **`[255] * channel_count` is not a "fixture on" frame**:
   on anything with a shutter it selects a strobe, and any assertion about
   brightness then depends on when the test ran (`_lit_frame()` raises only the
   level channels).

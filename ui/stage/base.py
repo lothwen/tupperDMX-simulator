@@ -388,6 +388,12 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     #: a yoke still slewing. Emissions and features declare their own.
     profile_animates: bool = False
 
+    #: What kind of fog this profile makes when the definition declares no OFL
+    #: `fogType`. Empty for everything that is not a fog machine — and note the
+    #: fallback is only reached when the fixture itself is silent, so a mover
+    #: with a hazer built in still says what it is putting out.
+    default_fog_kind: str = ""
+
     def __init__(self, fdef: FixtureDef, x: float, y: float, *,
                  body_index: int = 0):
         super().__init__()
@@ -490,8 +496,9 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         frame.beam.visible = frame.beam.level > 0
 
         if self._makes_fog:
-            self.atmosphere.contribute(id(self), self.state.atmosphere.output,
-                                       self.state.atmosphere.kind)
+            self.atmosphere.contribute(
+                id(self), self.state.atmosphere.output,
+                self.state.atmosphere.kind or self.default_fog_kind)
         self.emission.render(frame)
         self.paint_housing(frame)
 

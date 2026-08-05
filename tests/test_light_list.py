@@ -25,7 +25,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
-from ui.stage import renderer_for
+from ui.stage import puffs, renderer_for
 from ui.stage.emission.cone import HardBeam
 from ui.stage.light import (
     BLOB, CONE, LINE, POINT, QUAD, LightList, linear_rgb, linear_to_srgb,
@@ -301,15 +301,251 @@ def test_a_laser_emits_lines_and_a_hazer_blobs(qapp):
     try:
         blobs = _lights(hazer, [255]).of_kind(BLOB)
         _assert(blobs, f"a running hazer emits fog blobs ({len(blobs)})")
-        _assert(all(b.intensity < 0.5 for b in blobs),
-                "fog scatters light rather than emitting it, so it stays dim")
+        # A blob is MEDIUM, not light: `intensity` is a density and the fog pass
+        # integrates other fixtures' beams through it. It is never a light
+        # source, so even a hazer at full sits far below a lit lamp.
+        _assert(all(0.0 < b.density <= puffs.HAZER.density for b in blobs),
+                "each carries a density, capped by what a hazer can make "
+                f"({puffs.HAZER.density})")
+        _assert(all(b.radius > 0.0 and b.z_extent > 0.0 for b in blobs),
+                "and an extent in the picture and in depth")
     finally:
         hazer.cleanup()
+
+    # The same channel on a smoke machine is a different medium entirely.
+    smoke = _body(ofl_factory.fdef(
+        categories=("Smoke",),
+        channels={"f": ofl_factory.channel("Fog")}))
+    try:
+        thick = _lights(smoke, [255]).of_kind(BLOB)
+        _assert(thick, f"a running smoke machine emits parcels too ({len(thick)})")
+        _assert(max(b.density for b in thick) > max(b.density for b in blobs),
+                "and they are denser than a hazer's at the same DMX")
+    finally:
+        smoke.cleanup()
+
+
+def test_the_fog_stops_asking_for_frames_once_the_rig_stands_still(qapp):
+    print("test_the_fog_stops_asking_for_frames_once_the_rig_stands_still")
+    # The march dithers each ray's start and averages a few frames, so after the
+    # picture stops changing it needs a handful more to settle — and it is the
+    # only thing on the stage that asks for a repaint it was not given a reason
+    # for. Which makes it the only thing that can spin: resetting the countdown
+    # every frame the march RAN, rather than every frame the picture CHANGED,
+    # means it never reaches zero and the stage redraws flat out for as long as
+    # fog is switched on. GL-free — none of this needs a context.
+    import ctypes
+
+    from core.config import StageFogConfig
+    from ui.stage.gpu.fog import CONVERGE_FRAMES
+    from ui.stage.gpu.layer import LightLayer
+
+    layer = LightLayer(lambda: [])
+    layer.fog = StageFogConfig(enabled=True)
+    layer._fog = object()                 # stand in for a compiled fog pass
+    layer._packed = (ctypes.c_float * 2)(1.0, 2.0)
+    layer._light_count = 1
+
+    asked = []
+    layer.request_repaint = lambda: asked.append(1)
+
+    def frame():
+        signature = layer._frame_signature()
+        changed = signature != layer._last_signature
+        layer._last_signature = signature
+        layer._settle(changed)
+
+    frame()
+    _assert(len(asked) == 1, "the first frame starts the countdown")
+    for _ in range(40):
+        frame()
+    _assert(len(asked) == CONVERGE_FRAMES,
+            f"a rig standing still goes quiet after {CONVERGE_FRAMES} frames, "
+            f"not forever ({len(asked)} over 41)")
+
+    # Something moved: a parcel of smoke drifting is a genuinely different
+    # picture, so the fog is redrawn and the countdown starts again.
+    asked.clear()
+    layer._packed = (ctypes.c_float * 2)(1.0, 9.0)
+    frame()
+    _assert(len(asked) == 1, "and starts again when the picture changes")
+    _assert(layer._converge == CONVERGE_FRAMES - 1,
+            "with a full countdown to settle into")
+
+
+def test_drifting_air_is_a_moving_picture(qapp):
+    print("test_drifting_air_is_a_moving_picture")
+    # The other half of the same invariant. The march's noise flows with the
+    # clock, so textured air genuinely looks different every frame with the rig
+    # standing perfectly still — and `_frame_signature` cannot notice, because
+    # time is deliberately not in it (putting it there would make `_settle`
+    # reset its own countdown every frame, which is the spin that countdown
+    # exists to stop). So the layer answers the question instead, and the
+    # stage's 30 Hz clock is what acts on the answer.
+    #
+    # What matters is that every way of having nothing to animate says no.
+    import ctypes
+
+    from core.config import StageFogConfig
+    from ui.stage.gpu.layer import LightLayer
+
+    layer = LightLayer(lambda: [])
+    layer._fog = object()                 # stand in for a compiled fog pass
+    layer._packed = (ctypes.c_float * 2)(1.0, 2.0)
+    layer._light_count = 1
+    layer.haze = 0.4
+
+    layer.fog = StageFogConfig(enabled=True)
+    _assert(layer.fog.texture > 0.0, "the shipped air is ragged")
+    _assert(layer.air_is_drifting(),
+            "textured air with a beam in it is a moving picture")
+
+    layer.fog = StageFogConfig(enabled=True, texture=0.0)
+    _assert(not layer.air_is_drifting(),
+            "smooth air is not: `turbulence()` returns a constant, so there is "
+            "nothing in the frame that time changes")
+
+    layer.fog = StageFogConfig(enabled=False)
+    _assert(not layer.air_is_drifting(),
+            "and neither is a stage with the march switched off")
+
+    # Nothing lit, nothing in the air and no room light to show it with: the
+    # march draws an empty frame, and an empty frame does not move.
+    layer.fog = StageFogConfig(enabled=True, light_intensity=0.0)
+    layer._light_count = 0
+    layer._medium_count = 0
+    _assert(not layer.air_is_drifting(),
+            "nor a stage where the march would draw nothing at all")
+
+    # A hazer running in the dark, though, is exactly when the drift reads.
+    layer._medium_count = 3
+    _assert(layer.air_is_drifting(),
+            "but smoke on a dark stage still drifts")
+
+
+def test_the_fog_is_marched_without_the_stage_clip(qapp):
+    print("test_the_fog_is_marched_without_the_stage_clip")
+    # The clip confining the light to the stage image is a box in SURFACE
+    # pixels, and every target the fog renders into is a different size — the
+    # march is half the surface, the medium map an eighth of the scene. GL
+    # scissors in absolute framebuffer pixels, so left enabled it cuts each of
+    # them at the same absolute column: the march loses everything left of the
+    # letterbox bar (a hard vertical line across the stage, fog only to the
+    # right of it) and the medium map, all of ~192 texels wide, is missed
+    # entirely by a clip that starts past it — so a hazer at full puts no smoke
+    # on stage at all. Both were reported; they are the same bug.
+    #
+    # GL-free: a recording stand-in for the version functions is enough, since
+    # what has to be true is about the ORDER of the state changes.
+    import ctypes
+
+    from PyQt6.QtCore import QRect
+    from PyQt6.QtGui import QMatrix4x4
+
+    from core.config import StageFogConfig
+    from ui.stage.gpu.layer import LightLayer, _SCISSOR_TEST
+
+    calls = []
+
+    class FakeGL:
+        def glEnable(self, cap):
+            calls.append(("enable", cap))
+
+        def glDisable(self, cap):
+            calls.append(("disable", cap))
+
+        def glScissor(self, x, y, w, h):
+            calls.append(("scissor", x, y, w, h))
+
+    class FakeFog:
+        def render(self, **kwargs):
+            calls.append(("march",))
+            return 7          # a texture name; the layer only truth-tests it
+
+    layer = LightLayer(lambda: [])
+    layer.fog = StageFogConfig(enabled=True)
+    layer._fns = FakeGL()
+    layer._fog = FakeFog()
+    layer._packed = (ctypes.c_float * 2)(1.0, 2.0)
+    layer._light_count = 1
+
+    # A stage letterboxed with bars either side — which is what puts `clip.x`
+    # past the medium map's whole width.
+    clip = QRect(355, 0, 964, 643)
+    layer._set_clip(clip, 643)
+    layer._march_fog(QMatrix4x4(), 1674, 643, clip)
+
+    kinds = [c[0] for c in calls]
+    _assert("march" in kinds, "the march runs")
+    marched = kinds.index("march")
+    _assert(("disable", _SCISSOR_TEST) in calls[:marched],
+            "with the stage clip switched off, so neither the half-size march "
+            "nor the 192-texel medium map is cut at a surface-pixel column")
+    _assert(("enable", _SCISSOR_TEST) in calls[marched:],
+            "and back on afterwards, because the resolve is what confines the "
+            "fog to the stage image")
+    _assert(("scissor", 355, 0, 964, 643) in calls[marched:],
+            "restored to the same box, not a stale or wider one")
+    _assert(layer._fog_texture == 7, "and the march's result is what resolves")
+
+
+def test_a_dark_stage_still_has_air_in_it(qapp):
+    print("test_a_dark_stage_still_has_air_in_it")
+    # `count == 0` is not the same question as "is there anything to draw".
+    # The march's ambient pass lights the room's own baseline haze, and that is
+    # stage-wide — it needs no fixture and no parcel of smoke. Returning early
+    # on an empty light list is why the haze vanished the instant the last beam
+    # went out and the last puff aged away, which is the one moment a hazy room
+    # should read as most obviously hazy.
+    #
+    # GL-free: the draw calls are stubbed out, because what has to be right is
+    # the decision to make them.
+    from PyQt6.QtGui import QMatrix4x4
+
+    from core.config import StageFogConfig
+    from ui.stage.gpu.layer import LightLayer
+
+    def frame(**kwargs):
+        layer = LightLayer(lambda: [])          # no bodies: nothing emitting
+        layer._fns = object()                   # already "initialised"
+        layer._fog = object()                   # stand in for a compiled pass
+        for name, value in kwargs.items():
+            setattr(layer, name, value)
+        drawn = []
+        layer._ensure_fbo = lambda w, h: None
+        layer._set_clip = lambda clip, h: None
+        layer._restore = lambda w, h: None
+        layer._accumulate = lambda m, c: drawn.append(("accumulate", c))
+        layer._march_fog = lambda m, w, h, clip: drawn.append(("march",))
+        layer._resolve = lambda w, h: drawn.append(("resolve",))
+        layer.render(QMatrix4x4(), 800, 600, clip=None)
+        return drawn
+
+    hazy = frame(fog=StageFogConfig(enabled=True), haze=0.4)
+    _assert(("march",) in hazy,
+            "a dark stage with haze in the room still marches the fog")
+    _assert(("resolve",) in hazy, "and resolves it over the scene")
+    _assert(("accumulate", 0) in hazy,
+            "clearing the HDR buffer on the way, or the frame would keep the "
+            "last lit one's light for as long as the fog kept it drawing")
+
+    _assert(frame(fog=StageFogConfig(enabled=True), haze=0.0) == [],
+            "clean air and a dark rig really is an empty frame")
+    _assert(frame(fog=StageFogConfig(enabled=True, light_intensity=0.0),
+                  haze=0.4) == [],
+            "and so is haze with nothing lighting it — the ambient pass is "
+            "what makes the air visible on its own")
+    _assert(frame(fog=StageFogConfig(enabled=False), haze=0.4) == [],
+            "with the march off there is nothing to draw the air with at all")
 
 
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
+    test_a_dark_stage_still_has_air_in_it(app)
+    test_the_fog_is_marched_without_the_stage_clip(app)
+    test_the_fog_stops_asking_for_frames_once_the_rig_stands_still(app)
+    test_drifting_air_is_a_moving_picture(app)
     test_the_buffer_is_reused_across_frames(app)
     test_colour_is_linear_not_srgb(app)
     test_a_lit_blinder_emits_a_point_per_bulb(app)

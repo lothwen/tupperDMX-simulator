@@ -33,11 +33,18 @@ from typing import Iterator, NamedTuple, Sequence, Tuple
 STRIDE = 16
 
 # What a primitive is. The layer draws each kind with its own shader.
+#
+# Four of them are LIGHT — something a fixture emits. BLOB is the odd one out:
+# it is MEDIUM, a parcel of air with something in it. Fog does not glow, it
+# scatters whatever is already there, so a blob carries a density and a tint
+# rather than a radiance, and the fog pass integrates light through it. (With
+# volumetric fog off it still draws as a faint additive puff, which is what it
+# was before and what the raster path continues to do.)
 POINT = 0.0   # a glowing lamp or bulb: radius
 CONE = 1.0    # a beam: axis_deg, length, half_width, softness, hardness
 QUAD = 2.0    # a lit face: w, h  (matrix cells, panels)
 LINE = 3.0    # a laser: axis_deg, length, half_width
-BLOB = 4.0    # fog: radius
+BLOB = 4.0    # a parcel of medium: radius, and z/z_extent in the spare slots
 
 _EMPTY: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
@@ -97,6 +104,24 @@ class Primitive(NamedTuple):
     foreshorten: float
     w: float
     h: float
+
+    # A BLOB has no axis and no throw, so it spends those two slots on the two
+    # things a parcel of medium does need. Named here so nothing has to read
+    # `axis_deg` and mean depth.
+    @property
+    def z(self) -> float:
+        """BLOB only: how far into the picture the parcel sits."""
+        return self.axis_deg
+
+    @property
+    def z_extent(self) -> float:
+        """BLOB only: how deep it reaches, either side of `z`."""
+        return self.length
+
+    @property
+    def density(self) -> float:
+        """BLOB only: `intensity` read as what it is for a medium."""
+        return self.intensity
 
 
 class LightList:
@@ -186,10 +211,21 @@ class LightList:
                     length=length, half_width=half_width)
 
     def add_blob(self, x: float, y: float, rgb: Tuple[float, float, float],
-                 intensity: float, radius: float) -> None:
-        """A puff of fog. Scatters light rather than emitting it, so it belongs
-        in the buffer at a low intensity, not as a light source."""
-        self._write(BLOB, x, y, rgb, intensity, radius=radius)
+                 density: float, radius: float, z: float = 0.0,
+                 z_extent: float = 0.0) -> None:
+        """A parcel of medium — a puff of smoke, a pocket of haze.
+
+        Not a light. `density` is how much of the air this parcel fills and
+        `rgb` is what colour it scatters, so the fog pass integrates other
+        fixtures' light *through* it rather than adding this to the frame. `z`
+        and `z_extent` place it in depth: they ride in the `axis_deg` and
+        `length` slots, which a blob has no use for.
+
+        With volumetric fog off it falls back to being drawn as a faint additive
+        puff, which is what it has always been and what the raster path does.
+        """
+        self._write(BLOB, x, y, rgb, density, radius=radius,
+                    axis_deg=z, length=z_extent)
 
     # -- reading -------------------------------------------------------
     def __len__(self) -> int:
