@@ -386,7 +386,7 @@ def test_the_capability_grid_is_data_driven(qapp):
     `value = index * 4` baked in. It is now one tile per capability, valued
     from the capability's own dmxRange — the GIFs are just artwork."""
     print("test_the_capability_grid_is_data_driven")
-    from ui.channel_affordances import (
+    from ui.fixture.affordances import (
         CapabilityGrid, affordance_for, capability_choices, grid_applies)
 
     led = resolve_fixture("ledbar")
@@ -481,7 +481,7 @@ def test_the_picker_is_discoverable_and_opens_on_a_real_click(qapp):
 def test_the_colour_wheel_is_offered_only_where_a_hue_can_land(qapp):
     print("test_the_colour_wheel_is_offered_only_where_a_hue_can_land")
     from PyQt6.QtGui import QColor
-    from ui.channel_affordances import apply_color, current_color, wheel_applies
+    from ui.fixture.affordances import apply_color, current_color, wheel_applies
 
     led, blinder = resolve_fixture("ledbar"), resolve_fixture("blinder")
     _assert(wheel_applies(led), "a fixture that mixes RGB gets a wheel")

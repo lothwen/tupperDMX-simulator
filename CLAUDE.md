@@ -108,9 +108,9 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   `dmx_data` per instance. Which class draws a fixture comes from
   `registry.renderer_for(fdef)` — never from its type name. `set_design_mode()` makes
   fixtures movable; add/change-mode/remove/drag mutate `config.fixtures` and emit
-  `fixture_added/moved/removed/selected`. Driven by `ui/fixture_designer.py` (Menu ▸
+  `fixture_added/moved/removed/selected`. Driven by `ui/fixture/designer.py` (Menu ▸
   "Design stage"). `led_bars`/`blinders` survive as read-only views.
-- **`ui/add_fixture_dialog.py`**: the fixture browser — a search/grouping rail and
+- **`ui/fixture/browser.py`**: the fixture browser — a search/grouping rail and
   tree over a detail panel rendering the OFL document (General, Channels, Modes,
   Scenes). The footer is the patch decision: DMX start (live overlap/overflow check
   against `config.get_used_dmx_channels()`), MIDI channel (**0-15, the raw MIDI
@@ -118,7 +118,7 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   patch is legal. `values()` → `(type, dmx_start, channel, mode)`, `mode` empty for a
   single-mode type; `suggest_free_dmx_start()`/`used_midi_channels()` live here and
   the inspector validates the same two things.
-- **`ui/fixture_scenes_tab.py`**: edits the fixture *library* (a type's sidecar scene
+- **`ui/fixture/scenes_tab.py`**: edits the fixture *library* (a type's sidecar scene
   banks), not the patch — so the dialog's OK/Cancel doesn't apply. It opens on a blank
   **draft** and one button writes: **Create** turns the draft into a scene in
   `_target_bank()`, **Save** overwrites the selected one; a pending change to the banks
@@ -128,14 +128,14 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   never flattened; reorder is drag-and-drop resolved to `move_requested(...)` and
   applied to the data (Qt never moves the items, or their roles go stale). Writes via
   `fixture_library.save_fixture_banks`.
-- **`ui/fixture_console.py`**: one fixture's channels as faders over a live preview,
+- **`ui/fixture/console.py`**: one fixture's channels as faders over a live preview,
   shared by the Scenes tab and the clip editor. `FaderStrip` (one fader per channel,
   coloured by `channel_family`; `set_addressable_limit` greys slots past MIDI note
   23, `set_present` dims channels a scene doesn't carry; it IS its faders) and
   `OutputCard`. `ScenePreview` **is** the stage engine — `renderer_for(fdef)`, one
   body per `body_count()`, fed raw DMX — so a look previews exactly as on stage;
   **`clear()` it before it goes away**, the bodies own timers on the shared clock.
-- **`ui/channel_affordances.py`**: controls that beat a fader, chosen from the
+- **`ui/fixture/affordances.py`**: controls that beat a fader, chosen from the
   fixture's capabilities and never from its name. `ColorWheel` writes through
   `solve_color` (`wheel_applies()` asks it rather than `color_slots`, which counts
   Cold/Warm White). `CapabilityGrid` turns a channel carrying ≥4 discrete
@@ -572,13 +572,27 @@ Every package is described under Architecture above; this is the map.
   `glow`, `metrics`, `registry`, `optics`, `frame`, `geometry`, `clock`,
   `atmosphere`, `puffs`, `wheelart`, `light`, `profiles/`, `emission/`,
   `features/`, `gpu/`.
-- `ui/` — `main_window.py`, `playlist_controller.py` (widget half; guides relink
-  silently), and the dialogs/panels named under Architecture
-  (`fixture_designer`, `add_fixture_dialog`, `fixture_scenes_tab`, `fixture_console`,
-  `channel_affordances`, `fixture_chips`, `dmx_display`, `clip_library`,
-  `toolbar_manager`, `timeline_toolbar`, `settings_dialog`, `io_flow_widget`,
-  `voice_cues_dialog`, `error_dialogs`, `about_dialog`). `ui/__init__.py` no longer
-  re-exports `StageController`/`StageView` — import them from `stage.controller`.
+- `ui/` — the desktop view, in **three layers**, and **no eager re-exports at any
+  of them**: `ui/__init__.py` is a docstring, because re-exporting the window and
+  its dialogs meant `from ui.widgets import icons` — which the timeline tracks do
+  — executed all of them and dragged in the stage engine, the MIDI worker, the DMX
+  manager and the web remote (70+ modules to import an icon factory; it is 5 now).
+  Import the submodule you want.
+  - `ui/widgets/` — leaf toolkit, no app knowledge, safe for anyone to import:
+    `icons.py`, `toggle_switch.py`, `chips.py`. `chips.FlowLayout` is the ONE flow
+    layout (the clip library kept a second copy); margins are always zero, set them
+    on the parent.
+  - `ui/fixture/` — the fixture-editing subsystem: `browser.py` (was
+    `add_fixture_dialog`), `scenes_tab.py`, `console.py`, `affordances.py` (was
+    `channel_affordances`), `designer.py`. `timeline/widgets/`'s `clip_edit` and
+    `verb_editors` reach in for `console` and `affordances`; with `ui.widgets` that
+    is the whole of the timeline's dependency on `ui`.
+  - the root — `main_window.py`, `playlist_controller.py` (widget half; guides
+    relink silently) and the rest of the dialogs/panels named under Architecture
+    (`dmx_display`, `clip_library`, `toolbar_manager`, `timeline_toolbar`,
+    `settings_dialog`, `io_flow_widget`, `voice_cues_dialog`, `error_dialogs`,
+    `about_dialog`). `StageController`/`StageView` are not here — import them from
+    `stage.controller`.
 - `dmx/` — `manager.py`, `artnet_worker.py`, `usb_worker.py`, `base.py`.
 - `midi/` — `manager.py`, `document.py`, `codec.py`, `fade_engine.py`,
   `clip_editor.py`, `scene_editor.py`, `selection_editor.py`, `constants.py`,
@@ -590,7 +604,7 @@ Every package is described under Architecture above; this is the map.
   `peaks.py`, `static/` (bundled via build.spec).
 - `timeline/` — `manager.py`, `tracks/`, `widgets/`. `clip_edit` is NOT re-exported
   from `widgets/__init__.py` — it pulls in the stage render engine via
-  `ui.fixture_console`, which the tracks themselves import; import it from
+  `ui.fixture.console`, which the tracks themselves import; import it from
   `.widgets.clip_edit` directly.
 - `tests/` — headless characterization tests, all GL-free (CI's offscreen platform
   cannot make a context). `ofl_factory.py` builds synthetic OFL documents so a
@@ -625,7 +639,7 @@ follows from that `FixtureDef`. One dispatcher, `on_midi_event_edit_by_id` — g
 hue and a palette mode), else `ClipEditDialog`; `on_add_event_requested` is the third
 door.
 
-- **Two pages, one shell.** A scene group gets the `ui/fixture_console.py` console;
+- **Two pages, one shell.** A scene group gets the `ui/fixture/console.py` console;
   any other clip gets its verb's own editor from `verb_editors.py`, picked by
   `editor_class_for(note)` off a table whose predicates mirror `handle_note_on`'s
   match arms. **Retyping resets the velocity** (`default_velocity_for`):

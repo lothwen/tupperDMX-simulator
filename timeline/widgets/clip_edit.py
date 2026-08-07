@@ -42,12 +42,12 @@ from core.fixture_library import FixtureDef, resolve_fixture, save_fixture_banks
 from midi.constants import _channel_to_velocity
 from midi.scene_editor import TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import load_scenes
-from ui.channel_affordances import (
+from ui.fixture.affordances import (
     CapabilityGrid, ColorWheel, affordance_for, apply_color, current_color,
     wheel_applies,
 )
-from ui.fixture_chips import chip
-from ui.fixture_console import (
+from ui.widgets.chips import chip
+from ui.fixture.console import (
     FaderStrip, OutputCard, default_values, fields_to_values, values_to_fields,
 )
 from tupperlogger import get_logger

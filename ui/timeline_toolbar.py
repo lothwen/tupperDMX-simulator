@@ -7,8 +7,8 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
 from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
-from ui import icons
-from ui.toggle_switch import ToggleSwitch
+from ui.widgets import icons
+from ui.widgets.toggle_switch import ToggleSwitch
 
 
 class TimelineToolbar(QWidget):

@@ -11,8 +11,8 @@ from PyQt6.QtWidgets import (
 
 from tupperlogger import get_logger
 from core.fixture_library import fixture_modes
-from ui import icons
-from ui.add_fixture_dialog import AddFixtureDialog, used_midi_channels
+from ui.widgets import icons
+from ui.fixture.browser import AddFixtureDialog, used_midi_channels
 
 
 def _separator() -> QFrame:
@@ -49,7 +49,7 @@ class StageEditToolbar(QWidget):
         self._stage = stage_controller
         self._notify = on_patch_changed
         self._on_done = on_done
-        self.logger = get_logger("ui.fixture_designer")
+        self.logger = get_logger("ui.fixture.designer")
 
         # Two rows: the patch and the air on top, the fog's look underneath.
         # The fog controls only exist on the GPU path, so on a machine without

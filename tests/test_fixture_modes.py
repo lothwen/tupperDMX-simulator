@@ -233,7 +233,7 @@ def test_add_fixture_dialog_offers_every_mode(qapp):
     print("test_add_fixture_dialog_offers_every_mode")
     from core.config import Config as RealConfig
     from stage.controller import StageController
-    from ui.fixture_designer import AddFixtureDialog
+    from ui.fixture.browser import AddFixtureDialog
 
     def body():
         stage = StageController(RealConfig())
@@ -257,7 +257,7 @@ def test_add_fixture_stores_empty_mode_for_single_mode_types(qapp):
     print("test_add_fixture_stores_empty_mode_for_single_mode_types")
     from core.config import Config as RealConfig
     from stage.controller import StageController
-    from ui.fixture_designer import AddFixtureDialog
+    from ui.fixture.browser import AddFixtureDialog
 
     single = dict(MULTIMODE)
     single["name"] = "solo"

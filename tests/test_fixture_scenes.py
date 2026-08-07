@@ -254,13 +254,13 @@ def test_a_multi_mode_fixture_writes_to_its_named_mode():
 # --- the tab ------------------------------------------------------------------
 
 def _tab():
-    from ui.fixture_scenes_tab import FixtureScenesTab
+    from ui.fixture.scenes_tab import FixtureScenesTab
     return FixtureScenesTab()
 
 
 def _select(tab, bank, index=-1):
     """Put the tree cursor on a bank header (index -1) or one of its scenes."""
-    from ui.fixture_scenes_tab import _ROLE_BANK
+    from ui.fixture.scenes_tab import _ROLE_BANK
     for row in range(tab.tree.topLevelItemCount()):
         item = tab.tree.topLevelItem(row)
         if item.data(0, _ROLE_BANK) == bank:
@@ -345,7 +345,7 @@ def test_the_preview_is_the_stage_render_engine(qapp):
 
 def test_the_readout_follows_a_switching_channel(qapp):
     print("test_the_readout_follows_a_switching_channel")
-    from ui.fixture_scenes_tab import _capability_rows
+    from ui.fixture.scenes_tab import _capability_rows
 
     # Slot 3 is a Pan while "Mode" is low and a Tilt while it is high. Read
     # channel-by-channel it would always claim to be a Pan.
@@ -479,7 +479,7 @@ def test_renaming_a_bank_follows_through_into_its_chases(qapp):
 
     def body(shipped, _user):
         from PyQt6.QtCore import QCoreApplication
-        from ui.fixture_scenes_tab import _ROLE_BANK
+        from ui.fixture.scenes_tab import _ROLE_BANK
 
         tab = _tab()
         tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
@@ -548,7 +548,7 @@ def test_a_drag_reorders_scenes_and_banks(qapp):
 def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
     print("test_the_dialog_shows_the_tab_and_follows_its_selection")
     from core.config import Config
-    from ui.add_fixture_dialog import AddFixtureDialog
+    from ui.fixture.browser import AddFixtureDialog
     from stage.controller import StageController
 
     def body(_shipped, _user):

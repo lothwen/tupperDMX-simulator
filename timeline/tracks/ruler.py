@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QGraphicsItem
 
 from .base import BaseTrack
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
 
 
 class RulerTrack(BaseTrack):

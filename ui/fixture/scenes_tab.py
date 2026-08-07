@@ -49,11 +49,11 @@ from PyQt6.QtWidgets import (
 from core.fixture_library import FixtureDef, save_fixture_banks
 from core.fixture_state import FixtureState, resolve_state
 from core.note_layout import SONG_PARTS
-from ui.fixture_chips import flow_holder
+from ui.widgets.chips import flow_holder
 # The console — faders, preview and read-out — is shared with the timeline's
 # clip editor, so a scene looks the same wherever it is edited. Re-exported
 # under their old private names for the callers (and tests) that reach in.
-from ui.fixture_console import (  # noqa: F401  (re-exported)
+from ui.fixture.console import (  # noqa: F401  (re-exported)
     ChannelFader, FaderSlider as _FaderSlider, FaderStrip, OutputCard,
     ScenePreview, capability_rows as _capability_rows, clamp as _clamp,
     colour_text as _colour_text, escape as _escape, scene_values,
@@ -61,7 +61,7 @@ from ui.fixture_console import (  # noqa: F401  (re-exported)
 )
 from tupperlogger import get_logger
 
-logger = get_logger("ui.fixture_scenes")
+logger = get_logger("ui.fixture.scenes_tab")
 
 DEFAULT_BANK_NAME = "SCENES"
 

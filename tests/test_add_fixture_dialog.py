@@ -184,7 +184,7 @@ def test_ofl_document_metadata_is_parsed():
 def _dialog(qapp=None):
     from core.config import Config
     from stage.controller import StageController
-    from ui.add_fixture_dialog import AddFixtureDialog
+    from ui.fixture.browser import AddFixtureDialog
     config = Config()
     config.fixtures = []
     return AddFixtureDialog(StageController(config))
@@ -192,7 +192,7 @@ def _dialog(qapp=None):
 
 def test_browser_groups_by_manufacturer_and_by_category(qapp):
     print("test_browser_groups_by_manufacturer_and_by_category")
-    from ui.add_fixture_dialog import GROUP_BY_CATEGORY
+    from ui.fixture.browser import GROUP_BY_CATEGORY
 
     def groups(dialog):
         return [dialog.tree.topLevelItem(i).text(0)
@@ -287,7 +287,7 @@ def test_footer_refuses_an_illegal_patch(qapp):
     print("test_footer_refuses_an_illegal_patch")
     from core.config import Config, FixtureInstance
     from stage.controller import StageController
-    from ui.add_fixture_dialog import AddFixtureDialog
+    from ui.fixture.browser import AddFixtureDialog
 
     def body():
         config = Config()
