@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QObject, pyqtSignal, QRectF, QRect, QLineF
 from tupperlogger import get_logger
 from core.config import Config, FixtureInstance, FixturePosition
 from core.paths import asset_path
-from ui.stage import (
+from stage import (
     CLOCK, Atmosphere, BlinderFixture, PixelBarFixture, body_count,
     body_spacing, renderer_for,
 )
@@ -26,7 +26,7 @@ GRID_SPACING = 96
 
 # Horizontal spacing (scene units) between the bars of a freshly added ledbar.
 
-# Render dispatch lives in ui/stage/registry.py: a fixture is drawn by whichever
+# Render dispatch lives in stage/registry.py: a fixture is drawn by whichever
 # renderer claims one of its OFL categories, so no fixture type is named here.
 
 
@@ -129,7 +129,7 @@ class StageView(QGraphicsView):
             self.setViewport(QOpenGLWidget())
         except Exception as exc:
             from tupperlogger import get_logger
-            get_logger("ui.stage").warning(
+            get_logger("stage").warning(
                 "No OpenGL viewport (%s); staying on the raster path", exc)
             return False
         self._light_layer = layer
@@ -264,7 +264,7 @@ class StageController(QObject):
     def __init__(self, config: Config, background_image_path: str = None):
         super().__init__()
         self.config = config
-        self.logger = get_logger("ui.stage")
+        self.logger = get_logger("stage")
 
         if background_image_path is None:
             background_image_path = asset_path("images", "stage_background.png")
@@ -327,7 +327,7 @@ class StageController(QObject):
     def _enable_gpu_light(self) -> bool:
         """Move the stage's light onto the GPU, or quietly stay as we are."""
         try:
-            from ui.stage.gpu.layer import LightLayer
+            from stage.gpu.layer import LightLayer
         except Exception as exc:
             self.logger.warning("GPU light layer unavailable (%s)", exc)
             return False
@@ -352,7 +352,7 @@ class StageController(QObject):
         # Tell the scene preview it can do the same. Set only once the stage's
         # own context is up, so the preview never gambles on GL the stage has
         # already found to be missing.
-        from ui.stage.gpu import layer as gpu_layer
+        from stage.gpu import layer as gpu_layer
         gpu_layer.STAGE_GPU_ACTIVE = True
         return True
 

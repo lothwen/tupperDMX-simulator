@@ -6,16 +6,16 @@ light is a new module here with `@register_renderer("<OFL category>")` on its
 class — nothing in the registry or the stage controller changes.
 """
 
-from ui.stage.profiles.array import (
+from stage.profiles.array import (
     BlinderFixture, PixelBarFixture, StrobeFixture,
 )
-from ui.stage.profiles.atmospheric import (
+from stage.profiles.atmospheric import (
     FanFixture, HazerFixture, SmokeFixture, StandFixture,
 )
-from ui.stage.profiles.lamp import (
+from stage.profiles.lamp import (
     ColorChangerFixture, DimmerFixture, GenericStageFixture, LampFixture,
 )
-from ui.stage.profiles.motorised import (
+from stage.profiles.motorised import (
     FlowerFixture, LaserFixture, MovingHeadFixture, ScannerFixture,
 )
 

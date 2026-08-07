@@ -6,12 +6,12 @@ The stage is a flat front elevation, so none of these can aim into a world that
 has depth. What they do instead is aim *in the picture*: the beam swings across
 it and foreshortens as the fixture turns toward the audience, and the body
 visibly turns with it — a yoke for a head, a mirror for a scanner. See
-`ui/stage/geometry.py` for the mapping.
+`stage/geometry.py` for the mapping.
 
 Which emission a moving head gets is decided by what its optics say it is, not
 by its name: a head with a gobo wheel, a prism or an iris — or a lens narrow
 even wide open — is a spot and gets a hard-edged beam; one with none of those is
-a wash and gets a soft cone. `ui/stage/optics.py` makes that call for every
+a wash and gets a soft cone. `stage/optics.py` makes that call for every
 fixture on the stage, so it needs no per-fixture code here.
 
 What these profiles do add is a floor. A fixture that aims has to emit
@@ -26,13 +26,13 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
-from ui.stage.base import BodyFixture
-from ui.stage.emission.cone import BeamFan, emission_for_kind
-from ui.stage.emission.volumetric import LaserFan
-from ui.stage.frame import Frame
-from ui.stage.geometry import Spinner
-from ui.stage.optics import BeamKind
-from ui.stage.registry import register_renderer
+from stage.base import BodyFixture
+from stage.emission.cone import BeamFan, emission_for_kind
+from stage.emission.volumetric import LaserFan
+from stage.frame import Frame
+from stage.geometry import Spinner
+from stage.optics import BeamKind
+from stage.registry import register_renderer
 
 CHASSIS_COLOR = QColor(28, 28, 32)
 YOKE_COLOR = QColor(45, 45, 52)

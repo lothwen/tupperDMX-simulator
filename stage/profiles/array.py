@@ -11,9 +11,9 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
-from ui.stage.base import BodyFixture
-from ui.stage.emission.surface import BulbArray, FlatPanel, MatrixCells
-from ui.stage.registry import register_renderer
+from stage.base import BodyFixture
+from stage.emission.surface import BulbArray, FlatPanel, MatrixCells
+from stage.registry import register_renderer
 
 HOUSING_COLOR = QColor(20, 20, 20)
 

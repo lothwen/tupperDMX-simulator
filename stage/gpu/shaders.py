@@ -37,15 +37,15 @@ cannot find its shaders is a runtime failure on someone else's machine, and
 there is nothing to gain from being able to edit them without a restart.
 """
 
-from ui.stage import puffs
-from ui.stage.frame import FORESHORTEN_FLOOR
+from stage import puffs
+from stage.frame import FORESHORTEN_FLOOR
 
-# The context is desktop GL (see ui/stage/gpu/layer.py — the surface format
+# The context is desktop GL (see stage/gpu/layer.py — the surface format
 # forces it, because Wayland/EGL otherwise hands out GL ES, where none of this
 # compiles). 330 is the lowest version with the instancing this relies on.
 _HEADER = "#version 330\n"
 
-# Primitive kinds, mirroring ui/stage/light.py. Duplicated as GLSL constants
+# Primitive kinds, mirroring stage/light.py. Duplicated as GLSL constants
 # because a shader cannot import; `layer.py` asserts they still agree.
 _KINDS = """
 const float KIND_POINT = 0.0;
@@ -280,7 +280,7 @@ void main() {
 #
 # So a parcel is now built here the way the sprite sheet builds it — the same
 # disc, the same two octaves, the same weights, out of the same `PARCEL_*`
-# constants in `ui/stage/puffs.py` — turned to the parcel's own `spin` and
+# constants in `stage/puffs.py` — turned to the parcel's own `spin` and
 # seeded by its own `variant`. The hashes differ between Python and GLSL, so a
 # given parcel is not the identical picture on both paths; it is the same kind
 # of picture, which is the whole of what "the two renderers agree" ever meant.
@@ -415,7 +415,7 @@ const float PI = 3.14159265359;
 const vec3 VIEW_DIR = vec3(0.0, 0.0, 1.0);   // orthographic: every ray is +Z
 
 // How much of a beam's length survives being aimed at the viewer. Mirrors
-// `ui/stage/frame.FORESHORTEN_FLOOR`; inverted below to recover the throw.
+// `stage/frame.FORESHORTEN_FLOOR`; inverted below to recover the throw.
 const float FORESHORTEN_FLOOR = %(foreshorten_floor)s;
 
 // Fog scatters far more than it absorbs, so almost all the light that leaves a
@@ -1018,7 +1018,7 @@ void main() {
 }
 """
 
-#: Every per-instance attribute, in the order `ui.stage.light` packs them and
+#: Every per-instance attribute, in the order `stage.light` packs them and
 #: with its width in floats. `layer.py` builds the vertex-attribute pointers
 #: from this, so the packing and the shader cannot disagree silently.
 INSTANCE_ATTRIBUTES = (

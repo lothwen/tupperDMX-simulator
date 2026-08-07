@@ -65,7 +65,7 @@ def run_gui(argv):
 
     if _stage_gpu_requested():
         # Before QApplication, or it has no effect at all.
-        from ui.stage.gpu.layer import configure_surface_format
+        from stage.gpu.layer import configure_surface_format
         configure_surface_format()
 
     app = QApplication(argv)

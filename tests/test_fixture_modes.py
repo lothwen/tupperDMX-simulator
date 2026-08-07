@@ -232,7 +232,7 @@ def test_patch_refuses_a_fixture_past_the_universe():
 def test_add_fixture_dialog_offers_every_mode(qapp):
     print("test_add_fixture_dialog_offers_every_mode")
     from core.config import Config as RealConfig
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     from ui.fixture_designer import AddFixtureDialog
 
     def body():
@@ -256,7 +256,7 @@ def test_add_fixture_dialog_offers_every_mode(qapp):
 def test_add_fixture_stores_empty_mode_for_single_mode_types(qapp):
     print("test_add_fixture_stores_empty_mode_for_single_mode_types")
     from core.config import Config as RealConfig
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     from ui.fixture_designer import AddFixtureDialog
 
     single = dict(MULTIMODE)
@@ -278,7 +278,7 @@ def test_add_fixture_stores_empty_mode_for_single_mode_types(qapp):
 def test_changing_mode_rebuilds_the_render_group(qapp):
     print("test_changing_mode_rebuilds_the_render_group")
     from core.config import Config as RealConfig
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
 
     def body():
         config = RealConfig()

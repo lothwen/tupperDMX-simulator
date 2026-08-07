@@ -1,7 +1,7 @@
 """
 Characterization test: the ACES tonemap the GPU layer resolves with.
 
-The curve itself lives in GLSL (`ui/stage/gpu/shaders.py`), where CI cannot run
+The curve itself lives in GLSL (`stage/gpu/shaders.py`), where CI cannot run
 it — the offscreen platform plugin refuses to make an OpenGL context at all.
 So the maths is mirrored here in Python and its *properties* are pinned: that it
 is monotonic, that black stays black, that it never exceeds full scale however
@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ui.stage.gpu import shaders
+from stage.gpu import shaders
 
 
 def _assert(cond, msg):

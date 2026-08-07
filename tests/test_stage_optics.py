@@ -23,13 +23,13 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import ofl_factory
-from ui.stage.emission.cone import BeamCone, HardBeam, LampGlow, WashLamp
-from ui.stage.frame import BEAM_LENGTH_PX, BeamParams
-from ui.stage.optics import (
+from stage.emission.cone import BeamCone, HardBeam, LampGlow, WashLamp
+from stage.frame import BEAM_LENGTH_PX, BeamParams
+from stage.optics import (
     _NOT_SHAPING_SLOTS, _SHAPING_CAPABILITIES, _SHAPING_SLOTS,
     BeamKind, MAX_HALF_ANGLE_DEG, beam_kind, resting_half_angle,
 )
-from ui.stage.registry import renderer_for
+from stage.registry import renderer_for
 
 SCHEMA_DIR = os.path.join(os.path.dirname(__file__), "data", "ofl_schemas")
 

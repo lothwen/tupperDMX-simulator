@@ -10,9 +10,9 @@ that inexplicably declares a zoom channel.
 
 from typing import Set
 
-from ui.stage.features.base import Feature, register_feature
-from ui.stage.frame import Frame
-from ui.stage.geometry import Slew, Spinner
+from stage.features.base import Feature, register_feature
+from stage.frame import Frame
+from stage.geometry import Slew, Spinner
 
 
 @register_feature

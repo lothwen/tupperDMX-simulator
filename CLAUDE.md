@@ -102,7 +102,7 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   `reconcile_blackouts`). `MidiWorker` does timeline-synced threaded output with
   **fan-out** per `MidiRouting`: `note_on` verbs to `DMXController.handle_note_on()`
   and/or the full stream to an external mido port, independently.
-- **`ui/stage_controller.py`**: virtual stage + scenario designer. Owns one flat
+- **`stage/controller.py`**: virtual stage + scenario designer. Owns one flat
   `render_objs` list (one object per *body*; a fixture with a pixel matrix
   contributes one per `bars[]` entry, all fed the same DMX slice) and slices
   `dmx_data` per instance. Which class draws a fixture comes from
@@ -144,7 +144,7 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   optional artwork matched by `effectName`, so it can never appear on a fixture that
   didn't declare those effects. `affordance_for(fdef, index)` is the lookup.
 
-### The render engine (`ui/stage/`)
+### The render engine (`stage/`)
 
 **Two stages, in this order — the OFL *category* picks the body and the kind of light
 it makes; the *capabilities* its channels declare pick the layers that shape that
@@ -211,8 +211,7 @@ gains an entry nobody handled.
   slot's own OFL description), `base.py` (`DesignableFixture`, `GlowingEllipse`, the
   mm→px helpers anchored by `MM_PER_STAGE_PX`, and `BodyFixture`, which runs the
   pipeline: reset the beam → each feature shapes it → the emission draws it → the
-  profile repaints its chassis). `beam.py`/`pixelbar.py`/`blinder.py`/`wash.py`/
-  `strobe.py`/`generic.py` are shims re-exporting the names that moved.
+  profile repaints its chassis).
 - **Atmosphere**: a beam is invisible in clean air, so visibility is the one genuinely
   cross-fixture quantity. `StageController` owns one `Atmosphere`; any body resolving
   a fog output contributes, sources combine without exceeding full, and the level
@@ -563,15 +562,19 @@ Every package is described under Architecture above; this is the map.
   fog machines — nothing shipped declared a `Fog`/`FogOutput`/`FogType` capability
   before them, so the fixture-driven half of the atmosphere was unreachable.
 - `audio/` — `mixer.py`, `engine.py`, `decode.py`, `tts.py`.
+- `stage/` — the render engine, a **top-level** package like `timeline/`: it is
+  QtWidgets, but it imports nothing from `ui/` (only `core/`, PyQt6 and
+  `tupperlogger`), which is what earns it the root. `controller.py`
+  (`StageController`/`StageView`, also owns the `Atmosphere`) drives `base`,
+  `registry`, `optics`, `frame`, `geometry`, `clock`, `atmosphere`, `puffs`,
+  `wheelart`, `light`, `profiles/`, `emission/`, `features/`, `gpu/`.
 - `ui/` — `main_window.py`, `playlist_controller.py` (widget half; guides relink
-  silently), `stage_controller.py` (also owns the `Atmosphere`), `stage/` (the render
-  engine: `base`, `registry`, `optics`, `frame`, `geometry`, `clock`, `atmosphere`,
-  `puffs`, `wheelart`, `light`, `profiles/`, `emission/`, `features/`, `gpu/`, plus
-  the shims), and the dialogs/panels named under Architecture
+  silently), and the dialogs/panels named under Architecture
   (`fixture_designer`, `add_fixture_dialog`, `fixture_scenes_tab`, `fixture_console`,
   `channel_affordances`, `fixture_chips`, `dmx_display`, `clip_library`,
   `toolbar_manager`, `timeline_toolbar`, `settings_dialog`, `io_flow_widget`,
-  `voice_cues_dialog`, `error_dialogs`, `about_dialog`).
+  `voice_cues_dialog`, `error_dialogs`, `about_dialog`). `ui/__init__.py` no longer
+  re-exports `StageController`/`StageView` — import them from `stage.controller`.
 - `dmx/` — `manager.py`, `artnet_worker.py`, `usb_worker.py`, `base.py`.
 - `midi/` — `manager.py`, `document.py`, `codec.py`, `fade_engine.py`,
   `clip_editor.py`, `scene_editor.py`, `selection_editor.py`, `constants.py`,

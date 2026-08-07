@@ -66,7 +66,7 @@ tres ángulos** y no tiene sentido hacerlas por separado.
 **Por qué aquí (primero)**
 Casi todo está acoplado a los 2 tipos actuales: `fixtures.py`, `config.py`/`config.json`,
 `software_controller/` (constantes de canal, escenas, `handle_note_on`),
-`ui/stage_controller.py`, `ui/clip_library.py`, `timeline/`, `midi/constants.py`. Hacer
+`stage/controller.py`, `ui/clip_library.py`, `timeline/`, `midi/constants.py`. Hacer
 cualquier otra idea antes implicaría tocar este código cableado y luego rehacerlo. Es la
 inversión que más trabajo futuro ahorra.
 

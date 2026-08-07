@@ -1,5 +1,5 @@
 """
-Characterization test: the light list (ui/stage/light.py).
+Characterization test: the light list (stage/light.py).
 
 The engine draws every frame twice — once as 8-bit brushes for the raster
 scene, and once as `LightPrimitive`s in linear float for the GPU layer to
@@ -25,11 +25,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
-from ui.stage import puffs, renderer_for
-from ui.stage.emission.cone import HardBeam, lens_glow_radii
-from ui.stage.base import DIFFUSE_GLOW, SHARP_GLOW
-from ui.stage.frame import FORESHORTEN_FLOOR
-from ui.stage.light import (
+from stage import puffs, renderer_for
+from stage.emission.cone import HardBeam, lens_glow_radii
+from stage.base import DIFFUSE_GLOW, SHARP_GLOW
+from stage.frame import FORESHORTEN_FLOOR
+from stage.light import (
     BLOB, CONE, LINE, POINT, QUAD, STRIDE, LightList, linear_rgb,
     linear_to_srgb,
 )
@@ -338,7 +338,7 @@ def test_coordinates_are_body_local(qapp):
 def test_every_category_can_be_asked_for_its_light(qapp):
     """The registry claims all 17 OFL categories; none may explode here."""
     print("test_every_category_can_be_asked_for_its_light")
-    from ui.stage.registry import registered_categories
+    from stage.registry import registered_categories
     categories = registered_categories()
     checked = 0
     for category in sorted(categories):
@@ -448,7 +448,7 @@ def test_smoke_alone_still_reaches_the_gpu(qapp):
     # any light, which is the part that was wrong.
     import ctypes
 
-    from ui.stage.gpu.layer import LightLayer
+    from stage.gpu.layer import LightLayer
 
     class _Recorder:
         def __init__(self):
@@ -494,8 +494,8 @@ def test_the_fog_stops_asking_for_frames_once_the_rig_stands_still(qapp):
     import ctypes
 
     from core.config import StageFogConfig
-    from ui.stage.gpu.fog import CONVERGE_FRAMES
-    from ui.stage.gpu.layer import LightLayer
+    from stage.gpu.fog import CONVERGE_FRAMES
+    from stage.gpu.layer import LightLayer
 
     layer = LightLayer(lambda: [])
     layer.fog = StageFogConfig(enabled=True)
@@ -544,7 +544,7 @@ def test_drifting_air_is_a_moving_picture(qapp):
     import ctypes
 
     from core.config import StageFogConfig
-    from ui.stage.gpu.layer import LightLayer
+    from stage.gpu.layer import LightLayer
 
     layer = LightLayer(lambda: [])
     layer._fog = object()                 # stand in for a compiled fog pass
@@ -600,7 +600,7 @@ def test_the_fog_is_marched_without_the_stage_clip(qapp):
     from PyQt6.QtGui import QMatrix4x4
 
     from core.config import StageFogConfig
-    from ui.stage.gpu.layer import LightLayer, _SCISSOR_TEST
+    from stage.gpu.layer import LightLayer, _SCISSOR_TEST
 
     calls = []
 
@@ -660,7 +660,7 @@ def test_a_dark_stage_still_has_air_in_it(qapp):
     from PyQt6.QtGui import QMatrix4x4
 
     from core.config import StageFogConfig
-    from ui.stage.gpu.layer import LightLayer
+    from stage.gpu.layer import LightLayer
 
     def frame(**kwargs):
         layer = LightLayer(lambda: [])          # no bodies: nothing emitting

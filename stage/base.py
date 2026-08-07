@@ -20,15 +20,15 @@ from PyQt6.QtGui import (
 
 from core.fixture_library import FixtureDef, all_capability_types
 from core.fixture_state import FixtureState, resolve_state
-from ui.stage.atmosphere import DEFAULT_ATMOSPHERE
-from ui.stage.clock import CLOCK
-from ui.stage.features.base import build_features
-from ui.stage.frame import Frame
-from ui.stage.geometry import Aim
-from ui.stage.light import LightList
-from ui.stage.optics import BeamKind, beam_kind, resting_half_angle
+from stage.atmosphere import DEFAULT_ATMOSPHERE
+from stage.clock import CLOCK
+from stage.features.base import build_features
+from stage.frame import Frame
+from stage.geometry import Aim
+from stage.light import LightList
+from stage.optics import BeamKind, beam_kind, resting_half_angle
 
-# Stage coordinates are background-image pixels (see ui/stage_controller.py), so
+# Stage coordinates are background-image pixels (see stage/controller.py), so
 # a real-world size needs a scale to become one. Anchored on the LED bar: 1000mm
 # tall renders 400px, the height its bespoke renderer used.
 MM_PER_STAGE_PX = 2.5
@@ -505,7 +505,7 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
         """Which emission model draws this fixture's light."""
-        from ui.stage.emission.base import NoEmission
+        from stage.emission.base import NoEmission
         return NoEmission
 
     def paint_housing(self, frame: Frame) -> None:

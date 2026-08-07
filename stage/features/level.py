@@ -13,8 +13,8 @@ import math
 import random
 from typing import Set
 
-from ui.stage.features.base import Feature, register_feature
-from ui.stage.frame import Frame
+from stage.features.base import Feature, register_feature
+from stage.frame import Frame
 
 
 @register_feature

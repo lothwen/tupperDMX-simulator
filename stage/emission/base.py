@@ -15,8 +15,8 @@ on any fixture that has one.
 
 from typing import Optional
 
-from ui.stage.frame import Frame
-from ui.stage.light import LightList
+from stage.frame import Frame
+from stage.light import LightList
 
 
 class Emission:
@@ -87,5 +87,5 @@ def emission_reach(fdef) -> float:
     asked by the stage and by the scene preview, which would otherwise crop the
     cone or reserve empty space for one that never appears.
     """
-    from ui.stage.registry import renderer_for
+    from stage.registry import renderer_for
     return renderer_for(fdef).emission_for(fdef).reach(fdef)

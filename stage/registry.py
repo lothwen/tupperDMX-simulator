@@ -15,7 +15,7 @@ from typing import Dict, Type
 from core.fixture_library import FixtureDef, all_capability_types
 from tupperlogger import get_logger
 
-logger = get_logger("ui.stage.registry")
+logger = get_logger("stage.registry")
 
 _BY_CATEGORY: Dict[str, Type] = {}
 
@@ -40,8 +40,8 @@ def renderer_for(fdef: FixtureDef) -> Type:
     categorised only as "Other" — or as something nobody has written a renderer
     for yet — still draws as the kind of light its channels describe.
     """
-    from ui.stage.profiles.array import PixelBarFixture
-    from ui.stage.profiles.lamp import (
+    from stage.profiles.array import PixelBarFixture
+    from stage.profiles.lamp import (
         ColorChangerFixture, DimmerFixture, GenericStageFixture,
     )
 
@@ -75,8 +75,8 @@ def _CHANNEL_SHAPE_FALLBACKS():
     A function rather than a constant so the profile modules are imported
     lazily, which keeps this module free of the import cycle they close.
     """
-    from ui.stage.profiles.atmospheric import HazerFixture
-    from ui.stage.profiles.motorised import MovingHeadFixture
+    from stage.profiles.atmospheric import HazerFixture
+    from stage.profiles.motorised import MovingHeadFixture
 
     return (
         # Something that fills the air is a hazer even if it calls itself

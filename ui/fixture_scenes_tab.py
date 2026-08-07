@@ -18,7 +18,7 @@ them into one list.
     [+ New] [Dup] [Del]  ┃  │ ▮ ▮ ▮ ▮ ▮ ▮ ▮ ▮ ▮ ▮            │
 
 Nothing here is simulated twice: the preview builds the same renderer the stage
-would (`ui.stage.registry.renderer_for`) and feeds it the scene's DMX values, so
+would (`stage.registry.renderer_for`) and feeds it the scene's DMX values, so
 what a scene looks like here is what it looks like on stage — animations, beam
 cone, strobe and all.
 

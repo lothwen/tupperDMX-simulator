@@ -29,7 +29,7 @@ def _assert(cond, msg):
 
 
 def _stage():
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     cfg = Config()
     cfg.fixtures = [
         FixtureInstance(type="ledbar", dmx_start=1, bars=[FixturePosition(150, 350)]),

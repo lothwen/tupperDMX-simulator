@@ -29,10 +29,10 @@ from typing import Optional, Tuple
 from PyQt6.QtGui import QColor, QMatrix4x4
 
 from tupperlogger import get_logger
-from ui.stage.gpu import shaders
-from ui.stage.light import STRIDE
+from stage.gpu import shaders
+from stage.light import STRIDE
 
-logger = get_logger("ui.stage.gpu.fog")
+logger = get_logger("stage.gpu.fog")
 
 _FLOAT = 0x1406
 _TRIANGLE_STRIP = 0x0005
@@ -272,7 +272,7 @@ class FogPass:
                             haze, seconds) -> None:
         import math
 
-        from ui.stage.gpu.layer import GLOW_REACH, MAX_GLOW_RADIUS_PX
+        from stage.gpu.layer import GLOW_REACH, MAX_GLOW_RADIUS_PX
 
         inverse, invertible = scene_to_clip.inverted()
         program.setUniformValue("u_scene_to_clip", scene_to_clip)
@@ -473,7 +473,7 @@ def _scene_to_ndc(scene_rect) -> QMatrix4x4:
 
 def _linear_color(name: str):
     """A `#rrggbb` string as linear floats, the space the HDR buffer is in."""
-    from ui.stage.light import linear_rgb
+    from stage.light import linear_rgb
 
     color = QColor(name)
     if not color.isValid():
