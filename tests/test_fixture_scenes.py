@@ -314,7 +314,7 @@ def test_the_list_keeps_banks_as_sections(qapp):
 def test_the_preview_is_the_stage_render_engine(qapp):
     print("test_the_preview_is_the_stage_render_engine")
     from stage.registry import renderer_for
-    from stage.base import body_count
+    from stage.metrics import body_count
 
     def body(_shipped, _user):
         tab = _tab()

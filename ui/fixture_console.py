@@ -37,7 +37,7 @@ from core.channel_families import channel_family
 from core.fixture_library import FixtureDef
 from core.fixture_state import FixtureState, capability_at, resolve_state
 from ui.fixture_chips import rgba
-from stage.base import body_count, body_size, body_spacing
+from stage.metrics import body_count, body_size, body_spacing
 from stage.emission.base import emission_reach
 from stage.registry import renderer_for
 

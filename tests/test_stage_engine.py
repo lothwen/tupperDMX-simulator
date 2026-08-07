@@ -210,7 +210,7 @@ def test_every_registered_feature_declares_itself(qapp):
 
 def test_a_matrix_is_one_body_unless_its_pixels_are_separated(qapp):
     print("test_a_matrix_is_one_body_unless_its_pixels_are_separated")
-    from stage.base import body_count
+    from stage.metrics import body_count
 
     _assert(body_count(ofl_factory.fdef(categories=("Pixel Bar",))) == 1,
             "a fixture with no matrix at all is one body")

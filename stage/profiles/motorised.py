@@ -26,7 +26,7 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
-from stage.base import BodyFixture
+from stage.body import BodyFixture
 from stage.emission.cone import BeamFan, emission_for_kind
 from stage.emission.volumetric import LaserFan
 from stage.frame import Frame

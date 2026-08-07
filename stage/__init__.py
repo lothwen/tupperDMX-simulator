@@ -15,8 +15,9 @@ module under `profiles/`; adding support for a capability is a new module under
 `features/`. Nothing in the stage controller changes for either.
 """
 
-from stage.base import (
-    BodyFixture, DesignableFixture, FixtureLabel, GlowingEllipse,
+from stage.body import BodyFixture, DesignableFixture, FixtureLabel
+from stage.glow import GlowingEllipse
+from stage.metrics import (
     body_count, body_size, body_spacing, declared_cell_count,
 )
 from stage.atmosphere import DEFAULT_ATMOSPHERE, Atmosphere
