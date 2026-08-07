@@ -24,7 +24,7 @@ from typing import Optional, Tuple
 from core.fixture_library import FixtureDef
 from core.fixture_state import MotionState
 from core import ofl
-from ui.stage.frame import STRAIGHT_DOWN_DEG
+from stage.frame import STRAIGHT_DOWN_DEG
 
 # Most movers are 540°/270°; a fixture that declares its own ranges overrides
 # these, and one that declares nothing at least behaves like a normal head.

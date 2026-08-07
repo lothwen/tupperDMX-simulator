@@ -31,12 +31,12 @@ from typing import Callable, Iterable, Optional
 from PyQt6.QtGui import QMatrix4x4, QOpenGLContext, QSurfaceFormat
 
 from tupperlogger import get_logger
-from ui.stage.clock import CLOCK
-from ui.stage.light import BLOB, CONE, LINE, POINT, QUAD, STRIDE
-from ui.stage.gpu import fog as fog_module
-from ui.stage.gpu import shaders
+from stage.clock import CLOCK
+from stage.light import BLOB, CONE, LINE, POINT, QUAD, STRIDE
+from stage.gpu import fog as fog_module
+from stage.gpu import shaders
 
-logger = get_logger("ui.stage.gpu")
+logger = get_logger("stage.gpu")
 
 _FLOAT = 0x1406          # GL_FLOAT
 _TRIANGLE_STRIP = 0x0005
@@ -186,7 +186,7 @@ class LightLayer:
         # keeps its light and simply has no volumetric air.
         from functools import partial
 
-        from ui.stage.gpu.fog import FogPass
+        from stage.gpu.fog import FogPass
         fog = FogPass(self._fns, self._quad, self._instances, self._vao)
         self._fog = fog if fog.build(
             QOpenGLShaderProgram, QOpenGLShader,

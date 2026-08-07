@@ -26,7 +26,7 @@ class AnimationClock:
     """A single timer that calls back everything currently animating.
 
     Deliberately not a QObject: there is a module-level instance of this, and
-    `import ui.stage` can happen before the QApplication exists — a QObject
+    `import stage` can happen before the QApplication exists — a QObject
     built that early is invalidated the moment one is created. The QTimer it
     owns is made on first subscribe, by which time there certainly is an app.
     """

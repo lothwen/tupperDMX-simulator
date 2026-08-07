@@ -28,7 +28,7 @@ def _assert(cond, msg):
 
 
 def _stage():
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     cfg = Config()
     cfg.fixtures = [
         FixtureInstance(type="ledbar", dmx_start=1, bars=[FixturePosition(150, 350)]),
@@ -67,7 +67,7 @@ def test_added_fixture_receives_dmx(qapp):
 def test_add_ledbar_seeds_all_bars(qapp):
     print("test_add_ledbar_seeds_all_bars")
     from core.fixture_library import load_fixture_defs
-    from ui.stage.base import body_count
+    from stage.base import body_count
     sc, _ = _stage()
     count = body_count(load_fixture_defs()["ledbar"])
     _assert(count > 1, "the ledbar type def declares more than one bar")
@@ -152,7 +152,7 @@ def test_remove_then_readd_keeps_other_channels_stable(qapp):
         FixtureInstance(type="blinder", dmx_start=33, channel=1, x=400, y=300),
         FixtureInstance(type="blinder", dmx_start=65, channel=2, x=575, y=500),
     ]
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     sc = StageController(cfg)
 
     # Remove the middle fixture (channel 1) via the real designer path.
@@ -219,7 +219,7 @@ def test_sync_keeps_unchanged_fixtures_identical(qapp):
 
 def test_one_resolve_feeds_every_body_of_a_fixture(qapp):
     print("test_one_resolve_feeds_every_body_of_a_fixture")
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     cfg = Config()
     cfg.fixtures = [FixtureInstance(
         type="ledbar", dmx_start=1,

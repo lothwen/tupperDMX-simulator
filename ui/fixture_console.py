@@ -15,7 +15,7 @@ way the library editor does — same faders, same colours, same preview:
     └───────────────────────────────────────┘
 
 Nothing here is simulated twice: `ScenePreview` builds the same renderer the
-stage would (`ui.stage.registry.renderer_for`), one body per `body_count()`, and
+stage would (`stage.registry.renderer_for`), one body per `body_count()`, and
 feeds it raw DMX — so a look previews here exactly as it will appear on stage,
 animations, beam cone and strobe included.
 
@@ -37,9 +37,9 @@ from core.channel_families import channel_family
 from core.fixture_library import FixtureDef
 from core.fixture_state import FixtureState, capability_at, resolve_state
 from ui.fixture_chips import rgba
-from ui.stage.base import body_count, body_size, body_spacing
-from ui.stage.emission.base import emission_reach
-from ui.stage.registry import renderer_for
+from stage.base import body_count, body_size, body_spacing
+from stage.emission.base import emission_reach
+from stage.registry import renderer_for
 
 # Height of the faders scroll area — one 96 px slider plus its labels.
 FADERS_HEIGHT = 196
@@ -94,7 +94,7 @@ class ScenePreview(QGraphicsView):
         a preview must not be the thing that discovers the driver is broken.
         """
         try:
-            from ui.stage.gpu.layer import LightLayer, stage_gpu_active
+            from stage.gpu.layer import LightLayer, stage_gpu_active
             if not stage_gpu_active():
                 return None
             from PyQt6.QtOpenGLWidgets import QOpenGLWidget

@@ -5,7 +5,7 @@
 A hazer emits no light at all, and yet it is the most important fixture on this
 stage: without haze there is nothing for anyone's beam to scatter off, so every
 cone in the rig is drawn against what these contribute (see
-`ui/stage/atmosphere.py`). A fan and a stand emit nothing and change nothing —
+`stage/atmosphere.py`). A fan and a stand emit nothing and change nothing —
 they are on the stage because they are on the stage, and a rig that silently
 dropped them would be lying about the patch.
 """
@@ -14,13 +14,13 @@ from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
-from ui.stage import puffs
-from ui.stage.base import BodyFixture
-from ui.stage.emission.base import NoEmission
-from ui.stage.emission.volumetric import FogPlume
-from ui.stage.frame import Frame
-from ui.stage.geometry import Spinner
-from ui.stage.registry import register_renderer
+from stage import puffs
+from stage.base import BodyFixture
+from stage.emission.base import NoEmission
+from stage.emission.volumetric import FogPlume
+from stage.frame import Frame
+from stage.geometry import Spinner
+from stage.registry import register_renderer
 
 CHASSIS_COLOR = QColor(28, 28, 32)
 NOZZLE_COLOR = QColor(60, 60, 68)

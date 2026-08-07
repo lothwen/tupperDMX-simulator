@@ -1,5 +1,4 @@
 from .dmx_display import DMXDisplayWidget
-from .stage_controller import StageController, StageView
 from .toolbar_manager import ToolbarManager
 from .timeline_toolbar import TimelineToolbar
 from .error_dialogs import ErrorDialogManager
@@ -11,8 +10,6 @@ from .fixture_designer import StageEditToolbar, FixtureInspector
 
 __all__ = [
     'DMXDisplayWidget',
-    'StageController',
-    'StageView',
     'ToolbarManager',
     'TimelineToolbar',
     'ErrorDialogManager',

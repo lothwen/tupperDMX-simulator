@@ -4,13 +4,13 @@
 
 A fixture whose optics throw a shaft gets a visible cone. How visible depends on
 the air: `frame.haze` scales it, because a beam in clean air is not a thing you
-can see. Which fixtures those are is `ui/stage/optics.py`'s decision, made from
+can see. Which fixtures those are is `stage/optics.py`'s decision, made from
 the fixture's own optics and handed here as a `BeamKind`; a fixture that only
 lights a surface — an LED bar, a flood panel — gets `LampGlow` and no cone item
 at all, so there is nothing for a stray zoom channel to switch back on.
 
 The cone is drawn in the plane of the stage image, aimed by `beam.axis_deg` and
-shortened by `beam.foreshorten` (see `ui/stage/geometry.py`); with no pan or
+shortened by `beam.foreshorten` (see `stage/geometry.py`); with no pan or
 tilt channel those are "straight down, full length" and the shape is identical
 to the one the engine drew before fixtures could aim.
 """
@@ -24,14 +24,14 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPolygonItem
 
-from ui.stage import wheelart
-from ui.stage.base import DIFFUSE_GLOW, GlowingEllipse
-from ui.stage.emission.base import Emission
-from ui.stage.frame import (
+from stage import wheelart
+from stage.base import DIFFUSE_GLOW, GlowingEllipse
+from stage.emission.base import Emission
+from stage.frame import (
     BEAM_LENGTH_PX, FORESHORTEN_FLOOR, BeamParams, Frame,
 )
-from ui.stage.light import LightList, linear_rgb
-from ui.stage.optics import MAX_HALF_ANGLE_DEG, BeamKind
+from stage.light import LightList, linear_rgb
+from stage.optics import MAX_HALF_ANGLE_DEG, BeamKind
 
 BEAM_MAX_ALPHA = 90        # opacity at the lens, fading to nothing at the end
 BEAM_MIN_INTENSITY = 0.02  # below this the cone is hidden entirely
@@ -682,7 +682,7 @@ _BY_KIND = {
 def emission_for_kind(kind: BeamKind):
     """The emission that draws a given kind of light.
 
-    The join between `ui/stage/optics.py`, which decides what a fixture throws,
+    The join between `stage/optics.py`, which decides what a fixture throws,
     and the classes here that draw it. A profile whose body is a lamp in a
     housing goes straight through this; the ones that are a shape of their own —
     a flower's rosette, a laser's fan, a bar's cells — name their emission

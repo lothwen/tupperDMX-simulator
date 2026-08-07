@@ -1,5 +1,5 @@
 """
-Characterization test: aiming a light on a stage that has no depth (ui/stage/).
+Characterization test: aiming a light on a stage that has no depth (stage/).
 
 The stage is a front-elevation photograph, so pan and tilt can't point into a
 world — they are mapped into the plane of the picture. The load-bearing rule is
@@ -20,9 +20,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_state import MotionState
-from ui.stage import renderer_for
-from ui.stage.frame import STRAIGHT_DOWN_DEG
-from ui.stage.geometry import Aim, Slew, Spinner
+from stage import renderer_for
+from stage.frame import STRAIGHT_DOWN_DEG
+from stage.geometry import Aim, Slew, Spinner
 import ofl_factory
 
 
@@ -173,7 +173,7 @@ def test_every_category_builds_and_renders(qapp):
 
 def test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam(qapp):
     print("test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam")
-    from ui.stage.emission.cone import HardBeam, WashLamp
+    from stage.emission.cone import HardBeam, WashLamp
 
     wash = ofl_factory.fdef(categories=("Moving Head",),
                             channels=dict(MOVER_CHANNELS, **ofl_factory.RGB_CHANNELS))

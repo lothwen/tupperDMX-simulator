@@ -1,5 +1,5 @@
 """
-Characterization test: the two-stage stage engine (ui/stage/).
+Characterization test: the two-stage stage engine (stage/).
 
 The engine resolves a fixture in two steps — its OFL *category* picks the body
 and the kind of light it makes, then the *capabilities* its channels declare
@@ -17,13 +17,13 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
-from ui.stage import CLOCK, renderer_for
-from ui.stage.emission.base import emission_reach
-from ui.stage.features.base import FEATURES, build_features
-from ui.stage.features.beamshape import (
+from stage import CLOCK, renderer_for
+from stage.emission.base import emission_reach
+from stage.features.base import FEATURES, build_features
+from stage.features.beamshape import (
     BladeFeature, IrisFeature, PanTiltFeature, PrismFeature, ZoomFeature,
 )
-from ui.stage.features.level import ColorFeature, DimmerFeature, ShutterFeature
+from stage.features.level import ColorFeature, DimmerFeature, ShutterFeature
 import ofl_factory
 
 
@@ -210,7 +210,7 @@ def test_every_registered_feature_declares_itself(qapp):
 
 def test_a_matrix_is_one_body_unless_its_pixels_are_separated(qapp):
     print("test_a_matrix_is_one_body_unless_its_pixels_are_separated")
-    from ui.stage.base import body_count
+    from stage.base import body_count
 
     _assert(body_count(ofl_factory.fdef(categories=("Pixel Bar",))) == 1,
             "a fixture with no matrix at all is one body")
@@ -343,7 +343,7 @@ def test_a_wash_with_one_zone_is_unchanged(qapp):
 
 def test_a_big_matrix_behind_a_lamp_is_sampled(qapp):
     print("test_a_big_matrix_behind_a_lamp_is_sampled")
-    from ui.stage.emission.cone import MAX_LAMPS
+    from stage.emission.cone import MAX_LAMPS
 
     body = _body(_segmented_wash(200))
     _assert(len(body.emission.lamps) == MAX_LAMPS,

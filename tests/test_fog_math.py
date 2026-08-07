@@ -35,9 +35,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.config import StageFogConfig
-from ui.stage.frame import FORESHORTEN_FLOOR
-from ui.stage.gpu import shaders
-from ui.stage.gpu.fog import FLOW_PX_S
+from stage.frame import FORESHORTEN_FLOOR
+from stage.gpu import shaders
+from stage.gpu.fog import FLOW_PX_S
 
 
 def _fail_if(cond, msg):
@@ -279,7 +279,7 @@ def test_height_fog_thins_upward():
 
 def test_the_slant_length_inverts_what_the_cone_applied():
     print("test_the_slant_length_inverts_what_the_cone_applied")
-    from ui.stage.emission.cone import _foreshortened
+    from stage.emission.cone import _foreshortened
 
     for foreshorten in (0.0, 0.15, 0.5, 0.85, 1.0):
         throw = 320.0
@@ -455,7 +455,7 @@ def test_the_foreshorten_floor_is_shared():
                       shaders.FOG_VERT)
     _fail_if(match is None, "FORESHORTEN_FLOOR is not in the shader")
     _fail_if(abs(float(match.group(1)) - FORESHORTEN_FLOOR) > 1e-9,
-             f"the shader says {match.group(1)}, ui.stage.frame says "
+             f"the shader says {match.group(1)}, stage.frame says "
              f"{FORESHORTEN_FLOOR} — the marched shaft would end somewhere the "
              "drawn one does not")
     _ok(f"both stages of the fog program get {FORESHORTEN_FLOOR} from Python")

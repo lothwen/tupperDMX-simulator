@@ -183,7 +183,7 @@ def test_ofl_document_metadata_is_parsed():
 
 def _dialog(qapp=None):
     from core.config import Config
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     from ui.add_fixture_dialog import AddFixtureDialog
     config = Config()
     config.fixtures = []
@@ -286,7 +286,7 @@ def test_detail_panel_renders_the_document(qapp):
 def test_footer_refuses_an_illegal_patch(qapp):
     print("test_footer_refuses_an_illegal_patch")
     from core.config import Config, FixtureInstance
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
     from ui.add_fixture_dialog import AddFixtureDialog
 
     def body():

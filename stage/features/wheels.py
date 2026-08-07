@@ -15,10 +15,10 @@ puts a pattern in it, and neither needs to know which channel it came from.
 from typing import Optional, Set, Tuple
 
 from core import ofl
-from ui.stage import wheelart
-from ui.stage.features.base import Feature, register_feature
-from ui.stage.frame import Frame
-from ui.stage.geometry import Spinner
+from stage import wheelart
+from stage.features.base import Feature, register_feature
+from stage.frame import Frame
+from stage.geometry import Spinner
 
 _WHEEL_TYPES = frozenset({"WheelSlot", "WheelShake", "WheelSlotRotation",
                           "WheelRotation"})

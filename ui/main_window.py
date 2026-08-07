@@ -32,7 +32,7 @@ from ui.error_dialogs import ErrorDialogManager
 from ui.fixture_designer import StageEditToolbar, FixtureInspector
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
-from ui.stage_controller import StageController
+from stage.controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.voice_cues_dialog import VoiceCuesDialog

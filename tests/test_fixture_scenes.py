@@ -313,8 +313,8 @@ def test_the_list_keeps_banks_as_sections(qapp):
 
 def test_the_preview_is_the_stage_render_engine(qapp):
     print("test_the_preview_is_the_stage_render_engine")
-    from ui.stage.registry import renderer_for
-    from ui.stage.base import body_count
+    from stage.registry import renderer_for
+    from stage.base import body_count
 
     def body(_shipped, _user):
         tab = _tab()
@@ -549,7 +549,7 @@ def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
     print("test_the_dialog_shows_the_tab_and_follows_its_selection")
     from core.config import Config
     from ui.add_fixture_dialog import AddFixtureDialog
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
 
     def body(_shipped, _user):
         config = Config()

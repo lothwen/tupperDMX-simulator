@@ -27,7 +27,7 @@ at all — it simply has no scene banks.
 Each mode block holds `channels` (per-channel `label`/`flags` overrides, keyed by
 resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
 
-`stage` is render hints, read by `ui/stage/`. Five keys, all optional:
+`stage` is render hints, read by `stage/`. Five keys, all optional:
 
     "stage": {
         "size_px":      [width, height],   # on-stage body size, overriding mm
@@ -37,7 +37,7 @@ resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
         "beam":  "none" | "wash" | "hard"  # what this fixture puts in the air
     }
 
-`beam` overrides `ui/stage/optics.beam_kind()`, which otherwise works this out
+`beam` overrides `stage/optics.beam_kind()`, which otherwise works this out
 from the fixture's own optics. It exists for the fixture whose gate is not a DMX
 channel and so cannot be seen in the data at all — an ETC Source Four's lens tube
 is the standing example: it declares a 5–90° range like any zoom wash, and only

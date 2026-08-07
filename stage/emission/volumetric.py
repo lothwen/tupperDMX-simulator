@@ -18,10 +18,10 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsItem
 
-from ui.stage import puffs
-from ui.stage.emission.base import Emission
-from ui.stage.frame import BEAM_LENGTH_PX, Frame
-from ui.stage.light import LightList, linear_rgb
+from stage import puffs
+from stage.emission.base import Emission
+from stage.frame import BEAM_LENGTH_PX, Frame
+from stage.light import LightList, linear_rgb
 
 # A laser projector's fan. More lines than this is a solid sheet anyway.
 MAX_LASER_BEAMS = 24

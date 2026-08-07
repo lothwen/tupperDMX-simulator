@@ -20,7 +20,7 @@ fixture can be HARD *and* wide (an iris-equipped 120° fixture is hard-edged by
 evidence, but its cone is still as wide as its lens says).
 
 Qt-free on purpose, and it may import only from `core`. The kind -> emission
-mapping lives in `ui/stage/emission/cone.py`; importing a profile or an emission
+mapping lives in `stage/emission/cone.py`; importing a profile or an emission
 from here would close the `registry -> profiles -> registry` cycle that
 `registry._CHANNEL_SHAPE_FALLBACKS()` exists to work around.
 """

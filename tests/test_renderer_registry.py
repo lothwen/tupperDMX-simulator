@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import ofl
 from core.fixture_library import build_fixture_def, resolve_fixture
-from ui.stage import (
+from stage import (
     BlinderFixture, ColorChangerFixture, DimmerFixture, FanFixture,
     FlowerFixture, GenericStageFixture, HazerFixture, LaserFixture,
     MovingHeadFixture, PixelBarFixture, ScannerFixture, SmokeFixture,
@@ -68,7 +68,7 @@ CATEGORY_PROFILES = {
     "Scanner": ScannerFixture,
     # Same housing, and deliberately NOT the same profile: a smoke machine's
     # parcels are dense, local and short-lived where a hazer's are a thin layer
-    # that fills the room (see ui/stage/puffs.py).
+    # that fills the room (see stage/puffs.py).
     "Smoke": SmokeFixture,
     "Stand": StandFixture,
     "Strobe": StrobeFixture,

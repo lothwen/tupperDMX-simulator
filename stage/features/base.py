@@ -16,7 +16,7 @@ special-cased by fixture name.
 
 from typing import List, Set, Type
 
-from ui.stage.frame import Frame
+from stage.frame import Frame
 
 
 class Feature:

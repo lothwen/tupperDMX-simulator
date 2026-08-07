@@ -1,5 +1,5 @@
 """
-Characterization test: the capability features that shape a beam (ui/stage/).
+Characterization test: the capability features that shape a beam (stage/).
 
 Covers the layers that need a fixture's wheels to mean anything — colour gels,
 gobo patterns, a closed slot — plus the prism, the shutter waveforms and the
@@ -15,9 +15,9 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_state import resolve_state
-from ui.stage import renderer_for, wheelart
-from ui.stage.atmosphere import Atmosphere
-from ui.stage.features.level import ShutterFeature
+from stage import renderer_for, wheelart
+from stage.atmosphere import Atmosphere
+from stage.features.level import ShutterFeature
 import ofl_factory
 
 
@@ -248,7 +248,7 @@ def test_the_haze_slider_takes_effect_at_once(qapp):
     # needed two things it did not have: the level had to move without waiting
     # out a twelve-second drift, and something had to ask for a redraw.
     from core.config import Config
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
 
     config = Config()
     config.fixtures = []
@@ -310,7 +310,7 @@ def test_drifting_air_gets_frames_of_its_own(qapp):
     # half matters just as much: with nothing to animate it must stay silent,
     # or a stage sitting idle redraws forever.
     from core.config import Config
-    from ui.stage_controller import StageController
+    from stage.controller import StageController
 
     config = Config()
     config.fixtures = []

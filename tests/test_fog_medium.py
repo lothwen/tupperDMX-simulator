@@ -25,10 +25,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
-from ui.stage import puffs, renderer_for
-from ui.stage.atmosphere import Atmosphere
-from ui.stage.light import BLOB
-from ui.stage.profiles.atmospheric import HazerFixture, SmokeFixture
+from stage import puffs, renderer_for
+from stage.atmosphere import Atmosphere
+from stage.light import BLOB
+from stage.profiles.atmospheric import HazerFixture, SmokeFixture
 import ofl_factory
 
 #: What a machine's fog is measured against. The stage is about this tall and
