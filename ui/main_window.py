@@ -24,12 +24,12 @@ from core.show import store as show_store
 from core.show.model import ShowError
 from timeline import Timeline
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
 from ui.about_dialog import AboutDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
-from ui.fixture_designer import StageEditToolbar, FixtureInspector
+from ui.fixture.designer import StageEditToolbar, FixtureInspector
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
 from stage.controller import StageController

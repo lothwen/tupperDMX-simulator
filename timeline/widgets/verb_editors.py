@@ -34,7 +34,7 @@ from core import note_layout, ofl
 from core.fixture_library import FixtureDef
 from core.fixture_state import capability_at
 from midi.constants import _channel_to_velocity
-from ui.fixture_console import ChannelFader, default_values
+from ui.fixture.console import ChannelFader, default_values
 
 # Velocity for a verb that takes no parameter. Must be non-zero: a note_on at
 # velocity 0 reads as a note_off. Matches the take-manual convention.

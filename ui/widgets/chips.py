@@ -1,6 +1,7 @@
-# ABOUTME: The Qt chip widget shared by the fixture browser's tabs. The channel
-# ABOUTME: family it displays comes from core/channel_families.py.
-"""Chip rendering.
+# ABOUTME: The Qt chip widget, plus the one FlowLayout every wrapping row in the
+# ABOUTME: app uses. The channel family a chip displays comes from
+# ABOUTME: core/channel_families.py.
+"""Chip rendering, and the flow layout chips need.
 
 Only the Qt half lives here: what a channel *is* — its family label and colour —
 is decided from the OFL capabilities in `core.channel_families`, which the
@@ -34,8 +35,10 @@ def chip(text: str, color: str) -> QLabel:
 class FlowLayout(QLayout):
     """Left-to-right layout wrapping onto a new line when it runs out of width.
 
-    Chips are text-sized and so unpredictably wide that no grid fits them; this
-    is the standard Qt flow-layout recipe.
+    The standard Qt flow-layout recipe. Chips are text-sized and so
+    unpredictably wide that no grid fits them; the clip library's pill bar and
+    card grid are fixed-size but want the same reflow-with-the-panel behaviour,
+    so both read this one. Margins are always zero — set them on the parent.
     """
 
     def __init__(self, parent=None, spacing: int = 5):

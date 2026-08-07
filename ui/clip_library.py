@@ -8,9 +8,9 @@ from typing import Dict, List, Tuple
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
                              QLineEdit, QToolButton, QButtonGroup, QScrollArea,
-                             QLayout, QLayoutItem, QApplication, QSizePolicy)
+                             QLayout, QApplication, QSizePolicy)
 from PyQt6.QtGui import QColor, QPainter, QDrag
-from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QMimeData, QSize, QPoint, pyqtSignal
 
 from core import note_layout
 from core.config import Config
@@ -19,7 +19,8 @@ from core.fixture_library import FixtureDef, color_slots, resolve_fixture
 from midi.scene_editor import TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
+from ui.widgets.chips import FlowLayout
 
 
 # Custom MIME type carries a JSON payload {"note": int, "velocity": int}.
@@ -47,80 +48,6 @@ _SHOW_COLOR = '#888888'
 # width.
 _PILL_WIDTH = 114
 _PILL_HEIGHT = 28
-
-
-class FlowLayout(QLayout):
-    """A layout that lays items left-to-right and wraps to the next row when it
-    runs out of width (the standard Qt FlowLayout example). Used for the pill
-    bar and the clip-card grid so both reflow with the panel width."""
-
-    def __init__(self, parent=None, margin=0, spacing=6):
-        super().__init__(parent)
-        if parent is not None:
-            self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
-        self._items: List[QLayoutItem] = []
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self):
-        return len(self._items)
-
-    def itemAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items[index]
-        return None
-
-    def takeAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
-        return None
-
-    def expandingDirections(self):
-        return Qt.Orientation(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self._do_layout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
-
-    def _do_layout(self, rect, test_only):
-        m = self.contentsMargins()
-        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
-        x = effective.x()
-        y = effective.y()
-        line_height = 0
-        spacing = self.spacing()
-        for item in self._items:
-            hint = item.sizeHint()
-            next_x = x + hint.width() + spacing
-            if next_x - spacing > effective.right() and line_height > 0:
-                x = effective.x()
-                y = y + line_height + spacing
-                next_x = x + hint.width() + spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x = next_x
-            line_height = max(line_height, hint.height())
-        return y + line_height - rect.y() + m.bottom()
 
 
 class ClipPill(QFrame):
@@ -348,7 +275,7 @@ class ClipLibraryWidget(QWidget):
 
         self.pill_bar = QWidget()
         self.pill_bar.setObjectName("ClipPillBar")
-        self.pill_flow = FlowLayout(self.pill_bar, margin=0, spacing=6)
+        self.pill_flow = FlowLayout(self.pill_bar, spacing=6)
         root.addWidget(self.pill_bar)
 
         root.addWidget(self._build_header_row())
@@ -361,7 +288,7 @@ class ClipLibraryWidget(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.card_grid = QWidget()
         self.card_grid.setObjectName("ClipCardGrid")
-        self.card_flow = FlowLayout(self.card_grid, margin=0, spacing=6)
+        self.card_flow = FlowLayout(self.card_grid, spacing=6)
         self.card_scroll.setWidget(self.card_grid)
         root.addWidget(self.card_scroll, 1)
 

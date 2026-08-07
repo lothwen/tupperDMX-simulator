@@ -61,7 +61,7 @@ def test_overlay_registration_and_grid(qapp):
 
 def test_toolbar_move_persists(qapp):
     print("test_toolbar_move_persists")
-    from ui.fixture_designer import StageEditToolbar
+    from ui.fixture.designer import StageEditToolbar
     sc, cfg = _stage()
     calls = {"patch": 0}
     StageEditToolbar(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1),
@@ -74,7 +74,7 @@ def test_toolbar_move_persists(qapp):
 
 def test_inspector_populates_and_edits(qapp):
     print("test_inspector_populates_and_edits")
-    from ui.fixture_designer import FixtureInspector
+    from ui.fixture.designer import FixtureInspector
     sc, cfg = _stage()
     calls = {"patch": 0}
     insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
@@ -108,7 +108,7 @@ def _click_delete_with_confirmation(insp, answer):
 
 def test_inspector_delete_removes_and_persists(qapp):
     print("test_inspector_delete_removes_and_persists")
-    from ui.fixture_designer import FixtureInspector
+    from ui.fixture.designer import FixtureInspector
     from PyQt6.QtWidgets import QMessageBox
     sc, cfg = _stage()
     calls = {"patch": 0}
@@ -126,7 +126,7 @@ def test_inspector_delete_removes_and_persists(qapp):
 
 def test_inspector_delete_cancel_keeps_fixture(qapp):
     print("test_inspector_delete_cancel_keeps_fixture")
-    from ui.fixture_designer import FixtureInspector
+    from ui.fixture.designer import FixtureInspector
     from PyQt6.QtWidgets import QMessageBox
     sc, cfg = _stage()
     calls = {"patch": 0}
@@ -144,7 +144,7 @@ def test_inspector_delete_cancel_keeps_fixture(qapp):
 
 def test_inspector_close_clears_selection(qapp):
     print("test_inspector_close_clears_selection")
-    from ui.fixture_designer import FixtureInspector
+    from ui.fixture.designer import FixtureInspector
     sc, _ = _stage()
     insp = FixtureInspector(sc, lambda: None)
 
@@ -209,7 +209,7 @@ def test_label_removed_with_fixture(qapp):
 
 def test_toolbar_done_invokes_callback(qapp):
     print("test_toolbar_done_invokes_callback")
-    from ui.fixture_designer import StageEditToolbar
+    from ui.fixture.designer import StageEditToolbar
     sc, _ = _stage()
     calls = {"done": 0}
     tb = StageEditToolbar(sc, lambda: None, lambda: calls.__setitem__("done", calls["done"] + 1))

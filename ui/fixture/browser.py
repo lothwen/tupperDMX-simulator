@@ -35,8 +35,8 @@ from core.fixture_library import (
     FixtureDef, fixture_document, load_fixture_defs, resolve_fixture,
 )
 from core.channel_families import channel_family as _channel_family
-from ui.fixture_chips import FlowLayout, chip as _chip
-from ui.fixture_scenes_tab import FixtureScenesTab
+from ui.widgets.chips import FlowLayout, chip as _chip
+from ui.fixture.scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
 

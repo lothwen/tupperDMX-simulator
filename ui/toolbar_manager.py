@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
-from ui import icons
+from ui.widgets import icons
 from tupperlogger import get_logger
 from core.config import Config
 from webremote.state import probe_duration

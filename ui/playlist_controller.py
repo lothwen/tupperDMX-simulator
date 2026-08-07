@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from core.show.model import song_status
 from core.show.relink import find_by_basename
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
 
 
 class PlaylistController:
