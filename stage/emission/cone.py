@@ -25,7 +25,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPolygonItem
 
 from stage import wheelart
-from stage.base import DIFFUSE_GLOW, GlowingEllipse
+from stage.glow import DIFFUSE_GLOW, GlowingEllipse
 from stage.emission.base import Emission
 from stage.frame import (
     BEAM_LENGTH_PX, FORESHORTEN_FLOOR, BeamParams, Frame,

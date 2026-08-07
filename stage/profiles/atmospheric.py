@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
 from stage import puffs
-from stage.base import BodyFixture
+from stage.body import BodyFixture
 from stage.emission.base import NoEmission
 from stage.emission.volumetric import FogPlume
 from stage.frame import Frame

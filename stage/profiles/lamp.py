@@ -19,7 +19,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QGraphicsRectItem
 
 from core.fixture_library import FixtureDef
-from stage.base import BodyFixture
+from stage.body import BodyFixture
 from stage.emission.cone import emission_for_kind
 from stage.registry import register_renderer
 

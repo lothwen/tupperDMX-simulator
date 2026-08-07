@@ -187,7 +187,7 @@ gains an entry nobody handled.
   aim** (squared in `beam.foreshorten`), and it is ignored on a body that throws no
   shaft (`Lensed.lens_only`). The raster halo is the item's bounding rect, so it must
   move through `GlowingEllipse.set_glow_radius` or the old halo stays painted; a lens
-  fades on `base.DIFFUSE_GLOW`, not the classic `SHARP_GLOW`, whose original alphas
+  fades on `glow.DIFFUSE_GLOW`, not the classic `SHARP_GLOW`, whose original alphas
   (180/130/90/40/0) keep every other fixture rendering byte-identically.
 - `emission/` — how the light is drawn: `cone.py` (`WashLamp`, `LampGlow` — the same
   lamps with no cone ever built, so a stray zoom channel cannot conjure one —
@@ -208,10 +208,13 @@ gains an entry nobody handled.
   (`Aim`: pan/tilt onto a flat front elevation; **no pan/tilt ⇒ straight down at full
   length** — plus `Spinner`, `Slew`), `clock.py` (ONE 30 Hz timer for everything that
   animates, subscribed weakly), `wheelart.py` (procedural gobo/gel/prism art from the
-  slot's own OFL description), `base.py` (`DesignableFixture`, `GlowingEllipse`, the
-  mm→px helpers anchored by `MM_PER_STAGE_PX`, and `BodyFixture`, which runs the
+  slot's own OFL description), and the three that used to be one `base.py`:
+  `body.py` (`FixtureLabel`, `DesignableFixture`, and `BodyFixture`, which runs the
   pipeline: reset the beam → each feature shapes it → the emission draws it → the
-  profile repaints its chassis).
+  profile repaints its chassis), `glow.py` (`GlowingEllipse` and the `SHARP_GLOW` /
+  `DIFFUSE_GLOW` falloffs) and `metrics.py` (the mm→px helpers anchored by
+  `MM_PER_STAGE_PX`, `body_size`/`body_count`/`body_spacing`/`declared_cell_count`
+  — Qt-free, since a body is sized and placed before there is a state to resolve).
 - **Atmosphere**: a beam is invisible in clean air, so visibility is the one genuinely
   cross-fixture quantity. `StageController` owns one `Atmosphere`; any body resolving
   a fog output contributes, sources combine without exceeding full, and the level
@@ -565,9 +568,10 @@ Every package is described under Architecture above; this is the map.
 - `stage/` — the render engine, a **top-level** package like `timeline/`: it is
   QtWidgets, but it imports nothing from `ui/` (only `core/`, PyQt6 and
   `tupperlogger`), which is what earns it the root. `controller.py`
-  (`StageController`/`StageView`, also owns the `Atmosphere`) drives `base`,
-  `registry`, `optics`, `frame`, `geometry`, `clock`, `atmosphere`, `puffs`,
-  `wheelart`, `light`, `profiles/`, `emission/`, `features/`, `gpu/`.
+  (`StageController`/`StageView`, also owns the `Atmosphere`) drives `body`,
+  `glow`, `metrics`, `registry`, `optics`, `frame`, `geometry`, `clock`,
+  `atmosphere`, `puffs`, `wheelart`, `light`, `profiles/`, `emission/`,
+  `features/`, `gpu/`.
 - `ui/` — `main_window.py`, `playlist_controller.py` (widget half; guides relink
   silently), and the dialogs/panels named under Architecture
   (`fixture_designer`, `add_fixture_dialog`, `fixture_scenes_tab`, `fixture_console`,

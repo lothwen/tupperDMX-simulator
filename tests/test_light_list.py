@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.fixture_library import resolve_fixture
 from stage import puffs, renderer_for
 from stage.emission.cone import HardBeam, lens_glow_radii
-from stage.base import DIFFUSE_GLOW, SHARP_GLOW
+from stage.glow import DIFFUSE_GLOW, SHARP_GLOW
 from stage.frame import FORESHORTEN_FLOOR
 from stage.light import (
     BLOB, CONE, LINE, POINT, QUAD, STRIDE, LightList, linear_rgb,

@@ -16,7 +16,8 @@ from PyQt6.QtGui import QBrush, QColor, QMovie
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsRectItem
 
 from core.paths import asset_path
-from stage.base import GlowingEllipse, body_count
+from stage.glow import GlowingEllipse
+from stage.metrics import body_count
 from stage.emission.base import Emission
 from stage.frame import Frame
 from stage.light import LightList, linear_rgb
