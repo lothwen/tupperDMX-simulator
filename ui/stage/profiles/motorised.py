@@ -47,6 +47,10 @@ class MovingHeadFixture(BodyFixture):
     forced_features = ("PanTiltFeature",)
     # A head with no optics declared at all still throws something.
     beam_fallback = BeamKind.WASH
+    # And what it throws is the beam, all of it. The lens is where the light
+    # leaves, not a second light of its own: a head that also wore a halo read
+    # as a spot with a wash bolted to it, which is not a fixture.
+    lamp_is_lens = True
 
     def build_housing(self) -> None:
         width, height = self.width, self.height

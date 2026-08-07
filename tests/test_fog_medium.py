@@ -18,6 +18,7 @@ Run with:
     uv run python tests/test_fog_medium.py
 """
 
+import math
 import os
 import sys
 
@@ -29,6 +30,10 @@ from ui.stage.atmosphere import Atmosphere
 from ui.stage.light import BLOB
 from ui.stage.profiles.atmospheric import HazerFixture, SmokeFixture
 import ofl_factory
+
+#: What a machine's fog is measured against. The stage is about this tall and
+#: the machine stands on its floor, so a parcel this far up has left the room.
+STAGE_HEIGHT_PX = 1024.0
 
 
 def _assert(cond, msg):
@@ -124,52 +129,166 @@ def test_a_parcel_rises_spreads_and_thins():
     _assert(later.z_extent > first.z_extent, "it spreads in depth as well as across")
 
 
-def test_a_machine_fills_the_stage_rather_than_drawing_a_column():
-    print("test_a_machine_fills_the_stage_rather_than_drawing_a_column")
-    # The report this pins: "the haze and smoke machines should generate more
-    # smoke and spread all over the stage". Before, every parcel left the nozzle
+def test_a_machine_fills_the_room_rather_than_drawing_a_column():
+    print("test_a_machine_fills_the_room_rather_than_drawing_a_column")
+    # The report this pins: "the smoke generated should fill the entire room,
+    # like it would happen in real life". Before, every parcel left the nozzle
     # on essentially the same line and wandered ±125px over its whole life, so
-    # what a machine made was a stripe above itself. A stage is ~1536px across.
-    for spec, name, wanted in ((puffs.HAZER, "a hazer", 1200.0),
-                               (puffs.SMOKE, "a smoke machine", 700.0)):
+    # what a machine made was a stripe above itself. A stage is ~1536 x 1024,
+    # so these are "most of the room in both directions" rather than exact
+    # measurements of the specs — the parcels are meant to stay tunable.
+    for spec, name, across, up in ((puffs.HAZER, "a hazer", 1300.0, 800.0),
+                                   (puffs.SMOKE, "a smoke machine", 900.0, 800.0)):
         field = puffs.PuffField(spec)
         _run(field, spec.lifetime_s, 1.0)
         xs = [p.x for p in field]
-        span = max(xs) - min(xs)
-        _assert(span >= wanted,
-                f"{name} left running covers {span:.0f}px across the stage "
-                f"(wanted at least {wanted:.0f})")
+        ys = [p.y for p in field]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        _assert(width >= across,
+                f"{name} left running covers {width:.0f}px across the stage "
+                f"(wanted at least {across:.0f})")
+        # Both directions, which is the half that was missing: a machine whose
+        # every parcel stopped climbing at one height filled a band, not a room.
+        _assert(height >= up,
+                f"and {height:.0f}px of its height (wanted at least {up:.0f})")
         # And it is a bank of many parcels rather than a handful of blobs: the
         # texture comes from them overlapping, so the count is the look.
         _assert(len(field) >= 40,
                 f"{name} holds {len(field)} parcels in the air")
 
 
-def test_a_parcel_stops_rising():
-    print("test_a_parcel_stops_rising")
-    # Fog is a cold, heavy fluid being pushed by a fan, not a balloon. A parcel
-    # that kept climbing at a constant rate would file off the top of the
-    # picture in formation, which is the most obvious tell there is.
+def test_a_machine_does_not_leave_in_two_branches():
+    print("test_a_machine_does_not_leave_in_two_branches")
+    # The other half of the same report: "they always go up a bit and then left
+    # and right forming kind of a 2 branch tree ... it is always the same path".
+    # That was a constant lateral velocity dealt with a bias AWAY from zero, so
+    # every parcel set off on one of two straight lines and the middle stayed
+    # empty. Dispersion is a random walk now, which fills the middle.
+    for spec, name in ((puffs.HAZER, "a hazer"), (puffs.SMOKE, "a smoke machine")):
+        field = puffs.PuffField(spec)
+        _run(field, spec.lifetime_s, 1.0)
+        xs = sorted(p.x for p in field)
+        low, high = xs[0], xs[-1]
+        third = (high - low) / 3.0
+        middle = sum(1 for x in xs if low + third <= x <= high - third)
+        share = middle / len(xs)
+        # A two-lobe fan leaves the middle third emptier than the flanks; an
+        # even spread would put a third here and a cloud centred on its own
+        # nozzle rather more. Either is fine. A hole in the middle is not.
+        _assert(share > 0.33,
+                f"{name}'s middle third of the stage holds {share:.0%} of its "
+                "parcels, so there is no gap between two branches")
+
+
+def test_no_two_parcels_take_the_same_path():
+    print("test_no_two_parcels_take_the_same_path")
+    # "Real smoke has more chaos in its movements, randomness." A parcel used to
+    # meander on ONE sine, at one frequency shared by every parcel, with Y a
+    # fixed fraction of X — so every parcel slid up and down its own 45 degree
+    # line, in step, forever.
     spec = puffs.SMOKE
     field = puffs.PuffField(spec)
-    field.update(0.0, 1.0, (0.0, 0.0))
+    _run(field, spec.lifetime_s * 0.6, 1.0)
+    parcels = list(field)
 
-    heights = []
-    for fraction in (0.25, 0.5, 0.75):
-        field.update(spec.lifetime_s * fraction, 0.0, (0.0, 0.0))
-        heights.append(-list(field)[0].y)          # stage up is -Y
+    # X and Y are decorrelated: they are dealt independent amplitudes, phases
+    # and rates, so a bank does not travel on a diagonal.
+    mean_x = sum(p.x for p in parcels) / len(parcels)
+    mean_y = sum(p.y for p in parcels) / len(parcels)
+    covariance = sum((p.x - mean_x) * (p.y - mean_y) for p in parcels)
+    spread_x = math.sqrt(sum((p.x - mean_x) ** 2 for p in parcels))
+    spread_y = math.sqrt(sum((p.y - mean_y) ** 2 for p in parcels))
+    correlation = covariance / (spread_x * spread_y)
+    _assert(abs(correlation) < 0.5,
+            f"how far a parcel has gone across says little about how far it "
+            f"has gone up (correlation {correlation:+.2f})")
 
-    first_leg = heights[1] - heights[0]
-    second_leg = heights[2] - heights[1]
-    _assert(second_leg < first_leg,
-            f"it climbs {first_leg:.0f}px in the second quarter of its life "
-            f"and only {second_leg:.0f}px in the third")
-    # Its buoyancy is worth a fixed climb, and turbulence can push it a little
-    # either side of that. Nothing else lifts it, so it hangs.
-    ceiling = spec.rise_px_s * spec.rise_decay_s + spec.turbulence_px * 0.35
-    _assert(heights[-1] < ceiling,
-            f"and hangs below {ceiling:.0f}px rather than climbing out of "
-            f"the picture (reached {heights[-1]:.0f}px)")
+    # And the meander does not repeat. One sine comes back to exactly where it
+    # was every 2*pi; three at incommensurate frequencies never come round
+    # together, which is what makes the path unpredictable rather than a
+    # pendulum you can time.
+    residual = max(abs(puffs._wander(t * 0.4 + math.tau, 1.3)
+                       - puffs._wander(t * 0.4, 1.3))
+                   for t in range(0, 200))
+    _assert(residual > 0.2,
+            f"and a full turn of its slowest octave leaves it somewhere else "
+            f"entirely (up to {residual:.2f} of its own amplitude away), "
+            "rather than back where it started")
+
+
+def test_a_bank_stops_rising():
+    print("test_a_bank_stops_rising")
+    # Fog is a cold, heavy fluid being pushed by a fan, not a balloon. A bank
+    # that kept climbing at a constant rate would file off the top of the
+    # picture in formation, which is the most obvious tell there is.
+    #
+    # Measured over the bank rather than over one parcel, because a parcel no
+    # longer only rises: it also takes a random walk, and one that happened to
+    # be pushed upward late in its life genuinely does climb faster in its third
+    # quarter than its second. That is the chaos, not a bug in the buoyancy —
+    # what has to hold is that a machine's smoke as a whole settles.
+    #
+    # Over the two HALVES of a life, and against a margin rather than a hair.
+    # A machine's push is spent within a few `rise_decay_s` of the nozzle, which
+    # on a smoke machine is inside the first quarter of a parcel's life: sampled
+    # at the quarter marks, both legs are made of nothing but the random walk
+    # and the meander, and the deceleration left in them is smaller than the
+    # noise of averaging a ±`turbulence_px` sine over any finite bank. Halves
+    # put the climb in the first leg, where it happens.
+    for spec, name in ((puffs.HAZER, "a hazer"), (puffs.SMOKE, "a smoke machine")):
+        legs = [[], []]
+        for index in range(120):
+            field = puffs.PuffField(spec)
+            field._spawned = index          # deal parcel `index`, one at a time
+            field.update(0.0, 1.0, (0.0, 0.0))
+            heights = [-list(field)[0].y]              # stage up is -Y
+            for fraction in (0.5, 0.99):
+                field.update(spec.lifetime_s * fraction, 0.0, (0.0, 0.0))
+                heights.append(-list(field)[0].y)
+            legs[0].append(heights[1] - heights[0])
+            legs[1].append(heights[2] - heights[1])
+
+        first = sum(legs[0]) / len(legs[0])
+        second = sum(legs[1]) / len(legs[1])
+        _assert(second < first * 0.5,
+                f"{name}'s smoke climbs {first:.0f}px in the first half of its "
+                f"life and only {second:.0f}px in the second")
+
+
+def test_the_top_of_a_bank_is_ragged_rather_than_a_line():
+    print("test_the_top_of_a_bank_is_ragged_rather_than_a_line")
+    # Every parcel used to be dealt the same push and lose it on the same
+    # schedule, so a machine left running drew a hard line across the stage
+    # where all of them ran out of lift at once. The push and the losing of it
+    # are both per-parcel now.
+    for spec, name in ((puffs.HAZER, "a hazer"), (puffs.SMOKE, "a smoke machine")):
+        ceilings = []
+        for index in range(120):
+            field = puffs.PuffField(spec)
+            field._spawned = index
+            field.update(0.0, 1.0, (0.0, 0.0))
+            field.update(spec.lifetime_s * 0.99, 0.0, (0.0, 0.0))
+            live = list(field)
+            if live:
+                ceilings.append(-live[0].y)
+        span = max(ceilings) - min(ceilings)
+        _assert(span > 200.0,
+                f"{name}'s parcels come to rest over a {span:.0f}px spread of "
+                "heights, not all at one")
+        # And the bank hangs in the room rather than filing off into the sky.
+        # Over the bulk of it rather than over its luckiest parcel: dispersion
+        # is a random walk, so a machine that reaches the wings has by the same
+        # term carried the odd parcel out of the top of the picture, and capping
+        # the maximum would cap the spread instead of the climb.
+        ceilings.sort()
+        median = ceilings[len(ceilings) // 2]
+        indoors = sum(1 for c in ceilings if c < STAGE_HEIGHT_PX) / len(ceilings)
+        _assert(median < STAGE_HEIGHT_PX,
+                f"while the middle of {name}'s bank rests {median:.0f}px up, "
+                f"inside a {STAGE_HEIGHT_PX:.0f}px room")
+        _assert(indoors > 0.75,
+                f"and {indoors:.0%} of it is still under the ceiling")
 
 
 def test_parcels_do_not_all_look_the_same():
@@ -180,10 +299,24 @@ def test_parcels_do_not_all_look_the_same():
     field = puffs.PuffField(puffs.SMOKE)
     _run(field, 6.0, 1.0)
     parcels = list(field)
-    _assert(len({p.variant % 6 for p in parcels}) > 1,
-            "parcels are dealt different shapes to wear")
-    _assert(len({round(p.spin, 3) for p in parcels}) == len(parcels),
-            "and each is turned differently, so no two are the same stamp")
+    shapes = {p.variant % puffs.PARCEL_VARIANTS for p in parcels}
+    _assert(len(shapes) > 1,
+            f"parcels are dealt different shapes to wear ({len(shapes)} of "
+            f"{puffs.PARCEL_VARIANTS})")
+    # Turned all round the circle, rather than pairwise unique. A bank of a
+    # hundred-odd angles dealt from a hash has a pair a thousandth of a radian
+    # apart by simple coincidence, so demanding that no two round to the same
+    # number is a birthday-paradox test that fails as soon as a machine's rate
+    # goes up — while a pair 0.005 degrees apart is not what "the same stamp"
+    # means. What has to hold is that the field SPREADS orientation.
+    sectors = [0] * 12
+    for parcel in parcels:
+        sectors[int(parcel.spin % math.tau / math.tau * 12)] += 1
+    _assert(sum(1 for count in sectors if count) >= 9,
+            f"and turned to angles from all round the circle ({sectors})")
+    _assert(max(sectors) < len(parcels) / 3.0,
+            f"with no one orientation the bank shares ({max(sectors)} of "
+            f"{len(parcels)} within a twelfth of a turn)")
     # A parcel keeps its shape for life — flickering between them would read as
     # noise on the fixture rather than as smoke.
     before = {id_: p.variant for id_, p in enumerate(parcels)}
@@ -232,13 +365,22 @@ def test_a_hazers_ceiling_is_reached_below_full_dmx():
 
 def test_a_stalled_frame_does_not_teleport_the_column():
     print("test_a_stalled_frame_does_not_teleport_the_column")
-    field = puffs.PuffField(puffs.SMOKE)
+    spec = puffs.SMOKE
+    field = puffs.PuffField(spec)
     field.update(0.0, 1.0, (0.0, 0.0))
+    already = len(field)
     # A modal dialog, a slow decode: the clock jumps. One step's worth is all
     # that may be integrated, or the whole column shoots off the stage.
     field.update(30.0, 1.0, (0.0, 0.0))
-    _assert(len(field) <= 2,
-            f"a 30-second gap does not spawn a ring's worth ({len(field)})")
+    # `MAX_STEP_S` of spawning and the part-parcel carried at the nozzle, on top
+    # of whatever was already in the air — and NOT the 600 this machine owes for
+    # thirty seconds, which is the thing being clamped.
+    burst = already + 1 + spec.rate_hz * puffs.MAX_STEP_S
+    _assert(len(field) <= burst,
+            f"a 30-second gap spawns one step's worth ({len(field)}, at most "
+            f"{burst:.0f})")
+    _assert(len(field) < spec.capacity / 4.0,
+            f"which is nowhere near a ring's worth ({spec.capacity})")
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +520,11 @@ def main():
     test_a_machine_shows_something_on_its_first_frame()
     test_smoke_outlives_the_channel_that_made_it()
     test_a_parcel_rises_spreads_and_thins()
-    test_a_machine_fills_the_stage_rather_than_drawing_a_column()
-    test_a_parcel_stops_rising()
+    test_a_machine_fills_the_room_rather_than_drawing_a_column()
+    test_a_machine_does_not_leave_in_two_branches()
+    test_no_two_parcels_take_the_same_path()
+    test_a_bank_stops_rising()
+    test_the_top_of_a_bank_is_ragged_rather_than_a_line()
     test_parcels_do_not_all_look_the_same()
     test_the_ring_bounds_a_machine_left_running()
     test_a_hazer_makes_a_thinner_medium_than_a_smoke_machine()

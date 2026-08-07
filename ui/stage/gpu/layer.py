@@ -260,6 +260,7 @@ class LightLayer:
         try:
             self._ensure_fbo(width, height)
             self._set_clip(clip, height)
+            self._upload_instances()
             self._accumulate(scene_to_clip, self._light_count)
             self._march_fog(scene_to_clip, width, height, clip)
             self._resolve(width, height)
@@ -480,6 +481,30 @@ class LightLayer:
         self._fbo = QOpenGLFramebufferObject(width, height, fmt)
         self._size = (width, height)
 
+    def _upload_instances(self) -> None:
+        """Put this frame's primitives on the GPU, before anything draws them.
+
+        Its own step, and not the light pass's, because **the medium pass reads
+        the same buffer** — the parcels of smoke sit after the lights in one
+        upload, which is the whole reason there is only one. Left where it was,
+        inside `_accumulate` and after its `count == 0` early return, a stage
+        whose only emitter is a fog machine never uploaded anything at all:
+        `light_count` is 0 for a hazer, so the buffer stayed at whatever size it
+        last was — zero on the first frame — and `_build_medium` then drew a
+        hundred and fifty instances out of it. That is a read off the end of a
+        vertex buffer, which is undefined, and on the driver this was found on
+        it took the process down.
+
+        Reachable in ordinary use: a hazer running through a blackout, or a rig
+        being patched fog-machine-first.
+        """
+        if self._packed is None:
+            return
+        payload = bytes(self._packed)
+        self._instances.bind()
+        self._instances.allocate(payload, len(payload))
+        self._instances.release()
+
     def _accumulate(self, scene_to_clip: QMatrix4x4, count: int) -> None:
         gl = self._fns
         self._fbo.bind()
@@ -516,8 +541,6 @@ class LightLayer:
         self._quad.release()
 
         self._instances.bind()
-        payload = bytes(self._packed)
-        self._instances.allocate(payload, len(payload))
         stride = STRIDE * 4
         offset = 0
         enabled = []
