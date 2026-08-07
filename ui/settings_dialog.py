@@ -1,6 +1,7 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
-# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Logging).
+# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Virtual
+# ABOUTME: stage, Logging).
 
 import html
 import threading
@@ -42,7 +43,8 @@ class SettingsDialog(QDialog):
     _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
 
     _PAGES = (("swap", "Input / Output"), ("monitor", "Web Remote"),
-              ("volume", "Audio"), ("list-view", "Logging"))
+              ("volume", "Audio"), ("bolt", "Virtual stage"),
+              ("list-view", "Logging"))
 
     def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
@@ -65,6 +67,7 @@ class SettingsDialog(QDialog):
         self.pages.addWidget(self._build_io_page())
         self.pages.addWidget(self._build_webremote_page())
         self.pages.addWidget(self._build_audio_page())
+        self.pages.addWidget(self._build_stage_page())
         self.pages.addWidget(self._build_logging_page())
         right.addWidget(self.pages, 1)
 
@@ -571,10 +574,11 @@ class SettingsDialog(QDialog):
         hint.setObjectName("SettingsDimLabel")
         layout.addWidget(hint)
 
-        layout.addSpacing(18)
-        stage_title = QLabel("VIRTUAL STAGE")
-        stage_title.setObjectName("SettingsDimLabel")
-        layout.addWidget(stage_title)
+        layout.addStretch(1)
+        return page
+
+    def _build_stage_page(self) -> QWidget:
+        page, layout = self._make_page("Virtual stage", "renderer · fog")
 
         self.stage_gpu_check = QCheckBox("Render the stage light on the GPU")
         self.stage_gpu_check.setChecked(self.config.window.stage_gpu)
