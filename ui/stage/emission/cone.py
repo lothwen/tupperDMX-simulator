@@ -25,7 +25,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPolygonItem
 
 from ui.stage import wheelart
-from ui.stage.base import GlowingEllipse
+from ui.stage.base import DIFFUSE_GLOW, GlowingEllipse
 from ui.stage.emission.base import Emission
 from ui.stage.frame import (
     BEAM_LENGTH_PX, FORESHORTEN_FLOOR, BeamParams, Frame,
@@ -203,7 +203,95 @@ def _cone_polygon(origin: QPointF, axis_deg: float, length: float,
                       QPointF(tip.x() + across.x(), tip.y() + across.y())])
 
 
-class WashLamp(Emission):
+# How wide a lens's halo is at rest, in LAMP RADII: 1.0 reaches the edge of the
+# lamp itself, 3.0 three times as far again.
+#
+# Its own unit rather than a fraction of `GLOW`, because that baseline is 4 to
+# 20 lamp radii — a wash's halo — and every setting a lens wants is a small
+# fraction of it, which crowded the whole usable range into the bottom
+# hundredths of the dial. Here a tenth is a tenth of the lamp and the numbers
+# say what they do.
+#
+# Not zero: a lit head has a visibly lit lens, and a bare dot with nothing
+# around it reads as a pinprick rather than as glass with a lamp behind it.
+LENS_GLOW_AT_REST = 0.15
+
+# ...and what it grows to as the beam turns down the lens.
+#
+# Aimed at you, a beam puts its whole output in your eye instead of the little
+# it scatters sideways, so the lens blooms out to something the size of a wash.
+# It is still one beam and there is still no second light: you are just standing
+# in it. The shaft is doing the same thing at the same moment — `cone_geometry`
+# widens its spread, and the shader's `forward_scatter` brightens it — so this
+# is the lens's share of one effect rather than a rule of its own.
+LENS_GLOW_AT_VIEWER = 0.35
+
+
+def lens_glow_radii(foreshorten: float) -> float:
+    """How wide a lens's halo is, in lamp radii, for one frame's aim.
+
+    `foreshorten` is 1.0 across the picture and `FORESHORTEN_FLOOR` straight
+    down the lens, which is the most any fixture here can turn toward you.
+
+    Squared, so the bloom belongs to the last part of the turn. Linear, a head
+    tilted halfway already wore a bigger halo than the flat one this replaced —
+    and a beam crossing the stage at 45° is still a beam you are looking at
+    from the side. What the eye reads as "that one is pointing at me" happens
+    close to the end of the range, which is also where `forward_scatter` puts
+    the shaft's own brightening.
+    """
+    aimed = (1.0 - min(1.0, max(FORESHORTEN_FLOOR, foreshorten))) / (
+        1.0 - FORESHORTEN_FLOOR)
+    return (LENS_GLOW_AT_REST
+            + (LENS_GLOW_AT_VIEWER - LENS_GLOW_AT_REST) * aimed * aimed)
+
+
+def lens_glow_scale(foreshorten: float, base_glow: float) -> float:
+    """The same halo as a fraction of `base_glow`, which is what both paths
+    scale: the raster multiplier is in lamp radii and the light list's POINT
+    radius is spread over `GLOW_REACH` of them, so handing each its own
+    baseline's share keeps one number describing both."""
+    return lens_glow_radii(foreshorten) / max(1e-6, base_glow)
+
+
+def _glow_multiplier(base_glow: float, radius: float, scale: float) -> float:
+    """A glow radius in lamp radii, held under the absolute ceiling.
+
+    The cap is in scene units and the multiplier is relative to the lamp, so a
+    big fixture reaches it long before a small one — which is the whole reason
+    it exists (20x on an ARRI SkyPanel is a 2650px halo on a 1920px stage).
+    """
+    return min(base_glow * scale, MAX_GLOW_RADIUS_PX / max(1.0, radius))
+
+
+class Lensed:
+    """Shared by the emissions whose lamp might be a lens rather than a light.
+
+    A moving head throws everything it makes down its beam, so its lamp is the
+    aperture that beam leaves through and not a second light beside it. Which
+    fixtures those are is the profile's call (`BodyFixture.lamp_is_lens`), and
+    it only applies where a shaft is actually drawn — on a body whose lamp IS
+    its light there would be nothing left to emit.
+    """
+
+    #: Whether this body puts a shaft in the air as well as lighting its face.
+    DRAWS_CONE = True
+
+    @property
+    def lens_only(self) -> bool:
+        return self.body.lamp_is_lens and self.DRAWS_CONE
+
+    def glow_scale(self, foreshorten: float = 1.0) -> float:
+        """How much of `GLOW` this lamp shows, for one frame's aim.
+
+        1.0 on a lamp that is its own light — the halo is what it emits, and
+        where it points changes nothing about that.
+        """
+        return (lens_glow_scale(foreshorten, self.GLOW)
+                if self.lens_only else 1.0)
+
+
+class WashLamp(Lensed, Emission):
     """One glowing lamp per zone, plus a soft cone.
 
     The common case by a distance: pars, washes, and any moving head whose
@@ -218,8 +306,6 @@ class WashLamp(Emission):
 
     #: How far the lamp's glow spreads, relative to the lamp.
     GLOW = GLOW_WITH_WASH
-    #: Whether this body puts a shaft in the air as well as lighting its face.
-    DRAWS_CONE = True
 
     def build(self) -> None:
         body = self.body
@@ -233,12 +319,14 @@ class WashLamp(Emission):
         slot = (body.width - 2 * inset_x) / count
         size = min(slot, body.height - 2 * inset_y)
         top = (body.height - size) / 2
-        multiplier = min(self.GLOW, MAX_GLOW_RADIUS_PX / max(1.0, size / 2.0))
+        multiplier = _glow_multiplier(self.GLOW, size / 2.0, self.glow_scale())
         self.lamps = []
         for index in range(count):
             lamp = GlowingEllipse(inset_x + index * slot + (slot - size) / 2,
                                   top, size, size, body)
             lamp.glow_radius_multiplier = multiplier
+            if self.lens_only:
+                lamp.glow_profile = DIFFUSE_GLOW
             self.lamps.append(lamp)
 
         origin_x, origin_y = body.aim_origin()
@@ -267,6 +355,7 @@ class WashLamp(Emission):
         # `emitter_index` rises with the lamps, so its last entry is the
         # highest emitter asked for.
         per_zone = len(self.lamps) > 1 and len(emitters) > self.emitter_index[-1]
+        scale = self.glow_scale(beam.foreshorten)
 
         for index, lamp in enumerate(self.lamps):
             if per_zone:
@@ -274,6 +363,9 @@ class WashLamp(Emission):
                 rgb, level = emitter.rgb, emitter.intensity * beam.gate
             else:
                 rgb, level = beam.rgb, beam.level
+            lamp.set_glow_radius(_glow_multiplier(self.GLOW,
+                                                  lamp.rect().width() / 2.0,
+                                                  scale))
             lamp.setGlowColor(self.body.clamped_color(rgb, level),
                               min(1.0, level))
 
@@ -285,6 +377,9 @@ class WashLamp(Emission):
         beam = frame.beam
         emitters = frame.state.emitters
         per_zone = len(self.lamps) > 1 and len(emitters) > self.emitter_index[-1]
+        # The same lens rule the raster path applies, on this path's own
+        # baseline: `GLOW_REACH` is the halo the shader spreads a lamp over.
+        scale = self.glow_scale(beam.foreshorten)
 
         for index, lamp in enumerate(self.lamps):
             if per_zone:
@@ -296,7 +391,7 @@ class WashLamp(Emission):
                 continue
             rect = lamp.rect()
             out.add_point(rect.center().x(), rect.center().y(),
-                          linear_rgb(rgb), level, rect.width() / 2.0)
+                          linear_rgb(rgb), level, rect.width() / 2.0 * scale)
 
         if self.cone is not None:
             _emit_cone(out, self.body, beam,
@@ -402,7 +497,7 @@ def _gobo_radius(beam: BeamParams) -> float:
                * length * 0.78 * max(0.05, beam.aperture))
 
 
-class HardBeam(Emission):
+class HardBeam(Lensed, Emission):
     """A defined-edge beam, and as many copies of it as the prism is making.
 
     What separates a spot from a wash on stage is that you can see where the
@@ -425,8 +520,10 @@ class HardBeam(Emission):
         size = min(body.width - 2 * inset_x, body.height - 2 * inset_y)
         self.lamp = GlowingEllipse((body.width - size) / 2,
                                    (body.height - size) / 2, size, size, body)
-        self.lamp.glow_radius_multiplier = min(
-            self.GLOW, MAX_GLOW_RADIUS_PX / max(1.0, size / 2.0))
+        self.lamp.glow_radius_multiplier = _glow_multiplier(
+            self.GLOW, size / 2.0, self.glow_scale())
+        if self.lens_only:
+            self.lamp.glow_profile = DIFFUSE_GLOW
         origin_x, origin_y = body.aim_origin()
         self._origin = QPointF(origin_x, origin_y)
         self.cones = [BeamCone(body, origin_x, origin_y)
@@ -436,6 +533,9 @@ class HardBeam(Emission):
 
     def render(self, frame: Frame) -> None:
         beam = frame.beam
+        self.lamp.set_glow_radius(_glow_multiplier(
+            self.GLOW, self.lamp.rect().width() / 2.0,
+            self.glow_scale(beam.foreshorten)))
         self.lamp.setGlowColor(self.body.clamped_color(beam.rgb, beam.level),
                                min(1.0, beam.level))
         self.gobo.apply_beam(beam, self._origin, frame.haze)
@@ -457,7 +557,7 @@ class HardBeam(Emission):
         beam.axis_deg, beam.level = base_axis, base_level
 
     def set_raster_light_visible(self, visible: bool) -> None:
-        self.lamp.draw_glow = visible
+        self.lamp.draw_glow = visible and not self.lens_only
         self.lamp.update()
         for cone in self.cones:
             cone.enabled = visible
@@ -469,7 +569,8 @@ class HardBeam(Emission):
         if beam.level > 0.0:
             size = self.lamp.rect()
             out.add_point(size.center().x(), size.center().y(),
-                          linear_rgb(beam.rgb), beam.level, size.width() / 2.0)
+                          linear_rgb(beam.rgb), beam.level,
+                          size.width() / 2.0 * self.glow_scale(beam.foreshorten))
 
         copies = beam.copies[:self.MAX_COPIES] or (0.0,)
         # A prism divides the light it splits rather than multiplying it.

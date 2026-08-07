@@ -119,6 +119,16 @@ class Primitive(NamedTuple):
         return self.length
 
     @property
+    def spin(self) -> float:
+        """BLOB only: how far the parcel has turned since birth, radians."""
+        return self.half_width
+
+    @property
+    def variant(self) -> float:
+        """BLOB only: which of the renderer's shapes it wears."""
+        return self.softness
+
+    @property
     def density(self) -> float:
         """BLOB only: `intensity` read as what it is for a medium."""
         return self.intensity
@@ -212,7 +222,8 @@ class LightList:
 
     def add_blob(self, x: float, y: float, rgb: Tuple[float, float, float],
                  density: float, radius: float, z: float = 0.0,
-                 z_extent: float = 0.0) -> None:
+                 z_extent: float = 0.0, spin: float = 0.0,
+                 variant: float = 0.0) -> None:
         """A parcel of medium — a puff of smoke, a pocket of haze.
 
         Not a light. `density` is how much of the air this parcel fills and
@@ -221,11 +232,18 @@ class LightList:
         and `z_extent` place it in depth: they ride in the `axis_deg` and
         `length` slots, which a blob has no use for.
 
+        `spin` and `variant` are what the parcel *looks* like — which shape it
+        was dealt and how far it has turned — so the density map can rasterise
+        it as the same ragged, rotated thing the raster plume paints instead of
+        a clean sphere. They ride in `half_width` and `softness`, which a blob
+        has no use for either; the stride is unchanged.
+
         With volumetric fog off it falls back to being drawn as a faint additive
         puff, which is what it has always been and what the raster path does.
         """
         self._write(BLOB, x, y, rgb, density, radius=radius,
-                    axis_deg=z, length=z_extent)
+                    axis_deg=z, length=z_extent, half_width=spin,
+                    softness=variant)
 
     # -- reading -------------------------------------------------------
     def __len__(self) -> int:

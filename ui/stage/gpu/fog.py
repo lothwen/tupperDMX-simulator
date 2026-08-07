@@ -55,9 +55,16 @@ _CLAMP_TO_EDGE = 0x812F
 #: is made deeper — `max_distance` moves the *fog's* extent, not its density.
 OPTICAL_DEPTH_AT_FULL = 2.5
 
-#: The medium map's size relative to the stage image. A parcel of smoke is tens
-#: of scene units across at its smallest, so an eighth still resolves one.
-MEDIUM_SCALE = 0.125
+#: The medium map's size relative to the stage image.
+#:
+#: An eighth resolves *where* a parcel is — it is tens of scene units across at
+#: its smallest — and that is all it ever had to do while a parcel was a smooth
+#: Gaussian. It is not enough to resolve what one now looks like: `MEDIUM_FRAG`
+#: breaks each parcel up with two octaves of noise, and at an eighth the fine
+#: one lands at about two texels a cycle, which is not detail but aliasing.
+#: A quarter costs one more megabyte and four times the rasterising of a few
+#: hundred small quads, which is nothing next to the march that reads it.
+MEDIUM_SCALE = 0.25
 
 #: How much of each frame's march survives into the next. Low enough that the
 #: dither averages out over a handful of frames, high enough that a blackout

@@ -37,6 +37,7 @@ cannot find its shaders is a runtime failure on someone else's machine, and
 there is nothing to gain from being able to edit them without a restart.
 """
 
+from ui.stage import puffs
 from ui.stage.frame import FORESHORTEN_FLOOR
 
 # The context is desktop GL (see ui/stage/gpu/layer.py — the surface format
@@ -268,7 +269,38 @@ void main() {
 # it a depth profile analytically costs one texture fetch per march step
 # instead of a loop over every puff, and nothing about the picture betrays the
 # difference.
+#
+# **Not flat in shape, though, and that was the bug.** A parcel used to land
+# here as a clean Gaussian, so what the march integrated was a pile of soft
+# spheres — and no matter how many are stacked the eye finds the circles. The
+# raster plume never had that problem because it draws each parcel with a noisy
+# sprite, which is why the GPU path looked *worse* than the fallback it was
+# meant to improve on. All the structure was coming from `turbulence()`, a
+# stage-wide field drifting on its own current with no idea where the smoke was.
+#
+# So a parcel is now built here the way the sprite sheet builds it — the same
+# disc, the same two octaves, the same weights, out of the same `PARCEL_*`
+# constants in `ui/stage/puffs.py` — turned to the parcel's own `spin` and
+# seeded by its own `variant`. The hashes differ between Python and GLSL, so a
+# given parcel is not the identical picture on both paths; it is the same kind
+# of picture, which is the whole of what "the two renderers agree" ever meant.
 # ---------------------------------------------------------------------------
+
+_PARCEL_CONSTANTS = """
+const float PARCEL_FALLOFF = %(falloff)s;
+const float PARCEL_RIM = %(rim)s;
+const float PARCEL_NOISE_COARSE = %(coarse)s;
+const float PARCEL_NOISE_FINE = %(fine)s;
+const float PARCEL_NOISE_MIX = %(mix)s;
+const float PARCEL_NOISE_FLOOR = %(floor)s;
+const float PARCEL_NOISE_GAIN = %(gain)s;
+""" % {"falloff": repr(float(puffs.PARCEL_FALLOFF)),
+       "rim": repr(float(puffs.PARCEL_RIM)),
+       "coarse": repr(float(puffs.PARCEL_NOISE_COARSE)),
+       "fine": repr(float(puffs.PARCEL_NOISE_FINE)),
+       "mix": repr(float(puffs.PARCEL_NOISE_MIX)),
+       "floor": repr(float(puffs.PARCEL_NOISE_FLOOR)),
+       "gain": repr(float(puffs.PARCEL_NOISE_GAIN))}
 
 MEDIUM_VERT = _HEADER + """
 in vec2 a_corner;
@@ -279,35 +311,75 @@ in float i_intensity;      // BLOB: density
 in float i_radius;
 in float i_axis_deg;       // BLOB: z
 in float i_length;         // BLOB: z extent
+in float i_half_width;     // BLOB: spin, radians
+in float i_softness;       // BLOB: which shape it wears
 
 uniform mat4 u_scene_to_medium;
 
 out vec2 v_local;
 flat out float v_density;
 flat out float v_z_extent;
+flat out float v_seed;
 
 void main() {
     vec2 scene = i_pos + a_corner * max(i_radius, 1.0);
-    v_local = a_corner;
+    // Into the parcel's own frame, so its noise turns with it. A parcel that
+    // kept its texture fixed while it rotated would be a stencil over moving
+    // smoke — and every parcel sharing one unrotated field is the wallpaper
+    // pattern the variants exist to break up.
+    float c = cos(i_half_width);
+    float s = sin(i_half_width);
+    v_local = vec2(a_corner.x * c - a_corner.y * s,
+                   a_corner.x * s + a_corner.y * c);
     v_density = i_intensity;
     v_z_extent = max(i_length, 1.0);
+    // Far apart per variant, so two shapes cannot land on adjacent lattice
+    // cells of the same noise and come out near-identical.
+    v_seed = i_softness * 37.0;
     gl_Position = u_scene_to_medium * vec4(scene, 0.0, 1.0);
 }
 """
 
-MEDIUM_FRAG = _HEADER + """
+MEDIUM_FRAG = _HEADER + _PARCEL_CONSTANTS + """
 in vec2 v_local;
 flat in float v_density;
 flat in float v_z_extent;
+flat in float v_seed;
 
 out vec4 fragColor;
+
+// 2D value noise in 0..1 — the same construction `_noise2` uses on the raster
+// side, in the space where it is cheap enough to run per fragment.
+float hash21(vec2 p, float seed) {
+    vec3 q = fract(vec3(p.xyx) * 0.1031 + seed * 0.0973);
+    q += dot(q, q.yzx + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+float noise2(vec2 p, float seed) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i, seed), hash21(i + vec2(1.0, 0.0), seed), f.x),
+               mix(hash21(i + vec2(0.0, 1.0), seed),
+                   hash21(i + vec2(1.0, 1.0), seed), f.x), f.y);
+}
 
 void main() {
     float r = length(v_local);
     if (r >= 1.0) { discard; }
-    // Soft-edged, and faded right out at the rim so no parcel shows a seam.
-    float shape = exp(-2.5 * r * r) * (1.0 - smoothstep(0.75, 1.0, r));
-    float density = v_density * shape;
+    // A soft disc, gone well before the rim so no parcel can show its own quad.
+    float shape = exp(-PARCEL_FALLOFF * r * r)
+                * (1.0 - smoothstep(PARCEL_RIM, 1.0, r));
+    if (shape <= 0.0) { discard; }
+    // Two octaves: one that shapes the outline, one that mottles the inside.
+    // The floor and gain are chosen so the noise averages out to 1 — this makes
+    // the parcel ragged, it does not make it thicker or thinner.
+    float noise = mix(noise2(v_local * PARCEL_NOISE_FINE, v_seed + 41.0),
+                      noise2(v_local * PARCEL_NOISE_COARSE, v_seed),
+                      PARCEL_NOISE_MIX);
+    float density = v_density * shape
+                  * max(0.0, PARCEL_NOISE_FLOOR + PARCEL_NOISE_GAIN * noise);
     if (density <= 0.0) { discard; }
     // The depth extent is stored density-WEIGHTED, because this buffer sums.
     // The march divides it back out, which makes it the average extent of
@@ -374,6 +446,17 @@ const float FOG_POINT_REACH = 10.0;
 // rather than as air already in it. Machine-made smoke is NOT scaled by it —
 // nothing put that in the photograph.
 const float AMBIENT_HAZE_WEIGHT = 0.09;
+
+// How much of the stage-wide `turbulence()` field a machine's own smoke takes.
+//
+// The baseline haze needs all of it: it is a smooth exponential in height and
+// nothing else would ever break it up. A parcel of smoke does not — it arrives
+// from the medium map already ragged, already turning, already drifting with
+// the machine that made it. Multiplying that by a *second* noise field on its
+// own current is what made GPU smoke look like a texture sliding along behind a
+// pile of blobs rather than like the blobs having a texture. Not zero: the air
+// a parcel is travelling through is genuinely churning, and some of that shows.
+const float MEDIUM_TEXTURE_WEIGHT = 0.4;
 
 // How bright a beam is, in the units the density scale uses.
 //
@@ -548,7 +631,11 @@ float density_at(vec3 p, float base_weight) {
             medium_density = medium.r * exp(-depth * depth);
         }
     }
-    return (base + medium_density) * turbulence(p);
+    // The baseline takes the whole field; a parcel, which brought its own
+    // structure with it from the medium map, takes a fraction of it.
+    float turb = turbulence(p);
+    return base * turb
+         + medium_density * mix(1.0, turb, MEDIUM_TEXTURE_WEIGHT);
 }
 
 // Jimenez's interleaved gradient noise. Cheap, and its error is spread across

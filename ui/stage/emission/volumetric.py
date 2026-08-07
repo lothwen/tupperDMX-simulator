@@ -47,11 +47,24 @@ PLUME_REACH_PX = 520.0
 #: lid, and thin enough that the stage stays visible through it.
 PLUME_ALPHA = 78.0
 
-#: Most parcels the raster path paints. The field carries a hundred or so, which
-#: the GPU rasterises for nothing but which would be a hundred large alpha-
-#: blended blits per frame here. Sampling them evenly and compensating the alpha
-#: keeps the shape of the bank while bounding the fill rate.
-PLUME_MAX_ITEMS = 30
+#: Most parcels the raster path paints, and how much of a skipped parcel's
+#: opacity the ones that are drawn carry for it.
+#:
+#: The field holds a couple of hundred, which the GPU rasterises for nothing but
+#: which would be that many large alpha-blended blits per frame here. Sampling
+#: them evenly bounds the fill rate whatever the machine has been doing.
+#:
+#: The two moved in opposite directions when the machines were retuned to fill a
+#: room, and the second one is the interesting half. **Alpha does not stand in
+#: for count.** Qt composites `SourceOver`, so a parcel drawn at three times the
+#: alpha is nothing like three parcels — it is one parcel with a hard edge, and
+#: over a room's worth of area that is exactly what it looked like: a handful of
+#: separate balls instead of a bank. So the count went up until a hazer's layer
+#: is continuous (measured: ~1 ms a frame for the whole plume, which is not the
+#: budget the old cap was protecting) and the compensation came down until each
+#: parcel is a wisp again.
+PLUME_MAX_ITEMS = 80
+PLUME_SHARE = 1.8
 
 #: Below this a parcel is not worth its fill rate. See `_PlumeItem.paint`.
 PLUME_MIN_ALPHA = 0.02
@@ -64,7 +77,6 @@ _PLUME_ARGB = (_PLUME_RGB[0] << 16) | (_PLUME_RGB[1] << 8) | _PLUME_RGB[2]
 #: in the one-off build. Detail past this is invisible under the magnification
 #: and the noise it carries is soft by construction.
 SPRITE_PX = 64
-SPRITE_VARIANTS = 5
 
 
 class _LaserItem(QGraphicsItem):
@@ -183,6 +195,11 @@ def _plume_sprites() -> List["QPixmap"]:
     pattern; a parcel picks one for life and turns slowly, so a bank of smoke
     never shows the same shape twice in the same orientation.
 
+    Every number that decides the shape comes from `puffs.PARCEL_*`, because
+    `MEDIUM_FRAG` builds the same shape from the same constants and the two
+    quietly drifting apart is exactly how the GPU path ended up drawing clean
+    spheres while this one drew smoke.
+
     Built lazily and cached. It is ~45 ms of Python — a `sin` per lattice
     corner per pixel — which is why the sprites are small and why there are five
     rather than fifty; and it cannot be done at import time anyway, because
@@ -197,7 +214,7 @@ def _plume_sprites() -> List["QPixmap"]:
 
     sprites = []
     half = SPRITE_PX / 2.0
-    for variant in range(SPRITE_VARIANTS):
+    for variant in range(puffs.PARCEL_VARIANTS):
         image = QImage(SPRITE_PX, SPRITE_PX, QImage.Format.Format_ARGB32)
         image.fill(0)
         seed = variant * 977 + 13
@@ -210,13 +227,19 @@ def _plume_sprites() -> List["QPixmap"]:
                     continue
                 # A soft disc, gone well before the edge so no sprite can ever
                 # show its own square.
-                falloff = math.exp(-2.6 * r * r) * (1.0 - _smoothstep(0.62, 1.0, r))
+                falloff = (math.exp(-puffs.PARCEL_FALLOFF * r * r)
+                           * (1.0 - _smoothstep(puffs.PARCEL_RIM, 1.0, r)))
                 if falloff <= 0.0:
                     continue
                 # Two octaves: one that shapes the outline, one that mottles it.
-                noise = (0.66 * _noise2(dx * 2.1, dy * 2.1, seed)
-                         + 0.34 * _noise2(dx * 5.3, dy * 5.3, seed + 41))
-                alpha = falloff * (0.30 + 1.40 * noise)
+                coarse = puffs.PARCEL_NOISE_COARSE
+                fine = puffs.PARCEL_NOISE_FINE
+                noise = (puffs.PARCEL_NOISE_MIX
+                         * _noise2(dx * coarse, dy * coarse, seed)
+                         + (1.0 - puffs.PARCEL_NOISE_MIX)
+                         * _noise2(dx * fine, dy * fine, seed + 41))
+                alpha = falloff * (puffs.PARCEL_NOISE_FLOOR
+                                   + puffs.PARCEL_NOISE_GAIN * noise)
                 value = int(max(0.0, min(1.0, alpha)) * 255)
                 if value:
                     image.setPixel(x, y, (value << 24) | _PLUME_ARGB)
@@ -290,7 +313,7 @@ class _PlumeItem(QGraphicsItem):
         sprites = _plume_sprites()
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         # Skipping parcels thins the bank, so what is drawn carries their share.
-        share = min(2.5, float(self._stride))
+        share = min(PLUME_SHARE, float(self._stride))
         for index, puff in enumerate(self._puffs):
             if index % self._stride:
                 continue
@@ -361,10 +384,18 @@ class FogPlume(Emission):
     def emit_lights(self, frame: Frame, out: LightList) -> None:
         # Medium, not light: what the fog pass integrates other fixtures' beams
         # through. `render` has already advanced the field for this frame.
+        #
+        # `spin` and `variant` ride along because the density map has to draw a
+        # parcel the way the sprite sheet above does — ragged, and turned to its
+        # own angle. Rasterised as the clean Gaussian it was, a bank of smoke on
+        # the GPU path was a pile of spheres with a stage-wide noise field
+        # sliding along behind it, which is why it read worse than the raster
+        # plume it was supposed to improve on.
         rgb = linear_rgb(_PLUME_RGB)
         for puff in self.field:
             out.add_blob(puff.x, puff.y, rgb, puff.density, puff.radius,
-                         z=puff.z, z_extent=puff.z_extent)
+                         z=puff.z, z_extent=puff.z_extent, spin=puff.spin,
+                         variant=puff.variant % puffs.PARCEL_VARIANTS)
 
     def cleanup(self) -> None:
         self.field.clear()

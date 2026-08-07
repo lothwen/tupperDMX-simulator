@@ -26,9 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
 from ui.stage import puffs, renderer_for
-from ui.stage.emission.cone import HardBeam
+from ui.stage.emission.cone import HardBeam, lens_glow_radii
+from ui.stage.base import DIFFUSE_GLOW, SHARP_GLOW
+from ui.stage.frame import FORESHORTEN_FLOOR
 from ui.stage.light import (
-    BLOB, CONE, LINE, POINT, QUAD, LightList, linear_rgb, linear_to_srgb,
+    BLOB, CONE, LINE, POINT, QUAD, STRIDE, LightList, linear_rgb,
+    linear_to_srgb,
 )
 import ofl_factory
 
@@ -173,6 +176,91 @@ def test_only_a_fixture_with_optics_throws_a_cone(qapp):
         spot.cleanup()
 
 
+def test_a_moving_heads_lens_flares_where_a_par_washes(qapp):
+    """A head's lamp is the aperture of its beam, not a light beside it.
+
+    Given a par's halo as well, a head reads as a beam with a wash bolted to
+    it — and on this path especially, where a POINT is spread over sixty lamp
+    radii and lights the air around the fixture whatever its beam is doing. So
+    the lens keeps a fraction of it, and grows that fraction back as the beam
+    turns down the lens: aimed at you, a beam really does put its whole output
+    in your eye, and there is still only one beam doing it.
+
+    Scoped to the profile, not to the emission: the same `WashLamp` on a par is
+    a lamp in a housing and keeps its glow, which the last part asserts.
+    """
+    print("test_a_moving_heads_lens_flares_where_a_par_washes")
+    # The ramp itself. A head halfway round is still a beam seen from the side,
+    # so most of the bloom has to be left for the end of the turn — linear, a
+    # head tilted halfway wore a bigger halo than the flat one this replaced.
+    rest, half, full = (lens_glow_radii(1.0),
+                        lens_glow_radii((1.0 + FORESHORTEN_FLOOR) / 2.0),
+                        lens_glow_radii(FORESHORTEN_FLOOR))
+    _assert(rest < half < full,
+            f"the lens grows as the beam turns toward the viewer "
+            f"({rest:.2f} -> {half:.2f} -> {full:.2f})")
+    _assert(full - half > half - rest,
+            "and most of that growth is in the last part of the turn")
+
+    channels = {"d": ofl_factory.channel("Intensity"),
+                "r": ofl_factory.channel("ColorIntensity", color="Red"),
+                "t": ofl_factory.channel("Tilt", angleStart="0deg",
+                                         angleEnd="270deg"),
+                "z": ofl_factory.channel("Zoom", angleStart="10deg",
+                                         angleEnd="40deg")}
+    head = _body(ofl_factory.fdef(categories=("Moving Head", "Color Changer"),
+                                  channels=dict(channels)))
+    par = _body(ofl_factory.fdef(categories=("Color Changer",),
+                                 channels=dict(channels)))
+    try:
+        # Tilt centred: the beam crosses the picture, side-on to the viewer.
+        rest = _lights(head, [255, 255, 128, 0])
+        _assert(rest.of_kind(CONE), "a lit head throws a beam")
+        lens = rest.of_kind(POINT)
+        _assert(len(lens) == 1, "and one flare at the lens, no more")
+
+        washed = _lights(par, [255, 255, 128, 0]).of_kind(POINT)
+        _assert(lens[0].radius < washed[0].radius / 2.0,
+                f"a fraction of what the same channels glow in a par "
+                f"({lens[0].radius:.1f} vs {washed[0].radius:.1f})")
+
+        # A lens is small enough that the classic falloff's shoulder reads as
+        # the rim of a disc, so it fades on the diffuse curve instead. Only it:
+        # every other lamp on the stage keeps the falloff it always had.
+        _assert(head.emission.lamp.glow_profile is DIFFUSE_GLOW,
+                "a lens fades diffusely, with no radius the eye can find")
+        _assert(par.emission.lamp.glow_profile is SHARP_GLOW
+                and SHARP_GLOW == ((0.0, 180), (0.13, 130), (0.25, 90),
+                                   (0.5, 40), (1.0, 0)),
+                "while every other lamp keeps the stage's classic falloff")
+
+        # Aimed straight down the lens. Set on the frame rather than driven
+        # through the tilt channel because a head *slews*: it would arrive
+        # several seconds after the one DMX frame a test hands it.
+        frame = head._frame
+        frame.beam.foreshorten = FORESHORTEN_FLOOR
+        bloom = LightList()
+        head.emission.emit_lights(frame, bloom)
+        aimed = bloom.of_kind(POINT)
+        # By the ramp, rather than by a multiple of its own: what is wired here
+        # is that this path reads `lens_glow_radii` for the frame's aim, and the
+        # ramp's shape is already pinned at the top of this test. Where its two
+        # ends sit is a look decision — a number here only restates them, and
+        # goes red the next time the lens is tuned.
+        grew = aimed[0].radius / lens[0].radius
+        ramp = lens_glow_radii(FORESHORTEN_FLOOR) / lens_glow_radii(1.0)
+        _assert(abs(grew - ramp) < 0.01,
+                f"blooming as the beam turns down the lens "
+                f"({aimed[0].radius:.1f} from {lens[0].radius:.1f}, x{grew:.2f} "
+                f"against the ramp's x{ramp:.2f})")
+
+        _assert(len(_lights(head, [0, 0, 128, 0])) == 0,
+                "and nothing at all from a head that is switched off")
+    finally:
+        head.cleanup()
+        par.cleanup()
+
+
 def test_a_prism_divides_the_light_it_splits(qapp):
     print("test_a_prism_divides_the_light_it_splits")
     channels = {
@@ -304,11 +392,30 @@ def test_a_laser_emits_lines_and_a_hazer_blobs(qapp):
         # A blob is MEDIUM, not light: `intensity` is a density and the fog pass
         # integrates other fixtures' beams through it. It is never a light
         # source, so even a hazer at full sits far below a lit lamp.
-        _assert(all(0.0 < b.density <= puffs.HAZER.density for b in blobs),
-                "each carries a density, capped by what a hazer can make "
-                f"({puffs.HAZER.density})")
+        #
+        # Capped at the NOZZLE density rather than the settled one: a parcel
+        # leaves the machine `NOZZLE_DENSITY` times thicker than it ends up and
+        # mixes down to `spec.density` over the first breath of its life, so
+        # what a fresh blob carries is the product of the two.
+        # Slack for the array: a light list is float32, and a parcel this fresh
+        # sits exactly ON the ceiling, so it reads back a hair above it.
+        ceiling = puffs.HAZER.density * puffs.NOZZLE_DENSITY
+        _assert(all(0.0 < b.density <= ceiling * (1.0 + 1e-5) for b in blobs),
+                f"each carries a density, capped by what a hazer can make "
+                f"({ceiling:.2f} at the nozzle, settling to "
+                f"{puffs.HAZER.density})")
         _assert(all(b.radius > 0.0 and b.z_extent > 0.0 for b in blobs),
                 "and an extent in the picture and in depth")
+        # And what it LOOKS like, which the density map needs and used not to
+        # get: rasterised as the clean Gaussian a blob used to be, a bank of
+        # smoke on the GPU path was a pile of spheres, which is why it read
+        # worse than the raster plume it was meant to improve on.
+        _assert(all(0.0 <= b.variant < puffs.PARCEL_VARIANTS for b in blobs),
+                f"each wearing one of the {puffs.PARCEL_VARIANTS} shapes the "
+                "sprite sheet also deals from")
+        _assert(len({round(b.spin, 4) for b in blobs}) == len(blobs),
+                "and each turned to its own angle, so no two are the same "
+                "stamp on either path")
     finally:
         hazer.cleanup()
 
@@ -323,6 +430,56 @@ def test_a_laser_emits_lines_and_a_hazer_blobs(qapp):
                 "and they are denser than a hazer's at the same DMX")
     finally:
         smoke.cleanup()
+
+
+def test_smoke_alone_still_reaches_the_gpu(qapp):
+    print("test_smoke_alone_still_reaches_the_gpu")
+    # The lights and the parcels of medium ride in ONE instance buffer — the
+    # media packed after the lights, which is why the medium pass can share the
+    # light pass's upload. The upload used to BE the light pass's, and behind
+    # its `count == 0` early return: a stage whose only emitter is a fog machine
+    # has no lights at all, so nothing was ever uploaded and the medium pass
+    # then drew a hundred and fifty instances out of a buffer that had never
+    # been allocated. Reading off the end of a vertex buffer is undefined, and
+    # on the driver this was found on it took the process down — a hazer running
+    # through a blackout was enough.
+    #
+    # GL-free: what is pinned is that the upload does not depend on there being
+    # any light, which is the part that was wrong.
+    import ctypes
+
+    from ui.stage.gpu.layer import LightLayer
+
+    class _Recorder:
+        def __init__(self):
+            self.allocated = []
+
+        def bind(self):
+            pass
+
+        def release(self):
+            pass
+
+        def allocate(self, payload, size):
+            self.allocated.append(size)
+
+    layer = LightLayer(lambda: [])
+    layer._instances = _Recorder()
+    # A hazer's worth of parcels and not one light.
+    layer._packed = (ctypes.c_float * (STRIDE * 3))(*([0.0] * (STRIDE * 3)))
+    layer._light_count = 0
+    layer._medium_count = 3
+    layer._upload_instances()
+    _assert(layer._instances.allocated == [STRIDE * 3 * 4],
+            f"a stage of nothing but smoke still uploads its parcels "
+            f"({layer._instances.allocated})")
+
+    # And nothing at all uploads nothing, rather than an empty buffer.
+    layer._instances = _Recorder()
+    layer._packed = None
+    layer._upload_instances()
+    _assert(layer._instances.allocated == [],
+            "while a stage with nothing on it uploads nothing")
 
 
 def test_the_fog_stops_asking_for_frames_once_the_rig_stands_still(qapp):
@@ -544,6 +701,7 @@ def main():
     app = QApplication.instance() or QApplication([])
     test_a_dark_stage_still_has_air_in_it(app)
     test_the_fog_is_marched_without_the_stage_clip(app)
+    test_smoke_alone_still_reaches_the_gpu(app)
     test_the_fog_stops_asking_for_frames_once_the_rig_stands_still(app)
     test_drifting_air_is_a_moving_picture(app)
     test_the_buffer_is_reused_across_frames(app)
@@ -551,6 +709,7 @@ def main():
     test_a_lit_blinder_emits_a_point_per_bulb(app)
     test_a_dark_fixture_emits_nothing(app)
     test_only_a_fixture_with_optics_throws_a_cone(app)
+    test_a_moving_heads_lens_flares_where_a_par_washes(app)
     test_a_prism_divides_the_light_it_splits(app)
     test_a_matrix_emits_one_quad_per_cell(app)
     test_coordinates_are_body_local(app)
