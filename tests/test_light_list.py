@@ -267,13 +267,18 @@ def test_a_prism_divides_the_light_it_splits(qapp):
         "d": ofl_factory.channel("Intensity"),
         "g": ofl_factory.channel("GoboWheel", slotNumber=1),
     }
+    # Both declare the same lens: the control has to throw a beam for the prism
+    # to be compared against, and a head with no optics declared anywhere
+    # resolves to no shaft at all (see `test_stage_optics.py`).
+    lens = {"lens": {"degreesMinMax": [25, 25]}}
     plain = _body(ofl_factory.fdef(categories=("Moving Head",),
-                                   channels=dict(channels)))
+                                   channels=dict(channels), physical=lens))
     prism = _body(ofl_factory.fdef(
         categories=("Moving Head",),
         channels=dict(channels,
                       p=ofl_factory.channel("Prism", angleStart="0deg",
-                                            angleEnd="360deg"))))
+                                            angleEnd="360deg")),
+        physical=lens))
     try:
         undivided = _lights(plain, [255, 0]).of_kind(CONE)
         _assert(len(undivided) == 1, "no prism channel, one beam")

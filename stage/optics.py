@@ -59,7 +59,17 @@ ZOOM_RANGE_RATIO = 2.5
 
 # What a fixture that declares no angle at all falls back to, once its profile
 # has said it throws something.
+#
+# The wash default is deliberately WIDER than `WASH_MAX_DEGREES`, and that is
+# the whole point of it rather than an oversight: `beam_kind` runs it through
+# the same threshold a declared spread meets, so a profile falling back to WASH
+# with nothing in its document to go on ends up as a soft source with no shaft.
+# It is the one number that decides that, so moving it under 65 turns every
+# lens-less wash head back into a cone.
 DEFAULT_WASH_DEGREES = 75.0
+# The hard default is NOT held to a threshold that way — see `beam_kind`. A
+# spot found by its gobo wheel rather than by its lens rests at an ordinary spot
+# spread, which is wider than `HARD_MAX_DEGREES` and still hard-edged.
 DEFAULT_HARD_DEGREES = 14.0
 
 # The cone is drawn with `tan(half_angle)`, which passes 1.6e16 at 90°.
@@ -109,6 +119,21 @@ def beam_kind(fdef: FixtureDef,
     if all_capability_types(fdef) & _ANGLE_CAPABILITIES:
         return BeamKind.WASH
 
+    # Nothing in the document says anything at all, so the profile answers. Its
+    # answer is a *spread* like any other, and a spread is classified the same
+    # way whether it was declared or defaulted — which is what makes
+    # `DEFAULT_WASH_DEGREES` past `WASH_MAX_DEGREES` mean what it looks like it
+    # means: light, but no shaft. A wash head that declares no lens, no zoom and
+    # no gate is telling you it is a soft source, and inventing a cone for it is
+    # the same mistake as reading a filled-in `degreesMinMax` as "throws a
+    # shaft" — the bug this whole module exists to undo.
+    #
+    # The wash side only. `HARD_MAX_DEGREES` is *sufficient* evidence of a hard
+    # edge and never necessary — a scanner is a scanner because of its mirror,
+    # not because of its lens — so running `DEFAULT_HARD_DEGREES` through the
+    # same rule would quietly demote every lens-less scanner to a wash.
+    if fallback is BeamKind.WASH:
+        return _kind_from_lens(DEFAULT_WASH_DEGREES, DEFAULT_WASH_DEGREES)
     return fallback
 
 

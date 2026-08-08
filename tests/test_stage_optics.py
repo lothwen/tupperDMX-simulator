@@ -27,7 +27,8 @@ from stage.emission.cone import BeamCone, HardBeam, LampGlow, WashLamp
 from stage.frame import BEAM_LENGTH_PX, BeamParams
 from stage.optics import (
     _NOT_SHAPING_SLOTS, _SHAPING_CAPABILITIES, _SHAPING_SLOTS,
-    BeamKind, MAX_HALF_ANGLE_DEG, beam_kind, resting_half_angle,
+    BeamKind, DEFAULT_HARD_DEGREES, DEFAULT_WASH_DEGREES, MAX_HALF_ANGLE_DEG,
+    WASH_MAX_DEGREES, beam_kind, resting_half_angle,
 )
 from stage.registry import renderer_for
 
@@ -119,9 +120,18 @@ ARCHETYPES = {
                                                   wheel="Gobo Wheel",
                                                   slotNumber=1))),
          BeamKind.HARD, HardBeam),
+    # These two carry a lens on purpose. The question they ask is whether the
+    # capability is read as a hard edge, so they have to reach the evidence
+    # rules with a spread of their own — left bare they would fall through to
+    # the profile default instead, which answers a different question (and is
+    # pinned by `test_a_defaulted_spread_is_classified_like_a_declared_one`).
+    # It is also what the real fixtures look like: 83 of the 102 shipped
+    # definitions declaring Frost or a wheel declare a lens too.
+    #
     # TRAP: a colour wheel declares WheelSlot exactly as a gobo wheel does.
     "colour wheel alone does not":
         (dict(categories=("Moving Head",), wheels=COLOR_WHEEL,
+              physical=_lens(25),
               channels=dict(MOVER_CHANNELS,
                             c=ofl_factory.channel("WheelSlot",
                                                   wheel="Color Wheel",
@@ -130,7 +140,7 @@ ARCHETYPES = {
     # TRAP: frost softens a beam. It rides on wash heads, and counting it is
     # what made dts/XR1200 WASH a spot.
     "frost alone does not":
-        (dict(categories=("Moving Head",),
+        (dict(categories=("Moving Head",), physical=_lens(25),
               channels=dict(MOVER_CHANNELS,
                             f=ofl_factory.channel("Frost", frostIntensityStart="0%",
                                                   frostIntensityEnd="100%"))),
@@ -152,9 +162,16 @@ ARCHETYPES = {
     "no data on a par":
         (dict(categories=("Color Changer",), channels=ofl_factory.RGB_CHANNELS),
          BeamKind.NONE, LampGlow),
+    # TRAP: the profile says WASH, and the answer is still no shaft. A fallback
+    # spread meets the same `WASH_MAX_DEGREES` ceiling a declared one does, and
+    # `DEFAULT_WASH_DEGREES` sits above it on purpose — a head with no lens, no
+    # zoom and no gate is a soft source, and giving it the widest cone on the
+    # stage is the same mistake as reading a filled-in field as "throws a shaft".
     "no data on a moving head":
         (dict(categories=("Moving Head",), channels=MOVER_CHANNELS),
-         BeamKind.WASH, WashLamp),
+         BeamKind.NONE, LampGlow),
+    # ...but only the wash side. A scanner is hard-edged because of its mirror,
+    # so `DEFAULT_HARD_DEGREES` is never put through that rule.
     "no data on a scanner":
         (dict(categories=("Scanner",), channels=MOVER_CHANNELS),
          BeamKind.HARD, HardBeam),
@@ -234,12 +251,56 @@ def test_the_resting_angle_is_the_fixtures_own_spread():
             "which is tighter than the arithmetic mean would be")
 
     bare = ofl_factory.fdef()
-    _assert(resting_half_angle(bare, BeamKind.WASH) == 12.0,
+    _assert(resting_half_angle(bare, BeamKind.WASH)
+            == DEFAULT_WASH_DEGREES / 2,
             "a fixture with no lens data falls back to a wash default")
-    _assert(resting_half_angle(bare, BeamKind.HARD) == 7.0,
+    _assert(resting_half_angle(bare, BeamKind.HARD)
+            == DEFAULT_HARD_DEGREES / 2,
             "or a tighter one when its profile says it is a beam")
     _assert(resting_half_angle(bare, BeamKind.NONE) is None,
             "and to nothing at all when it throws no shaft")
+
+
+def test_a_defaulted_spread_is_classified_like_a_declared_one():
+    """The wash default is over the ceiling, and that is what it is for.
+
+    `resting_half_angle` answers "how wide" for a kind it is *handed*, so on its
+    own it will happily quote 37.5 degrees for a WASH. What decides there is no
+    WASH to quote for is `beam_kind`, which puts the fallback spread through the
+    same `WASH_MAX_DEGREES` ceiling a declared one meets. Both halves are
+    load-bearing: drop the routing and `DEFAULT_WASH_DEGREES = 75` silently
+    becomes the widest cone on the stage instead of no cone at all, which is
+    exactly what it did.
+    """
+    print("test_a_defaulted_spread_is_classified_like_a_declared_one")
+    _assert(DEFAULT_WASH_DEGREES > WASH_MAX_DEGREES,
+            f"the wash default ({DEFAULT_WASH_DEGREES} deg) is over the "
+            f"{WASH_MAX_DEGREES} deg ceiling, which is how it means 'no shaft'")
+
+    bare = ofl_factory.fdef(categories=("Moving Head",), channels=MOVER_CHANNELS)
+    _assert(beam_kind(bare, BeamKind.WASH) is BeamKind.NONE,
+            "so a profile falling back to WASH with nothing to go on throws "
+            "no shaft at all")
+    _assert(beam_kind(bare, BeamKind.HARD) is BeamKind.HARD,
+            "while a HARD fallback is left alone — a scanner is hard-edged "
+            "because of its mirror, not because of its lens")
+    _assert(beam_kind(bare, BeamKind.NONE) is BeamKind.NONE,
+            "and NONE was already nothing")
+
+    # The evidence still outranks the fallback, or the routing above would have
+    # turned every wash head with a real lens into a panel too.
+    lensed = ofl_factory.fdef(categories=("Moving Head",),
+                              channels=MOVER_CHANNELS, physical=_lens(25))
+    _assert(beam_kind(lensed, BeamKind.WASH) is BeamKind.WASH,
+            "a declared 25 deg lens still beats the default")
+    zoomed = ofl_factory.fdef(
+        categories=("Moving Head",),
+        channels=dict(MOVER_CHANNELS,
+                      z=ofl_factory.channel("Zoom", angleStart="8deg",
+                                            angleEnd="40deg")))
+    _assert(beam_kind(zoomed, BeamKind.WASH) is BeamKind.WASH,
+            "and so does a zoom channel, which is only fitted to a fixture "
+            "with a beam to zoom")
 
 
 def test_the_resting_angle_never_reaches_the_tangent_asymptote():
@@ -289,6 +350,7 @@ def main():
     test_the_slot_table_covers_every_ofl_wheel_slot_type()
     test_the_non_evidence_set_stays_out_of_the_evidence_set()
     test_the_resting_angle_is_the_fixtures_own_spread()
+    test_a_defaulted_spread_is_classified_like_a_declared_one()
     test_the_resting_angle_never_reaches_the_tangent_asymptote()
     test_a_cone_stays_on_the_stage_however_wide_it_is_asked_to_be(app)
     print("ALL TESTS PASSED")
