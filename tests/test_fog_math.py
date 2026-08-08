@@ -62,6 +62,7 @@ FINE_WARP = _glsl_const("FINE_WARP")
 FINE_DRIFT = _glsl_const("FINE_DRIFT")
 COARSE_WEIGHT = _glsl_const("COARSE_WEIGHT")
 TEXTURE_CONTRAST = _glsl_const("TEXTURE_CONTRAST")
+LINE_FOG_RADIUS = _glsl_const("LINE_FOG_RADIUS")
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +556,82 @@ def test_every_sample_lands_inside_the_beam():
     _ok("a ray that misses the cone reports a miss")
 
 
+def line_segment(scene, camera_z, apex, axis, radius):
+    """FOG_FRAG's `line_segment`, mirrored. Returns (enter, leave) or None."""
+    o = (scene[0] - apex[0], scene[1] - apex[1], -camera_z - apex[2])
+    along = sum(a * b for a, b in zip(o, axis))
+    a = 1.0 - axis[2] * axis[2]
+    b = 2.0 * (o[2] - along * axis[2])
+    c = sum(v * v for v in o) - along * along - radius * radius
+    if a <= 1e-4:
+        return None
+    disc = b * b - 4.0 * a * c
+    if disc <= 0.0:
+        return None
+    root = math.sqrt(disc)
+    return ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a))
+
+
+def test_every_sample_lands_inside_the_laser():
+    print("test_every_sample_lands_inside_the_laser")
+    # The cone's bug again, on the one primitive that has it worse. A laser is
+    # a tube a dozen units across lying in the rig plane, and the march steps
+    # ~58: about one pixel in ten got a single sample inside it and the rest got
+    # nothing, so a fan rendered as speckle that moved with the dither rather
+    # than as beams. This is what the user reported as the beams looking bugged.
+    camera_z, steps = 770.0, 24
+    apex = (400.0, 120.0, 0.0)
+    axis = (0.0, 1.0, 0.0)                  # straight down the picture
+    radius = LINE_FOG_RADIUS
+    scene = (apex[0] + 3.0, apex[1] + 500.0)   # well down the beam, just off axis
+
+    # What it used to do: the bounding sphere's chord, clipped to the slab.
+    length = 1220 * 1.4
+    swept = (max(0.0, camera_z - length), min(1400.0, camera_z + length))
+    dt = (swept[1] - swept[0]) / steps
+    _fail_if(dt < 2.0 * radius,
+             "this test no longer reproduces the undersampling it pins")
+    _ok(f"a swept march steps {dt:.0f} units through a {2 * radius:.0f}-unit tube")
+
+    segment = line_segment(scene, camera_z, apex, axis, radius)
+    _fail_if(segment is None, "the ray through a beam must hit it")
+    enter, leave = segment
+
+    inside = 0
+    for i in range(steps):
+        t = enter + (i + 0.5) * (leave - enter) / steps
+        point = (scene[0], scene[1], -camera_z + t)
+        offset = tuple(p - a for p, a in zip(point, apex))
+        along = sum(a * b for a, b in zip(offset, axis))
+        distance = math.sqrt(sum(v * v for v in offset))
+        across = math.sqrt(max(0.0, distance * distance - along * along))
+        if along > 0.0 and across <= radius + 1e-6:
+            inside += 1
+    _fail_if(inside < steps,
+             f"only {inside}/{steps} samples landed in the laser — the fan will "
+             "be speckle again")
+    _ok(f"all {steps} samples land inside the tube")
+
+    # A ray that misses the beam has to say so rather than march the slab.
+    _fail_if(line_segment((apex[0] + 400.0, apex[1] + 500.0), camera_z, apex,
+                          axis, radius) is not None,
+             "a ray well beside the beam must report a miss")
+    _ok("a ray that misses the laser reports a miss")
+
+    # And the segment the march runs is the tube, not the slab it sat in.
+    thickness = leave - enter
+    _fail_if(thickness > 2.0 * radius + 1e-6,
+             f"segment is {thickness:.1f} units for a {2 * radius:.0f}-unit tube")
+    _ok(f"and the segment is the tube's own {thickness:.1f} units, not 1400")
+
+    # Both halves of the shader read the same radius, or the beam is lit
+    # somewhere other than where it was marched.
+    _fail_if(shaders.FOG_FRAG.count("line_radius()") < 3,
+             "line_segment, radiance_at and the helper itself must all agree "
+             "on how thick a laser is")
+    _ok("the segment and the radiance share one line_radius()")
+
+
 def test_a_beam_aimed_at_the_viewer_falls_back():
     print("test_a_beam_aimed_at_the_viewer_falls_back")
     # When the ray lies inside the cone's own opening angle the quadratic
@@ -584,6 +661,7 @@ def main():
     test_the_foreshorten_floor_is_shared()
     test_the_march_terminates_early()
     test_every_sample_lands_inside_the_beam()
+    test_every_sample_lands_inside_the_laser()
     test_a_beam_aimed_at_the_viewer_falls_back()
     print("\nALL TESTS PASSED")
 

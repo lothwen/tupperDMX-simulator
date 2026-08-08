@@ -262,7 +262,13 @@ gains an entry nobody handled.
   and `intensity` is **unbounded** — which is how two lights add past full instead of
   clipping — with `config.window.stage_exposure` scaling it. Haze is deliberately NOT
   baked in; it reaches the shader as a uniform. `cone_geometry()` is shared by the
-  raster cone and the light list so the two cannot drift.
+  raster cone and the light list so the two cannot drift. A **LINE is thinner than
+  the pixel that draws it** — `LASER_HALF_WIDTH_PX` is ~1 scene unit and the view
+  fits 1536 of them into a few hundred — and GL has no coverage, so `LIGHT_VERT`
+  widens its quad to `MIN_LINE_HALF_PX` device pixels (from `u_px_per_scene`, the
+  one thing a shader cannot derive) and hands the brightness back. Widen without
+  dimming and a fan is a smear; do neither and it rasterises to dashes, which is
+  what it did.
 
 #### `gpu/` — the optional HDR renderer
 
@@ -305,8 +311,11 @@ quad**, the only fullscreen draw being ambient.
 
 - **The segment is solved, not swept** — a beam is a thin sheet in depth (~66 units)
   while an even march steps ~58, so the shaft never appeared: each ray is clipped to
-  the bounding-sphere chord, then for a cone to the cone. `scatter_gain` (Henyey-
-  Greenstein over its **broadside** value), `BEAM_RADIANCE` and a `FOG_POINT_REACH`
+  the bounding-sphere chord, then for a cone to the cone (`cone_segment`) and for a
+  laser to its tube (`line_segment`, `LINE_FOG_RADIUS`). The laser is the worse case
+  — one pixel in ten got a single sample and the rest none, so a fan marched as
+  speckle that moved with the dither. `scatter_gain` (Henyey-Greenstein over its
+  **broadside** value), `BEAM_RADIANCE` and a `FOG_POINT_REACH`
   of 10 lamp-radii — **not** the sprite's `GLOW_REACH` of 60 — calibrate it.
 - **The air is ragged and drifts** (`fog.texture`, `fog.texture_scale`, the
   `turbulence()` fbm at `FLOW_PX_S`): two octaves clamped at zero, the holes being

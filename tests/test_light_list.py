@@ -472,6 +472,85 @@ def test_a_laser_emits_lines_and_a_hazer_blobs(qapp):
         smoke.cleanup()
 
 
+def test_a_laser_is_never_drawn_thinner_than_a_pixel(qapp):
+    """A laser is the one primitive thinner than the pixel that draws it.
+
+    `LASER_HALF_WIDTH_PX` is a couple of scene units, and the view fits a
+    1536-unit stage into a few hundred device pixels — so the quad the light
+    pass builds for a beam comes out under a pixel wide. GL has no coverage: it
+    shades the pixels whose centres land inside the triangle and drops the rest,
+    which turns a beam at any angle into a dashed line and a fan into the fan of
+    dashes this was reported as.
+
+    So the vertex shader widens the quad to `MIN_LINE_HALF_PX` device pixels and
+    hands back the brightness it gained by covering more of them — which is what
+    an antialiased thin line is, and what Qt has been doing for the raster
+    path's 2px pen all along. This mirrors that arithmetic and pins both halves:
+    widen without dimming and the fan is a bright smear; dim without widening
+    and it is still dashed.
+
+    Source-level, because CI cannot compile a shader, let alone rasterise one.
+    """
+    print("test_a_laser_is_never_drawn_thinner_than_a_pixel")
+    import re
+
+    from stage.emission.volumetric import LASER_HALF_WIDTH_PX
+    from stage.gpu import shaders
+    from stage.gpu.layer import _px_per_scene
+
+    def const(name):
+        match = re.search(rf"const float {name} = (-?[0-9.]+);",
+                          shaders.LIGHT_VERT)
+        _assert(match is not None, f"{name} is still in the light shader")
+        return float(match.group(1))
+
+    min_half_px = const("MIN_LINE_HALF_PX")
+    _assert(min_half_px >= 0.5,
+            f"the floor is {min_half_px} device px — under half a pixel and a "
+            "diagonal beam can still fall between pixel centres")
+
+    def drawn(px_per_scene):
+        """LIGHT_VERT's KIND_LINE branch: the half width it draws, and the
+        brightness it keeps."""
+        width = max(LASER_HALF_WIDTH_PX, 0.5)
+        half = max(width, min_half_px / max(px_per_scene, 1e-4))
+        return half, width / half
+
+    # The scale the screenshot was taken at: a 1536-unit stage in a 465px view.
+    scale = _px_per_scene(_fit_matrix(465, 1536), 465)
+    half, dim = drawn(scale)
+    _assert(half * scale >= min_half_px - 1e-6,
+            f"at {scale:.2f} px per scene unit a beam is drawn "
+            f"{2 * half * scale:.2f} px wide, not {2 * LASER_HALF_WIDTH_PX * scale:.2f}")
+    _assert(dim < 1.0 and abs(dim * half - LASER_HALF_WIDTH_PX) < 1e-6,
+            f"and gives back exactly what it gained ({dim:.2f}), so the fan "
+            "carries the same light it always did")
+
+    # Zoomed in far enough that the beam is genuinely wider than a pixel, the
+    # floor must get out of the way entirely.
+    half, dim = drawn(10.0)
+    _assert(half == LASER_HALF_WIDTH_PX and dim == 1.0,
+            "and a beam already wider than a pixel is left alone")
+
+    # The fragment shader has to measure against that same half width. It used
+    # to divide by 0.35, which lit a fifth of the quad it was handed.
+    body = shaders.LIGHT_FRAG.split("v_kind == KIND_LINE")[1]
+    _assert("float across = abs(v_local.y);" in body,
+            "the beam's profile is measured in its own half widths, so what is "
+            "drawn is the width the vertex shader just guaranteed")
+
+
+def _fit_matrix(view_px: int, scene_units: int):
+    """`StageView._scene_to_clip` for a scene fitted into a square-ish view."""
+    from PyQt6.QtGui import QMatrix4x4
+    scale = view_px / scene_units
+    matrix = QMatrix4x4()
+    matrix.translate(-1.0, 1.0)
+    matrix.scale(2.0 / view_px, -2.0 / view_px)
+    matrix.scale(scale, scale)
+    return matrix
+
+
 def test_smoke_alone_still_reaches_the_gpu(qapp):
     print("test_smoke_alone_still_reaches_the_gpu")
     # The lights and the parcels of medium ride in ONE instance buffer — the
@@ -756,6 +835,7 @@ def main():
     test_coordinates_are_body_local(app)
     test_every_category_can_be_asked_for_its_light(app)
     test_a_laser_emits_lines_and_a_hazer_blobs(app)
+    test_a_laser_is_never_drawn_thinner_than_a_pixel(app)
     print("\nALL TESTS PASSED")
 
 
