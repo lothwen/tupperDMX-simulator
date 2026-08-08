@@ -126,6 +126,12 @@ class ScannerFixture(BodyFixture):
 class FlowerFixture(BodyFixture):
     """A moonflower or derby: one lamp, many narrow beams, spinning."""
 
+    # The rosette IS the output. Its beams all leave through the one front
+    # optic, so that optic is a lens like a head's — a flower does not also
+    # wash the room, and drawing it with a full halo made it look like a par
+    # someone had drawn beams on.
+    lamp_is_lens = True
+
     def build_housing(self) -> None:
         width, height = self.width, self.height
         self.chassis = QGraphicsEllipseItem(0, 0, width, height, self)
