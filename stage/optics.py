@@ -59,7 +59,7 @@ ZOOM_RANGE_RATIO = 2.5
 
 # What a fixture that declares no angle at all falls back to, once its profile
 # has said it throws something.
-DEFAULT_WASH_DEGREES = 24.0
+DEFAULT_WASH_DEGREES = 75.0
 DEFAULT_HARD_DEGREES = 14.0
 
 # The cone is drawn with `tan(half_angle)`, which passes 1.6e16 at 90°.
