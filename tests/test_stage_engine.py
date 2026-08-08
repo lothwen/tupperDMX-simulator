@@ -166,14 +166,19 @@ def test_emission_reach_answers_for_the_preview(qapp):
     _assert(emission_reach(panel) == 0.0,
             "a 115 deg panel lights a surface, so it reserves no room either")
 
-    # And the reverse: no lens data is missing data, not a claim of no beam.
-    # A head that aims has to throw something.
+    # And a head that declares nothing at all reserves nothing either. Its
+    # profile falls back to WASH, but a fallback spread meets the same
+    # `WASH_MAX_DEGREES` ceiling a declared one does and `DEFAULT_WASH_DEGREES`
+    # sits above it, so what it actually resolves to is no shaft — the fixture
+    # aims a soft source rather than a beam. Inventing a cone here was the
+    # mirror image of the bug this module exists to undo: reading a blank field
+    # as a claim, rather than as the absence of one.
     mover = ofl_factory.fdef(
         categories=("Moving Head",),
         channels={"p": ofl_factory.channel("Pan", angleStart="0deg",
                                            angleEnd="540deg")})
-    _assert(emission_reach(mover) > 0.0,
-            "a mover that declares no optics still reserves room for its beam")
+    _assert(emission_reach(mover) == 0.0,
+            "a mover that declares no optics at all reserves no room either")
 
 
 def test_the_shutter_gate_is_a_pure_function_of_time(qapp):

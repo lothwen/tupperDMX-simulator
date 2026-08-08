@@ -175,8 +175,13 @@ def test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam(qapp):
     print("test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam")
     from stage.emission.cone import HardBeam, WashLamp
 
+    # Both heads declare a lens, because the question here is what the GOBO
+    # WHEEL does to the beam. A head with no lens, no zoom and no gate falls
+    # through to the profile default, which resolves to no shaft at all — a
+    # different question, pinned in `test_stage_optics.py`.
     wash = ofl_factory.fdef(categories=("Moving Head",),
-                            channels=dict(MOVER_CHANNELS, **ofl_factory.RGB_CHANNELS))
+                            channels=dict(MOVER_CHANNELS, **ofl_factory.RGB_CHANNELS),
+                            physical={"lens": {"degreesMinMax": [25, 25]}})
     _assert(renderer_for(wash).emission_for(wash) is WashLamp,
             "a mover with only colour channels is a wash")
 
@@ -186,7 +191,8 @@ def test_a_moving_head_with_a_gobo_wheel_gets_a_hard_beam(qapp):
                                          {"type": "Gobo", "resource": "gobos/dots"}]}},
         channels=dict(MOVER_CHANNELS,
                       g=ofl_factory.channel("WheelSlot", wheel="Gobo Wheel",
-                                            slotNumber=1)))
+                                            slotNumber=1)),
+        physical={"lens": {"degreesMinMax": [25, 25]}})
     _assert(renderer_for(spot).emission_for(spot) is HardBeam,
             "the same body with a gobo wheel throws a beam you can see the edge of")
 
