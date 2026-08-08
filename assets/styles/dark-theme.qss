@@ -1261,8 +1261,11 @@ QLabel {
     color: #dcdcdc;
 }
 
-/* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar */
-QPushButton#EditStageButton {
+/* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar.
+   The dock/undock toggle sits beside it and shares the look: same corner,
+   same control group. */
+QPushButton#EditStageButton,
+QPushButton#StageDockButton {
     background: rgba(26,28,32,.82);
     color: #cfe9f5;
     border: 1px solid #707070;
@@ -1272,13 +1275,21 @@ QPushButton#EditStageButton {
     font-size: 13px;
 }
 
-QPushButton#EditStageButton:hover {
+QPushButton#EditStageButton:hover,
+QPushButton#StageDockButton:hover {
     background-color: rgba(30, 30, 30, 220);
     border-color: rgba(255, 255, 255, 140);
 }
 
-QPushButton#EditStageButton:pressed {
+QPushButton#EditStageButton:pressed,
+QPushButton#StageDockButton:pressed {
     background-color: rgba(20, 20, 20, 230);
+}
+
+/* Icon-only, so square rather than the text button's wide padding. */
+QPushButton#StageDockButton {
+    padding: 6px;
+    min-width: 0;
 }
 
 QWidget#StageEditToolbar {

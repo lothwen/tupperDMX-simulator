@@ -24,6 +24,9 @@ DEFAULT_SCENE_HEIGHT = 1024
 # scenario designer is active. Purely a visual aid — no snapping (yet).
 GRID_SPACING = 96
 
+# Gap (px) between two overlays sharing a corner; see reposition_overlays.
+OVERLAY_GAP = 6
+
 # Horizontal spacing (scene units) between the bars of a freshly added ledbar.
 
 # Render dispatch lives in stage/registry.py: a fixture is drawn by whichever
@@ -103,14 +106,27 @@ class StageView(QGraphicsView):
         return QRect(top_left, bottom_right)
 
     def reposition_overlays(self) -> None:
+        """Lay every overlay out against its corner, in rows.
+
+        Overlays sharing an anchor AND a reference are a row rather than a
+        pile: the corner they were all given is one point, so without this the
+        dock button would sit underneath "Edit stage". Registration order is
+        left-to-right, and a hidden widget takes no space — which is what lets
+        edit mode swap one control for another without leaving a gap.
+        """
+        cursors: dict = {}
         for widget, anchor, reference, margin in self._overlays:
             rect = self._background_rect() if reference == "background" else self.viewport().rect()
+            key = (anchor, reference)
             if "right" in anchor:
-                x = rect.right() - widget.width() - margin
+                x = cursors.get(key, rect.right() - margin) - widget.width()
             else:
-                x = rect.left() + margin
-            y = rect.top() + margin
-            widget.move(x, y)
+                x = cursors.get(key, rect.left() + margin)
+            widget.move(x, rect.top() + margin)
+            if widget.isHidden():
+                continue   # placed for when it is shown, but takes no room
+            cursors[key] = (x - OVERLAY_GAP if "right" in anchor
+                            else x + widget.width() + OVERLAY_GAP)
 
     def attach_light_layer(self, layer) -> bool:
         """Draw the stage's light on the GPU, over the scene this view renders.
@@ -124,10 +140,14 @@ class StageView(QGraphicsView):
         platform: the offscreen plugin, for one, refuses outright), leaving the
         view exactly as it was.
         """
+        released = None
         try:
             from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            released = self._release_overlays()
             self.setViewport(QOpenGLWidget())
         except Exception as exc:
+            if released is not None:
+                self._readopt_overlays(released)   # back onto the raster viewport
             from tupperlogger import get_logger
             get_logger("stage").warning(
                 "No OpenGL viewport (%s); staying on the raster path", exc)
@@ -140,17 +160,52 @@ class StageView(QGraphicsView):
         self.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.viewport().setAutoFillBackground(True)
 
-        # Overlays were parented to the OLD viewport, which setViewport has
-        # just replaced and destroyed.
-        for widget, _anchor, _reference, _margin in self._overlays:
-            widget.setParent(self.viewport())
-            widget.raise_()
-            widget.show()
-        self.reposition_overlays()
+        self._readopt_overlays(released)
         return True
 
+    def _release_overlays(self) -> list:
+        """Get the overlays out of the viewport before it is replaced.
+
+        `setViewport` deletes the old viewport **synchronously**, and a deleted
+        widget takes its children with it — so overlays cannot be re-adopted
+        after the swap, only before it. Parking them on the view itself keeps
+        them alive across the two calls.
+
+        Returns which ones were showing, because `setParent` hides a widget and
+        only the caller knows which deserve to come back: the edit toolbar and
+        the fixture inspector spend most of their life deliberately hidden, and
+        re-showing them wholesale pops the designer open over a stage nobody
+        asked to edit.
+        """
+        shown = [not widget.isHidden() for widget, *_ in self._overlays]
+        for widget, *_ in self._overlays:
+            widget.setParent(self)
+        return shown
+
+    def _readopt_overlays(self, shown: list) -> None:
+        """Re-parent the overlays onto the CURRENT viewport, as they were."""
+        for (widget, *_), was_shown in zip(self._overlays, shown):
+            widget.setParent(self.viewport())
+            widget.raise_()
+            widget.setVisible(was_shown)
+        self.reposition_overlays()
+
     def detach_light_layer(self) -> None:
+        """Undo `attach_light_layer`: back to a plain raster viewport.
+
+        The GL viewport is dropped rather than kept, because the only caller
+        is about to reparent this view into another window — and a reparented
+        `QOpenGLWidget` comes back with a NEW context, while the layer's
+        shaders, buffers and FBO all belong to the old one.
+        """
         self._light_layer = None
+        released = self._release_overlays()
+        self.setViewport(QWidget())
+        # Keep painting the letterbox black rather than restoring the default
+        # brush: black is what the bars are on the raster path anyway, and if
+        # the GPU never comes back this viewport is the one we keep.
+        self.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        self._readopt_overlays(released)
 
     def _scene_to_clip(self):
         """The matrix the light layer draws with.
@@ -316,6 +371,7 @@ class StageController(QObject):
         self._setup_fixtures()
 
         self.light_layer = None
+        self._gpu_suspended = False
         if config.window.stage_gpu:
             self._enable_gpu_light()
 
@@ -355,6 +411,40 @@ class StageController(QObject):
         from stage.gpu import layer as gpu_layer
         gpu_layer.STAGE_GPU_ACTIVE = True
         return True
+
+    def suspend_gpu_light(self) -> None:
+        """Give up the GPU light so the view can be reparented.
+
+        Reparenting a `QOpenGLWidget` destroys and recreates its context, and
+        `LightLayer` caches its functions, programs, VAO, buffers and FBO from
+        whichever context it first initialised against — it never revalidates
+        them. Worse, both fail-soft paths latch one way (`LightLayer._failed`
+        and `StageView._light_layer = None`), so a single bad frame after a
+        move would cost the GPU stage for the rest of the session.
+
+        So the layer is thrown away rather than carried across, and `resume`
+        builds a new one against the new context. The dead layer's GL objects
+        go with the context Qt is about to destroy.
+        """
+        if self.light_layer is None:
+            return
+        self._gpu_suspended = True
+        self.light_layer = None
+        for obj in self.render_objs:
+            obj.set_light_on_gpu(False)
+            obj._light_sink = None
+        self.stage_view.detach_light_layer()
+        # Write-once no longer: the scene preview gates its own GL on this, and
+        # while the stage has no context the honest answer is False.
+        from stage.gpu import layer as gpu_layer
+        gpu_layer.STAGE_GPU_ACTIVE = False
+
+    def resume_gpu_light(self) -> None:
+        """Rebuild the GPU light after a reparent. Fails soft to raster."""
+        if not self._gpu_suspended:
+            return
+        self._gpu_suspended = False
+        self._enable_gpu_light()
 
     def _on_light_changed(self) -> None:
         """A body's light list changed; ask for one repaint.
