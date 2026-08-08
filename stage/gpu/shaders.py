@@ -79,6 +79,7 @@ in vec2  i_size;
 uniform mat4 u_scene_to_clip;
 uniform float u_glow_reach;   // how far a lamp's halo spreads, in lamp radii
 uniform float u_max_glow;     // and a ceiling on that, in scene units
+uniform float u_px_per_scene; // device pixels one scene unit covers on screen
 
 out vec2 v_local;             // position within the primitive's own frame
 flat out float v_kind;
@@ -93,8 +94,24 @@ flat out vec3  v_box;         // QUAD only: (half width, half height, halo)
 // the soft edge; the fragment shader narrows it back down per slice.
 const float CONE_MARGIN = 1.35;
 
+// The narrowest a laser is ever DRAWN, in device pixels either side of its axis.
+//
+// A laser is the one primitive here that is genuinely thinner than a pixel: it
+// is a couple of scene units across, and the view fits a 1536-unit stage into a
+// few hundred, so its quad comes out around 0.8 device pixels wide. GL has no
+// coverage — it shades the pixels whose centres land inside the triangle and
+// drops the rest — so a beam at any angle other than axis-aligned rasterises to
+// a *dashed* line, and a fan of them to the fan of dashes this was reported as.
+// Widening the quad to something the rasteriser can hold and taking the
+// brightness back out (see `v_intensity` below) is what an antialiased thin
+// line is, and it is exactly what Qt does for the raster path's 2px pen.
+const float MIN_LINE_HALF_PX = 1.0;
+
 void main() {
     vec2 scene;
+    // How much of its brightness a primitive gives up for having been drawn
+    // wider than it is. 1 for everything that was already wider than a pixel.
+    float dim = 1.0;
 
     if (i_kind == KIND_QUAD) {
         // The cell's own rectangle, grown by however far its light carries.
@@ -111,8 +128,17 @@ void main() {
         vec2 dir = vec2(cos(rad), sin(rad));
         vec2 nrm = vec2(-dir.y, dir.x);
         float t = a_corner.x * 0.5 + 0.5;            // 0 at the lens, 1 at the tip
-        float half_width = max(i_half_width, 0.5) * CONE_MARGIN;
-        scene = i_pos + dir * (t * i_length) + nrm * (a_corner.y * half_width);
+        float width = max(i_half_width, 0.5);
+        if (i_kind == KIND_LINE) {
+            float drawn = max(width, MIN_LINE_HALF_PX
+                                     / max(u_px_per_scene, 1e-4));
+            dim = width / drawn;      // spread over more pixels, so less on each
+            width = drawn;
+        }
+        scene = i_pos + dir * (t * i_length)
+              + nrm * (a_corner.y * width * CONE_MARGIN);
+        // In units of the primitive's own half width, so the fragment shader
+        // measures against the beam rather than against the quad's margin.
         v_local = vec2(t, a_corner.y * CONE_MARGIN);
     } else {
         // POINT and BLOB: a square centred on the source. Capped, or a big
@@ -126,7 +152,7 @@ void main() {
 
     v_kind = i_kind;
     v_rgb = i_rgb;
-    v_intensity = i_intensity;
+    v_intensity = i_intensity * dim;
     v_softness = i_softness;
     v_hardness = i_hardness;
     v_foreshorten = i_foreshorten;
@@ -230,7 +256,13 @@ void main() {
 
     } else if (v_kind == KIND_LINE) {
         // Coherent light: thin, hard, and still there where a wash has gone.
-        float across = abs(v_local.y) / 0.35;
+        //
+        // Measured against the beam's own half width — `v_local.y` is already
+        // in those units — so the beam is drawn as wide as it says it is. The
+        // old divisor put the edge at 0.35 of that, which on top of a quad that
+        // was already sub-pixel left a lit core a fifth of a pixel across:
+        // nothing to rasterise, and the fan came out dashed.
+        float across = abs(v_local.y);
         shape = (1.0 - smoothstep(0.6, 1.0, across))
               * (1.0 - smoothstep(0.85, 1.0, v_local.x));
 
@@ -468,6 +500,18 @@ const float MEDIUM_TEXTURE_WEIGHT = 0.4;
 // something near 1. This is the number that makes the beam the thing you look
 // at, which on a stage it is.
 const float BEAM_RADIANCE = 20.0;
+
+// How thick a laser is to the march, in scene units.
+//
+// Wider than the beam itself, on purpose: what the march draws is the glow
+// *around* a thread of coherent light, not the thread — the thread is a
+// LINE in the accumulate pass and stays there. Two units of it would be a third
+// of a march texel across at the scale the stage is usually fitted to, which is
+// the same aliasing the light pass has to widen its quad to escape.
+//
+// `line_segment` is solved on this same number, so the tube that is marched is
+// exactly the tube that is lit.
+const float LINE_FOG_RADIUS = 12.0;
 
 // The throw a fixture actually has, undoing the foreshortening the light list
 // applied on the way in. A beam aimed at the viewer is short on the picture and
@@ -797,6 +841,40 @@ bool cone_segment(vec3 apex, vec3 axis, float k, out float enter,
     return true;
 }
 
+// Where this ray enters and leaves a laser, exactly.
+//
+// The same fix as `cone_segment`, for a worse case. A laser is a *tube* a few
+// units across lying in the rig plane, while the march steps ~58: one pixel in
+// ten got a single sample inside it and the other nine got nothing at all, so a
+// fan came out as a field of speckle rather than as beams — and the dither
+// moved the speckle every frame. Marching the tube's own chord gives every
+// sample to the beam, exactly as solving the cone did for a shaft.
+//
+// A ray along +Z through a cylinder of radius `r` about `axis` is a quadratic in
+// t, as it was for the cone. `a <= 0` means the ray runs along the axis — a
+// laser aimed down the lens — where the bounding sphere is already the answer.
+bool line_segment(vec3 apex, vec3 axis, float radius, out float enter,
+                  out float leave) {
+    vec3 o = vec3(v_scene, -u_camera_z) - apex;
+    float along = dot(o, axis);
+    float a = 1.0 - axis.z * axis.z;
+    float b = 2.0 * (o.z - along * axis.z);
+    float c = dot(o, o) - along * along - radius * radius;
+    if (a <= 1e-4) { return false; }
+    float disc = b * b - 4.0 * a * c;
+    if (disc <= 0.0) { return false; }             // the ray misses the tube
+    float root = sqrt(disc);
+    enter = (-b - root) / (2.0 * a);
+    leave = (-b + root) / (2.0 * a);
+    return true;
+}
+
+// The tube a laser is to the march. One place, because the segment above and
+// the radiance below drifting apart is a beam lit outside what was marched.
+float line_radius() {
+    return max(v_half_width, LINE_FOG_RADIUS);
+}
+
 // What this light puts on a point in the air, and which way it was going.
 vec3 radiance_at(vec3 p, out vec3 to_light) {
     vec3 origin = vec3(v_light_pos, 0.0);
@@ -821,11 +899,9 @@ vec3 radiance_at(vec3 p, out vec3 to_light) {
     if (along <= 0.0) { return vec3(0.0); }        // behind the lens
 
     if (v_kind == KIND_LINE) {
-        // A laser is far thinner than a march step, so it is given a radius it
-        // can actually be hit at; below that it would flicker in and out as the
-        // dither moved the samples around.
+        // The glow around the thread, over the tube `line_segment` marched.
         float across = length(offset - axis * along);
-        float width = max(v_half_width, 3.0);
+        float width = line_radius();
         float profile = 1.0 - smoothstep(0.0, width, across);
         return v_rgb * (v_intensity * BEAM_RADIANCE * profile
                         * (1.0 - smoothstep(0.85, 1.0, along / slant)));
@@ -884,6 +960,15 @@ void main() {
             float enter, leave;
             if (cone_segment(vec3(v_light_pos, 0.0), beam_direction(),
                              max(v_half_width, 1.0) / slant, enter, leave)) {
+                t0 = max(t0, enter);
+                t1 = min(t1, leave);
+            }
+        } else if (v_kind == KIND_LINE) {
+            // And for a laser, to its tube — which is thinner still, so this
+            // matters more here than it does for the cone above.
+            float enter, leave;
+            if (line_segment(vec3(v_light_pos, 0.0), beam_direction(),
+                             line_radius(), enter, leave)) {
                 t0 = max(t0, enter);
                 t1 = min(t1, leave);
             }

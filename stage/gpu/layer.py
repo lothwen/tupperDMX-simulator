@@ -73,6 +73,18 @@ def stage_gpu_active() -> bool:
     return STAGE_GPU_ACTIVE
 
 
+def _px_per_scene(scene_to_clip: QMatrix4x4, width: int) -> float:
+    """How many device pixels one scene unit covers, from the matrix itself.
+
+    The one thing a shader cannot work out on its own and the one primitive
+    that needs it — a laser — is thinner than a pixel, so it has to be drawn
+    wider than it is or the rasteriser turns it into a dashed line. The mapping
+    is already in the matrix that projects it: scene units go to clip space, and
+    clip space spans 2 across the surface.
+    """
+    return abs(scene_to_clip.column(0).x()) * width / 2.0
+
+
 def configure_surface_format() -> None:
     """Ask for the context the layer needs. Must run before `QApplication`.
 
@@ -526,6 +538,8 @@ class LightLayer:
         program.bind()
         program.setUniformValue("u_glow_reach", float(GLOW_REACH))
         program.setUniformValue("u_max_glow", float(MAX_GLOW_RADIUS_PX))
+        program.setUniformValue("u_px_per_scene",
+                                _px_per_scene(scene_to_clip, self._size[0]))
         program.setUniformValue("u_haze", float(self.haze))
         # With the march running it owns the shaft, and this pass keeps only the
         # lens — otherwise one beam would be drawn twice, once each way.
