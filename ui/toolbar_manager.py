@@ -42,6 +42,7 @@ class ToolbarManager(QObject):
     # Application menu signals
     settings_requested = pyqtSignal()
     about_requested = pyqtSignal()
+    dock_stage_requested = pyqtSignal()  # bring the undocked stage window back
 
     def __init__(self, config: Config):
         super().__init__()
@@ -64,6 +65,7 @@ class ToolbarManager(QObject):
         self.next_button: Optional[QPushButton] = None
         self.remove_button: Optional[QPushButton] = None
         self.menu_button: Optional[QToolButton] = None
+        self.dock_stage_action = None
         # Show section widgets
         self.show_name_label: Optional[QLabel] = None
         self.autosave_status_label: Optional[QLabel] = None
@@ -682,6 +684,12 @@ class ToolbarManager(QObject):
         button.setToolTip("Menu")
 
         menu = QMenu(button)
+        # The stage's own dock button leaves with the stage, so this is the way
+        # back when its window ends up on a display that is no longer there.
+        self.dock_stage_action = menu.addAction("Dock stage")
+        self.dock_stage_action.setEnabled(False)
+        self.dock_stage_action.triggered.connect(self.dock_stage_requested.emit)
+        menu.addSeparator()
         settings_action = menu.addAction("Settings…")
         settings_action.triggered.connect(self.settings_requested.emit)
         about_action = menu.addAction("About TupperDMX")
@@ -791,6 +799,11 @@ class ToolbarManager(QObject):
         if self.export_midi_action:
             self.export_midi_action.setEnabled(enabled)
             self.logger.debug(f"Export MIDI button {'enabled' if enabled else 'disabled'}")
+
+    def set_dock_stage_enabled(self, enabled: bool) -> None:
+        """Enable the ☰ "Dock stage" action (only while the stage is floating)."""
+        if self.dock_stage_action:
+            self.dock_stage_action.setEnabled(enabled)
 
     def update_song_counter(self, current: int, total: int) -> None:
         """Update the setlist counter badge ('05/11') and header song count."""

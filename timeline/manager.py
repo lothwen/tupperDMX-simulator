@@ -320,9 +320,16 @@ class Timeline(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Tracks hang from the top. A QGraphicsView centres a scene smaller than
+        # its viewport, which parked the lanes in the middle of the empty space
+        # once the section grew tall (undocking the stage hands it the whole
+        # window) — a timeline reads top-down, so anchor it there.
+        top_left = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+
         self.header_view = QGraphicsView(self)
         self.header_scene = QGraphicsScene(self)
         self.header_view.setScene(self.header_scene)
+        self.header_view.setAlignment(top_left)
         self.header_view.setFixedWidth(self.HEADER_WIDTH)
         self.header_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.header_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -338,6 +345,7 @@ class Timeline(QWidget):
         # count (<200) — and eliminates the use-after-free SIGSEGV.
         self.content_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.content_view.setScene(self.content_scene)
+        self.content_view.setAlignment(top_left)
         # Track selection centrally so multi-select affordances and the
         # persisted id set stay in sync as clips are (de)selected.
         self.content_scene.selectionChanged.connect(self._on_selection_changed)
