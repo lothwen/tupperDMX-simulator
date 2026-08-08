@@ -600,29 +600,43 @@ def _prism_spread(copies, index: int) -> float:
 PRISM_SPREAD_DEG = 9.0
 
 
-class BeamFan(Emission):
+class BeamFan(Lensed, Emission):
     """A rosette of narrow beams — a flower effect, a moonflower, a derby.
 
     One body, many beams that all do the same thing: the fixture spins them
     rather than aiming them individually, so `motion.rotation_hz` turns the
     whole rosette.
+
+    Lensed like a head, and for the same reason: everything a flower makes
+    leaves through the one front optic as those beams, so the lamp is that
+    optic and not a light beside it. Wearing a full halo it read as a par with
+    a rosette drawn over the top — which is not what a moonflower does to a
+    room.
     """
 
     animates = True
     BEAMS = 6
     HALF_ANGLE_DEG = 4.0
 
+    GLOW = GLOW_WITH_BEAM
+
     def build(self) -> None:
         body = self.body
         size = min(body.width, body.height) * 0.5
         self.lamp = GlowingEllipse((body.width - size) / 2,
                                    (body.height - size) / 2, size, size, body)
-        self.lamp.glow_radius_multiplier = GLOW_WITH_BEAM
+        self.lamp.glow_radius_multiplier = _glow_multiplier(
+            self.GLOW, size / 2.0, self.glow_scale())
+        if self.lens_only:
+            self.lamp.glow_profile = DIFFUSE_GLOW
         origin_x, origin_y = body.aim_origin()
         self.cones = [BeamCone(body, origin_x, origin_y) for _ in range(self.BEAMS)]
 
     def render(self, frame: Frame) -> None:
         beam = frame.beam
+        self.lamp.set_glow_radius(_glow_multiplier(
+            self.GLOW, self.lamp.rect().width() / 2.0,
+            self.glow_scale(beam.foreshorten)))
         self.lamp.setGlowColor(self.body.clamped_color(beam.rgb, beam.level),
                                min(1.0, beam.level))
 
@@ -639,7 +653,7 @@ class BeamFan(Emission):
         beam.axis_deg, beam.half_angle_deg = base_axis, base_angle
 
     def set_raster_light_visible(self, visible: bool) -> None:
-        self.lamp.draw_glow = visible
+        self.lamp.draw_glow = visible and not self.lens_only
         self.lamp.update()
         for cone in self.cones:
             cone.enabled = visible
@@ -651,7 +665,8 @@ class BeamFan(Emission):
         if beam.level > 0.0:
             rect = self.lamp.rect()
             out.add_point(rect.center().x(), rect.center().y(),
-                          linear_rgb(beam.rgb), beam.level, rect.width() / 2.0)
+                          linear_rgb(beam.rgb), beam.level,
+                          rect.width() / 2.0 * self.glow_scale(beam.foreshorten))
 
         # The rosette's own half-angle, not the fixture's: these are always the
         # same narrow beams however the body is classified.

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
 from stage import puffs, renderer_for
-from stage.emission.cone import HardBeam, lens_glow_radii
+from stage.emission.cone import BeamFan, HardBeam, lens_glow_radii
 from stage.glow import DIFFUSE_GLOW, SHARP_GLOW
 from stage.frame import FORESHORTEN_FLOOR
 from stage.light import (
@@ -258,6 +258,41 @@ def test_a_moving_heads_lens_flares_where_a_par_washes(qapp):
                 "and nothing at all from a head that is switched off")
     finally:
         head.cleanup()
+        par.cleanup()
+
+
+def test_a_flowers_lens_is_its_rosette_not_a_wash(qapp):
+    """A flower makes beams, so its lamp is the optic they leave through.
+
+    The same rule as the head above, on the emission that draws a rosette:
+    everything a moonflower puts out goes down those beams, so a full halo at
+    the lens is a second light the fixture does not have — and on this path it
+    is spread over sixty lamp radii, which washes the room a derby never
+    washes.
+    """
+    print("test_a_flowers_lens_is_its_rosette_not_a_wash")
+    channels = {"d": ofl_factory.channel("Intensity"),
+                "r": ofl_factory.channel("ColorIntensity", color="Red")}
+    flower = _body(ofl_factory.fdef(categories=("Flower",),
+                                    channels=dict(channels)))
+    par = _body(ofl_factory.fdef(categories=("Color Changer",),
+                                 channels=dict(channels)))
+    try:
+        lit = _lights(flower, [255, 255])
+        _assert(len(lit.of_kind(CONE)) == BeamFan.BEAMS,
+                f"a lit flower throws its {BeamFan.BEAMS} beams")
+
+        lens = lit.of_kind(POINT)
+        _assert(len(lens) == 1, "and one flare at the lens, no more")
+        washed = _lights(par, [255, 255]).of_kind(POINT)
+        _assert(lens[0].radius < washed[0].radius / 2.0,
+                f"a fraction of what the same channels glow in a par "
+                f"({lens[0].radius:.1f} vs {washed[0].radius:.1f})")
+
+        _assert(flower.emission.lamp.glow_profile is DIFFUSE_GLOW,
+                "and it fades diffusely on the raster path, like any lens")
+    finally:
+        flower.cleanup()
         par.cleanup()
 
 
@@ -715,6 +750,7 @@ def main():
     test_a_dark_fixture_emits_nothing(app)
     test_only_a_fixture_with_optics_throws_a_cone(app)
     test_a_moving_heads_lens_flares_where_a_par_washes(app)
+    test_a_flowers_lens_is_its_rosette_not_a_wash(app)
     test_a_prism_divides_the_light_it_splits(app)
     test_a_matrix_emits_one_quad_per_cell(app)
     test_coordinates_are_body_local(app)
