@@ -135,6 +135,10 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   `OutputCard`. `ScenePreview` **is** the stage engine — `renderer_for(fdef)`, one
   body per `body_count()`, fed raw DMX — so a look previews exactly as on stage;
   **`clear()` it before it goes away**, the bodies own timers on the shared clock.
+  Everything but the *size* comes from the stage: a preview holds one fixture with
+  nothing to compare it against, so `metrics.preview_def` normalises every body to
+  the same size and the frame is `_MARGIN` around it plus `emission_reach` on the
+  side `emission_rises` says the light uses.
 - **`ui/fixture/affordances.py`**: controls that beat a fader, chosen from the
   fixture's capabilities and never from its name. `ColorWheel` writes through
   `solve_color` (`wheel_applies()` asks it rather than `color_slots`, which counts
@@ -193,7 +197,9 @@ gains an entry nobody handled.
   lamps with no cone ever built, so a stray zoom channel cannot conjure one —
   `HardBeam`, `BeamFan`), `surface.py` (`MatrixCells`, `BulbArray`, `FlatPanel`),
   `volumetric.py` (`LaserFan`, `FogPlume`), `NoEmission`. `emission_for_kind(kind)`
-  is the join from `optics.py`; `emission_reach(fdef)` is a per-class constant. An
+  is the join from `optics.py`; `emission_reach(fdef)` is a per-class constant and
+  `emission_rises(fdef)` says which way it is spent — a beam falls down the stage,
+  a plume climbs, and reserving the room below a fog machine framed it out. An
   emission that draws a face draws **one item per zone** from the state's emitters,
   so a segmented wash shows every segment while staying a wash.
 - `features/` — the capability layers, each naming the OFL types it consumes and
@@ -214,7 +220,12 @@ gains an entry nobody handled.
   profile repaints its chassis), `glow.py` (`GlowingEllipse` and the `SHARP_GLOW` /
   `DIFFUSE_GLOW` falloffs) and `metrics.py` (the mm→px helpers anchored by
   `MM_PER_STAGE_PX`, `body_size`/`body_count`/`body_spacing`/`declared_cell_count`
-  — Qt-free, since a body is sized and placed before there is a state to resolve).
+  — Qt-free, since a body is sized and placed before there is a state to resolve,
+  plus `preview_def`, which throws the real scale away: it rewrites a definition's
+  `size_px`/`body_spacing` so every body previews at one size, keeping its aspect
+  ratio, because a **beam is 1220 units and a halo caps at 400 whatever body made
+  them** — real dimensions put a scanner head inside its own beam and left an ARRI
+  panel no room for its glow).
 - **Atmosphere**: a beam is invisible in clean air, so visibility is the one genuinely
   cross-fixture quantity. `StageController` owns one `Atmosphere`; any body resolving
   a fog output contributes, sources combine without exceeding full, and the level

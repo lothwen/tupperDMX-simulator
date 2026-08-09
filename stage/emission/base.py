@@ -26,6 +26,11 @@ class Emission:
     #: animation, a plume), so the body knows it must keep ticking.
     animates = False
 
+    #: Which way `reach` is spent: down the stage, as a beam is thrown, or up
+    #: from the body, as smoke rises. Only the scene preview asks — it frames
+    #: one fixture and has to leave the room on the side the light uses.
+    reach_rises = False
+
     def __init__(self, body):
         self.body = body
         self.build()
@@ -89,3 +94,13 @@ def emission_reach(fdef) -> float:
     """
     from stage.registry import renderer_for
     return renderer_for(fdef).emission_for(fdef).reach(fdef)
+
+
+def emission_rises(fdef) -> bool:
+    """True when that reach is spent ABOVE the body rather than below it.
+
+    A beam is thrown down the stage; smoke goes the other way. Reserving the
+    room below a fog machine left its plume outside the frame entirely.
+    """
+    from stage.registry import renderer_for
+    return renderer_for(fdef).emission_for(fdef).reach_rises

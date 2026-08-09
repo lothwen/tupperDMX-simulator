@@ -18,12 +18,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.fixture_library import resolve_fixture
 from stage import CLOCK, renderer_for
-from stage.emission.base import emission_reach
+from stage.emission.base import emission_reach, emission_rises
 from stage.features.base import FEATURES, build_features
 from stage.features.beamshape import (
     BladeFeature, IrisFeature, PanTiltFeature, PrismFeature, ZoomFeature,
 )
 from stage.features.level import ColorFeature, DimmerFeature, ShutterFeature
+from stage.metrics import (
+    PREVIEW_BODY_OF_REACH, PREVIEW_BODY_PX, body_size, preview_def,
+)
 import ofl_factory
 
 
@@ -179,6 +182,55 @@ def test_emission_reach_answers_for_the_preview(qapp):
                                            angleEnd="540deg")})
     _assert(emission_reach(mover) == 0.0,
             "a mover that declares no optics at all reserves no room either")
+
+
+def test_the_preview_sizes_every_fixture_the_same(qapp):
+    print("test_the_preview_sizes_every_fixture_the_same")
+    # A preview holds one fixture and nothing to compare it against, so real
+    # dimensions are the wrong scale there: what a body shares the frame with is
+    # its own light, and that is drawn in absolute scene units.
+    tiny = ofl_factory.fdef(categories=("Color Changer",),
+                            channels=dict(ofl_factory.RGB_CHANNELS),
+                            physical={"dimensions": [60, 60, 60]})
+    huge = ofl_factory.fdef(categories=("Color Changer",),
+                            channels=dict(ofl_factory.RGB_CHANNELS),
+                            physical={"dimensions": [1200, 1200, 400]})
+    _assert(body_size(tiny) != body_size(huge),
+            "on stage a 60 mm fixture is not the size of a 1.2 m one")
+    _assert(body_size(preview_def(tiny)) == body_size(preview_def(huge))
+            == (PREVIEW_BODY_PX, PREVIEW_BODY_PX),
+            "but in the preview both bodies are the same size")
+
+    # Shape survives, or a bar would preview as a square.
+    bar = ofl_factory.fdef(categories=("Color Changer",),
+                           channels=dict(ofl_factory.RGB_CHANNELS),
+                           physical={"dimensions": [1000, 100, 100]})
+    width, height = body_size(preview_def(bar))
+    _assert(width == PREVIEW_BODY_PX and round(height, 3) == PREVIEW_BODY_PX / 10,
+            "a fixture ten times wider than it is tall still is")
+
+    # And a fixture that throws something gets less of the frame, because the
+    # beam is what there is to look at.
+    lensed = ofl_factory.fdef(categories=("Moving Head",),
+                              channels={"d": ofl_factory.channel("Intensity")},
+                              physical={"dimensions": [1200, 1200, 400],
+                                        "lens": {"degreesMinMax": [10, 10]}})
+    _assert(max(body_size(preview_def(lensed)))
+            == emission_reach(lensed) * PREVIEW_BODY_OF_REACH
+            < PREVIEW_BODY_PX,
+            "a fixture with a beam previews smaller, sized off its own throw")
+
+
+def test_the_preview_is_told_which_way_the_light_goes(qapp):
+    print("test_the_preview_is_told_which_way_the_light_goes")
+    beam = ofl_factory.fdef(categories=("Moving Head",),
+                            channels={"d": ofl_factory.channel("Intensity")},
+                            physical={"lens": {"degreesMinMax": [10, 10]}})
+    _assert(not emission_rises(beam), "a beam is thrown down the stage")
+    fog = ofl_factory.fdef(categories=("Hazer",),
+                           channels={"f": ofl_factory.channel("Fog")})
+    _assert(emission_reach(fog) > 0.0 and emission_rises(fog),
+            "and a plume climbs, so the room for it is reserved above")
 
 
 def test_the_shutter_gate_is_a_pure_function_of_time(qapp):
@@ -368,6 +420,8 @@ def main():
     test_only_animating_bodies_hold_the_clock(app)
     test_cleanup_releases_the_animation(app)
     test_emission_reach_answers_for_the_preview(app)
+    test_the_preview_sizes_every_fixture_the_same(app)
+    test_the_preview_is_told_which_way_the_light_goes(app)
     test_the_shutter_gate_is_a_pure_function_of_time(app)
     test_every_registered_feature_declares_itself(app)
     test_a_matrix_is_one_body_unless_its_pixels_are_separated(app)

@@ -364,6 +364,7 @@ class FogPlume(Emission):
     """
 
     animates = True
+    reach_rises = True      # a plume climbs out of the nozzle; a beam falls
 
     def build(self) -> None:
         origin_x, origin_y = self.body.aim_origin()
