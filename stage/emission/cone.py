@@ -327,6 +327,7 @@ class WashLamp(Lensed, Emission):
             lamp.glow_radius_multiplier = multiplier
             if self.lens_only:
                 lamp.glow_profile = DIFFUSE_GLOW
+                lamp.draw_unlit_face = not body.draws_own_aperture
             self.lamps.append(lamp)
 
         origin_x, origin_y = body.aim_origin()
@@ -524,6 +525,7 @@ class HardBeam(Lensed, Emission):
             self.GLOW, size / 2.0, self.glow_scale())
         if self.lens_only:
             self.lamp.glow_profile = DIFFUSE_GLOW
+            self.lamp.draw_unlit_face = not body.draws_own_aperture
         origin_x, origin_y = body.aim_origin()
         self._origin = QPointF(origin_x, origin_y)
         self.cones = [BeamCone(body, origin_x, origin_y)
@@ -629,6 +631,7 @@ class BeamFan(Lensed, Emission):
             self.GLOW, size / 2.0, self.glow_scale())
         if self.lens_only:
             self.lamp.glow_profile = DIFFUSE_GLOW
+            self.lamp.draw_unlit_face = not body.draws_own_aperture
         origin_x, origin_y = body.aim_origin()
         self.cones = [BeamCone(body, origin_x, origin_y) for _ in range(self.BEAMS)]
 
