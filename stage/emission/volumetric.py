@@ -137,7 +137,7 @@ class LaserFan(Emission):
     animates = True
 
     def build(self) -> None:
-        origin_x, origin_y = self.body.aim_origin()
+        origin_x, origin_y = self.body.emit_origin()
         self.fan = _LaserItem(self.body, origin_x, origin_y)
 
     def render(self, frame: Frame) -> None:
@@ -163,7 +163,7 @@ class LaserFan(Emission):
         count = MAX_LASER_BEAMS if program.name else max(2, MAX_LASER_BEAMS // 3)
         spread = LASER_SPREAD_DEG * max(0.2, beam.aperture)
         length = LASER_LENGTH_PX * max(0.3, beam.foreshorten)
-        origin_x, origin_y = self.body.aim_origin()
+        origin_x, origin_y = self.body.emit_origin()
         rgb = linear_rgb(beam.rgb)
 
         step = (spread / (count - 1)) if count > 1 else 0.0
@@ -367,7 +367,7 @@ class FogPlume(Emission):
     reach_rises = True      # a plume climbs out of the nozzle; a beam falls
 
     def build(self) -> None:
-        origin_x, origin_y = self.body.aim_origin()
+        origin_x, origin_y = self.body.emit_origin()
         self.origin = (origin_x, origin_y - self.body.height / 2.0)
         self.field = puffs.PuffField(
             getattr(self.body, "fog_spec", puffs.HAZER))

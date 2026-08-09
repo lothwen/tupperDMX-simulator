@@ -215,6 +215,12 @@ class FixtureInstance:
     mode: str = ""                                             # OFL mode; "" = the type's first
     x: int = 0
     y: int = 0
+    # How it is rigged: True = flown, hanging under a truss (housing upside
+    # down, beam thrown at the floor); False = standing on the deck (housing
+    # the right way up, beam thrown at the ceiling). True is the default
+    # because a beam that points down is what every stage drew before a fixture
+    # could say which way up it was.
+    hanging: bool = True
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
 
 
@@ -682,6 +688,9 @@ class Config:
                 mode=mode,
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
+                # A patch saved before fixtures could be rigged either way is
+                # read as flown, which is where its beams already pointed.
+                hanging=bool(entry.get("hanging", True)),
                 bars=bars,
             ))
 

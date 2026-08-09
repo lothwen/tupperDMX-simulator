@@ -239,9 +239,46 @@ def test_one_resolve_feeds_every_body_of_a_fixture(qapp):
     _assert(first.rgb == (30, 20, 10), "and it is the right one")
 
 
+def test_a_new_fixture_is_rigged_by_where_it_lands(qapp):
+    print("test_a_new_fixture_is_rigged_by_where_it_lands")
+    sc, _ = _stage()
+    height = sc.scene.sceneRect().height()
+
+    truss = sc.add_fixture("par_rgb", 9, 400, int(height * 0.2))
+    deck = sc.add_fixture("par_rgb", 13, 500, int(height * 0.9))
+    _assert(truss.hanging, "dropped up in the air, a fixture is flown")
+    _assert(not deck.hanging, "dropped on the deck, it stands on it")
+
+    # The browser drops at the stage centre, and what lands there is on its way
+    # to a truss — so a guess of "standing" there would be wrong every time.
+    middle = sc.add_fixture("par_rgb", 17, 600, int(height / 2))
+    _assert(middle.hanging, "and the centre of the picture counts as flown")
+
+
+def test_the_guess_is_only_a_guess_and_a_drag_never_revises_it(qapp):
+    print("test_the_guess_is_only_a_guess_and_a_drag_never_revises_it")
+    sc, _ = _stage()
+    height = sc.scene.sceneRect().height()
+    inst = sc.add_fixture("par_rgb", 9, 400, int(height * 0.2))
+    body = sc.get_all_fixtures()[-1]
+
+    # Dragging is a move, not a re-rig: a fixture that turned itself over
+    # halfway across the stage would be unusable.
+    body.setPos(400, height * 0.95)
+    sc._on_fixture_moved(body)
+    _assert(inst.hanging, "carried down to the deck, it is still flown")
+
+    sc.set_fixture_hanging(inst, False)
+    _assert(not inst.hanging, "until it is said outright")
+    _assert(not sc.get_all_fixtures()[-1].hanging,
+            "and the body is rebuilt the other way up")
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
+    test_a_new_fixture_is_rigged_by_where_it_lands(app)
+    test_the_guess_is_only_a_guess_and_a_drag_never_revises_it(app)
     test_add_is_incremental(app)
     test_added_fixture_receives_dmx(app)
     test_add_ledbar_seeds_all_bars(app)

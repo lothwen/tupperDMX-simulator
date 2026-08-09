@@ -187,6 +187,7 @@ def test_fixtures_and_cues_reuse_config_parsers():
         "fixtures": [
             {"type": "ledbar", "dmx_start": 1},
             {"type": "bogus", "dmx_start": 5},
+            {"type": "par_rgb", "dmx_start": 9, "hanging": False},
         ],
         "webremote_cues": [
             {"label": "Warm", "color": "#ffb86b", "messages": [[0, 200, 300]]},
@@ -194,15 +195,20 @@ def test_fixtures_and_cues_reuse_config_parsers():
         ],
     }
     show = show_from_manifest(root, data)
-    _assert(len(show.fixtures) == 1 and show.fixtures[0].type == "ledbar",
+    _assert(len(show.fixtures) == 2 and show.fixtures[0].type == "ledbar",
             "fixtures parse via Config._parse_fixtures (unknown types skipped)")
     _assert(show.fixtures[0].channel == 0, "stable channel auto-assignment applies")
     _assert(len(show.cues) == 1 and show.cues[0].messages == [[0, 127, 127]],
             "cues parse via Config._parse_web_cues (clamped, unlabeled dropped)")
+    # A patch written before fixtures could say which way up they are rigged
+    # keeps throwing its light at the floor, which is where it already was.
+    _assert(show.fixtures[0].hanging and not show.fixtures[1].hanging,
+            "how a fixture is rigged is read, and defaults to flown")
 
     roundtrip = show_from_manifest(root, show_to_manifest(show))
     _assert(roundtrip.fixtures[0].dmx_start == 1 and roundtrip.cues[0].label == "Warm",
             "fixtures and cues roundtrip")
+    _assert(not roundtrip.fixtures[1].hanging, "and so does the rigging")
 
 
 def test_song_status_matrix():

@@ -107,9 +107,16 @@ downloaded on demand into `userprefs_dir()/tts_voices/`, never bundled).
   contributes one per `bars[]` entry, all fed the same DMX slice) and slices
   `dmx_data` per instance. Which class draws a fixture comes from
   `registry.renderer_for(fdef)` — never from its type name. `set_design_mode()` makes
-  fixtures movable; add/change-mode/remove/drag mutate `config.fixtures` and emit
-  `fixture_added/moved/removed/selected`. Driven by `ui/fixture/designer.py` (Menu ▸
-  "Design stage"). `led_bars`/`blinders` survive as read-only views.
+  fixtures movable; add/change-mode/remove/drag/**re-rig** mutate `config.fixtures`
+  and emit `fixture_added/moved/removed/selected`. Driven by `ui/fixture/designer.py`
+  (Menu ▸ "Design stage"). `led_bars`/`blinders` survive as read-only views.
+  **Rigging** (`FixtureInstance.hanging`, persisted, the inspector's RIGGING toggle):
+  flown = housing upside down + beam at the floor, standing = the reverse.
+  `set_fixture_hanging` rebuilds the bodies, as a mode change does. `add_fixture`
+  *guesses* it from where the fixture lands (`is_flown_height`, `DECK_TOP` at ⅔
+  down) and writes it down — a guess re-evaluated live would turn a fixture over
+  mid-drag. A profile with `rigs_inverted = False` (hazer, smoke, fan, stand) ignores
+  it and the toggle is hidden (`can_rig_inverted`).
 - **`ui/fixture/browser.py`**: the fixture browser — a search/grouping rail and
   tree over a detail panel rendering the OFL document (General, Channels, Modes,
   Scenes). The footer is the patch decision: DMX start (live overlap/overflow check
@@ -211,13 +218,26 @@ gains an entry nobody handled.
 - `frame.py` (`Frame` + `BeamParams`, the contract between the two stages;
   `half_angle_deg` is the **resting** spread — `None` only when the kind is `NONE` —
   and `ZoomFeature` overwrites it every frame, so a live zoom wins), `geometry.py`
-  (`Aim`: pan/tilt onto a flat front elevation; **no pan/tilt ⇒ straight down at full
-  length** — plus `Spinner`, `Slew`), `clock.py` (ONE 30 Hz timer for everything that
+  (`Aim`: the fixture is aimed in a **room** — a unit vector from pan/tilt — and only
+  then flattened onto the front elevation, so `(axis_deg, foreshorten)` IS that vector
+  and the fog march can rebuild it. **Home (half travel, DMX 127/128) is straight
+  down**; **tilt swings the beam and pan turns the plane it swings in** — at pan home
+  tilt walks it toward the viewer and only shortens it, a quarter turn away the same
+  tilt sweeps it across the stage, and at tilt home *pan cannot move a beam at all*.
+  `PanTiltFeature` slews the pan/tilt, never the projection, and the housings read
+  `aim.pan_offset()` / `frame.beam` so a yoke can never have turned where its beam
+  did not — plus `Spinner`, `Slew`), `clock.py` (ONE 30 Hz timer for everything that
   animates, subscribed weakly), `wheelart.py` (procedural gobo/gel/prism art from the
   slot's own OFL description), and the three that used to be one `base.py`:
   `body.py` (`FixtureLabel`, `DesignableFixture`, and `BodyFixture`, which runs the
   pipeline: reset the beam → each feature shapes it → the emission draws it → the
-  profile repaints its chassis), `glow.py` (`GlowingEllipse` and the `SHARP_GLOW` /
+  profile repaints its chassis. **Every profile draws its chassis the way it stands
+  on the deck, into `body.housing`** — one item `ChassisPart` re-parents to itself,
+  which a flown fixture turns 180°. **Never the body item**: the GPU offsets each
+  body's lights by its *position* alone, so a turned body would send the raster and
+  the shader two different beams; the light's own half of the flip is `Aim`'s, and
+  `emit_origin()` is `aim_origin()` carried through it), `glow.py` (`GlowingEllipse`
+  and the `SHARP_GLOW` /
   `DIFFUSE_GLOW` falloffs) and `metrics.py` (the mm→px helpers anchored by
   `MM_PER_STAGE_PX`, `body_size`/`body_count`/`body_spacing`/`declared_cell_count`
   — Qt-free, since a body is sized and placed before there is a state to resolve,
@@ -456,7 +476,9 @@ quad**, the only fullscreen draw being ambient.
   `id`/`title`/`key`/`precount`/`voice_cues`/`offset`/`guide`+`guide_offset`/paths + a
   derived `cache` of duration/bpm), `current_song_index`, the fixture **patch** (type
   + `dmx_start` + stable MIDI `channel` + optional `mode`, where `""` means the type's
-  first declared mode so a renamed mode never strands a patch) and `webremote_cues`.
+  first declared mode so a renamed mode never strands a patch, + `hanging`, which
+  defaults to **true** so a patch written before fixtures could say which way up they
+  are rigged keeps throwing its light at the floor) and `webremote_cues`.
   Owned `.mid` files live in `midis/`; audio is *referenced in place* unless it
   arrived in a bundle. The `.mid` stays canonical — extras plain MIDI can't carry
   (stable scene `group_id`, `scene_name`, per-clip fades) ride as `tdmx1:{json}` text

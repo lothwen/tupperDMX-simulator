@@ -1424,6 +1424,23 @@ QLabel#InspectorFieldLabel {
     font-size: 11px;
 }
 
+/* The two ends of a switch. Both are always readable — the one in force is
+   what the fixture IS, so it is the one that lights up. */
+QLabel#InspectorSideLabel {
+    color: #777;
+    font-size: 11px;
+}
+
+QLabel#InspectorSideLabel[active="true"] {
+    color: white;
+    font-weight: bold;
+}
+
+QLabel#InspectorHint {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
 QLabel#InspectorReadonly {
     color: white;
     background-color: #333;

@@ -175,7 +175,7 @@ def _emit_cone(out: LightList, body, beam: BeamParams,
     if level <= BEAM_MIN_INTENSITY:
         return
     length, spread = cone_geometry(beam, hard)
-    origin_x, origin_y = body.aim_origin()
+    origin_x, origin_y = body.emit_origin()
     out.add_cone(origin_x, origin_y, linear_rgb(rgb), level,
                  beam.axis_deg if axis_deg is None else axis_deg,
                  length, spread,
@@ -330,7 +330,7 @@ class WashLamp(Lensed, Emission):
                 lamp.draw_unlit_face = not body.draws_own_aperture
             self.lamps.append(lamp)
 
-        origin_x, origin_y = body.aim_origin()
+        origin_x, origin_y = body.emit_origin()
         self.cone = (BeamCone(body, origin_x, origin_y) if self.DRAWS_CONE
                      else None)
 
@@ -526,7 +526,7 @@ class HardBeam(Lensed, Emission):
         if self.lens_only:
             self.lamp.glow_profile = DIFFUSE_GLOW
             self.lamp.draw_unlit_face = not body.draws_own_aperture
-        origin_x, origin_y = body.aim_origin()
+        origin_x, origin_y = body.emit_origin()
         self._origin = QPointF(origin_x, origin_y)
         self.cones = [BeamCone(body, origin_x, origin_y)
                       for _ in range(self.MAX_COPIES)]
@@ -632,7 +632,7 @@ class BeamFan(Lensed, Emission):
         if self.lens_only:
             self.lamp.glow_profile = DIFFUSE_GLOW
             self.lamp.draw_unlit_face = not body.draws_own_aperture
-        origin_x, origin_y = body.aim_origin()
+        origin_x, origin_y = body.emit_origin()
         self.cones = [BeamCone(body, origin_x, origin_y) for _ in range(self.BEAMS)]
 
     def render(self, frame: Frame) -> None:

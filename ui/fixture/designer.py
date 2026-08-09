@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from tupperlogger import get_logger
 from core.fixture_library import fixture_modes
 from ui.widgets import icons
+from ui.widgets.toggle_switch import ToggleSwitch
 from ui.fixture.browser import AddFixtureDialog, used_midi_channels
 
 
@@ -376,6 +377,40 @@ class FixtureInspector(QWidget):
         self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
         layout.addWidget(self._mode_combo)
 
+        # MOUNTING — which way up the fixture is rigged. The switch carries a
+        # label on each side and a line saying what the current one does: one
+        # word on a toggle only ever names half of it, and the half it names is
+        # the state you are not in.
+        self._mounting = QWidget()
+        mounting = QVBoxLayout(self._mounting)
+        mounting.setContentsMargins(0, 0, 0, 0)
+        mounting.setSpacing(5)
+        mounting.addWidget(self._section_label("MOUNTING"))
+
+        sides = QHBoxLayout()
+        sides.setSpacing(8)
+        self._floor_label = self._side_label("On the floor")
+        self._ceiling_label = self._side_label("Hanging")
+        self._hanging_switch = ToggleSwitch()
+        self._hanging_switch.toggled.connect(self._on_hanging_toggled)
+        sides.addWidget(self._floor_label)
+        sides.addWidget(self._hanging_switch)
+        sides.addWidget(self._ceiling_label)
+        sides.addStretch(1)
+        mounting.addLayout(sides)
+
+        self._mounting_hint = QLabel()
+        self._mounting_hint.setObjectName("InspectorHint")
+        self._mounting_hint.setWordWrap(True)
+        # A wrapped QLabel reports the height of ONE line unless its policy
+        # says otherwise, and a layout believes it — which cuts the second line
+        # off into whatever is underneath.
+        policy = self._mounting_hint.sizePolicy()
+        policy.setHeightForWidth(True)
+        self._mounting_hint.setSizePolicy(policy)
+        mounting.addWidget(self._mounting_hint)
+        layout.addWidget(self._mounting)
+
         # DMX PATCH
         layout.addWidget(self._section_label("DMX PATCH"))
         layout.addWidget(self._field_label("Start address"))
@@ -413,6 +448,13 @@ class FixtureInspector(QWidget):
         lbl.setObjectName("InspectorFieldLabel")
         return lbl
 
+    def _side_label(self, text: str) -> QLabel:
+        """One end of a two-ended switch. The side in force lights up."""
+        lbl = QLabel(text)
+        lbl.setObjectName("InspectorSideLabel")
+        lbl.setProperty("active", "false")
+        return lbl
+
     # ------------------------------------------------------------------
     # Population / edits
     # ------------------------------------------------------------------
@@ -437,6 +479,13 @@ class FixtureInspector(QWidget):
         self._mode_label.setVisible(len(modes) > 1)
         self._mode_combo.setVisible(len(modes) > 1)
 
+        hanging = bool(getattr(instance, "hanging", True))
+        self._mounting.setVisible(self._stage.can_rig_inverted(instance))
+        self._hanging_switch.blockSignals(True)
+        self._hanging_switch.setChecked(hanging)
+        self._hanging_switch.blockSignals(False)
+        self._show_mounting(hanging)
+
         self._dmx_spin.blockSignals(True)
         self._dmx_spin.setValue(instance.dmx_start)
         self._dmx_spin.blockSignals(False)
@@ -450,6 +499,28 @@ class FixtureInspector(QWidget):
         # Rebuilding the render group re-emits fixture_selected, so the host
         # keeps the inspector pointed at the same fixture.
         self._stage.change_fixture_mode(self._current, mode)
+        self._stage.refresh_labels()
+        self._notify()
+
+    def _show_mounting(self, hanging: bool) -> None:
+        """Light the side the switch is on, and say what that side does."""
+        for label, active in ((self._ceiling_label, hanging),
+                              (self._floor_label, not hanging)):
+            label.setProperty("active", "true" if active else "false")
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self._mounting_hint.setText(
+            "Upside down, beam aimed at the stage."
+            if hanging else
+            "Upright, beam aimed at the ceiling.")
+
+    def _on_hanging_toggled(self, hanging: bool) -> None:
+        self._show_mounting(hanging)
+        if self._current is None:
+            return
+        # Rebuilds the render group, which re-emits fixture_selected — same
+        # path a mode change takes, so the inspector stays on this fixture.
+        self._stage.set_fixture_hanging(self._current, hanging)
         self._stage.refresh_labels()
         self._notify()
 
