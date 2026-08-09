@@ -8,6 +8,8 @@ body has to be sized and placed before there is a state to resolve for it, and
 the scene preview has to ask the same questions before it has a scene.
 """
 
+from dataclasses import replace
+from types import MappingProxyType
 from typing import Tuple
 
 from core.fixture_library import FixtureDef
@@ -24,6 +26,14 @@ DEFAULT_BODY_SPACING_PX = 175             # between bodies of one multi-body fix
 # Pixels spaced this much further apart than they are wide aren't a row of
 # cells behind one lens; they are separate housings on one DMX slice.
 SEPARATE_BODY_RATIO = 1.5
+
+# What the scene preview scales a body's longer side to, in scene units. Two
+# numbers because a fixture that throws something has to share the frame with
+# it: the smaller its body, the more of that frame is the light — which is the
+# whole point of previewing it. Sized off the throw itself rather than fixed, so
+# a laser (which reaches further than a wash) still frames the same way.
+PREVIEW_BODY_PX = 340.0
+PREVIEW_BODY_OF_REACH = 0.15
 
 
 def body_size(fdef: FixtureDef) -> Tuple[float, float]:
@@ -74,6 +84,34 @@ def body_spacing(fdef: FixtureDef) -> int:
     if spacing and spacing[0] > 0:
         return int(spacing[0] / MM_PER_STAGE_PX)
     return DEFAULT_BODY_SPACING_PX
+
+
+def preview_def(fdef: FixtureDef) -> FixtureDef:
+    """`fdef` with its body resized for the scene preview.
+
+    On stage a fixture is as big as it really is, standing next to others at the
+    same scale, and that is the only place real dimensions mean anything. A
+    preview holds one fixture, and what it shares the frame with is its own
+    light — which is drawn in ABSOLUTE scene units: a halo capped at 400, a beam
+    1220 long. So the real scale is the wrong one there. A 20 mm scanner head
+    disappears inside its own beam while a 4 m panel leaves no room for its
+    glow, and neither is telling you anything about the scene you are editing.
+
+    Every body is scaled to the same longer side instead, keeping its aspect
+    ratio (a bar is still a bar, a par still square) and its spacing, so the
+    light always lands in the frame the same way.
+    """
+    from stage.emission.base import emission_reach
+
+    reach = emission_reach(fdef)
+    target = (reach * PREVIEW_BODY_OF_REACH if reach > 0.0 else PREVIEW_BODY_PX)
+    width, height = body_size(fdef)
+    scale = target / max(width, height)
+    return replace(fdef, stage=MappingProxyType({
+        **fdef.stage,
+        "size_px": (width * scale, height * scale),
+        "body_spacing": body_spacing(fdef) * scale,
+    }))
 
 
 def declared_cell_count(fdef: FixtureDef) -> int:

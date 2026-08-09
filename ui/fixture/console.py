@@ -17,7 +17,8 @@ way the library editor does — same faders, same colours, same preview:
 Nothing here is simulated twice: `ScenePreview` builds the same renderer the
 stage would (`stage.registry.renderer_for`), one body per `body_count()`, and
 feeds it raw DMX — so a look previews here exactly as it will appear on stage,
-animations, beam cone and strobe included.
+animations, beam cone and strobe included. The one thing it does not take from
+the stage is the fixture's *size*: see `metrics.preview_def`.
 
 Qt-facing only: what a channel *means* comes from `core.channel_families` and
 `core.fixture_state`, never from a table here.
@@ -37,8 +38,8 @@ from core.channel_families import channel_family
 from core.fixture_library import FixtureDef
 from core.fixture_state import FixtureState, capability_at, resolve_state
 from ui.widgets.chips import rgba
-from stage.metrics import body_count, body_size, body_spacing
-from stage.emission.base import emission_reach
+from stage.metrics import body_count, body_size, body_spacing, preview_def
+from stage.emission.base import emission_reach, emission_rises
 from stage.registry import renderer_for
 
 # Height of the faders scroll area — one 96 px slider plus its labels.
@@ -54,15 +55,20 @@ class ScenePreview(QGraphicsView):
     multi-body fixture (the LED bar's eight bars) previews as the row it really
     is rather than as a single strip.
 
+    Sizes them itself, though (`metrics.preview_def`): on stage a fixture is as
+    big as it really is because it stands next to others at the same scale, and
+    here there is only the one — so every body is normalised to the same size
+    and what varies in the frame is the light, which is the point of looking.
+
     The backdrop is the card's own gradient, repainted here: the view is a child
     widget, so it has to draw what the card behind it would have drawn.
     """
 
-    # Room around the bodies for the glow, as a fraction of ONE body — scaling
-    # it off the whole row instead would shrink a wide fixture (the LED bar's
-    # eight bars) into a sliver.
-    _PAD_X = 0.8
-    _PAD_Y = 0.3
+    # Room around the bodies for the glow, as a fraction of ONE body's longer
+    # side — scaling it off the whole row instead would shrink a wide fixture
+    # (the LED bar's eight bars) into a sliver, and taking each axis from its
+    # own side would leave a pixel tube 6 units of headroom for a 400-unit halo.
+    _MARGIN = 0.9
 
     # Keep in step with QFrame#AddFxOutputCard's gradient, or the preview shows
     # as a block against the card it sits on.
@@ -151,6 +157,9 @@ class ScenePreview(QGraphicsView):
         if fdef is None:
             return
 
+        # Real dimensions are the stage's scale, not this frame's: here a body
+        # only has to be big enough to read next to the light it makes.
+        fdef = preview_def(fdef)
         renderer = renderer_for(fdef)
         count = body_count(fdef)
         spacing = body_spacing(fdef)
@@ -164,12 +173,15 @@ class ScenePreview(QGraphicsView):
             self._bodies.append(body)
 
         span = spacing * (count - 1) + width
-        pad_x = width * self._PAD_X
-        pad_y = height * self._PAD_Y
-        # A fixture with optics throws its cone downstage, well past its body.
-        below = pad_y + emission_reach(fdef)
-        self._scene.setSceneRect(-pad_x, -pad_y,
-                                 span + 2 * pad_x, height + pad_y + below)
+        margin = max(width, height) * self._MARGIN
+        # A fixture with optics throws its cone downstage, well past its body —
+        # and a fog machine sends its plume the other way.
+        reach = emission_reach(fdef)
+        rises = emission_rises(fdef)
+        above = margin + (reach if rises else 0.0)
+        below = margin + (0.0 if rises else reach)
+        self._scene.setSceneRect(-margin, -above,
+                                 span + 2 * margin, height + above + below)
         self._fit()
 
     def set_values(self, values: List[int]) -> None:
