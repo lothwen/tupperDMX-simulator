@@ -99,11 +99,16 @@ class BladeFeature(Feature):
 
 @register_feature
 class PanTiltFeature(Feature):
-    """Where the fixture is pointing, in the plane of the stage image.
+    """Where the fixture is pointing, and what that looks like in the picture.
 
     Slewed rather than snapped: the DMX arrives at 20 Hz, and a head that
     teleported between frames would look like a strobe rather than a move. The
     fixture's own PanTiltSpeed sets the rate when it declares one.
+
+    What is slewed is the **mechanics** — the pan and tilt the yoke is chasing —
+    and not the projection of them. A head crossing the stage swings through an
+    arc, which is what interpolating the angles and then projecting gives; the
+    picture is only ever the answer, never the thing with inertia.
     """
 
     types = frozenset({"Pan", "Tilt", "PanContinuous", "TiltContinuous",
@@ -113,28 +118,30 @@ class PanTiltFeature(Feature):
 
     def __init__(self, body):
         super().__init__(body)
-        self._axis = Slew()
-        self._foreshorten = Slew()
+        self._pan = Slew()
+        self._tilt = Slew()
         self._pan_spin = Spinner()
         self._tilt_spin = Spinner()
 
     def apply(self, frame: Frame) -> None:
         motion = frame.state.motion
-        axis, foreshorten = self.body.aim.solve(motion,
-                                                frame.state.optics.beam_offset_deg)
-
-        # A head in continuous rotation has no position to slew toward; it just
-        # keeps turning.
-        if motion.pan_spin_hz:
-            axis += self._pan_spin.advance(motion.pan_spin_hz, frame.t)
-        if motion.tilt_spin_hz:
-            foreshorten = abs(_cos_deg(
-                self._tilt_spin.advance(motion.tilt_spin_hz, frame.t)))
-            foreshorten = max(0.15, foreshorten)
+        aim = self.body.aim
+        pan, tilt = aim.offsets(motion, frame.state.optics.beam_offset_deg)
 
         tau = _move_tau(motion)
-        frame.beam.axis_deg = self._axis.advance(axis, frame.t, tau)
-        frame.beam.foreshorten = self._foreshorten.advance(foreshorten, frame.t, tau)
+        pan = self._pan.advance(pan, frame.t, tau)
+        tilt = self._tilt.advance(tilt, frame.t, tau)
+
+        # A head in continuous rotation has no position to slew toward; it just
+        # keeps turning, so the spin rides on top of the slew rather than
+        # through it — a servo asked to chase 359 back round to 0 would run the
+        # long way once a revolution.
+        if motion.pan_spin_hz:
+            pan += self._pan_spin.advance(motion.pan_spin_hz, frame.t)
+        if motion.tilt_spin_hz:
+            tilt += self._tilt_spin.advance(motion.tilt_spin_hz, frame.t)
+
+        frame.beam.axis_deg, frame.beam.foreshorten = aim.point(pan, tilt)
 
 
 def _move_tau(motion):
@@ -144,8 +151,3 @@ def _move_tau(motion):
     if motion.move_speed_hz:
         return 1.0 / max(0.05, motion.move_speed_hz)
     return None
-
-
-def _cos_deg(degrees: float) -> float:
-    import math
-    return math.cos(math.radians(degrees))

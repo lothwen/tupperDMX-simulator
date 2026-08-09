@@ -46,6 +46,11 @@ MIRROR_BOTTOM = QColor(46, 51, 61)
 #: foreshortened. The housing is as deep as it is wide, so it never collapses.
 SHELL_SQUASH_FLOOR = 0.62
 
+#: And how much of its width the yoke keeps at a quarter turn of pan, where the
+#: two arms line up behind each other. A yoke is a real object seen edge-on, not
+#: a line, and one that vanished took the head's pivot with it.
+YOKE_NARROW_FLOOR = 0.34
+
 
 @register_renderer("Moving Head")
 class MovingHeadFixture(BodyFixture):
@@ -150,18 +155,24 @@ class MovingHeadFixture(BodyFixture):
         return path
 
     def paint_housing(self, frame: Frame) -> None:
-        motion = frame.state.motion
-        swing = self.aim.pan_swing(motion)
-        self.yoke.setRotation(swing)
-        self.head.setRotation(swing)
-        # Tilting toward or away from the audience foreshortens the head the
-        # same way it foreshortens the beam — but it is the *face* that
-        # foreshortens. A barrel seen end-on is still as deep as it is wide, so
-        # squashing the whole head collapsed it to a sliver between two arms
-        # that had not moved. The shell gives a little, the aperture all of it.
-        squash = max(0.25, abs(math.cos(math.radians(self.aim.tilt_offset(motion)))))
+        # The yoke turns about the vertical axis, and a vertical axis is the one
+        # thing a front elevation cannot show turning: what the audience sees is
+        # the two arms closing on each other. Rotating it instead drew a fixture
+        # that had swung in the picture while its beam — which pans into depth,
+        # not across — had not moved at all.
+        face_on = abs(math.cos(math.radians(self.aim.pan_offset())))
+        self.yoke.setTransform(
+            _narrow(YOKE_NARROW_FLOOR + (1.0 - YOKE_NARROW_FLOOR) * face_on))
+
+        # The head's face IS the beam's aperture, so it turns with the beam and
+        # foreshortens by exactly what shortens it — one quantity, not a second
+        # guess at the same tilt. But it is the *face* that foreshortens: a
+        # barrel seen end-on is still as deep as it is wide, so squashing the
+        # whole head collapsed it to a sliver between two arms that had not
+        # moved. The shell gives a little, the aperture all of it.
+        squash = max(0.25, frame.beam.foreshorten)
         shell = SHELL_SQUASH_FLOOR + (1.0 - SHELL_SQUASH_FLOOR) * squash
-        self.head.setTransform(_squash(shell))
+        self.head.setTransform(_turned(self.aim.turn(), shell))
         self.bezel.setTransform(_squash(squash / shell))
 
         # A lit head is lit from its own lamp: the chassis catches spill, the
@@ -229,10 +240,13 @@ class ScannerFixture(BodyFixture):
         return self.width / 2.0, self.height * 0.78
 
     def paint_housing(self, frame: Frame) -> None:
-        motion = frame.state.motion
-        self.mirror.setRotation(self.aim.pan_swing(motion) / 2.0)
-        squash = max(0.2, abs(math.cos(math.radians(self.aim.tilt_offset(motion)))))
-        self.mirror.setTransform(_squash(squash))
+        # A reflection moves at twice the angle of the surface making it, so the
+        # mirror turns half as far as the beam it throws. It is the *beam* it
+        # halves and not the pan channel: how far a scanner's light swings in
+        # the picture depends on where the whole fixture is pointing, so reading
+        # pan on its own turned a mirror that was deflecting nowhere.
+        self.mirror.setRotation(self.aim.turn() / 2.0)
+        self.mirror.setTransform(_squash(max(0.2, frame.beam.foreshorten)))
 
         # A mirror takes the colour of whatever it is deflecting, and takes far
         # more of it than a casing does — that is the whole job of the part.
@@ -373,6 +387,33 @@ def _squash(factor: float):
     """A vertical squash about the item's own origin."""
     from PyQt6.QtGui import QTransform
     transform = QTransform()
+    transform.scale(1.0, factor)
+    return transform
+
+
+def _narrow(factor: float):
+    """A horizontal squash about the item's own origin."""
+    from PyQt6.QtGui import QTransform
+    transform = QTransform()
+    transform.scale(factor, 1.0)
+    return transform
+
+
+def _turned(degrees: float, factor: float):
+    """A vertical squash carried round by a rotation, in that order.
+
+    A round face aimed away from the audience projects to an ellipse whose short
+    axis lies **along the beam**, so the squash has to happen while the item is
+    still upright and then be turned with it. That is why it is one transform
+    and not `setRotation` plus one: a QGraphicsItem applies its rotation first
+    and its `transform` after, so a squash set that way lands *outside* the
+    rotation — a face flattened against the picture instead of against its own
+    aim. (QTransform itself composes the other way round from how it reads: the
+    last call is the first thing done to the point.)
+    """
+    from PyQt6.QtGui import QTransform
+    transform = QTransform()
+    transform.rotate(degrees)
     transform.scale(1.0, factor)
     return transform
 

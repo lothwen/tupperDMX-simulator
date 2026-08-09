@@ -483,7 +483,8 @@ class StageController(QObject):
 
         objs = []
         for index, position in enumerate(positions):
-            obj = renderer(fdef, position.x, position.y, body_index=index)
+            obj = renderer(fdef, position.x, position.y, body_index=index,
+                           hanging=getattr(fixture, "hanging", True))
             # None for a single-body fixture, so it owns its label and its drag
             # writes back to the instance rather than to a bars[] entry.
             obj._bar_index = index if multi_body else None
@@ -610,12 +611,19 @@ class StageController(QObject):
 
         `channel` is the fixture's stable MIDI channel (what clips bind to);
         defaults to the lowest free channel when not supplied. `mode` picks the
-        fixture's DMX layout; empty means the type's default."""
+        fixture's DMX layout; empty means the type's default.
+
+        How it is rigged is *guessed* from where it lands — a fixture dropped
+        on the deck stands on it, one dropped above stage centre is flown — and
+        then written down, so the guess is only ever a starting point the
+        inspector can correct. Guessing it live off the position instead would
+        turn a fixture over mid-drag."""
         if channel < 0:
             channel = self.config.next_free_channel()
         instance = FixtureInstance(type=type_name, dmx_start=int(dmx_start),
                                    channel=int(channel), mode=str(mode),
-                                   x=int(x), y=int(y))
+                                   x=int(x), y=int(y),
+                                   hanging=self.is_flown_height(y))
         # A fixture sold as several housings on one DMX slice (the ledbar's 8
         # bars) gets a body each; seed them as a horizontal row centred on the
         # drop point.
@@ -665,6 +673,49 @@ class StageController(QObject):
             inst.x = int(pos.x())
             inst.y = int(pos.y())
         self.fixture_moved.emit(inst)
+
+    #: Where the deck starts, as a fraction of the stage picture's height.
+    #: Not the midpoint: trusses hang over most of a room and the floor package
+    #: sits in the bottom of it, and the browser drops a new fixture at the
+    #: exact centre — which should land on a truss, since that is where it was
+    #: going before the user drags it there.
+    DECK_TOP = 0.66
+
+    def is_flown_height(self, y: float) -> bool:
+        """Would a fixture dropped at `y` be hung rather than stood on the deck?
+
+        The stage is a picture of a room, so height in it is the only clue
+        there is. Only ever consulted when a fixture is added — see
+        `add_fixture` — never while one is being dragged.
+        """
+        rect = self.scene.sceneRect()
+        return y < rect.top() + rect.height() * self.DECK_TOP
+
+    def can_rig_inverted(self, instance: FixtureInstance) -> bool:
+        """Whether this fixture's profile can be hung upside down at all.
+
+        A smoke machine or a stand always sits on its own feet, so offering to
+        turn one over would be offering nothing.
+        """
+        fdef = resolve_fixture(instance.type, getattr(instance, "mode", ""))
+        return bool(fdef) and renderer_for(fdef).rigs_inverted
+
+    def set_fixture_hanging(self, instance: FixtureInstance,
+                            hanging: bool) -> None:
+        """Fly a patched fixture or stand it on the deck, rebuilding its bodies.
+
+        Which way up a fixture is rigged is decided when its housing is built
+        and read by the aim it is given, so — like a mode change — it is a
+        rebuild rather than a repaint.
+        """
+        if bool(getattr(instance, "hanging", True)) == bool(hanging):
+            return
+        self._remove_render_group(instance)
+        instance.hanging = bool(hanging)
+        self._add_render_group(instance)
+        self.fixture_selected.emit(instance)
+        self.logger.info(f"Fixture '{instance.type}' is now "
+                         f"{'flown' if hanging else 'standing on the deck'}")
 
     def change_fixture_mode(self, instance: FixtureInstance, mode: str) -> None:
         """Switch a patched fixture to another mode, rebuilding its render group.

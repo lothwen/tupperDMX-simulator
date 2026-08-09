@@ -12,7 +12,7 @@ sit the two pieces that make a body editable rather than merely drawn —
 from typing import Tuple
 
 from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
+from PyQt6.QtWidgets import QGraphicsItem, QGraphicsItemGroup, QGraphicsObject
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 
 from core.fixture_library import FixtureDef, all_capability_types
@@ -232,8 +232,14 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     #: with a hazer built in still says what it is putting out.
     default_fog_kind: str = ""
 
+    #: False for the profiles that only ever stand on the deck — a smoke
+    #: machine, a fan, a stand. Nobody flies those upside down, so they ignore
+    #: how the patch says they are rigged rather than drawing themselves
+    #: inverted with their output climbing out of the floor.
+    rigs_inverted: bool = True
+
     def __init__(self, fdef: FixtureDef, x: float, y: float, *,
-                 body_index: int = 0):
+                 body_index: int = 0, hanging: bool = True):
         super().__init__()
         self.setPos(x, y)
         self.fdef = fdef
@@ -242,10 +248,24 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.width, self.height = body_size(fdef)
         self.state = FixtureState()
         self.atmosphere = DEFAULT_ATMOSPHERE
-        self.aim = Aim(fdef)
+        self.hanging = bool(hanging) if self.rigs_inverted else False
+        self.aim = Aim(fdef, hanging=self.hanging)
         self.default_half_angle = resting_half_angle(
             fdef, type(self).beam_kind(fdef))
         self.init_design()
+
+        # Every profile draws its chassis the way it sits on the deck — base
+        # down — into this one item, and a flown fixture turns the whole thing
+        # over. It has to be the housing alone: the light is described in body
+        # coordinates for the GPU, which offsets it by the body's *position*
+        # and nothing else (`gpu/layer.py::_pack`), so a turned body item would
+        # send the raster and the shader two different beams. Where the light
+        # goes is `Aim`'s to say, and it says it in the picture's own axes.
+        self.housing = QGraphicsItemGroup(self)
+        if self.hanging:
+            self.housing.setTransformOriginPoint(self.width / 2.0,
+                                                 self.height / 2.0)
+            self.housing.setRotation(180.0)
 
         self.build_housing()
         self.emission = self.emission_for(fdef)(self)
@@ -277,8 +297,24 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
         self.paint_selection(painter)
 
     def aim_origin(self) -> Tuple[float, float]:
-        """Where light leaves this body, in its own coordinates."""
+        """Where light leaves this body, in the housing's own coordinates.
+
+        The profile's answer, and the one its own `build_housing` reads: an
+        aperture is drawn at the point the light comes out of, and both are
+        stated the way up the chassis is drawn.
+        """
         return self.width / 2.0, self.height
+
+    def emit_origin(self) -> Tuple[float, float]:
+        """The same point once the fixture is rigged — what an emission uses.
+
+        A flown fixture's housing is drawn turned over, so its lens is at the
+        other end of the body from where the profile put it.
+        """
+        x, y = self.aim_origin()
+        if self.hanging:
+            return self.width - x, self.height - y
+        return x, y
 
     def cell_count(self) -> int:
         return declared_cell_count(self.fdef)

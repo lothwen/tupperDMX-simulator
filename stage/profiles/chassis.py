@@ -126,7 +126,12 @@ class ChassisPart(QGraphicsItem):
                  top: QColor = SHELL_TOP, bottom: QColor = SHELL_BOTTOM,
                  rim: QColor = SHELL_RIM, contour: bool = True,
                  barrel: float = 0.0):
-        super().__init__(parent)
+        # A body keeps its whole chassis under one root item, so a fixture
+        # rigged upside down can be turned over without the light it emits
+        # turning with it. A profile still writes `self` — the body hands over
+        # its housing here, and a part parented to another part is already
+        # inside it.
+        super().__init__(getattr(parent, "housing", parent))
         self._path = path
         self._bounds = path.boundingRect()
         self._brush = QBrush(shade(self._bounds, top, bottom, rim))

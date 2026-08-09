@@ -41,6 +41,12 @@ class HazerFixture(BodyFixture):
     #: Which machine this is, for the plume's parcels.
     fog_spec = puffs.HAZER
 
+    #: A fog machine sits on the deck. It is the one thing here that cares
+    #: which way up gravity is — a plume climbs — so it ignores a patch that
+    #: says it is flown rather than drawing itself inverted with its output
+    #: rising out of the floor.
+    rigs_inverted = False
+
     #: What to weigh this fixture's output as when its definition declares no
     #: OFL `fogType`. Without it a machine's *category* — the one thing every
     #: definition does declare — was never consulted at all.
@@ -115,6 +121,8 @@ class FanFixture(BodyFixture):
     """A cage with blades that turn. Moves air, emits nothing."""
 
     profile_animates = True
+    #: Stands on the deck, like the machines above it.
+    rigs_inverted = False
 
     def build_housing(self) -> None:
         """A guard ring, the blade behind it, and a hub it turns on.
@@ -168,6 +176,9 @@ class StandFixture(BodyFixture):
     is wider than it is tall — a T-bar or a truss span, which is a crossbar on
     legs. Drawing every one as a post made the wide ones a fat slab.
     """
+
+    #: The thing other fixtures are rigged *on*. It stands on its own feet.
+    rigs_inverted = False
 
     def build_housing(self) -> None:
         width, height = self.width, self.height

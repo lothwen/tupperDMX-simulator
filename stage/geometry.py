@@ -3,19 +3,44 @@
 """Aiming a light in a picture that has no depth.
 
 The stage is a photograph of a stage seen from the audience: scene units are
-image pixels and there is no floor, no depth and no camera. A moving head still
-has to *look* like it is pointing somewhere, so pan and tilt are mapped into the
-plane of that picture rather than into a world that doesn't exist:
+image pixels and there is no floor, no depth and no camera. But a moving head
+does point into a room, so it is aimed in one — a unit vector built from its
+pan and tilt — and only then flattened into the picture. Pan and tilt are not
+two independent screen quantities, which is the whole of what this module gets
+right and what reading them as "swing" and "lift" got wrong.
 
-  * **pan** is the only axis that can carry a beam across the image, so it
-    becomes the cone's swing left and right;
-  * **tilt** rotates the cone up and down and, past the vertical, turns it
-    toward the viewer — which reads as the beam getting shorter and blooming
-    rather than sweeping anywhere. That is `foreshorten`.
+**Home is straight down** — for a flown fixture. Half of a fixture's declared
+travel (DMX 127/128, 135° on a 270° tilt) is where a head rests, so tilt is
+measured from there and the beam leaves the lens pointing at the floor. A
+fixture standing on the deck is that same fixture turned over: its home points
+at the ceiling instead, which is half a turn of everything it draws in the
+picture and no change at all to the part of it aimed at the audience. Which way
+a fixture is rigged is the patch's to say (`FixtureInstance.hanging`), because
+nothing in a DMX document knows.
 
-The one hard requirement: a fixture with no pan or tilt channel must come out
-pointing straight down at full length, because that is what every cone did
-before fixtures could aim at all.
+**Tilt swings the beam; pan chooses the plane it swings in.** From home the
+head tips by the tilt angle inside one vertical plane, and panning turns that
+plane about the fixture's own vertical axis. So:
+
+  * at pan home the plane faces the audience: tilting keeps the beam on the
+    picture's vertical axis and walks it *toward the viewer*, which reads as
+    the beam getting shorter and blooming — longest at 50%, where it points
+    straight down. That is `foreshorten`;
+  * a quarter turn of pan away, the plane lies in the picture: the same tilt
+    now sweeps the beam across the stage at full length;
+  * at tilt home there is nothing to swing. A head pointing straight down does
+    not move its beam when you pan it, and drawing one that did is why panning
+    used to carry a beam ±80° across a picture the fixture had never left.
+
+What comes out is `(axis_deg, foreshorten)`: the direction of the beam **in**
+the picture, and how much of the unit vector is left there once the part aimed
+at the viewer is taken away. The two together *are* that unit vector — the fog
+march reconstructs it as `(cos·f, sin·f, -sqrt(1-f²))` — so the flat drawing
+and the volumetric one are two views of one beam and cannot disagree.
+
+The one hard requirement, unchanged: a fixture with no pan or tilt channel must
+come out pointing straight down at full length, because that is what every cone
+did before fixtures could aim at all.
 """
 
 import math
@@ -31,64 +56,98 @@ from stage.frame import STRAIGHT_DOWN_DEG
 DEFAULT_PAN_RANGE = (0.0, 540.0)
 DEFAULT_TILT_RANGE = (0.0, 270.0)
 
-# Real pan is up to a turn and a half. Mapping that onto a flat picture 1:1
-# would swing the beam back through the fixture's own body, so it is scaled and
-# clamped to the part of the swing an audience would see as "across the stage".
-PAN_TO_SCREEN = 0.5
-MAX_SWING_DEG = 80.0
-MAX_TILT_DEG = 80.0
-
 # A beam pointed at the audience is never drawn as nothing; it becomes a short,
 # bright bloom instead.
 MIN_FORESHORTEN = 0.15
 
 
 class Aim:
-    """Maps a fixture's declared pan/tilt onto the flat stage image.
+    """Where a fixture is pointing, and what that looks like in the picture.
 
     Built once per body: the ranges come from the fixture's own capabilities and
-    can't change, so the per-frame work is two multiplications.
+    can't change, so the per-frame work is two sines and a cosine.
+
+    It also *remembers* the last direction it was pointed, because the housing
+    is drawn after the beam and has to agree with it — a yoke that has turned
+    while its beam has not is the same lie in the other direction.
     """
 
-    def __init__(self, fdef: FixtureDef):
+    def __init__(self, fdef: FixtureDef, hanging: bool = True):
         self.pan_range = _declared_range(fdef, "Pan") or DEFAULT_PAN_RANGE
         self.tilt_range = _declared_range(fdef, "Tilt") or DEFAULT_TILT_RANGE
         self.pan_mid = sum(self.pan_range) / 2.0
         self.tilt_mid = sum(self.tilt_range) / 2.0
+        self.hanging = hanging
+        self._pan = 0.0
+        self._tilt = 0.0
+        self._swung = 0.0
 
-    def solve(self, motion: MotionState,
-              offset: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
-        """`(axis_deg, foreshorten)` for a motion state.
+    def offsets(self, motion: MotionState,
+                offset: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
+        """`(pan, tilt)` in degrees from home, before anything is projected.
+
+        Kept apart from `point` so the mechanics can be slewed as mechanics: a
+        head takes time to reach a position, and it is the yoke that is slow,
+        not the picture of it.
 
         `offset` is a BeamPosition nudge in degrees, applied on top.
         """
-        axis = STRAIGHT_DOWN_DEG
-        foreshorten = 1.0
-
-        swing = offset[0]
+        pan, tilt = offset
         if motion.pan_deg is not None:
-            swing += (motion.pan_deg - self.pan_mid) * PAN_TO_SCREEN
-        axis += _clamp(swing, MAX_SWING_DEG)
-
-        lift = offset[1]
+            pan += motion.pan_deg - self.pan_mid
         if motion.tilt_deg is not None:
-            lift += motion.tilt_deg - self.tilt_mid
-        if lift:
-            axis -= _clamp(lift, MAX_TILT_DEG)
-            foreshorten = max(MIN_FORESHORTEN, abs(math.cos(math.radians(lift))))
-        return axis, foreshorten
+            tilt += motion.tilt_deg - self.tilt_mid
+        return pan, tilt
 
-    def pan_swing(self, motion: MotionState) -> float:
-        """How far the yoke has turned on screen, in degrees. 0 is facing front."""
-        if motion.pan_deg is None:
-            return 0.0
-        return _clamp((motion.pan_deg - self.pan_mid) * PAN_TO_SCREEN, MAX_SWING_DEG)
+    def point(self, pan_deg: float, tilt_deg: float) -> Tuple[float, float]:
+        """Aim the fixture there; answer with `(axis_deg, foreshorten)`."""
+        self._pan, self._tilt = pan_deg, tilt_deg
+        pan = math.radians(pan_deg)
+        tilt = math.radians(tilt_deg)
 
-    def tilt_offset(self, motion: MotionState) -> float:
-        """How far the head has tipped from centre, in degrees."""
-        if motion.tilt_deg is None:
-            return 0.0
-        return _clamp(motion.tilt_deg - self.tilt_mid, MAX_TILT_DEG)
+        # The unit vector, in the picture's own axes: x across, y down, and a
+        # third component `sin(tilt) * cos(pan)` out of the page that nothing
+        # draws — `foreshorten` is what is left after it.
+        across = math.sin(tilt) * math.sin(pan)
+        down = math.cos(tilt)
+
+        flat = math.hypot(across, down)
+        # Aimed exactly down the lens at the viewer there is no direction left
+        # in the picture to point. What is drawn there is a round bloom, so any
+        # answer looks the same; straight ahead is the one that cannot surprise.
+        self._swung = math.degrees(math.atan2(across, down)) if flat > 1e-9 else 0.0
+
+        # A fixture standing on the deck is the same fixture turned over, so
+        # everything it does in the picture turns with it — half a turn, which
+        # leaves the part aimed at the audience alone and so leaves
+        # `foreshorten` (and the unit vector the fog march rebuilds) intact.
+        axis = STRAIGHT_DOWN_DEG - self._swung
+        if not self.hanging:
+            axis += 180.0
+        return axis, max(MIN_FORESHORTEN, flat)
+
+    def solve(self, motion: MotionState,
+              offset: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
+        """`(axis_deg, foreshorten)` for a motion state, in one step."""
+        return self.point(*self.offsets(motion, offset))
+
+    def turn(self) -> float:
+        """How far the beam has turned off the fixture's own straight-ahead, as
+        degrees of item rotation — what the head or mirror throwing it turns by.
+
+        Housing-local on purpose. The chassis of a flown fixture is *already*
+        drawn turned over, so a part that took `beam.axis_deg` instead would
+        count the rigging twice and point its lens back into its own base.
+        """
+        return -self._swung
+
+    def pan_offset(self) -> float:
+        """How far the yoke has turned from home, in degrees. 0 faces front."""
+        return self._pan
+
+    def tilt_offset(self) -> float:
+        """How far the head has tipped from home, in degrees. 0 is straight down."""
+        return self._tilt
 
 
 def _declared_range(fdef: FixtureDef, cap_type: str) -> Optional[Tuple[float, float]]:
@@ -105,10 +164,6 @@ def _declared_range(fdef: FixtureDef, cap_type: str) -> Optional[Tuple[float, fl
                 if angle is not None:
                     angles.append(angle)
     return (min(angles), max(angles)) if len(angles) >= 2 else None
-
-
-def _clamp(value: float, limit: float) -> float:
-    return max(-limit, min(limit, value))
 
 
 class Spinner:
