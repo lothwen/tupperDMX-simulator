@@ -72,6 +72,12 @@ class GlowingEllipse(QGraphicsEllipseItem):
     #: enough that the classic curve's shoulder reads as the edge of a ball.
     glow_profile = SHARP_GLOW
 
+    #: Whether an unlit lamp paints its own stand-in face. True everywhere by
+    #: default — for most fixtures this flat disc IS the dark bulb. A profile
+    #: that draws its own glass turns it off, or the stand-in covers the glass
+    #: with a lighter, flatter circle than the housing it sits in.
+    draw_unlit_face = True
+
     def setGlowColor(self, color, intensity=1.0):
         """Set the glow color and intensity (0.0-1.0)"""
         self.glow_color = color
@@ -133,7 +139,7 @@ class GlowingEllipse(QGraphicsEllipseItem):
                 int(center_x - glow_radius), int(center_y - glow_radius),
                 glow_diameter, glow_diameter
             )
-        else:
+        elif self.draw_unlit_face:
             # No glow - just dark grey bulb
             painter.setBrush(QBrush(QColor(40, 40, 40)))
             painter.setPen(self.pen())

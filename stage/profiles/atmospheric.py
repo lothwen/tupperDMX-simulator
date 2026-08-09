@@ -10,8 +10,8 @@ they are on the stage because they are on the stage, and a rig that silently
 dropped them would be lying about the patch.
 """
 
-from PyQt6.QtGui import QBrush, QColor
-from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsRectItem
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtGui import QPainterPath
 
 from core.fixture_library import FixtureDef
 from stage import puffs
@@ -20,11 +20,8 @@ from stage.emission.base import NoEmission
 from stage.emission.volumetric import FogPlume
 from stage.frame import Frame
 from stage.geometry import Spinner
+from stage.profiles import chassis
 from stage.registry import register_renderer
-
-CHASSIS_COLOR = QColor(28, 28, 32)
-NOZZLE_COLOR = QColor(60, 60, 68)
-STAND_COLOR = QColor(38, 38, 42)
 
 
 @register_renderer("Hazer")
@@ -50,14 +47,45 @@ class HazerFixture(BodyFixture):
     default_fog_kind = "Haze"
 
     def build_housing(self) -> None:
+        """A case standing on the floor with a snout on top of it.
+
+        The one fixture here that is not hung: a fog machine sits on the deck,
+        so it gets feet rather than a bracket, and its nozzle points up out of
+        the top plate — which is where `aim_origin` puts the plume.
+        """
         width, height = self.width, self.height
-        self.chassis = QGraphicsRectItem(0, height * 0.25, width, height * 0.75, self)
-        self.chassis.setBrush(QBrush(CHASSIS_COLOR))
-        nozzle = min(width, height) * 0.22
-        self.nozzle = QGraphicsEllipseItem((width - nozzle) / 2,
-                                           height * 0.25 - nozzle / 2,
-                                           nozzle, nozzle, self)
-        self.nozzle.setBrush(QBrush(NOZZLE_COLOR))
+        radius = min(width, height) * 0.09
+        origin_x = self.aim_origin()[0]
+        snout = min(width, height) * 0.11
+
+        # The feet are part of the case, not a detail on it: a machine that
+        # loses its feet the moment it is drawn small is a box floating on the
+        # deck, and LOD is exactly when that happens.
+        case = QPainterPath()
+        case.setFillRule(Qt.FillRule.WindingFill)
+        case.addPath(chassis.rounded(width * 0.03, height * 0.26,
+                                     width * 0.94, height * 0.66, radius))
+        for side in (0.07, 0.77):
+            case.addPath(chassis.rounded(width * side, height * 0.88,
+                                         width * 0.16, height * 0.12,
+                                         radius * 0.4))
+        self.chassis = chassis.ChassisPart(case, self, barrel=0.35)
+        self.deck = chassis.ChassisPart(
+            chassis.rounded(width * 0.13, height * 0.20,
+                            width * 0.74, height * 0.14, radius * 0.6), self,
+            top=chassis.DARK_TOP, bottom=chassis.DARK_BOTTOM, rim=chassis.DARK_RIM)
+        self.nozzle = chassis.ChassisPart(
+            chassis.rounded(origin_x - snout, height * 0.06,
+                            snout * 2, height * 0.22, snout * 0.5), self,
+            top=chassis.DARK_TOP, bottom=chassis.DARK_BOTTOM, rim=chassis.SHELL_RIM)
+        self.nozzle.add_detail(_disc(origin_x, height * 0.09, snout * 0.6),
+                               chassis.LENS_BOTTOM)
+
+        # The control panel every one of these has on its flank.
+        self.chassis.add_detail(
+            chassis.rounded(width * 0.60, height * 0.40,
+                            width * 0.30, height * 0.22, radius * 0.5),
+            chassis.LENS_BOTTOM)
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
@@ -89,15 +117,35 @@ class FanFixture(BodyFixture):
     profile_animates = True
 
     def build_housing(self) -> None:
+        """A guard ring, the blade behind it, and a hub it turns on.
+
+        Drawn in that order and not this one: the blade goes *inside* the cage,
+        so the cage is built first and raised over it. Still one blade item —
+        a fan reads as spinning from any single mark going round.
+        """
         width, height = self.width, self.height
-        self.cage = QGraphicsEllipseItem(0, 0, width, height, self)
-        self.cage.setBrush(QBrush(CHASSIS_COLOR))
-        # One blade item, rotated: a fan reads as "spinning" from any single
-        # mark going round, and this keeps it to one item.
-        self.blade = QGraphicsRectItem(-width * 0.04, -height * 0.38,
-                                       width * 0.08, height * 0.76, self)
-        self.blade.setBrush(QBrush(NOZZLE_COLOR))
-        self.blade.setPos(width / 2, height / 2)
+        centre_x, centre_y = width / 2.0, height / 2.0
+        span = min(width, height)
+
+        self.blade = chassis.ChassisPart(
+            chassis.rounded(-width * 0.045, -height * 0.36,
+                            width * 0.09, height * 0.72, span * 0.045), self,
+            top=chassis.DARK_TOP, bottom=chassis.DARK_BOTTOM, rim=chassis.SHELL_RIM)
+        self.blade.setPos(centre_x, centre_y)
+
+        self.cage = chassis.ChassisPart(
+            _ring(centre_x, centre_y, span / 2.0, span * 0.42), self,
+            barrel=0.30)
+        self.cage.setZValue(1)
+        for radius in (0.34, 0.24, 0.14):
+            self.cage.add_detail(
+                _ring(centre_x, centre_y, span * radius, span * (radius - 0.02)),
+                chassis.DARK_TOP)
+
+        self.hub = chassis.ChassisPart(
+            _disc(centre_x, centre_y, span * 0.09), self,
+            top=chassis.DARK_TOP, bottom=chassis.DARK_BOTTOM, rim=chassis.DARK_RIM)
+        self.hub.setZValue(2)
         self._spinner = Spinner()
 
     @classmethod
@@ -113,15 +161,64 @@ class FanFixture(BodyFixture):
 
 @register_renderer("Stand")
 class StandFixture(BodyFixture):
-    """A stand or truss. Holds things up; emits nothing, does nothing."""
+    """A stand or truss. Holds things up; emits nothing, does nothing.
+
+    Two shapes, because the category covers both: a lighting stand is taller
+    than it is wide and is a post on a base, while most of what OFL files here
+    is wider than it is tall — a T-bar or a truss span, which is a crossbar on
+    legs. Drawing every one as a post made the wide ones a fat slab.
+    """
 
     def build_housing(self) -> None:
         width, height = self.width, self.height
-        self.post = QGraphicsRectItem(width * 0.42, 0, width * 0.16, height, self)
-        self.post.setBrush(QBrush(STAND_COLOR))
-        self.foot = QGraphicsRectItem(0, height * 0.9, width, height * 0.1, self)
-        self.foot.setBrush(QBrush(STAND_COLOR))
+        radius = min(width, height) * 0.12
+        parts = (self._post(width, height, radius) if height >= width
+                 else self._span(width, height, radius))
+        self.post, self.foot = (
+            chassis.ChassisPart(path, self, top=chassis.DARK_TOP,
+                                bottom=chassis.DARK_BOTTOM,
+                                rim=chassis.DARK_RIM)
+            for path in parts)
+
+    @staticmethod
+    def _post(width: float, height: float, radius: float):
+        """A column on a splayed base."""
+        column = chassis.rounded(width * 0.40, 0, width * 0.20,
+                                 height * 0.92, radius)
+        base = QPainterPath()
+        base.setFillRule(Qt.FillRule.WindingFill)
+        base.addPath(chassis.rounded(0, height * 0.88, width, height * 0.12,
+                                     radius))
+        base.addPath(chassis.rounded(width * 0.30, height * 0.74,
+                                     width * 0.40, height * 0.18, radius))
+        return column, base
+
+    @staticmethod
+    def _span(width: float, height: float, radius: float):
+        """A crossbar on two legs."""
+        bar = chassis.rounded(0, 0, width, height * 0.26, radius)
+        legs = QPainterPath()
+        legs.setFillRule(Qt.FillRule.WindingFill)
+        for left in (width * 0.12, width * 0.76):
+            legs.addPath(chassis.rounded(left, height * 0.20,
+                                         width * 0.12, height * 0.80, radius))
+        return bar, legs
 
     @classmethod
     def emission_for(cls, fdef: FixtureDef):
         return NoEmission
+
+
+def _disc(x: float, y: float, radius: float) -> QPainterPath:
+    path = QPainterPath()
+    path.addEllipse(QRectF(x - radius, y - radius, radius * 2, radius * 2))
+    return path
+
+
+def _ring(x: float, y: float, outer: float, inner: float) -> QPainterPath:
+    """An annulus — a cage's guard, or one of the wires inside it."""
+    path = QPainterPath()
+    path.setFillRule(Qt.FillRule.OddEvenFill)  # outer minus inner
+    path.addEllipse(QRectF(x - outer, y - outer, outer * 2, outer * 2))
+    path.addEllipse(QRectF(x - inner, y - inner, inner * 2, inner * 2))
+    return path

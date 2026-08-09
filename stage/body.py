@@ -221,6 +221,11 @@ class BodyFixture(DesignableFixture, QGraphicsObject):
     #: throws no shaft, where the lamp IS the light.
     lamp_is_lens: bool = False
 
+    #: True when this profile's housing draws the fixture's aperture itself —
+    #: a bezel and glass of its own. An unlit lamp then leaves its stand-in
+    #: disc unpainted, since the housing already draws that face, better.
+    draws_own_aperture: bool = False
+
     #: What kind of fog this profile makes when the definition declares no OFL
     #: `fogType`. Empty for everything that is not a fog machine — and note the
     #: fallback is only reached when the fixture itself is silent, so a mover
