@@ -41,14 +41,23 @@ MAX_CELLS = 256
 # pattern rather than an averaged wash, which is the point of a pixel bar.
 CELL_HALO = 50.0
 
-# HOW BRIGHT that spill is, against the pixel's own face. Small on purpose:
-# the face itself is drawn by the scene underneath, so this is only what
-# reaches the air, and forty stacked cells all contribute to the same patch of
-# it. Raise it for a hazier room, not to make the bar reach further.
-CELL_GLOW = 0.0004
+# HOW BRIGHT that spill is — for the fixture's whole FACE, shared out between
+# its cells at construction. Per-cell it cannot be a constant: a cell's halo is
+# tens of times its own size, so every cell on a body covers the same patch of
+# air and the grid stacks. A constant therefore makes a fixture's output a
+# function of how finely it is pixelated — a 4-cell wash threw a tenth of what
+# a 40-cell bar throws off the same lit face, and landed far enough down the
+# tonemap's toe (below ~0.003 the ACES fit clamps to zero) to contribute
+# literally nothing.
+#
+# The face itself is drawn by the scene underneath, so this is only what
+# reaches the air past it — which is why a whole grid at full is worth the same
+# as the panel below and no more. Raise it for a hazier room, not to make the
+# bar reach further.
+CELL_GLOW = 0.04
 
-# A panel is one big soft source rather than a grid of small ones, so nothing
-# stacks and it can afford to be a little stronger per unit of face.
+# A panel is one big soft source rather than a grid of small ones: the same
+# spill off the same lit face, with no cells to divide it between.
 PANEL_HALO = 2.0
 PANEL_GLOW = 0.22
 
@@ -128,6 +137,11 @@ class MatrixCells(Emission):
         glow.setOffset(0)
         body.setGraphicsEffect(glow)
 
+        # One cell's share of the face's spill. Fixed at construction because
+        # the grid is: what varies per frame is which cells are lit, and a
+        # mostly-dark animation should spill correspondingly less.
+        self._cell_glow = CELL_GLOW / len(self.cells)
+
         self._movie: Optional[QMovie] = None
         self._asset: Optional[str] = None
         # What each cell resolved to this frame, so `emit_lights` doesn't have
@@ -154,7 +168,7 @@ class MatrixCells(Emission):
                 continue
             rect = cell.rect()
             out.add_quad(rect.x(), rect.y(), rect.width(), rect.height(),
-                         linear_rgb(rgb), level * CELL_GLOW,
+                         linear_rgb(rgb), level * self._cell_glow,
                          halo=max(rect.width(), rect.height()) * CELL_HALO)
 
     # -- painting ------------------------------------------------------
