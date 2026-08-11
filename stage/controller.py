@@ -700,6 +700,40 @@ class StageController(QObject):
         fdef = resolve_fixture(instance.type, getattr(instance, "mode", ""))
         return bool(fdef) and renderer_for(fdef).rigs_inverted
 
+    def _selected_bodies(self, instance: FixtureInstance) -> List[int]:
+        """Which of a fixture's bodies are selected, by position in its group.
+
+        Half of carrying a selection across a rebuild: a multi-body fixture is
+        selected one body at a time (that is how a ledbar's bars are dragged
+        apart), so it is not enough to know that the fixture was selected.
+        """
+        for inst, render_objs in self._render_groups:
+            if inst is instance:
+                return [index for index, obj in enumerate(render_objs)
+                        if obj.isSelected()]
+        return []
+
+    def _reselect_bodies(self, instance: FixtureInstance,
+                         indices: List[int]) -> None:
+        """Re-select the bodies a rebuild replaced, so the scene still agrees
+        with the inspector about what is selected.
+
+        `QGraphicsScene.removeItem` drops a selected item from the selection
+        *without* emitting `selectionChanged`, and the fresh bodies come back
+        unselected — so a rebuild left the stage with nothing selected while
+        `fixture_selected` had just said otherwise. The fixture lost its
+        selection outline, and Close (which clears an already-empty selection,
+        emitting nothing) could no longer hide the inspector at all.
+        """
+        if not indices:
+            return
+        for inst, render_objs in self._render_groups:
+            if inst is instance:
+                for index in indices:
+                    if index < len(render_objs):
+                        render_objs[index].setSelected(True)
+                return
+
     def set_fixture_hanging(self, instance: FixtureInstance,
                             hanging: bool) -> None:
         """Fly a patched fixture or stand it on the deck, rebuilding its bodies.
@@ -710,9 +744,11 @@ class StageController(QObject):
         """
         if bool(getattr(instance, "hanging", True)) == bool(hanging):
             return
+        selected = self._selected_bodies(instance)
         self._remove_render_group(instance)
         instance.hanging = bool(hanging)
         self._add_render_group(instance)
+        self._reselect_bodies(instance, selected)
         self.fixture_selected.emit(instance)
         self.logger.info(f"Fixture '{instance.type}' is now "
                          f"{'flown' if hanging else 'standing on the deck'}")
@@ -724,9 +760,11 @@ class StageController(QObject):
         rebuilt against the new definition."""
         if getattr(instance, "mode", "") == mode:
             return
+        selected = self._selected_bodies(instance)
         self._remove_render_group(instance)
         instance.mode = mode
         self._add_render_group(instance)
+        self._reselect_bodies(instance, selected)
         self.fixture_selected.emit(instance)
         self.logger.info(f"Fixture '{instance.type}' switched to mode "
                          f"'{mode or '(default)'}'")

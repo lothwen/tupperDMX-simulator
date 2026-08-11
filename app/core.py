@@ -304,6 +304,24 @@ class AppCore(QObject):
         self.midi_manager.seed_controller_auto(controller)
         self.software_controller_changed.emit(controller)
 
+    def repatch_controller(self):
+        """Hot-swap the patch onto the software controller — the ONE way in.
+
+        `repatch` builds every `Fixture` fresh, so anything on them that is a
+        *mirror* of durable state comes back at its dataclass default. The auto
+        flag is exactly that: what the .mid persists in its note-71 setup, and
+        what the timeline's 'A' buttons show. Nothing else re-seeds it — that
+        only happens when the controller instance itself changes — so a patch
+        edit silently dropped the whole rig out of the song-part program while
+        every lane went on claiming it was in auto. The notes still arrived and
+        no longer did anything, which is indistinguishable from a dead MIDI
+        route and was reported as one.
+        """
+        if self.software_controller is None:
+            return
+        self.software_controller.repatch(self.config.fixtures)
+        self.midi_manager.seed_controller_auto(self.software_controller)
+
     def preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) through the
         configured MIDI outputs without modifying the timeline. `messages` is
@@ -369,8 +387,7 @@ class AppCore(QObject):
         rebuilds ride patch_reloaded (synchronous, before the song loads)
         and show_reloaded (counters/title/autosave chip)."""
         self.midi_manager.update_fixtures(self.config.fixtures)
-        if self.software_controller is not None:
-            self.software_controller.repatch(self.config.fixtures)
+        self.repatch_controller()
         self.patch_reloaded.emit()
 
         self.playlist_controller.load_current_song()
