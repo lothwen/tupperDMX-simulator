@@ -193,6 +193,67 @@ def test_inspector_close_clears_selection(qapp):
     _assert(len(sc.scene.selectedItems()) == 0, "close clears the stage selection")
 
 
+def test_inspector_closes_after_an_edit(qapp):
+    """A rebuild must leave the fixture selected, or Close stops working.
+
+    Changing the mode or the rigging swaps the fixture's bodies, and removing a
+    selected item drops it from the scene's selection without Qt emitting
+    selectionChanged. The card was still up (the rebuild re-announces the
+    fixture), but with nothing selected Close cleared an already-empty
+    selection, emitted nothing, and the host never heard to hide it.
+    """
+    print("test_inspector_closes_after_an_edit")
+    from ui.fixture.designer import FixtureInspector
+    sc, _ = _stage()
+    insp = FixtureInspector(sc, lambda: None)
+
+    # The host half: the inspector is up exactly while a fixture is selected.
+    shown = {"v": False}
+
+    def on_selected(instance):
+        insp.set_instance(instance)
+        shown["v"] = instance is not None
+
+    sc.fixture_selected.connect(on_selected)
+    sc.set_design_mode(True)
+
+    inst = sc.add_fixture("moving-head", 100, 400, 200)
+    sc.get_all_fixtures()[-1].setSelected(True)
+    _assert(shown["v"], "selecting a fixture shows the inspector")
+
+    insp._mode_combo.setCurrentText("18ch")
+    _assert(inst.mode == "18ch", "the mode combo rebuilds the fixture")
+    _assert(len(sc.scene.selectedItems()) == 1,
+            "a mode change leaves the rebuilt fixture selected")
+    insp.findChild(QPushButton, "InspectorClose").click()
+    _assert(not shown["v"], "close still hides the inspector after a mode change")
+
+    sc.get_all_fixtures()[-1].setSelected(True)
+    insp._hanging_switch.setChecked(not insp._hanging_switch.isChecked())
+    _assert(len(sc.scene.selectedItems()) == 1,
+            "re-rigging leaves the rebuilt fixture selected")
+    insp.findChild(QPushButton, "InspectorClose").click()
+    _assert(not shown["v"], "close still hides the inspector after a rigging change")
+
+
+def test_rebuild_keeps_the_selected_bar(qapp):
+    print("test_rebuild_keeps_the_selected_bar")
+    sc, _ = _stage()
+    sc.set_design_mode(True)
+    inst = sc.add_fixture("ledbar", 100, 300, 400)
+
+    # A multi-body fixture is selected one body at a time, so the rebuild has to
+    # put the selection back on the same bar rather than on the whole fixture.
+    bodies = [o for o in sc.get_all_fixtures() if o._instance is inst]
+    _assert(len(bodies) > 1, "a ledbar is rendered as several bars")
+    bodies[2].setSelected(True)
+
+    sc.set_fixture_hanging(inst, not inst.hanging)
+    rebuilt = [o for o in sc.get_all_fixtures() if o._instance is inst]
+    _assert([i for i, o in enumerate(rebuilt) if o.isSelected()] == [2],
+            "the bar that was selected is the one that comes back selected")
+
+
 def test_fixture_labels(qapp):
     print("test_fixture_labels")
     sc, cfg = _stage()
@@ -264,6 +325,8 @@ def main():
     test_inspector_delete_removes_and_persists(app)
     test_inspector_delete_cancel_keeps_fixture(app)
     test_inspector_close_clears_selection(app)
+    test_inspector_closes_after_an_edit(app)
+    test_rebuild_keeps_the_selected_bar(app)
     test_fixture_labels(app)
     test_label_follows_fixture(app)
     test_label_removed_with_fixture(app)

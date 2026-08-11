@@ -849,7 +849,7 @@ class MainWindow(QMainWindow):
         controller = getattr(self, "software_controller", None)
         if controller is not None and dmx_sig != self._last_dmx_sig:
             self._last_dmx_sig = dmx_sig
-            controller.repatch(self.config.fixtures)
+            self.app_core.repatch_controller()
 
         self.toolbar_manager.update_show_stats()
 
