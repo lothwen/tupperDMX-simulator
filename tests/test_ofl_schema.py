@@ -135,7 +135,12 @@ def test_bank_scenes_only_reference_real_channels():
         sidecar = parse_sidecar(_load(path), path)
         target = target_filename(os.path.basename(path), sidecar)
         fixture = parse_ofl(_load(os.path.join(FIXTURES_DIR, target)))
-        known = set(fixture.available_channels)
+        # A fine byte is a channel key too: it takes a DMX slot of its own, and
+        # a mode that uses one expects every scene to carry it (load_scenes
+        # skips a scene missing any of the mode's fields).
+        known = set(fixture.available_channels) | {
+            alias for channel in fixture.available_channels.values()
+            for alias in channel.fine_aliases}
         for mode_name, extras in sidecar.modes.items():
             for bank, scenes in extras.banks.items():
                 stray = {key for scene in scenes for key in scene} - known - metadata

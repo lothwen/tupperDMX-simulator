@@ -1,0 +1,1206 @@
+{
+  "tdmx": 1,
+  "fixture": "moving-head.json",
+  "modes": {
+    "12ch": {
+      "banks": {
+        "LOOKS": [
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Palette down",
+            "song_parts": [
+              "VERSE",
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Tilt": 100,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Palette cross L",
+            "song_parts": [
+              "VERSE",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Tilt": 100,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Palette cross R",
+            "song_parts": [
+              "VERSE",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 196,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Palette front",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 110,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 110,
+            "Blue": 0,
+            "White": 40,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Amber low",
+            "song_parts": [
+              "INTRO",
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 150,
+            "Dimmer": 200,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Deep blue",
+            "song_parts": [
+              "INTRO",
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "White wash",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 70,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Palette half",
+            "song_parts": [
+              "BREAK",
+              "OUTRO"
+            ]
+          }
+        ],
+        "BEAMS": [
+          {
+            "Pan": 85,
+            "Tilt": 60,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Beam cross L",
+            "song_parts": [
+              "SOLO",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Tilt": 60,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Beam cross R",
+            "song_parts": [
+              "SOLO",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Tilt": 100,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 20,
+            "Gobo Rotation": 140,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Breakup spin",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Tilt": 196,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 40,
+            "Gobo Rotation": 175,
+            "Prism": 0,
+            "Zoom": 40,
+            "name": "Dots fast",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 110,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 135,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Star shake",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 150,
+            "Dimmer": 220,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 88,
+            "Gobo Rotation": 245,
+            "Prism": 0,
+            "Zoom": 30,
+            "name": "Spiral CCW",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 185,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 200,
+            "Zoom": 0,
+            "name": "Prism fan",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Tilt": 156,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 210,
+            "Gobo Rotation": 140,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Gobo scroll",
+            "song_parts": [
+              "SOLO"
+            ]
+          }
+        ],
+        "HITS": [
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 255,
+            "Shutter": 120,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Strobe fast",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 196,
+            "Dimmer": 255,
+            "Shutter": 40,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Strobe slow",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Tilt": 100,
+            "Dimmer": 255,
+            "Shutter": 150,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 0,
+            "name": "Pulse",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 255,
+            "Shutter": 185,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 128,
+            "name": "Ramp up",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 196,
+            "Dimmer": 255,
+            "Shutter": 220,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Random strobe",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 200,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Audience blind",
+            "song_parts": [
+              "CHORUS",
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 0,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 128,
+            "name": "Park dark"
+          },
+          {
+            "Pan": 128,
+            "Tilt": 128,
+            "Dimmer": 25,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Zoom": 255,
+            "name": "Slow fade",
+            "song_parts": [
+              "OUTRO"
+            ]
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Cross sweep",
+          "banks": [
+            "LOOKS",
+            "LOOKS"
+          ],
+          "scenes": [
+            1,
+            2
+          ],
+          "song_parts": [
+            "VERSE",
+            "INST"
+          ]
+        },
+        {
+          "name": "Gobo cycle",
+          "banks": [
+            "BEAMS",
+            "BEAMS",
+            "BEAMS",
+            "BEAMS"
+          ],
+          "scenes": [
+            2,
+            3,
+            7,
+            4
+          ],
+          "song_parts": [
+            "INST",
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Beam pingpong",
+          "banks": [
+            "BEAMS",
+            "BEAMS"
+          ],
+          "scenes": [
+            0,
+            1
+          ],
+          "song_parts": [
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Pump",
+          "banks": [
+            "LOOKS",
+            "HITS"
+          ],
+          "scenes": [
+            0,
+            6
+          ],
+          "song_parts": [
+            "BREAK"
+          ]
+        },
+        {
+          "name": "Finale",
+          "banks": [
+            "HITS",
+            "HITS",
+            "LOOKS"
+          ],
+          "scenes": [
+            0,
+            5,
+            6
+          ],
+          "song_parts": [
+            "END"
+          ]
+        }
+      ]
+    },
+    "18ch": {
+      "banks": {
+        "LOOKS": [
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 50,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Palette down",
+            "song_parts": [
+              "VERSE",
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Pan fine": 0,
+            "Tilt": 100,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 50,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Palette cross L",
+            "song_parts": [
+              "VERSE",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Pan fine": 0,
+            "Tilt": 100,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 50,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Palette cross R",
+            "song_parts": [
+              "VERSE",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 196,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 40,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Palette front",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 110,
+            "Dimmer": 110,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 110,
+            "Blue": 0,
+            "White": 40,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Amber low",
+            "song_parts": [
+              "INTRO",
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 150,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 110,
+            "Dimmer": 200,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Deep blue",
+            "song_parts": [
+              "INTRO",
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "White wash",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 110,
+            "Dimmer": 70,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Palette half",
+            "song_parts": [
+              "BREAK",
+              "OUTRO"
+            ]
+          }
+        ],
+        "BEAMS": [
+          {
+            "Pan": 85,
+            "Pan fine": 0,
+            "Tilt": 60,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 50,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Beam cross L",
+            "song_parts": [
+              "SOLO",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Pan fine": 0,
+            "Tilt": 60,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 50,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Beam cross R",
+            "song_parts": [
+              "SOLO",
+              "INST"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Pan fine": 0,
+            "Tilt": 100,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 60,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 20,
+            "Gobo Rotation": 140,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Breakup spin",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Pan": 171,
+            "Pan fine": 0,
+            "Tilt": 196,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 60,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 40,
+            "Gobo Rotation": 175,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 40,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Dots fast",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 110,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 135,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Star shake",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 150,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 110,
+            "Dimmer": 220,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 88,
+            "Gobo Rotation": 245,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 30,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Spiral CCW",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 185,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 40,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 200,
+            "Prism Rotation": 145,
+            "Zoom": 0,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Prism fan",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Pan fine": 0,
+            "Tilt": 156,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 60,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 210,
+            "Gobo Rotation": 140,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Gobo scroll",
+            "song_parts": [
+              "SOLO"
+            ]
+          }
+        ],
+        "HITS": [
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 120,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Strobe fast",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 196,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 40,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Strobe slow",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 85,
+            "Pan fine": 0,
+            "Tilt": 100,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 150,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 0,
+            "Focus": 170,
+            "Control": 0,
+            "name": "Pulse",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 185,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 128,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Ramp up",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 196,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 220,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Random strobe",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 200,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 0,
+            "Dimmer": 255,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 255,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Audience blind",
+            "song_parts": [
+              "CHORUS",
+              "END"
+            ]
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 110,
+            "Dimmer": 0,
+            "Shutter": 12,
+            "Red": 0,
+            "Green": 0,
+            "Blue": 0,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 128,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Park dark"
+          },
+          {
+            "Pan": 128,
+            "Pan fine": 0,
+            "Tilt": 128,
+            "Tilt fine": 0,
+            "Pan/Tilt Speed": 200,
+            "Dimmer": 25,
+            "Shutter": 12,
+            "Red": 255,
+            "Green": 255,
+            "Blue": 255,
+            "White": 0,
+            "Gobo Wheel": 0,
+            "Gobo Rotation": 0,
+            "Prism": 0,
+            "Prism Rotation": 0,
+            "Zoom": 255,
+            "Focus": 128,
+            "Control": 0,
+            "name": "Slow fade",
+            "song_parts": [
+              "OUTRO"
+            ]
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Cross sweep",
+          "banks": [
+            "LOOKS",
+            "LOOKS"
+          ],
+          "scenes": [
+            1,
+            2
+          ],
+          "song_parts": [
+            "VERSE",
+            "INST"
+          ]
+        },
+        {
+          "name": "Gobo cycle",
+          "banks": [
+            "BEAMS",
+            "BEAMS",
+            "BEAMS",
+            "BEAMS"
+          ],
+          "scenes": [
+            2,
+            3,
+            7,
+            4
+          ],
+          "song_parts": [
+            "INST",
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Beam pingpong",
+          "banks": [
+            "BEAMS",
+            "BEAMS"
+          ],
+          "scenes": [
+            0,
+            1
+          ],
+          "song_parts": [
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Pump",
+          "banks": [
+            "LOOKS",
+            "HITS"
+          ],
+          "scenes": [
+            0,
+            6
+          ],
+          "song_parts": [
+            "BREAK"
+          ]
+        },
+        {
+          "name": "Finale",
+          "banks": [
+            "HITS",
+            "HITS",
+            "LOOKS"
+          ],
+          "scenes": [
+            0,
+            5,
+            6
+          ],
+          "song_parts": [
+            "END"
+          ]
+        }
+      ]
+    }
+  }
+}

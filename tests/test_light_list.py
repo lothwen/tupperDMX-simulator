@@ -352,6 +352,44 @@ def test_a_matrix_emits_one_quad_per_cell(qapp):
         body.cleanup()
 
 
+def test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can(qapp):
+    """A fixture's output must not depend on how finely it is pixelated.
+
+    A cell's halo is tens of times its own size, so every cell on a body lights
+    the same patch of air and the grid stacks. With a flat per-cell constant
+    that made the total proportional to the cell COUNT: the shipped 4-cell wash
+    summed to 0.0016, which is below the toe of the ACES fit in `RESOLVE_FRAG`
+    (it clamps to zero under ~0.003) — the fixture lit its own face and put
+    nothing whatever into the room, while a 40-cell bar off the same lit area
+    put out ten times as much.
+    """
+    print("test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can")
+    from stage.emission.surface import CELL_GLOW, PANEL_GLOW
+
+    totals = {}
+    for key in ("ledbar", "Wild Wash Pro 648 RGBW"):
+        fdef = resolve_fixture(key, "")
+        if fdef is None:
+            print(f"  skip: no shipped '{key}' definition")
+            return
+        body = _body(fdef)
+        try:
+            quads = _lights(body, _lit_frame(fdef)).of_kind(QUAD)
+            _assert(len(quads) > 1, f"'{key}' is a grid ({len(quads)} cells)")
+            totals[key] = sum(q.intensity for q in quads)
+        finally:
+            body.cleanup()
+
+    for key, total in totals.items():
+        _assert(abs(total - CELL_GLOW) < 1e-6,
+                f"'{key}' at full spills one face's worth ({total:.4f})")
+    _assert(CELL_GLOW == PANEL_GLOW,
+            "which is what the undivided panel of the same face spills")
+    _assert(min(totals.values()) > 0.003,
+            f"clear of the tonemap's toe ({min(totals.values()):.4f}), so it "
+            "reaches the frame at all")
+
+
 def test_coordinates_are_body_local(qapp):
     """The layer adds the body's scene position while packing, so a fixture
     dragged in design mode needs a repaint and not a re-render."""
@@ -832,6 +870,7 @@ def main():
     test_a_flowers_lens_is_its_rosette_not_a_wash(app)
     test_a_prism_divides_the_light_it_splits(app)
     test_a_matrix_emits_one_quad_per_cell(app)
+    test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can(app)
     test_coordinates_are_body_local(app)
     test_every_category_can_be_asked_for_its_light(app)
     test_a_laser_emits_lines_and_a_hazer_blobs(app)
