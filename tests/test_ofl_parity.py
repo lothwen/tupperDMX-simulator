@@ -50,7 +50,7 @@ _BLENDS = frozenset({
 # derived set wholesale — so they are not evidence about the derivation.
 _OVERRIDDEN_FLAGS = {
     "ledbar": {"brightness", "speed"},
-    "par_rgb": {"brightness"},
+    "par-rgbw": {"brightness"},
     "Wild Wash Pro 648 RGBW": {"red", "green", "blue", "white"},
 }
 
@@ -74,8 +74,9 @@ GOLDEN_CHANNELS = {
         ("warm1", 1), ("warm2", 1),
         ("strobe", 0), ("mode", 0), ("speed", 0),
     ],
-    "par_rgb": [
+    "par-rgbw": [
         ("brightness", 3), ("red", 1), ("green", 1), ("blue", 1),
+        ("white", 1), ("strobe", 0),
     ],
     "Wild Wash Pro 648 RGBW": [
         ("red", 3), ("green", 3), ("blue", 3), ("white", 3),
@@ -88,12 +89,12 @@ GOLDEN_BANKS = {
     "ledbar": [("ANIMATIONS", 8), ("FILLS", 8), ("FILLS2", 8), ("MULTICOLOR", 8),
                ("STROBES", 8), ("TUBES", 8), ("RADARS", 8)],
     "blinder": [("BLINDER_SCENES", 8)],
-    "par_rgb": [],
+    "par-rgbw": [("COLORS", 8), ("STROBES", 8)],
     "Wild Wash Pro 648 RGBW": [],
 }
 
 GOLDEN_CHASES = {
-    "ledbar": 15, "blinder": 2, "par_rgb": 0,
+    "ledbar": 15, "blinder": 2, "par-rgbw": 5,
     "Wild Wash Pro 648 RGBW": 0,
 }
 
@@ -121,7 +122,17 @@ GOLDEN_SONG_PARTS = {
         "OUTRO": [(False, "BLINDER_SCENES", 3)],
         "END": [(True, "", 0)],
     },
-    "par_rgb": {},
+    "par-rgbw": {
+        "INTRO": [(False, "COLORS", 2), (False, "STROBES", 6)],
+        "VERSE": [(False, "COLORS", 1)],
+        "CHORUS": [(False, "COLORS", 0), (True, "", 1)],
+        "BREAK": [(False, "COLORS", 3)],
+        "BRIDGE": [(False, "COLORS", 5)],
+        "INST": [(True, "", 0)],
+        "SOLO": [(True, "", 2)],
+        "OUTRO": [(False, "STROBES", 3), (True, "", 3)],
+        "END": [(True, "", 4)],
+    },
     "Wild Wash Pro 648 RGBW": {},
 }
 

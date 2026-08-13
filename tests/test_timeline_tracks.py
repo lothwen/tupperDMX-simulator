@@ -200,9 +200,9 @@ def test_rebuild_for_patch_adds_and_removes_tracks():
     _, tl = _make()
     _assert(len(tl.midi_events_tracks) == 3, "starts with 3 tracks")
 
-    # Add a 4th fixture (par_rgb @17 ch3): tracks re-sort by DMX address,
-    # ledbar@1, par_rgb@17, blinder@33, blinder@65 -> channels 0, 3, 1, 2.
-    added = list(PATCH) + [FakeFixture("par_rgb", 17, 3)]
+    # Add a 4th fixture (par-rgbw @17 ch3): tracks re-sort by DMX address,
+    # ledbar@1, par-rgbw@17, blinder@33, blinder@65 -> channels 0, 3, 1, 2.
+    added = list(PATCH) + [FakeFixture("par-rgbw", 17, 3)]
     tl.rebuild_for_patch(added)
     _assert([t.fixture_index for t in tl.midi_events_tracks] == [0, 3, 1, 2],
             "rebuild added a lane, re-sorted by DMX, bound by stable channel")
@@ -219,7 +219,7 @@ def test_rebuild_for_patch_keeps_clip_binding():
     m, tl = _make()
     m.add_event(BLINDER_CLIP, 2.0, 100, channel=2)  # 2nd blinder clip
     tl.refresh_from_manager()
-    tl.rebuild_for_patch(list(PATCH) + [FakeFixture("par_rgb", 17, 3)])
+    tl.rebuild_for_patch(list(PATCH) + [FakeFixture("par-rgbw", 17, 3)])
 
     e = _event(m, BLINDER_CLIP, channel=2)
     track2 = next(t for t in tl.midi_events_tracks if t.fixture_index == 2)

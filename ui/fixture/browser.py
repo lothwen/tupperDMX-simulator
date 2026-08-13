@@ -41,7 +41,7 @@ from ui.fixture.scenes_tab import FixtureScenesTab
 UNIVERSE_SIZE = 512
 
 # Group name for definitions sitting directly in a fixtures dir, i.e. with no
-# manufacturer folder — the shipped ledbar/blinder/par_rgb and anything a user
+# manufacturer folder — the shipped ledbar/blinder/par-rgbw and anything a user
 # drops in loose.
 GENERIC_MANUFACTURER = "Generic"
 

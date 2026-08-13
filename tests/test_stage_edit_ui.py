@@ -150,7 +150,7 @@ def test_inspector_delete_removes_and_persists(qapp):
     calls = {"patch": 0}
     insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
 
-    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
     sc.set_design_mode(True)
     sc.generic_fixtures[0].setSelected(True)
     insp.set_instance(inst)
@@ -168,7 +168,7 @@ def test_inspector_delete_cancel_keeps_fixture(qapp):
     calls = {"patch": 0}
     insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
 
-    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
     sc.set_design_mode(True)
     sc.generic_fixtures[0].setSelected(True)
     insp.set_instance(inst)
@@ -184,7 +184,7 @@ def test_inspector_close_clears_selection(qapp):
     sc, _ = _stage()
     insp = FixtureInspector(sc, lambda: None)
 
-    sc.add_fixture("par_rgb", 9, 400, 300)
+    sc.add_fixture("par-rgbw", 9, 400, 300)
     sc.set_design_mode(True)
     sc.generic_fixtures[0].setSelected(True)
     _assert(len(sc.scene.selectedItems()) == 1, "a fixture is selected")
@@ -293,7 +293,7 @@ def test_label_follows_fixture(qapp):
 def test_label_removed_with_fixture(qapp):
     print("test_label_removed_with_fixture")
     sc, _ = _stage()
-    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
     obj = sc.generic_fixtures[0]
     label = obj._label
     _assert(label in sc.scene.items(), "the new fixture's label is in the scene")

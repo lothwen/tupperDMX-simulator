@@ -150,7 +150,7 @@ def test_shipped_fixtures_pick_the_expected_renderers():
     expected = {
         "ledbar": PixelBarFixture,
         "blinder": BlinderFixture,
-        "par_rgb": ColorChangerFixture,
+        "par-rgbw": ColorChangerFixture,
         WILD_WASH: ColorChangerFixture,
         "hazer": HazerFixture,
         "smoke-machine": SmokeFixture,

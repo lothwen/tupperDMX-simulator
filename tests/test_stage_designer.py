@@ -42,7 +42,7 @@ def test_add_is_incremental(qapp):
     sc, cfg = _stage()
     before_ids = {id(o) for o in sc.get_all_fixtures()}
 
-    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
 
     after_ids = {id(o) for o in sc.get_all_fixtures()}
     _assert(before_ids <= after_ids,
@@ -55,9 +55,9 @@ def test_add_is_incremental(qapp):
 def test_added_fixture_receives_dmx(qapp):
     print("test_added_fixture_receives_dmx")
     sc, _ = _stage()
-    sc.add_fixture("par_rgb", 9, 400, 300)
+    sc.add_fixture("par-rgbw", 9, 400, 300)
     buf = bytearray(96)
-    buf[8], buf[9], buf[10], buf[11] = 255, 10, 20, 30  # par_rgb at DMX 9 (index 8)
+    buf[8], buf[9], buf[10], buf[11] = 255, 10, 20, 30  # par-rgbw at DMX 9 (index 8)
     sc.update_fixtures_with_dmx(buf)
     c = sc.generic_fixtures[0].lamp.glow_color
     _assert((c.red(), c.green(), c.blue()) == (10, 20, 30),
@@ -83,14 +83,14 @@ def test_add_ledbar_seeds_all_bars(qapp):
 def test_remove_drops_only_target(qapp):
     print("test_remove_drops_only_target")
     sc, cfg = _stage()
-    inst = sc.add_fixture("par_rgb", 9, 400, 300)
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
     keep_ids = {id(o) for o in (sc.led_bars + sc.blinders)}
 
     sc.set_design_mode(True)
     sc.generic_fixtures[0].setSelected(True)
     removed = sc.remove_selected()
 
-    _assert([r.type for r in removed] == ["par_rgb"], "only the selected fixture removed")
+    _assert([r.type for r in removed] == ["par-rgbw"], "only the selected fixture removed")
     _assert(len(sc.generic_fixtures) == 0, "the generic render object was dropped")
     _assert(len(sc._render_groups) == 2, "its render group was removed")
     _assert(inst not in cfg.fixtures, "the instance was removed from the patch")
@@ -170,7 +170,7 @@ def test_remove_then_readd_keeps_other_channels_stable(qapp):
             "survivors' channels still untouched after re-add")
 
     # Gap-insert (DMX 17, between ledbar@1 and blinder@33): fresh channel, no shift.
-    gap = sc.add_fixture("par_rgb", 17, 500, 300)
+    gap = sc.add_fixture("par-rgbw", 17, 500, 300)
     _assert(gap.channel == 3, "gap-inserted fixture gets a fresh channel (3)")
     _assert(sorted(f.channel for f in cfg.fixtures) == [0, 1, 2, 3],
             "no existing channel shifted by a gap insert")
@@ -185,12 +185,12 @@ def test_opening_another_show_replaces_the_fixtures(qapp):
     _assert(len(stage._render_groups) == 2, "the first show's patch is on stage")
 
     cfg.fixtures = [
-        FixtureInstance(type="par_rgb", dmx_start=1, x=100, y=100),
+        FixtureInstance(type="par-rgbw", dmx_start=1, x=100, y=100),
         FixtureInstance(type="blinder", dmx_start=65, x=400, y=400),
     ]
     stage.sync_from_config(cfg)
 
-    _assert([i.type for i, _ in stage._render_groups] == ["par_rgb", "blinder"],
+    _assert([i.type for i, _ in stage._render_groups] == ["par-rgbw", "blinder"],
             "the stage now shows the new show's patch")
     _assert(all(obj.scene() is None for obj in before),
             "and every body of the old one has left the scene")
@@ -206,7 +206,7 @@ def test_sync_keeps_unchanged_fixtures_identical(qapp):
     kept_bodies = [obj for inst, objs in stage._render_groups
                    if inst is kept for obj in objs]
 
-    cfg.fixtures = [kept, FixtureInstance(type="par_rgb", dmx_start=70,
+    cfg.fixtures = [kept, FixtureInstance(type="par-rgbw", dmx_start=70,
                                           x=200, y=200)]
     stage.sync_from_config(cfg)
 
@@ -244,14 +244,14 @@ def test_a_new_fixture_is_rigged_by_where_it_lands(qapp):
     sc, _ = _stage()
     height = sc.scene.sceneRect().height()
 
-    truss = sc.add_fixture("par_rgb", 9, 400, int(height * 0.2))
-    deck = sc.add_fixture("par_rgb", 13, 500, int(height * 0.9))
+    truss = sc.add_fixture("par-rgbw", 9, 400, int(height * 0.2))
+    deck = sc.add_fixture("par-rgbw", 13, 500, int(height * 0.9))
     _assert(truss.hanging, "dropped up in the air, a fixture is flown")
     _assert(not deck.hanging, "dropped on the deck, it stands on it")
 
     # The browser drops at the stage centre, and what lands there is on its way
     # to a truss — so a guess of "standing" there would be wrong every time.
-    middle = sc.add_fixture("par_rgb", 17, 600, int(height / 2))
+    middle = sc.add_fixture("par-rgbw", 17, 600, int(height / 2))
     _assert(middle.hanging, "and the centre of the picture counts as flown")
 
 
@@ -259,7 +259,7 @@ def test_the_guess_is_only_a_guess_and_a_drag_never_revises_it(qapp):
     print("test_the_guess_is_only_a_guess_and_a_drag_never_revises_it")
     sc, _ = _stage()
     height = sc.scene.sceneRect().height()
-    inst = sc.add_fixture("par_rgb", 9, 400, int(height * 0.2))
+    inst = sc.add_fixture("par-rgbw", 9, 400, int(height * 0.2))
     body = sc.get_all_fixtures()[-1]
 
     # Dragging is a move, not a re-rig: a fixture that turned itself over
