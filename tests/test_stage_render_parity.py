@@ -65,9 +65,16 @@ GOLDEN_GENERIC = {
     ("par-rgbw", (255, 10, 20, 30, 0, 0)): ((10, 20, 30), 1.0),
     ("par-rgbw", (128, 200, 100, 50, 0, 0)): ((100, 50, 25), 128 / 255),
     ("par-rgbw", (0, 255, 255, 255, 0, 0)): ((0, 0, 0), 0.0),
-    # No brightness channel -> full intensity; `white` is a cool-white tint.
-    (WILD_WASH, (10, 20, 30, 0)): ((10, 20, 30), 1.0),
-    (WILD_WASH, (0, 0, 0, 255)): ((200, 220, 255), 1.0),
+}
+
+# The wash declares Matrix first, so it is drawn as its four-cell face rather
+# than as one lamp — the same colour resolution, read off the cells. It has no
+# brightness channel, so intensity is full and a cell's brush IS the resolved
+# colour; `white` is a cool-white tint.
+# dmx -> cell rgb
+GOLDEN_WILD_WASH = {
+    (10, 20, 30, 0): (10, 20, 30),
+    (0, 0, 0, 255): (200, 220, 255),
 }
 
 # dmx -> (bulb1 rgb, bulb2 rgb, intensity)
@@ -90,6 +97,20 @@ def test_lamp_fixture_colours(qapp):
         _assert(got_rgb == rgb, f"{type_name} {data} -> glow {rgb}")
         _assert(abs(got_i - min(1.0, intensity)) < 1e-6,
                 f"{type_name} {data} -> intensity {min(1.0, intensity):.3f}")
+
+
+def test_wild_wash_face_colours(qapp):
+    print("test_wild_wash_face_colours")
+    for data, rgb in GOLDEN_WILD_WASH.items():
+        wash = _render(WILD_WASH, data)
+        try:
+            _assert(len(wash.cells) == 4, "the wash builds one cell per pixel")
+            _assert(all(_rgb(cell.brush().color()) == rgb for cell in wash.cells),
+                    f"{WILD_WASH} {data} -> every cell {rgb}")
+            _assert(_rgb(wash.graphicsEffect().color()) == rgb,
+                    f"{WILD_WASH} {data} -> glow {rgb}")
+        finally:
+            wash.cleanup()
 
 
 def test_blinder_bulbs(qapp):
@@ -191,6 +212,7 @@ def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     test_lamp_fixture_colours(app)
+    test_wild_wash_face_colours(app)
     test_blinder_bulbs(app)
     test_ledbar_channel_order_is_bgr(app)
     test_ledbar_brightness_scales_pixels(app)

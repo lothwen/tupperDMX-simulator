@@ -151,7 +151,9 @@ def test_shipped_fixtures_pick_the_expected_renderers():
         "ledbar": PixelBarFixture,
         "blinder": BlinderFixture,
         "par-rgbw": ColorChangerFixture,
-        WILD_WASH: ColorChangerFixture,
+        # The wash declares Matrix before Color Changer, and the fixture's own
+        # category order wins: it is drawn as the 4-cell face it has.
+        WILD_WASH: PixelBarFixture,
         "hazer": HazerFixture,
         "smoke-machine": SmokeFixture,
     }
