@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ABOUTME: Standalone 3D-stage prototype — a white room, lit by the app's own
-# ABOUTME: par_rgb and moving-head definitions driven by real DMX frames.
+# ABOUTME: par-rgbw and moving-head definitions driven by real DMX frames.
 """A draft of what a 3D virtual stage could look like.
 
 Run it:
@@ -314,7 +314,7 @@ class Rig:
     """The whole prototype rig, and the DMX being sent to it."""
 
     def __init__(self):
-        self.par = Fixture(key="par_rgb", mode="4ch",
+        self.par = Fixture(key="par-rgbw", mode="6ch",
                            position=(2.35, 0.62, 6.3))
         self.head = Fixture(key="moving-head", mode="12ch",
                             position=(ROOM[0] * 0.5, ROOM[1] - 0.95, 4.6))
@@ -898,7 +898,7 @@ class Stage3DView(QOpenGLWidget):
             f"  tilt {self.rig.tilt_deg:6.1f}d (dmx {self.rig.tilt_dmx_deg:6.1f})\n"
             f"             zoom {self.rig.zoom_deg:4.1f}d -> half {half:4.1f}d"
             f"  rgb {rgb}  [{head.kind.value}]\n"
-            f"par_rgb      static      "
+            f"par-rgbw     static      "
             f"  rgb {self.rig.par.state.scaled_rgb() if self.rig.par.state else ()}"
             f"  [{self.rig.par.kind.value}]\n"
             f"drag orbit | wheel dolly | WASD walk | [ ] haze | - = exposure"

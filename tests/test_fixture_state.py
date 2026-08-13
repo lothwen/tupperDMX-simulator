@@ -53,20 +53,24 @@ def _probe(channels, mode_channels=None, sidecar=None, name="probe",
 
 # --- parity with the pre-OFL renderers ---------------------------------------
 
-def test_parity_par_rgb():
-    print("test_parity_par_rgb")
-    fdef = resolve_fixture("par_rgb")
-    state = resolve_state(fdef, [255, 10, 20, 30])
+def test_parity_par_rgbw():
+    print("test_parity_par_rgbw")
+    fdef = resolve_fixture("par-rgbw")
+    state = resolve_state(fdef, [255, 10, 20, 30, 0, 0])
     _assert(state.rgb == (10, 20, 30) and state.intensity == 1.0,
             "RGB read from the right channels at full brightness")
 
-    dim = resolve_state(fdef, [128, 200, 100, 50])
+    dim = resolve_state(fdef, [128, 200, 100, 50, 0, 0])
     _assert(dim.scaled_rgb() == (int(200 * 128 / 255), int(100 * 128 / 255),
                                  int(50 * 128 / 255)),
             "brightness scales the mix exactly as before")
 
-    off = resolve_state(fdef, [0, 255, 255, 255])
+    off = resolve_state(fdef, [0, 255, 255, 255, 0, 0])
     _assert(off.scaled_rgb() == (0, 0, 0), "zero brightness blacks out")
+
+    white = resolve_state(fdef, [255, 0, 0, 0, 255, 0])
+    _assert(white.scaled_rgb() == (255, 255, 255),
+            "the white emitter lights on its own")
 
 
 def test_parity_ledbar_channel_order():
@@ -132,14 +136,16 @@ def test_parity_ledbar_effect_names():
 # the new code exists.
 GOLDENS = [
     # (type, mode, dmx slice, intensity, rgb, scaled_rgb, per-emitter scaled rgb)
-    ("par_rgb", "", [255, 255, 0, 0],
+    ("par-rgbw", "", [255, 255, 0, 0, 0, 0],
      1.0, (255, 0, 0), (255, 0, 0), [(255, 0, 0)]),
-    ("par_rgb", "", [128, 200, 100, 50],
+    ("par-rgbw", "", [128, 200, 100, 50, 0, 0],
      128 / 255, (200, 100, 50), (100, 50, 25), [(100, 50, 25)]),
-    ("par_rgb", "", [0, 255, 255, 255],
+    ("par-rgbw", "", [0, 255, 255, 255, 0, 0],
      0.0, (255, 255, 255), (0, 0, 0), [(0, 0, 0)]),
-    ("par_rgb", "", [255, 0, 0, 0],
+    ("par-rgbw", "", [255, 0, 0, 0, 0, 0],
      1.0, (0, 0, 0), (0, 0, 0), [(0, 0, 0)]),
+    ("par-rgbw", "", [255, 0, 0, 0, 255, 0],
+     1.0, (255, 255, 255), (255, 255, 255), [(255, 255, 255)]),
 
     # The ledbar is wired B, G, R.
     ("ledbar", "", [255, 10, 20, 30, 0, 0, 0],
@@ -590,7 +596,7 @@ def test_solve_color_round_trips_through_resolve_state():
 
 
 def main():
-    test_parity_par_rgb()
+    test_parity_par_rgbw()
     test_parity_ledbar_channel_order()
     test_parity_blinder_two_cells()
     test_parity_wild_wash_white_is_a_cool_tint()

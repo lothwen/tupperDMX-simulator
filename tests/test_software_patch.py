@@ -112,10 +112,10 @@ def test_none_defaults_but_explicit_empty_is_empty():
 
 def test_generic_fixture_inert_and_output_unchanged():
     print("test_generic_fixture_inert_and_output_unchanged")
-    # A library-defined generic type (par_rgb, 4ch) patched alongside the
+    # A library-defined generic type (par-rgbw, 6ch) patched alongside the
     # built-ins must build without raising (synthetic default bank) and, since
     # the note sequence never addresses it, leave the full present[] unchanged.
-    with_generic = SHIPPED_FIXTURES + [FixtureInstance(type="par_rgb", dmx_start=9)]
+    with_generic = SHIPPED_FIXTURES + [FixtureInstance(type="par-rgbw", dmx_start=9)]
     ctrl = DMXController(with_generic)
     _assert(ctrl.num_fixtures == 4, "generic fixture added to the patch")
 

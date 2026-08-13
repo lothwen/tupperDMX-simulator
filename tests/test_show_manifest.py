@@ -187,7 +187,7 @@ def test_fixtures_and_cues_reuse_config_parsers():
         "fixtures": [
             {"type": "ledbar", "dmx_start": 1},
             {"type": "bogus", "dmx_start": 5},
-            {"type": "par_rgb", "dmx_start": 9, "hanging": False},
+            {"type": "par-rgbw", "dmx_start": 9, "hanging": False},
         ],
         "webremote_cues": [
             {"label": "Warm", "color": "#ffb86b", "messages": [[0, 200, 300]]},

@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
-  "name": "par_rgb",
+  "name": "par-rgbw",
+  "shortName": "TDMXPAR",
   "categories": [
     "Color Changer",
     "Dimmer"
@@ -10,8 +11,9 @@
       "TupperDMX"
     ],
     "createDate": "2025-06-25",
-    "lastModifyDate": "2026-07-31"
+    "lastModifyDate": "2026-08-13"
   },
+  "comment": "A generic LED PAR",
   "physical": {
     "dimensions": [
       180,
@@ -19,7 +21,7 @@
       180
     ],
     "bulb": {
-      "type": "RGB LED"
+      "type": "RGBW LED"
     },
     "lens": {
       "degreesMinMax": [
@@ -55,17 +57,49 @@
         "type": "ColorIntensity",
         "color": "Blue"
       }
+    },
+    "white": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "White"
+      }
+    },
+    "strobe": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            7
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [
+            8,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "0.5Hz",
+          "speedEnd": "20Hz"
+        }
+      ]
     }
   },
   "modes": [
     {
-      "name": "4ch",
-      "shortName": "4ch",
+      "name": "6ch",
+      "shortName": "6ch",
       "channels": [
         "brightness",
         "red",
         "green",
-        "blue"
+        "blue",
+        "white",
+        "strobe"
       ]
     }
   ]

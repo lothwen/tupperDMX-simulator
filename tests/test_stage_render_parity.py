@@ -63,9 +63,9 @@ def _lamp(type_name, data):
 
 # (type, dmx) -> (rgb, intensity)
 GOLDEN_GENERIC = {
-    ("par_rgb", (255, 10, 20, 30)): ((10, 20, 30), 1.0),
-    ("par_rgb", (128, 200, 100, 50)): ((100, 50, 25), 128 / 255),
-    ("par_rgb", (0, 255, 255, 255)): ((0, 0, 0), 0.0),
+    ("par-rgbw", (255, 10, 20, 30, 0, 0)): ((10, 20, 30), 1.0),
+    ("par-rgbw", (128, 200, 100, 50, 0, 0)): ((100, 50, 25), 128 / 255),
+    ("par-rgbw", (0, 255, 255, 255, 0, 0)): ((0, 0, 0), 0.0),
     # No brightness channel -> full intensity; `white` is a cool-white tint.
     (WILD_WASH, (10, 20, 30, 0)): ((10, 20, 30), 1.0),
     (WILD_WASH, (0, 0, 0, 255)): ((200, 220, 255), 1.0),
