@@ -232,13 +232,12 @@ def test_animation_capabilities_reproduce_the_gif_mapping():
     # capability per animation, with the effect name resolving to a file through
     # the sidecar. Walk all 256 values and demand the same asset either way.
     import glob
-    from core.paths import asset_path
 
     fdef = load_fixture_defs()["ledbar"]
     animation = next(c for c in fdef.channels if c.field == "animation")
 
     def legacy_gif(value):
-        found = glob.glob(os.path.join(asset_path("animations"),
+        found = glob.glob(os.path.join(fdef.effects_dir,
                                        f"{value // 4 + 1:02d}-*.gif"))
         return os.path.basename(found[0]) if found else None
 
@@ -247,7 +246,7 @@ def test_animation_capabilities_reproduce_the_gif_mapping():
                     if c.dmx_range[0] <= value <= c.dmx_range[1]), None)
         if cap is None or cap.type != "Effect":
             return None
-        return fdef.effects.get(str(cap.get("effectName", "")), {}).get("gif")
+        return fdef.effects.get(str(cap.get("effectName", "")), {}).get("asset")
 
     mismatches = [v for v in range(256) if ofl_gif(v) != legacy_gif(v)]
     _assert(not mismatches,

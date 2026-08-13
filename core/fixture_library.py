@@ -73,6 +73,10 @@ class FixtureDef:
         default_factory=lambda: MappingProxyType({}))
     effects: Mapping[str, dict] = field(default_factory=lambda: MappingProxyType({}))
     stage: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    # Absolute path of this definition's `<stem>.effects/` folder — where the
+    # artwork its `effects` map names is resolved. Empty for a def built without
+    # a file behind it (a synthetic one in a test).
+    effects_dir: str = ""
 
     @property
     def channel_count(self) -> int:
@@ -88,6 +92,55 @@ def fixtures_dir_user() -> Path:
     """Writable directory for user-imported fixture definitions: a fixtures/
     subfolder of the platform-conventional user-prefs directory."""
     return userprefs_dir() / "fixtures"
+
+
+# --- effect artwork -----------------------------------------------------------
+#
+# An `Effect` capability names a program the fixture runs; a GIF illustrating it
+# is artwork, and artwork belongs to the fixture that declares the effect. So it
+# lives BESIDE the definition — `fixtures/ledbar.effects/` next to
+# `fixtures/ledbar.json` — rather than in one global assets/ bucket, which could
+# only ever serve shipped fixtures and matched by name across all of them (any
+# fixture declaring an effect called "Fade" inherited the LED bar's artwork).
+# Beside the definition, a user-layer or show-local fixture can ship artwork too,
+# and two fixtures may each have their own `01-ON.gif` without colliding.
+
+EFFECTS_DIR_SUFFIX = ".effects"
+
+
+def effects_dir_for(ofl_path) -> Path:
+    """The artwork folder that pairs with an OFL document by default.
+
+    `fixtures/ledbar.json` -> `fixtures/ledbar.effects/`, the same stem-plus-
+    suffix convention the `.tdmx.json` sidecar uses. Deliberately not a bare
+    `fixtures/ledbar/`: a subfolder of a fixtures dir is the *manufacturer*
+    namespace, so a plain name there would register any def dropped inside it
+    under a manufacturer called "ledbar".
+    """
+    path = Path(ofl_path)
+    return path.with_name(path.stem + EFFECTS_DIR_SUFFIX)
+
+
+def effect_asset(fdef: FixtureDef, effect_name: str) -> Optional[str]:
+    """Absolute path to the artwork illustrating one of a fixture's effects.
+
+    None when the fixture declares no artwork for it, or the file it names is
+    missing — artwork is decoration, and everything reading this degrades to
+    showing the effect's name instead. Hits the filesystem, so a caller on a
+    render path resolves on the effect CHANGING, not per frame.
+    """
+    if not effect_name or not fdef.effects_dir:
+        return None
+    spec = fdef.effects.get(effect_name)
+    if not spec:
+        return None
+    # `gif` is the pre-`.effects/` spelling of the same key, still read so a
+    # sidecar forked into the user layer before the rename keeps its artwork.
+    asset = spec.get("asset") or spec.get("gif")
+    if not asset:
+        return None
+    path = Path(fdef.effects_dir) / str(asset)
+    return str(path) if path.is_file() else None
 
 
 # --- the OFL bridge -----------------------------------------------------------
@@ -245,7 +298,8 @@ def _channel_spec(slot: ofl.ResolvedChannel, extras: ModeExtras) -> ChannelSpec:
 def build_fixture_def(key: str, fixture: ofl.OflFixture,
                       sidecar: Optional[Sidecar] = None,
                       mode_name: str = "",
-                      manufacturer: str = "") -> Optional[FixtureDef]:
+                      manufacturer: str = "",
+                      effects_dir: str = "") -> Optional[FixtureDef]:
     """Combine an OFL document, its sidecar and a mode into a FixtureDef."""
     if not mode_name and sidecar is not None:
         mode_name = sidecar.default_mode
@@ -267,6 +321,7 @@ def build_fixture_def(key: str, fixture: ofl.OflFixture,
         wheels=fixture.wheels,
         effects=extras.effects,
         stage=extras.stage,
+        effects_dir=effects_dir,
     )
 
 
@@ -383,9 +438,10 @@ def _manufacturer_of(path: Path, root: Path) -> str:
 def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
     """Load one fixture-defs layer.
 
-    A definition is one or two files: the OFL document, and optionally a
-    `.tdmx.json` sidecar beside it. Sidecars are indexed first so each OFL file
-    can be paired with its own as it is parsed.
+    A definition is one or two files plus an optional folder: the OFL document,
+    optionally a `.tdmx.json` sidecar beside it, and optionally a
+    `<stem>.effects/` folder holding the artwork its effects name. Sidecars are
+    indexed first so each OFL file can be paired with its own as it is parsed.
 
     Subfolders are the *manufacturer*: `ADJ/focus-spot-4z.json` registers as
     "ADJ/Focus Spot 4Z". Namespacing by folder is what lets two makers ship a
@@ -440,7 +496,8 @@ def _load_dir(directory) -> Tuple[Dict[str, FixtureDef], Dict[str, _Source]]:
         manufacturer = _manufacturer_of(path, root)
         base = (sidecar.key if sidecar is not None and sidecar.key else fixture.name)
         key = f"{manufacturer}/{base}" if manufacturer else base
-        fdef = build_fixture_def(key, fixture, sidecar, manufacturer=manufacturer)
+        fdef = build_fixture_def(key, fixture, sidecar, manufacturer=manufacturer,
+                                 effects_dir=str(effects_dir_for(path)))
         if fdef is None:
             logger.warning(f"Skipping fixture def '{path}': no usable mode")
             continue
@@ -528,7 +585,8 @@ def resolve_fixture(type_name: str, mode: str = "") -> Optional[FixtureDef]:
     if source is None:
         return defs.get(type_name)
     fdef = (build_fixture_def(type_name, source.fixture, source.sidecar, mode,
-                              source.manufacturer)
+                              source.manufacturer,
+                              str(effects_dir_for(source.ofl_path)))
             or defs.get(type_name))
     _mode_cache[(type_name, mode)] = fdef
     return fdef
@@ -587,9 +645,11 @@ def _is_persistable(directory: Path) -> bool:
 def _fork_to_user_layer(source: _Source) -> Tuple[Path, Path]:
     """Copy a read-only definition into the writable user layer.
 
-    Both files are copied under the same manufacturer folder and the same
+    Everything is copied under the same manufacturer folder and the same
     names, so the fork registers under the identical key — and, being a later
-    layer, overrides the shipped one from the next reload on.
+    layer, overrides the shipped one from the next reload on. That includes the
+    `<stem>.effects/` artwork: the fork *replaces* the shipped def rather than
+    extending it, so anything it doesn't carry is simply gone.
     """
     target_dir = Path(fixtures_dir_user()) / source.manufacturer
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -603,6 +663,11 @@ def _fork_to_user_layer(source: _Source) -> Tuple[Path, Path]:
     sidecar_path = target_dir / name
     if source.sidecar_path is not None and not sidecar_path.exists():
         shutil.copyfile(source.sidecar_path, sidecar_path)
+
+    effects_src = effects_dir_for(source.ofl_path)
+    effects_dst = effects_dir_for(ofl_path)
+    if effects_src.is_dir() and not effects_dst.exists():
+        shutil.copytree(effects_src, effects_dst)
 
     logger.info(f"Forked read-only fixture def '{source.ofl_path}' into "
                 f"'{target_dir}' so it can be edited")

@@ -43,9 +43,10 @@ models (~60 MB) download on demand into `userprefs_dir()/tts_voices/`, never bun
   knowledge, safe for anyone to import), `ui/fixture/` (the fixture-editing subsystem —
   the timeline reaches in for `console` and `affordances`), and the root.
 - `fixtures/` — shipped definitions: a strict OFL `*.json` + optional `*.tdmx.json`
-  sidecar. A **subfolder is the manufacturer** and namespaces the key
-  (`fixtures/ADJ/focus-spot-4z.json` → `"ADJ/Focus Spot 4Z"`); a file at the root
-  keeps its **bare** key, which is what saved patches refer to.
+  sidecar + optional `*.effects/` artwork folder. A **subfolder is the manufacturer**
+  and namespaces the key (`fixtures/ADJ/focus-spot-4z.json` → `"ADJ/Focus Spot 4Z"`);
+  a file at the root keeps its **bare** key, which is what saved patches refer to —
+  which is why the artwork folder is `ledbar.effects/` and not `ledbar/`.
 
 **No eager re-exports at any level; import the submodule you want.** `ui/__init__.py`
 is a docstring because re-exporting the window and its dialogs meant
@@ -267,10 +268,17 @@ and cost follows lit area — each light gets **one bounded quad**.
   consume an address**. A switching channel's `channel` holds the resolution at the
   trigger's default, so labels stay static while `fixture_state` picks the live one per
   frame. Deliberately lenient: unknown capability types are preserved, not rejected.
-- **`core/fixture_library.py`** — a definition is **one or two files**:
-  `fixtures/<x>.json` (strict OFL) plus an optional `fixtures/<x>.tdmx.json` sidecar
-  carrying what OFL cannot express (scene `banks`, `chases`, `song_parts`, per-channel
-  `label`/`flags`, `stage` hints). **What a channel *does* is never declared there**,
+- **`core/fixture_library.py`** — a definition is **one or two files plus an optional
+  folder**: `fixtures/<x>.json` (strict OFL), an optional `fixtures/<x>.tdmx.json`
+  sidecar carrying what OFL cannot express (scene `banks`, `chases`, `song_parts`,
+  per-channel `label`/`flags`, `stage` hints, the `effects` artwork map), and an
+  optional `fixtures/<x>.effects/` folder holding that artwork. **Artwork is resolved
+  per fixture, never by name across all of them** — `effect_asset()` reads the
+  sidecar's map against that def's own folder, so a user-layer or show-local fixture
+  can ship animations (a global `assets/` bucket never could) and two fixtures may
+  each have an `01-ON.gif`. Anything travelling with a definition — the `.showpack`
+  bundler, the fork into the user layer — carries all three.
+  **What a channel *does* is never declared there**,
   and a fixture straight from OFL works with no sidecar. Loaded in three layers —
   shipped, `userprefs_dir()/fixtures/`, the open show's — later layers overriding by
   key, memoized, and **sidecars never cross layers**. **A channel has no summarised

@@ -9,9 +9,10 @@ which built-in effect maps to which animation asset. The OFL root is
 `additionalProperties: false`, so those can't ride inside it either.
 
 They live in a sibling file instead: `fixtures/ledbar.json` stays a pristine OFL
-document that any OFL tool can read, and `fixtures/ledbar.tdmx.json` carries the
-rest. A fixture dropped in straight from the OFL project works with no sidecar
-at all — it simply has no scene banks.
+document that any OFL tool can read, `fixtures/ledbar.tdmx.json` carries the
+rest, and `fixtures/ledbar.effects/` holds the artwork it names. A fixture
+dropped in straight from the OFL project works with no sidecar at all — it
+simply has no scene banks.
 
     {
       "tdmx": 1,                    // format version (required)
@@ -26,6 +27,14 @@ at all — it simply has no scene banks.
 
 Each mode block holds `channels` (per-channel `label`/`flags` overrides, keyed by
 resolved OFL channel key), `banks`, `chases`, `effects` and `stage`.
+
+`effects` maps an `Effect` capability's own `effectName` to the artwork that
+illustrates it — `{"Radar": {"asset": "17-radar.gif"}}`. The filename is
+resolved against this definition's `<stem>.effects/` folder (see
+`fixture_library.effects_dir_for`), never against a global bucket: artwork
+belongs to the fixture that declares the effect, so a user-layer or show-local
+fixture can ship its own, and two fixtures may each have an `01-ON.gif`. `gif`
+is the pre-folder spelling of `asset` and is still read.
 
 `stage` is render hints, read by `stage/`. Five keys, all optional:
 

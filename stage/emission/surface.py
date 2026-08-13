@@ -8,14 +8,12 @@ one flat sheet. All three are drawn as what they are, with a glow so they read
 as light rather than as coloured rectangles.
 """
 
-import glob
-import os
 from typing import Dict, Optional, Tuple
 
 from PyQt6.QtGui import QBrush, QColor, QMovie
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect, QGraphicsRectItem
 
-from core.paths import asset_path
+from core.fixture_library import effect_asset
 from stage.glow import GlowingEllipse
 from stage.metrics import body_count
 from stage.emission.base import Emission
@@ -144,6 +142,12 @@ class MatrixCells(Emission):
 
         self._movie: Optional[QMovie] = None
         self._asset: Optional[str] = None
+        # The resolver's memo, kept apart from `_asset` — that one is the movie
+        # currently LOADED, and `_set_animation` swaps on the difference between
+        # the two. `_effect` starts None rather than "" so the first frame always
+        # resolves, whatever the fixture is doing.
+        self._effect: Optional[str] = None
+        self._resolved: Optional[str] = None
         # What each cell resolved to this frame, so `emit_lights` doesn't have
         # to sample the animation a second time — 256 cells per body at 30 Hz
         # is the one place in the engine where that would actually show.
@@ -240,10 +244,17 @@ class MatrixCells(Emission):
 
     # -- animation assets ----------------------------------------------
     def _asset_for(self, effect: str) -> Optional[str]:
-        """The animation file the running effect maps to, if any."""
-        if not effect:
-            return None
-        return self.body.fdef.effects.get(effect, {}).get("gif")
+        """Path to the animation the running effect maps to, if any.
+
+        Resolved against the fixture's own `<stem>.effects/` folder, so two
+        fixtures may each ship an `01-ON.gif` of their own. Memoized on the
+        effect name because resolving touches the filesystem and this runs at
+        30 Hz per body, while the effect only changes when the DMX does.
+        """
+        if effect != self._effect:
+            self._effect = effect
+            self._resolved = effect_asset(self.body.fdef, effect)
+        return self._resolved
 
     def _set_animation(self, asset: Optional[str], speed_hz: Optional[float]) -> None:
         if asset != self._asset:
@@ -267,7 +278,7 @@ class MatrixCells(Emission):
 
     @property
     def current_asset(self) -> Optional[str]:
-        """The animation file playing, or None when the bar is a flat colour."""
+        """Path of the animation playing, or None when the bar is a flat colour."""
         return self._asset
 
     @property
@@ -276,13 +287,14 @@ class MatrixCells(Emission):
 
 
 def _acquire_movie(asset: str) -> Optional[QMovie]:
-    """The shared QMovie for an animation file, started on first use."""
+    """The shared QMovie for an animation file, started on first use.
+
+    Keyed by the resolved path rather than the filename: two fixtures' artwork
+    folders can hold the same name, and they are not the same movie.
+    """
     movie = _MOVIES.get(asset)
     if movie is None:
-        matches = glob.glob(os.path.join(asset_path("animations"), asset))
-        if not matches:
-            return None
-        movie = QMovie(matches[0])
+        movie = QMovie(asset)
         _MOVIES[asset] = movie
         _MOVIE_USERS[asset] = 0
     _MOVIE_USERS[asset] += 1

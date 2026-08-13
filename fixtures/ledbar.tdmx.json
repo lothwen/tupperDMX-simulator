@@ -777,109 +777,109 @@
       ],
       "effects": {
         "On": {
-          "gif": "01-ON.gif"
+          "asset": "01-ON.gif"
         },
         "Strobo": {
-          "gif": "02-STROBO.gif"
+          "asset": "02-STROBO.gif"
         },
         "Fade": {
-          "gif": "03-Fade.gif"
+          "asset": "03-Fade.gif"
         },
         "Loading corta arriba": {
-          "gif": "04-Loading-corta-arriba.gif"
+          "asset": "04-Loading-corta-arriba.gif"
         },
         "Loading abajo": {
-          "gif": "05-Loading-abajo.gif"
+          "asset": "05-Loading-abajo.gif"
         },
         "Pingpong": {
-          "gif": "06-PingPong.gif"
+          "asset": "06-PingPong.gif"
         },
         "Lluvia abajo": {
-          "gif": "07-Lluvia-abajo.gif"
+          "asset": "07-Lluvia-abajo.gif"
         },
         "Lluvia random derecha": {
-          "gif": "08-lluvia-random-derecha.gif"
+          "asset": "08-lluvia-random-derecha.gif"
         },
         "Tube1": {
-          "gif": "09-tube1.gif"
+          "asset": "09-tube1.gif"
         },
         "Tube2": {
-          "gif": "10-tube2.gif"
+          "asset": "10-tube2.gif"
         },
         "Tube3": {
-          "gif": "11-tube3.gif"
+          "asset": "11-tube3.gif"
         },
         "Tube4": {
-          "gif": "12-tube4.gif"
+          "asset": "12-tube4.gif"
         },
         "Tube5": {
-          "gif": "13-tube5.gif"
+          "asset": "13-tube5.gif"
         },
         "Tube6": {
-          "gif": "14-tube6.gif"
+          "asset": "14-tube6.gif"
         },
         "Tube7": {
-          "gif": "15-tube7.gif"
+          "asset": "15-tube7.gif"
         },
         "Tube8": {
-          "gif": "16-tube8.gif"
+          "asset": "16-tube8.gif"
         },
         "Radar": {
-          "gif": "17-radar.gif"
+          "asset": "17-radar.gif"
         },
         "Fuego": {
-          "gif": "18-fuego.gif"
+          "asset": "18-fuego.gif"
         },
         "Fuego azul": {
-          "gif": "19-fuego-azul.gif"
+          "asset": "19-fuego-azul.gif"
         },
         "Plasma psychodelic": {
-          "gif": "20-plasma-psychodelic.gif"
+          "asset": "20-plasma-psychodelic.gif"
         },
         "Plasma liquid color war": {
-          "gif": "21-plasma-liquid-color-war.gif"
+          "asset": "21-plasma-liquid-color-war.gif"
         },
         "Gotas": {
-          "gif": "22-gotas.gif"
+          "asset": "22-gotas.gif"
         },
         "Gotas cooldrops orange": {
-          "gif": "23-gotas-cooldrops-orange.gif"
+          "asset": "23-gotas-cooldrops-orange.gif"
         },
         "Starfield": {
-          "gif": "24-starfield.gif"
+          "asset": "24-starfield.gif"
         },
         "Vivasuecia": {
-          "gif": "25-vivasuecia.gif"
+          "asset": "25-vivasuecia.gif"
         },
         "Colormania1": {
-          "gif": "26-colormania1.gif"
+          "asset": "26-colormania1.gif"
         },
         "Colormania2": {
-          "gif": "27-colormania2.gif"
+          "asset": "27-colormania2.gif"
         },
         "Colormania3": {
-          "gif": "28-colormania3.gif"
+          "asset": "28-colormania3.gif"
         },
         "Fading pixels": {
-          "gif": "29-fading-pixels.gif"
+          "asset": "29-fading-pixels.gif"
         },
         "High traffic": {
-          "gif": "30-high-traffic.gif"
+          "asset": "30-high-traffic.gif"
         },
         "Regions random": {
-          "gif": "31-regions-random.gif"
+          "asset": "31-regions-random.gif"
         },
         "Radar 2w fade": {
-          "gif": "32-radar-2w-fade.gif"
+          "asset": "32-radar-2w-fade.gif"
         },
         "Squares pink white": {
-          "gif": "33-squares-pink-white.gif"
+          "asset": "33-squares-pink-white.gif"
         },
         "Squares white": {
-          "gif": "34-squares-white.gif"
+          "asset": "34-squares-white.gif"
         },
         "Strobo+rain": {
-          "gif": "35-strobo+rain.gif"
+          "asset": "35-strobo+rain.gif"
         }
       },
       "stage": {

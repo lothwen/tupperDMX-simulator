@@ -147,6 +147,35 @@ def test_cleanup_releases_the_animation(qapp):
     _assert(body.current_movie is None, "and stops when the body goes")
 
 
+def test_changing_the_effect_swaps_the_animation(qapp):
+    print("test_changing_the_effect_swaps_the_animation")
+    # Resolving artwork hits the filesystem, so it is memoized on the effect
+    # name — but that memo is NOT the loaded-movie state `_set_animation` swaps
+    # on. Conflating the two leaves the first animation playing forever.
+    body = _body(resolve_fixture("ledbar"))
+    try:
+        body.update_dmx([255, 255, 255, 255, 64, 255, 0])
+        radar = body.current_asset
+        _assert(os.path.basename(radar or "") == "17-radar.gif",
+                f"DMX 64 loads the radar animation ({radar})")
+
+        playing = body.current_movie
+        body.update_dmx([255, 255, 255, 255, 0, 255, 0])
+        first = body.current_asset
+        _assert(os.path.basename(first or "") == "01-ON.gif",
+                f"and DMX 0 swaps it for the first one ({first})")
+        _assert(body.current_movie is not playing,
+                "the movie really changed, not just the path it reports")
+
+        # Past the last declared effect there is no artwork at all, and the bar
+        # has to fall back to a flat colour rather than keep the old movie.
+        body.update_dmx([255, 255, 255, 255, 200, 255, 0])
+        _assert(body.current_asset is None,
+                "an effect with no artwork clears the animation")
+    finally:
+        body.cleanup()
+
+
 def test_emission_reach_answers_for_the_preview(qapp):
     print("test_emission_reach_answers_for_the_preview")
     _assert(emission_reach(resolve_fixture("ledbar")) == 0.0,
@@ -419,6 +448,7 @@ def main():
     test_features_are_discovered_once(app)
     test_only_animating_bodies_hold_the_clock(app)
     test_cleanup_releases_the_animation(app)
+    test_changing_the_effect_swaps_the_animation(app)
     test_emission_reach_answers_for_the_preview(app)
     test_the_preview_sizes_every_fixture_the_same(app)
     test_the_preview_is_told_which_way_the_light_goes(app)

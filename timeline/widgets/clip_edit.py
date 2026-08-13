@@ -75,7 +75,7 @@ class _CapabilityPopover(QWidget):
 
     picked = pyqtSignal(int)
 
-    def __init__(self, spec, value: int, parent=None):
+    def __init__(self, spec, value: int, fdef, parent=None):
         super().__init__(parent, Qt.WindowType.Popup)
         self.setObjectName("ClipEditPopover")
         layout = QVBoxLayout(self)
@@ -85,7 +85,7 @@ class _CapabilityPopover(QWidget):
         title.setObjectName("AddFxCardTitle")
         layout.addWidget(title)
         self.grid = CapabilityGrid()
-        self.grid.set_channel(spec)
+        self.grid.set_channel(spec, fdef)
         self.grid.set_value(value)
         self.grid.value_changed.connect(self._on_picked)
         layout.addWidget(self.grid)
@@ -528,7 +528,7 @@ class ClipEditDialog(QDialog):
         fader = self.scene_faders.fader(index)
         if fader is None:
             return
-        popover = _CapabilityPopover(fader.spec, fader.value(), self)
+        popover = _CapabilityPopover(fader.spec, fader.value(), self._fdef, self)
         popover.picked.connect(
             lambda value, i=index: self._apply_capability(i, value))
         popover.popup_near(fader.name_label)
