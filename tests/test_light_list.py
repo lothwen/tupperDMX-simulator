@@ -364,7 +364,7 @@ def test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can(qapp):
     put out ten times as much.
     """
     print("test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can")
-    from stage.emission.surface import CELL_GLOW, PANEL_GLOW
+    from stage.emission.surface import CELL_GLOW
 
     totals = {}
     for key in ("ledbar", "Wild Wash Pro 648 RGBW"):
@@ -383,8 +383,10 @@ def test_a_matrix_spills_what_its_face_can_and_not_what_its_grid_can(qapp):
     for key, total in totals.items():
         _assert(abs(total - CELL_GLOW) < 1e-6,
                 f"'{key}' at full spills one face's worth ({total:.4f})")
-    _assert(CELL_GLOW == PANEL_GLOW,
-            "which is what the undivided panel of the same face spills")
+    # Deliberately NOT compared against the flat panel's PANEL_GLOW: a cell
+    # spreads its share over CELL_HALO (50x the cell) where a panel spreads
+    # PANEL_GLOW over PANEL_HALO (2x the panel), so the two constants are the
+    # same quantity thrown over areas orders of magnitude apart.
     _assert(min(totals.values()) > 0.003,
             f"clear of the tonemap's toe ({min(totals.values()):.4f}), so it "
             "reaches the frame at all")

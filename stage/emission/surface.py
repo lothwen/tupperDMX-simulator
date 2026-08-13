@@ -49,13 +49,14 @@ CELL_HALO = 50.0
 # literally nothing.
 #
 # The face itself is drawn by the scene underneath, so this is only what
-# reaches the air past it — which is why a whole grid at full is worth the same
-# as the panel below and no more. Raise it for a hazier room, not to make the
-# bar reach further.
+# reaches the air past it — which is why a whole grid at full is worth one
+# face's spill and no more, however finely it is pixelated. Raise it for a
+# hazier room, not to make the bar reach further.
 CELL_GLOW = 0.04
 
-# A panel is one big soft source rather than a grid of small ones: the same
-# spill off the same lit face, with no cells to divide it between.
+# A panel is one big soft source rather than a grid of small ones: nothing to
+# divide between cells, and it throws over PANEL_HALO instead of the cell's far
+# longer reach — which is why this is not the same number as CELL_GLOW.
 PANEL_HALO = 2.0
 PANEL_GLOW = 0.22
 
