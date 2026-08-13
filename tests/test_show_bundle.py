@@ -78,6 +78,11 @@ def _rich_show(tmp):
     (show.fixtures_dir / "laser_x.json").write_text(json.dumps(CUSTOM_DEF))
     (show.fixtures_dir / "wash_y.json").write_text(json.dumps(PAIRED_DEF))
     (show.fixtures_dir / "wash_y.tdmx.json").write_text(json.dumps(PAIRED_SIDECAR))
+    # A show-local def may ship its own effect artwork, which is a third thing
+    # that has to travel — and it has to stay INSIDE its folder in the zip.
+    art = show.fixtures_dir / "wash_y.effects"
+    art.mkdir()
+    (art / "01-ON.gif").write_bytes(b"GIF89a")
     fixture_library.clear_cache()  # the defs were written after the layer was set
     show.fixtures = [FixtureInstance(type="ledbar", dmx_start=1, channel=0),
                      FixtureInstance(type="laser_x", dmx_start=90, channel=1),
@@ -114,6 +119,8 @@ def test_export_import_roundtrip():
                 "a definition's sidecar travels with it, or it arrives bankless")
         _assert("fixtures/laser_x.tdmx.json" not in names,
                 "a definition with no sidecar contributes only its own file")
+        _assert("fixtures/wash_y.effects/01-ON.gif" in names,
+                "a definition's effect artwork travels with it, in its own folder")
 
         # Import on a "different machine" (another folder).
         target = Path(tmp) / "otra-maquina"

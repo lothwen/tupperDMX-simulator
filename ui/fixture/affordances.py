@@ -30,18 +30,22 @@ The LED bar's `animation` channel is the case this was built for, and it used to
 be hardcoded: it declares 35 `Effect` capabilities at `dmxRange` [0,3] [4,7]
 [8,11] … plus a `NoFunction` tail at [140,255], which is exactly what the old
 grid's `value = index * 4` over a directory listing re-derived. Its 35 shipped
-GIFs still illustrate the tiles — matched to a capability by its own
-`effectName` — but they are now decoration ON a data-driven picker rather than
-the thing driving it. So a fixture that declares different effects gets its own
-tiles (falling back to the capability's name on a plain coloured tile where no
-artwork matches), and the LED bar's GIFs can never turn up on a blinder's
-`mode` channel the way they used to.
+GIFs still illustrate the tiles, but they are now decoration ON a data-driven
+picker rather than the thing driving it. So a fixture that declares different
+effects gets its own tiles, falling back to the capability's name on a plain
+coloured tile where it names no artwork.
+
+**Artwork is looked up per fixture, not by name across all of them** — through
+`fixture_library.effect_asset`, which reads the sidecar's `effects` map and
+resolves it against that fixture's own `<stem>.effects/` folder. The grid used
+to slug-match a capability's name against one global `assets/animations/`
+index, which meant any fixture declaring an effect called "Fade" silently
+inherited the LED bar's GIF. That is why the grid needs the `FixtureDef` and
+not just the channel spec.
 """
 
 import math
-import re
-from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from PyQt6.QtCore import QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (
@@ -54,20 +58,16 @@ from PyQt6.QtWidgets import (
 
 from core import ofl
 from core.channel_families import channel_family
-from core.fixture_library import FixtureDef, color_slots, dominant_capability
+from core.fixture_library import (
+    FixtureDef, color_slots, dominant_capability, effect_asset,
+)
 from core.fixture_state import resolve_state, solve_color
-from core.paths import asset_path
 
 # Capability types that name discrete choices rather than a continuum.
 DISCRETE_TYPES = frozenset({"Effect", "ColorPreset", "WheelSlot",
                             "Maintenance"})
 # Below this many, a fader and a read-out say it just as well.
 MIN_DISCRETE = 4
-
-
-def animations_dir() -> Path:
-    """Resolve assets/animations/ both in dev and under PyInstaller (_MEIPASS)."""
-    return Path(asset_path("animations"))
 
 
 # --- colour -------------------------------------------------------------------
@@ -237,7 +237,7 @@ class CapabilityTile(QFrame):
     TILE_H = 72
 
     def __init__(self, index: int, value: int, label: str,
-                 gif_path: Optional[Path], color: str, parent=None):
+                 gif_path: Optional[str], color: str, parent=None):
         super().__init__(parent)
         self._index = index
         self._value = value
@@ -253,7 +253,7 @@ class CapabilityTile(QFrame):
         if gif_path is not None:
             visual = QLabel()
             visual.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            movie = QMovie(str(gif_path))
+            movie = QMovie(gif_path)
             src = movie.frameRect().size() if movie.isValid() else QSize(8, 40)
             if src.width() <= 0 or src.height() <= 0:
                 src = QSize(8, 40)
@@ -298,7 +298,8 @@ class CapabilityGrid(QWidget):
 
     Tiles come from the channel's own definition — one per capability, valued
     from its `dmxRange` — so this works for any fixture that lists its effects,
-    presets or wheel slots. Artwork is optional decoration matched by name.
+    presets or wheel slots. Artwork is optional decoration, resolved from the
+    fixture's own effects folder.
     """
 
     COLS = 7
@@ -313,9 +314,14 @@ class CapabilityGrid(QWidget):
         self._layout.setSpacing(4)
         self._layout.setContentsMargins(0, 0, 0, 0)
 
-    def set_channel(self, spec) -> None:
+    def set_channel(self, spec, fdef: Optional[FixtureDef] = None) -> None:
         """Rebuild for a channel spec. A channel with nothing discrete to show
-        simply ends up empty, and the caller falls back to a fader."""
+        simply ends up empty, and the caller falls back to a fader.
+
+        `fdef` is the fixture the channel belongs to — the only thing that can
+        say which artwork illustrates its effects. Without it every tile is a
+        plain label, which is also what a fixture shipping no artwork gets.
+        """
         for tile in self._tiles:
             tile.setParent(None)
         self._tiles = []
@@ -323,10 +329,9 @@ class CapabilityGrid(QWidget):
         if spec is None:
             return
         _family, color = channel_family(spec)
-        art = _artwork_index()
         for index, (value, label) in enumerate(capability_choices(spec)):
-            tile = CapabilityTile(index, value, label,
-                                  art.get(_slug(label)), color)
+            art = effect_asset(fdef, label) if fdef is not None else None
+            tile = CapabilityTile(index, value, label, art, color)
             tile.clicked.connect(self._on_tile_clicked)
             self._tiles.append(tile)
             self._layout.addWidget(tile, index // self.COLS, index % self.COLS)
@@ -413,31 +418,3 @@ def affordance_for(fdef: Optional[FixtureDef], index: int) -> str:
     if fdef is None or not (0 <= index < fdef.channel_count):
         return "fader"
     return "grid" if grid_applies(fdef.channels[index]) else "fader"
-
-
-# --- artwork ------------------------------------------------------------------
-
-_ARTWORK: Optional[Dict[str, Path]] = None
-
-
-def _slug(text: str) -> str:
-    """Fold a name to a comparison key: '04-Loading-corta-arriba' and
-    'Loading corta arriba' both become 'loadingcortaarriba'."""
-    return re.sub(r"[^a-z0-9]", "", str(text).lower())
-
-
-def _artwork_index() -> Dict[str, Path]:
-    """`{slug: gif}` over assets/animations/, with the numeric filename prefix
-    stripped so a capability's own name is what matches."""
-    global _ARTWORK
-    if _ARTWORK is not None:
-        return _ARTWORK
-    index: Dict[str, Path] = {}
-    directory = animations_dir()
-    if directory.is_dir():
-        for path in sorted(directory.iterdir()):
-            if path.suffix.lower() != ".gif":
-                continue
-            index.setdefault(_slug(re.sub(r"^\d+[-_]?", "", path.stem)), path)
-    _ARTWORK = index
-    return index

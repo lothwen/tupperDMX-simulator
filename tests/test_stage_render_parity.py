@@ -30,7 +30,6 @@ import glob
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.paths import asset_path
 from core.fixture_library import resolve_fixture
 from stage import renderer_for
 
@@ -131,7 +130,8 @@ def test_ledbar_brightness_scales_pixels(qapp):
 def _gif_for(value):
     """The GIF the animation channel selects at `value`, or None."""
     number = value // 4 + 1
-    found = glob.glob(os.path.join(asset_path("animations"), f"{number:02d}-*.gif"))
+    directory = resolve_fixture("ledbar").effects_dir
+    found = glob.glob(os.path.join(directory, f"{number:02d}-*.gif"))
     return os.path.basename(found[0]) if found else None
 
 
@@ -177,7 +177,8 @@ def test_each_body_shows_its_own_animation_column(qapp):
     try:
         _assert({b.column for b in bars} == set(range(8)),
                 "each body reads its own animation column")
-        _assert(bars[0].current_asset == "17-radar.gif", "the radar animation loaded")
+        _assert(os.path.basename(bars[0].current_asset or "") == "17-radar.gif",
+                "the radar animation loaded")
         columns = [tuple(_rgb(c.brush().color()) for c in b.cells) for b in bars]
         _assert(len(set(columns)) > 1,
                 "a spatially-varying animation does not light every bar identically")

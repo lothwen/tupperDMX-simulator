@@ -121,9 +121,9 @@ def test_parity_ledbar_effect_names():
     first = resolve_state(fdef, [255, 255, 255, 255, 0, 255, 0])
     last = resolve_state(fdef, [255, 255, 255, 255, 136, 255, 0])
     none = resolve_state(fdef, [255, 255, 255, 255, 200, 255, 0])
-    _assert(fdef.effects.get(first.effect, {}).get("gif") == "01-ON.gif",
+    _assert(fdef.effects.get(first.effect, {}).get("asset") == "01-ON.gif",
             "DMX 0 selects the first animation")
-    _assert(fdef.effects.get(last.effect, {}).get("gif") == "35-strobo+rain.gif",
+    _assert(fdef.effects.get(last.effect, {}).get("asset") == "35-strobo+rain.gif",
             "DMX 136 selects the last one")
     _assert(none.effect == "", "past the last animation, no effect runs")
 

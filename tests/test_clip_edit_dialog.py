@@ -403,10 +403,18 @@ def test_the_capability_grid_is_data_driven(qapp):
             "which reproduces the old index*4 mapping exactly")
 
     grid = CapabilityGrid()
-    grid.set_channel(led.channels[4])
+    grid.set_channel(led.channels[4], led)
     _assert(len(grid) == 35, f"a tile per choice ({len(grid)})")
     _assert(sum(1 for t in grid._tiles if t._movie is not None) == 35,
-            "each matched to its shipped GIF by the capability's own name")
+            "each matched to its own GIF through the fixture's effects map")
+
+    # Artwork belongs to the fixture that declares the effect: without the
+    # FixtureDef there is nothing to resolve it against, and every tile is a
+    # plain label rather than another fixture's animation.
+    bare = CapabilityGrid()
+    bare.set_channel(led.channels[4])
+    _assert(sum(1 for t in bare._tiles if t._movie is not None) == 0,
+            "no fixture, no artwork")
     grid.set_value(12)
     _assert(grid.value() == 12, "and selecting round-trips the DMX value")
 

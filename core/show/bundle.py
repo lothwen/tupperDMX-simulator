@@ -31,13 +31,18 @@ BUNDLE_SUFFIX = ".showpack"
 
 
 def _def_files_by_name(directory) -> Dict[str, List[Path]]:
-    """{registry key: [OFL file, sidecar?]} for one fixtures directory.
+    """{registry key: [OFL file, sidecar?, effects artwork...]} for one dir.
 
-    A definition is one or two files — the OFL document and, optionally, the
-    `.tdmx.json` sidecar carrying its scene banks — so both have to travel
-    together or the bundled fixture arrives without its clips. Keys are the
-    registry name (the sidecar's `key` override, else the OFL `name`), not the
-    filename.
+    A definition is one or two files plus an optional folder — the OFL document,
+    optionally the `.tdmx.json` sidecar carrying its scene banks, and optionally
+    the `<stem>.effects/` artwork its effects name — so all of it has to travel
+    together or the bundled fixture arrives without its clips or without its
+    animations. Keys are the registry name (the sidecar's `key` override, else
+    the OFL `name`), not the filename.
+
+    **The OFL document is always first**: the writer takes its directory as the
+    root the arcnames are relative to, which is what keeps the artwork inside a
+    folder on the way into the zip.
     """
     out: Dict[str, List[Path]] = {}
     if not directory or not os.path.isdir(str(directory)):
@@ -77,6 +82,9 @@ def _def_files_by_name(directory) -> Dict[str, List[Path]]:
         files = [path]
         if path.name in sidecars:
             files.append(sidecars[path.name])
+        effects_dir = fixture_library.effects_dir_for(path)
+        if effects_dir.is_dir():
+            files.extend(sorted(p for p in effects_dir.iterdir() if p.is_file()))
         out[key] = files
     return out
 
@@ -160,8 +168,10 @@ def export_bundle(show: Show, dest_zip, *, include_history: bool = False) -> Lis
         for src, arc in {**audio_map, **guide_map, **midi_map}.items():
             zf.write(src, arc)
         for _name, def_files in used_nonshipped_defs(show).items():
+            root = def_files[0].parent      # the OFL document's directory
             for path in def_files:
-                zf.write(path, f"{FIXTURES_DIR}/{path.name}")
+                arc = path.relative_to(root).as_posix()
+                zf.write(path, f"{FIXTURES_DIR}/{arc}")
         if include_history and show.versions_dir.is_dir():
             for path in sorted(show.versions_dir.rglob("*")):
                 if path.is_file():

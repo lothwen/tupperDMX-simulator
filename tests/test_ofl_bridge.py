@@ -23,6 +23,7 @@ Run with:
 
 import sys
 import os
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -30,7 +31,8 @@ from core import ofl
 from core.channel_families import describe_channel
 from core.fixture_library import (
     all_capability_types, build_fixture_def, capability_types, color_slots,
-    color_sources, dominant_capability,
+    color_sources, dominant_capability, effect_asset, effects_dir_for,
+    resolve_fixture,
 )
 from core.fixture_sidecar import parse_sidecar
 import ofl_factory
@@ -46,11 +48,12 @@ def _assert(cond, msg):
     print(f"  ok: {msg}")
 
 
-def _build(doc, sidecar_data=None, mode=""):
+def _build(doc, sidecar_data=None, mode="", effects_dir=""):
     fixture = ofl.parse_ofl(doc)
     assert fixture is not None, "test document must be valid OFL"
     sidecar = parse_sidecar(sidecar_data) if sidecar_data else None
-    return build_fixture_def(doc["name"], fixture, sidecar, mode)
+    return build_fixture_def(doc["name"], fixture, sidecar, mode,
+                            effects_dir=effects_dir)
 
 
 def _pairs(fdef):
@@ -358,13 +361,73 @@ def test_sidecar_supplies_banks_and_chases():
         "modes": {"*": {
             "banks": {"FIRST": [{"brightness": 255}], "SECOND": [{"brightness": 0}]},
             "chases": [{"banks": ["FIRST"], "scenes": [0]}],
-            "effects": {"Glow": {"gif": "01-ON.gif"}},
+            "effects": {"Glow": {"asset": "01-ON.gif"}},
             "stage": {"size_px": [40, 40]}}}})
     _assert(list(fdef.banks) == ["FIRST", "SECOND"],
             "bank order is preserved — the first bank is the boot bank")
     _assert(len(fdef.chases) == 1, "chases carried")
-    _assert(fdef.effects["Glow"]["gif"] == "01-ON.gif", "effect asset map carried")
+    _assert(fdef.effects["Glow"]["asset"] == "01-ON.gif", "effect asset map carried")
     _assert(fdef.stage["size_px"] == [40, 40], "stage hints carried")
+
+
+def test_effect_artwork_resolves_beside_the_definition():
+    print("test_effect_artwork_resolves_beside_the_definition")
+    # Artwork belongs to the fixture that names it, so it is resolved against
+    # that definition's own `<stem>.effects/` folder rather than one global
+    # bucket keyed by effect name.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        art = Path(tmp) / "par_rgb.effects"
+        art.mkdir()
+        (art / "01-ON.gif").write_bytes(b"GIF89a")
+
+        def build(effects):
+            return _build(OFL_PAR_RGB,
+                          {"tdmx": 1, "modes": {"*": {"effects": effects}}},
+                          effects_dir=str(art))
+
+        fdef = build({"Glow": {"asset": "01-ON.gif"}})
+        _assert(effect_asset(fdef, "Glow") == str(art / "01-ON.gif"),
+                "the effects map resolves against the fixture's own folder")
+        _assert(effect_asset(fdef, "Nope") is None,
+                "an effect the fixture never declares has no artwork")
+
+        # `gif` is what the key was called before the folder moved beside the
+        # definition; a sidecar forked into the user layer back then still says
+        # it, and must keep its artwork.
+        legacy = build({"Glow": {"gif": "01-ON.gif"}})
+        _assert(effect_asset(legacy, "Glow") == str(art / "01-ON.gif"),
+                "the pre-rename 'gif' key still resolves")
+
+        missing = build({"Glow": {"asset": "99-nope.gif"}})
+        _assert(effect_asset(missing, "Glow") is None,
+                "a named file that isn't there degrades to no artwork")
+
+    unplaced = _build(OFL_PAR_RGB,
+                      {"tdmx": 1, "modes": {"*": {
+                          "effects": {"Glow": {"asset": "01-ON.gif"}}}}})
+    _assert(effect_asset(unplaced, "Glow") is None,
+            "a def with no folder behind it resolves nothing")
+
+
+def test_effects_dir_pairs_with_the_ofl_document():
+    print("test_effects_dir_pairs_with_the_ofl_document")
+    # Stem-plus-suffix, the same convention the .tdmx.json sidecar uses — and
+    # deliberately NOT a bare `fixtures/ledbar/`, which a fixtures dir reads as
+    # a manufacturer namespace.
+    _assert(effects_dir_for(Path("/fx/ledbar.json")) == Path("/fx/ledbar.effects"),
+            "ledbar.json -> ledbar.effects/")
+    _assert(effects_dir_for(Path("/fx/ADJ/focus-spot-4z.json"))
+            == Path("/fx/ADJ/focus-spot-4z.effects"),
+            "artwork stays inside the manufacturer folder")
+
+    led = resolve_fixture("ledbar")
+    _assert(Path(led.effects_dir).name == "ledbar.effects",
+            f"the shipped ledbar points at its own folder ({led.effects_dir})")
+    _assert(Path(led.effects_dir).is_dir(), "which is really there")
+    _assert(effect_asset(led, "Radar") == str(Path(led.effects_dir) / "17-radar.gif"),
+            "and its shipped artwork resolves through the effects map")
 
 
 def test_no_sidecar_means_no_banks():
@@ -453,6 +516,8 @@ def main():
     test_unused_slots_get_placeholder_fields()
     test_fine_channels_do_not_shadow_the_coarse_channel()
     test_sidecar_supplies_banks_and_chases()
+    test_effect_artwork_resolves_beside_the_definition()
+    test_effects_dir_pairs_with_the_ofl_document()
     test_no_sidecar_means_no_banks()
     test_sidecar_merges_shared_and_named_mode_blocks()
     test_sidecar_can_override_the_registry_key()
