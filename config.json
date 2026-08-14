@@ -14,7 +14,7 @@
         { "x": 1375, "y": 350 }
       ]
     },
-    { "type": "blinder", "dmx_start": 33, "x": 575, "y": 500, "multiply_factor": 2.0 },
-    { "type": "blinder", "dmx_start": 65, "x": 925, "y": 500, "multiply_factor": 2.0 }
+    { "type": "blinder", "dmx_start": 33, "x": 575, "y": 500 },
+    { "type": "blinder", "dmx_start": 65, "x": 925, "y": 500 }
   ]
 }

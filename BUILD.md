@@ -187,6 +187,28 @@ make build
 - Install Pillow for Windows ICO conversion: `uv add pillow`
 - macOS requires `sips` command (built-in)
 
+**GPU stage rendering (Settings ▸ Logging ▸ "Render the stage light on the
+GPU"):**
+
+Off by default. When on, the stage's light is accumulated in a floating-point
+buffer and tonemapped with ACES, which needs a working desktop-OpenGL driver.
+Everything degrades to the normal renderer on its own — a machine with no
+usable driver logs one warning and looks exactly as it did before — so the
+symptom to look for is "it never got faster/prettier", not a crash.
+
+- The `PyQt6.QtOpenGLWidgets` hidden import in `build.spec` is required.
+  `QOpenGLWidget` does **not** live in `QtOpenGL`, and a missing import here
+  fails only in the frozen build, never in development.
+- Remote sessions (RDP, VNC) and VMs frequently have no usable GL. Force
+  software rendering with `QT_OPENGL=software`, or just leave the setting off —
+  a lighting desk on venue hardware is exactly where the raster path earns its
+  keep.
+- On Linux the layer forces a *desktop* GL context. A Wayland/EGL session
+  otherwise hands out OpenGL ES, where the shaders will not compile.
+- Screenshots: `QWidget.grab()` cannot read back a GL viewport and returns a
+  blank image for the whole stage view. Turn the setting off when capturing the
+  stage programmatically (the `verify` skill included).
+
 ### Debug Mode
 ```bash
 # Enable PyInstaller debug output

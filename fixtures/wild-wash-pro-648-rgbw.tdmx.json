@@ -1,0 +1,33 @@
+{
+  "tdmx": 1,
+  "modes": {
+    "*": {
+      "channels": {
+        "red": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        },
+        "green": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        },
+        "blue": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        },
+        "white": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        }
+      }
+    }
+  }
+}

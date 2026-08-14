@@ -1,0 +1,890 @@
+{
+  "tdmx": 1,
+  "modes": {
+    "*": {
+      "channels": {
+        "brightness": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        },
+        "speed": {
+          "flags": [
+            "knob_speed"
+          ]
+        },
+        "direction": {
+          "label": "Direction"
+        }
+      },
+      "banks": {
+        "ANIMATIONS": [
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 132,
+            "speed": 255,
+            "direction": 0,
+            "name": "Cuadrados"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 128,
+            "speed": 255,
+            "direction": 0,
+            "name": "Cuadr. pink/white"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 8,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fade In/Out fast"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 12,
+            "speed": 255,
+            "direction": 0,
+            "name": "Loading bar Arriba"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 16,
+            "speed": 255,
+            "direction": 0,
+            "name": "Loading bar abajo"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 20,
+            "speed": 255,
+            "direction": 0,
+            "name": "Ping Pong",
+            "song_parts": [
+              "INST",
+              "SOLO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 24,
+            "speed": 255,
+            "direction": 0,
+            "name": "Lluvia",
+            "song_parts": [
+              "BRIDGE",
+              "INST",
+              "SOLO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 28,
+            "speed": 255,
+            "direction": 0,
+            "name": "Estrellas",
+            "song_parts": [
+              "INST",
+              "SOLO"
+            ]
+          }
+        ],
+        "FILLS": [
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 68,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fuego"
+          },
+          {
+            "brightness": 255,
+            "blue": 0,
+            "green": 0,
+            "red": 150,
+            "animation": 68,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fuego rojo"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 72,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fuego azul"
+          },
+          {
+            "brightness": 255,
+            "blue": 0,
+            "green": 255,
+            "red": 0,
+            "animation": 72,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fuego verde"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 76,
+            "speed": 255,
+            "direction": 0,
+            "name": "Psicodelia"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 0,
+            "animation": 76,
+            "speed": 255,
+            "direction": 0,
+            "name": "Psicodelia azul"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 88,
+            "speed": 255,
+            "direction": 0,
+            "name": "Relleno azul"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 76,
+            "speed": 255,
+            "direction": 0,
+            "name": "Psicodelia"
+          }
+        ],
+        "FILLS2": [
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 0,
+            "speed": 255,
+            "direction": 0,
+            "name": " ON"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 96,
+            "speed": 150,
+            "direction": 0,
+            "name": "Relleno",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 8,
+            "speed": 100,
+            "direction": 0,
+            "name": "Fade In/Out slow",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 68,
+            "speed": 255,
+            "direction": 0,
+            "name": "Fuego"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 76,
+            "speed": 255,
+            "direction": 0,
+            "name": "Psicodelia"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 8,
+            "speed": 100,
+            "direction": 0,
+            "name": "Fade In/Out slow"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 8,
+            "speed": 100,
+            "direction": 0,
+            "name": "Fade In/Out slow"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 8,
+            "speed": 100,
+            "direction": 0,
+            "name": "Fade In/Out slow"
+          }
+        ],
+        "MULTICOLOR": [
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 100,
+            "speed": 255,
+            "direction": 0,
+            "name": "MULTICOLOR #1"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 104,
+            "speed": 255,
+            "direction": 0,
+            "name": "MULTICOLOR #2"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 108,
+            "speed": 255,
+            "direction": 0,
+            "name": "MULTICOLOR #3"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 112,
+            "speed": 255,
+            "direction": 0,
+            "name": "MULTICOLOR #4"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 116,
+            "speed": 255,
+            "direction": 0,
+            "name": "MULTICOLOR #5"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 80,
+            "speed": 255,
+            "direction": 0,
+            "name": "RGB party"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 80,
+            "speed": 255,
+            "direction": 0,
+            "name": "RGB party"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 80,
+            "speed": 255,
+            "direction": 0,
+            "name": "RGB party"
+          }
+        ],
+        "STROBES": [
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 4,
+            "speed": 30,
+            "direction": 0,
+            "name": "STROBE slow"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 4,
+            "speed": 60,
+            "direction": 0,
+            "name": "STROBE medium"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 4,
+            "speed": 100,
+            "direction": 0,
+            "name": "STROBE fast"
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 136,
+            "speed": 255,
+            "direction": 0,
+            "name": "STROBE RGB Mix"
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          }
+        ],
+        "TUBES": [
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 32,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 36,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 40,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 44,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 48,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 52,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 56,
+            "speed": 255,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 60,
+            "speed": 255,
+            "direction": 0
+          }
+        ],
+        "RADARS": [
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 64,
+            "speed": 150,
+            "direction": 0,
+            "name": "RADAR slow"
+          },
+          {
+            "brightness": 255,
+            "blue": 255,
+            "green": 255,
+            "red": 255,
+            "animation": 124,
+            "speed": 200,
+            "direction": 0,
+            "name": "RADAR fast"
+          },
+          {
+            "brightness": 255,
+            "blue": 254,
+            "green": 254,
+            "red": 254,
+            "animation": 120,
+            "speed": 255,
+            "direction": 0,
+            "name": "Mix raro"
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          },
+          {
+            "brightness": 0,
+            "blue": 0,
+            "green": 0,
+            "red": 0,
+            "animation": 0,
+            "speed": 0,
+            "direction": 0
+          }
+        ]
+      },
+      "chases": [
+        {
+          "banks": [
+            "STROBES",
+            "FILLS2"
+          ],
+          "scenes": [
+            1,
+            0
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "banks": [
+            "STROBES",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            1,
+            5
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "banks": [
+            "STROBES",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            1,
+            6
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            0
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            1,
+            1
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            2,
+            2
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            3,
+            3
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            4,
+            4
+          ]
+        },
+        {
+          "banks": [
+            "MULTICOLOR",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            5,
+            5
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            0
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            3
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            4
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            5
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            6
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "banks": [
+            "FILLS2",
+            "ANIMATIONS"
+          ],
+          "scenes": [
+            0,
+            7
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        }
+      ],
+      "effects": {
+        "On": {
+          "asset": "01-ON.gif"
+        },
+        "Strobo": {
+          "asset": "02-STROBO.gif"
+        },
+        "Fade": {
+          "asset": "03-Fade.gif"
+        },
+        "Loading corta arriba": {
+          "asset": "04-Loading-corta-arriba.gif"
+        },
+        "Loading abajo": {
+          "asset": "05-Loading-abajo.gif"
+        },
+        "Pingpong": {
+          "asset": "06-PingPong.gif"
+        },
+        "Lluvia abajo": {
+          "asset": "07-Lluvia-abajo.gif"
+        },
+        "Lluvia random derecha": {
+          "asset": "08-lluvia-random-derecha.gif"
+        },
+        "Tube1": {
+          "asset": "09-tube1.gif"
+        },
+        "Tube2": {
+          "asset": "10-tube2.gif"
+        },
+        "Tube3": {
+          "asset": "11-tube3.gif"
+        },
+        "Tube4": {
+          "asset": "12-tube4.gif"
+        },
+        "Tube5": {
+          "asset": "13-tube5.gif"
+        },
+        "Tube6": {
+          "asset": "14-tube6.gif"
+        },
+        "Tube7": {
+          "asset": "15-tube7.gif"
+        },
+        "Tube8": {
+          "asset": "16-tube8.gif"
+        },
+        "Radar": {
+          "asset": "17-radar.gif"
+        },
+        "Fuego": {
+          "asset": "18-fuego.gif"
+        },
+        "Fuego azul": {
+          "asset": "19-fuego-azul.gif"
+        },
+        "Plasma psychodelic": {
+          "asset": "20-plasma-psychodelic.gif"
+        },
+        "Plasma liquid color war": {
+          "asset": "21-plasma-liquid-color-war.gif"
+        },
+        "Gotas": {
+          "asset": "22-gotas.gif"
+        },
+        "Gotas cooldrops orange": {
+          "asset": "23-gotas-cooldrops-orange.gif"
+        },
+        "Starfield": {
+          "asset": "24-starfield.gif"
+        },
+        "Vivasuecia": {
+          "asset": "25-vivasuecia.gif"
+        },
+        "Colormania1": {
+          "asset": "26-colormania1.gif"
+        },
+        "Colormania2": {
+          "asset": "27-colormania2.gif"
+        },
+        "Colormania3": {
+          "asset": "28-colormania3.gif"
+        },
+        "Fading pixels": {
+          "asset": "29-fading-pixels.gif"
+        },
+        "High traffic": {
+          "asset": "30-high-traffic.gif"
+        },
+        "Regions random": {
+          "asset": "31-regions-random.gif"
+        },
+        "Radar 2w fade": {
+          "asset": "32-radar-2w-fade.gif"
+        },
+        "Squares pink white": {
+          "asset": "33-squares-pink-white.gif"
+        },
+        "Squares white": {
+          "asset": "34-squares-white.gif"
+        },
+        "Strobo+rain": {
+          "asset": "35-strobo+rain.gif"
+        }
+      },
+      "stage": {
+        "body_spacing": 175
+      }
+    }
+  }
+}

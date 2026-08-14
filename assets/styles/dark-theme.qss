@@ -35,7 +35,7 @@ QGraphicsView {
     background-color: #2b2b2b;
     color: white;
     border: 1px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -55,7 +55,7 @@ QDialog QPushButton {
     color: #e6e6e6;
     border: 1px solid #202020;
     border-top: 1px solid #5d5d5d;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 8px 16px;
     font-size: 12px;
 }
@@ -159,7 +159,7 @@ QMenu::separator {
 QSlider#MasterVolumeSlider::groove:horizontal,
 QSlider#MetroVolumeSlider::groove:horizontal {
     height: 8px;
-    border-radius: 4px;
+    border-radius: 3px;
     border: 1px solid #333;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #3e8a3a, stop:0.7 #9bcf3a, stop:1 #e0a52e);
@@ -168,7 +168,7 @@ QSlider#MetroVolumeSlider::groove:horizontal {
 QSlider#MasterVolumeSlider::add-page:horizontal,
 QSlider#MetroVolumeSlider::add-page:horizontal {
     background: rgba(18, 18, 18, 190);
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QSlider#MasterVolumeSlider::sub-page:horizontal,
@@ -234,7 +234,7 @@ QToolBar {
 QFrame#ToolbarSection {
     background-color: #363636;
     border: 1px solid #232323;
-    border-radius: 4px;
+    border-radius: 3px;
     margin: 2px;
 }
 
@@ -285,7 +285,7 @@ QToolButton#ExportSplitButton {
     color: #eaf4fb;
     border: 1px solid #274b73;
     border-top: 1px solid #6ba3d6;
-    border-radius: 5px;
+    border-radius: 3px;
     /* right padding = 8px + the 21px ▾ segment, so the label centers in the
        main (clickable) area rather than the full button */
     padding: 0 29px 0 8px;
@@ -420,7 +420,7 @@ QFrame#SetlistSelector {
 QLabel#SetlistCounter {
     background-color: #2d4a63;
     color: #cfe4f5;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 0px 6px;
     margin: 6px 0px;
     font-size: 11px;
@@ -513,7 +513,7 @@ QToolButton#FileCardButton {
     background: transparent;
     color: #b5b5b5;
     border: 1px solid #4a4a4a;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 11px;
 }
 QToolButton#FileCardButton:hover   { background-color: #3d3d3d; }
@@ -522,7 +522,7 @@ QToolButton#FileCardButton:pressed { background-color: #262626; }
 QPushButton#FileCardAction {
     background: transparent;
     border: 1px dashed #4a4a4a;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 11px;
     padding: 2px 8px;
 }
@@ -559,7 +559,7 @@ QPushButton#SnapshotButton {
     background-color: #2f2f2f;
     color: #d7d7d7;
     border: 1px solid #3a4a5a;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 2px 12px;
     font-size: 12px;
     font-weight: bold;
@@ -623,7 +623,7 @@ QLineEdit {
     background-color: #1a1a1a;
     color: white;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 12px;
 }
@@ -637,7 +637,7 @@ QSpinBox, QDoubleSpinBox {
     background-color: #1a1a1a;
     color: white;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 0px;
     font-size: 12px;
 }
@@ -655,7 +655,7 @@ QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
 
 QSpinBox::up-button:hover, QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
-    background-color: #444;
+    /*background-color: #444;*/
 }
 
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
@@ -681,7 +681,7 @@ QCheckBox::indicator {
     width: 18px;
     height: 18px;
     border: 1px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     background-color: #1a1a1a;
 }
 
@@ -748,7 +748,7 @@ QComboBox {
     background-color: #262626;
     color: white;
     border: 1px solid #161616;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 5px 10px;
     font-size: 12px;
 }
@@ -843,7 +843,7 @@ QPushButton#DmxPanelToggle {
     background-color: rgba(40, 40, 40, 200);
     color: white;
     border: 1px solid rgba(255, 255, 255, 80);
-    border-radius: 4px;
+    border-radius: 3px;
     font-weight: bold;
     padding: 0;
 }
@@ -951,7 +951,7 @@ QLineEdit#ClipSearchBox {
     background-color: #1a1a1a;
     color: #ddd;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
     font-size: 12px;
 }
@@ -964,7 +964,7 @@ QToolButton#ClipViewToggle {
     background-color: #1a1a1a;
     color: #aaa;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 4px 7px;
     font-size: 13px;
 }
@@ -1089,10 +1089,11 @@ QLabel#ClipLibraryPlaceholder {
 }
 
 /* Scene Edit — Animation grid tiles */
+/* One choice on a discrete channel — an effect, a preset, a wheel slot. */
 QFrame#AnimationTile {
     background-color: #1a1a1a;
     border: 1px solid #444;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QFrame#AnimationTile:hover {
@@ -1102,27 +1103,6 @@ QFrame#AnimationTile:hover {
 QFrame#AnimationTile[selected="true"] {
     border: 2px solid #79cdf0;
     background-color: #24414d;
-}
-
-/* Scene Edit — Brightness slider (black → white gradient groove) */
-QSlider#BrightnessSlider::groove:horizontal {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #000000, stop:1 #ffffff);
-    height: 10px;
-    border: 1px solid #555;
-    border-radius: 5px;
-}
-
-QSlider#BrightnessSlider::handle:horizontal {
-    background: #d0d0d0;
-    border: 1px solid #222;
-    width: 14px;
-    margin: -4px 0;
-    border-radius: 7px;
-}
-
-QSlider#BrightnessSlider::handle:horizontal:hover {
-    background: #ffffff;
 }
 
 /* START Event Edit Dialog */
@@ -1144,7 +1124,7 @@ QPushButton#RandomHueButton {
     background-color: #2a2a2a;
     color: #dddddd;
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
     font-size: 22px;
     font-weight: bold;
 }
@@ -1156,7 +1136,7 @@ QPushButton#RandomHueButton:checked {
 QPushButton#PaletteModeButton {
     padding: 8px;
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QPushButton#PaletteModeButton:checked {
@@ -1167,7 +1147,7 @@ QPushButton#PaletteModeButton:checked {
 /* Color swatch border/checked styling; the per-swatch fill is set in code. */
 QPushButton#ColorSwatch {
     border: 2px solid #555;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 QPushButton#ColorSwatch:checked {
@@ -1281,8 +1261,11 @@ QLabel {
     color: #dcdcdc;
 }
 
-/* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar */
-QPushButton#EditStageButton {
+/* Stage scenario designer — "Edit stage" trigger + top-left edit toolbar.
+   The dock/undock toggle sits beside it and shares the look: same corner,
+   same control group. */
+QPushButton#EditStageButton,
+QPushButton#StageDockButton {
     background: rgba(26,28,32,.82);
     color: #cfe9f5;
     border: 1px solid #707070;
@@ -1292,13 +1275,21 @@ QPushButton#EditStageButton {
     font-size: 13px;
 }
 
-QPushButton#EditStageButton:hover {
+QPushButton#EditStageButton:hover,
+QPushButton#StageDockButton:hover {
     background-color: rgba(30, 30, 30, 220);
     border-color: rgba(255, 255, 255, 140);
 }
 
-QPushButton#EditStageButton:pressed {
+QPushButton#EditStageButton:pressed,
+QPushButton#StageDockButton:pressed {
     background-color: rgba(20, 20, 20, 230);
+}
+
+/* Icon-only, so square rather than the text button's wide padding. */
+QPushButton#StageDockButton {
+    padding: 6px;
+    min-width: 0;
 }
 
 QWidget#StageEditToolbar {
@@ -1317,7 +1308,7 @@ QWidget#StageEditToolbar QPushButton {
     color: white;
     background-color: #4a4a4a;
     border: 1px solid rgba(255, 255, 255, 40);
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 6px 12px;
     font-weight: bold;
 }
@@ -1351,6 +1342,48 @@ QWidget#StageEditToolbar QPushButton#EditToolbarDone {
 
 QWidget#StageEditToolbar QPushButton#EditToolbarDone:hover {
     background-color: #8fd6f3;
+}
+
+/* The fog row. Every caption on it is a quiet label over a plain slider,
+   except TEXTURE — which decides whether the stage reads as air or as a white
+   filter laid over the picture, while the rest only tune air you already have.
+   It leads the row, gets nearly twice the travel, and is coloured and sized to
+   say so. */
+QLabel#EditToolbarFogCaption {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
+QLabel#EditToolbarTextureCaption {
+    color: #cfe6f3;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QSlider#EditToolbarFogTexture::groove:horizontal {
+    height: 6px;
+    background-color: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 3px;
+}
+
+QSlider#EditToolbarFogTexture::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #3c6e8a, stop:1 #79cdf0);
+    border-radius: 3px;
+}
+
+QSlider#EditToolbarFogTexture::handle:horizontal {
+    width: 12px;
+    margin: -5px 0;
+    background-color: #cfe6f3;
+    border: 1px solid #5fb4d8;
+    border-radius: 6px;
+}
+
+QSlider#EditToolbarFogTexture::handle:horizontal:hover {
+    background-color: #ffffff;
 }
 
 /* Fixture inspector — floating card for the selected fixture */
@@ -1391,11 +1424,28 @@ QLabel#InspectorFieldLabel {
     font-size: 11px;
 }
 
+/* The two ends of a switch. Both are always readable — the one in force is
+   what the fixture IS, so it is the one that lights up. */
+QLabel#InspectorSideLabel {
+    color: #777;
+    font-size: 11px;
+}
+
+QLabel#InspectorSideLabel[active="true"] {
+    color: white;
+    font-weight: bold;
+}
+
+QLabel#InspectorHint {
+    color: #8a8a8a;
+    font-size: 10px;
+}
+
 QLabel#InspectorReadonly {
     color: white;
     background-color: #333;
     border: 1px solid rgba(255, 255, 255, 30);
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
 }
 
@@ -1404,7 +1454,7 @@ QWidget#FixtureInspector QSpinBox {
     color: white;
     background-color: #3a3a3a;
     border: 1px solid rgba(255, 255, 255, 40);
-    border-radius: 4px;
+    border-radius: 3px;
     padding: 5px 8px;
 }
 
@@ -1417,7 +1467,7 @@ QPushButton#InspectorDelete {
     color: #ff8a8a;
     background-color: rgba(120, 40, 40, 200);
     border: 1px solid #a04040;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 7px 12px;
     font-weight: bold;
 }
@@ -1462,7 +1512,7 @@ QWidget#TimelineToolbar QPushButton#TTFit {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
     border: 1px solid #1d1d1d;
     border-top: 1px solid #454545;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 5px 10px;
 }
 
@@ -1490,7 +1540,7 @@ QWidget#TimelineToolbar QPushButton#TTSnap {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
     border: 1px solid #1d1d1d;
     border-top: 1px solid #454545;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 5px 10px;
 }
 
@@ -1747,7 +1797,7 @@ QLabel#aboutRowValue {
 QPushButton#aboutCopy {
     background-color: #333333;
     border: 1px solid #444444;
-    border-radius: 5px;
+    border-radius: 3px;
     padding: 2px 10px;
     color: #d0d0d0;
     font-size: 11px;
@@ -1793,4 +1843,667 @@ QPushButton#aboutWebsite:hover {
 
 QPushButton#aboutWebsite:pressed {
     background-color: #202020;
+}
+
+/* ============================================================
+   Add fixture dialog (ui/add_fixture_dialog.py)
+   Library rail (search + grouping + tree) | detail panel
+   (header, General/Channels/Modes tabs) over the patch footer.
+   Capability chips are coloured in code — the palette depends
+   on the fixture — as is the patch occupancy bar.
+   ============================================================ */
+QDialog#AddFixtureDialog {
+    background-color: #262626;
+}
+
+/* --- library rail --- */
+QFrame#AddFxLibrary {
+    background-color: #1f1f1f;
+    border-right: 1px solid #3a3a3a;
+}
+
+QFrame#AddFxSearchBox {
+    background-color: #2b2b2b;
+    border: 1px solid #45484b;
+    border-radius: 3px;
+    min-height: 28px;
+}
+
+QLabel#AddFxSearchGlyph {
+    color: #7a7a7a;
+    font-size: 14px;
+}
+
+QLineEdit#AddFxSearchInput {
+    background: transparent;
+    border: none;
+    color: #e0e0e0;
+    font-size: 12px;
+    padding: 0;
+}
+
+QLabel#AddFxSearchCount {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QFrame#AddFxSegment {
+    background-color: #2b2b2b;
+    border-radius: 3px;
+    border: 1px solid #45484b;
+    padding: 2px;
+}
+
+QPushButton#AddFxSegmentButton {
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: #9a9a9a;
+    font-size: 12px;
+    font-weight: normal !important;
+    padding: 5px 10px;
+}
+
+QPushButton#AddFxSegmentButton:hover {
+    color: #d0d0d0;
+}
+
+QPushButton#AddFxSegmentButton:checked {
+    background-color: #34383b;
+    color: #f0f0f0;
+    font-weight: bold;
+}
+
+/* The library tree. Only the rows are styled here: the second column — a
+   group's count badge and a fixture's dimmed caption — is painted by
+   `_TreeAsideDelegate` in ui/add_fixture_dialog.py, because QSS reaches a
+   tree's items but not one column of them. */
+QTreeWidget#AddFxTree {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 12px;
+}
+
+QTreeWidget#AddFxTree::item {
+    color: #c8c8c8;
+    padding: 4px 2px;
+}
+
+QTreeWidget#AddFxTree::item:has-children {
+    color: #e8e8e8;
+    font-weight: bold;
+}
+
+QTreeWidget#AddFxTree::item:hover {
+    background-color: #2e2e2e;
+}
+
+QTreeWidget#AddFxTree::item:selected {
+    background-color: #3a6ea5;
+    color: #ffffff;
+}
+
+/* --- detail panel --- */
+QFrame#AddFxDetail {
+    background-color: #262626;
+}
+
+QLabel#AddFxDetailManufacturer {
+    color: #8a8a8a;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
+QLabel#AddFxDetailName {
+    color: #f0f0f0;
+    font-size: 21px;
+}
+
+QLabel#AddFxStatLabel {
+    color: #7a7a7a;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+QLabel#AddFxStatValue {
+    color: #e6e6e6;
+    font-size: 17px;
+}
+
+QLabel#AddFxChip {
+    border-radius: 3px;
+    font-size: 10px;
+    padding: 2px 7px;
+}
+
+QTabWidget#AddFxTabs::pane {
+    background-color: #232323;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    top: -1px;
+}
+
+QTabWidget#AddFxTabs QTabBar::tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #9a9a9a;
+    font-size: 12px;
+    margin-right: 4px;
+    padding: 7px 14px;
+}
+
+QTabWidget#AddFxTabs QTabBar::tab:hover {
+    color: #d8d8d8;
+}
+
+QTabWidget#AddFxTabs QTabBar::tab:selected {
+    border-bottom: 2px solid #79cdf0;
+    color: #ffffff;
+}
+
+QScrollArea#AddFxScroll {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#AddFxScroll > QWidget > QWidget {
+    background: transparent;
+}
+
+QFrame#AddFxCard {
+    background-color: #2a2a2a;
+    border: 1px solid #383838;
+    border-radius: 3px;
+}
+
+QLabel#AddFxCardTitle {
+    border-bottom: 1px solid #383838;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 0px;
+    color: #9a9a9a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 6px 14px;
+}
+
+QLabel#AddFxRowLabel {
+    color: #8f8f8f;
+    font-size: 11px;
+}
+
+QLabel#AddFxRowValue {
+    color: #e0e0e0;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+QLabel#AddFxComment {
+    color: #c0c0c0;
+    font-size: 12px;
+}
+
+QPushButton#AddFxLinkButton {
+    background-color: #303030;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    color: #cfcfcf;
+    font-size: 11px;
+    padding: 5px 10px;
+    text-align: left;
+}
+
+QPushButton#AddFxLinkButton:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QLabel#AddFxHint {
+    color: #9a9a9a;
+    font-size: 11px;
+    border-bottom: 1px solid #383838;
+}
+
+/* --- channels table --- */
+QTreeWidget#AddFxChannels {
+    background-color: #232323;
+    border: 1px solid #333333;
+    border-radius: 3px;
+    font-size: 12px;
+    outline: none;
+}
+
+QTreeWidget#AddFxChannels::item {
+    color: #d8d8d8;
+    padding: 5px 4px;
+}
+
+QTreeWidget#AddFxChannels::item:selected {
+    background-color: #2f2f2f;
+    color: #ffffff;
+}
+
+QTreeWidget#AddFxChannels QHeaderView::section {
+    background-color: #232323;
+    border: none;
+    border-bottom: 1px solid #3a3a3a;
+    color: #7a7a7a;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 6px 4px;
+}
+
+/* --- modes --- */
+QFrame#AddFxModeCard {
+    background-color: #2a2a2a;
+    border: 1px solid #383838;
+    border-radius: 3px;
+}
+
+QFrame#AddFxModeCard[selected="true"] {
+    background-color: #2c3947;
+    border: 1px solid #4a7fa8;
+}
+
+QLabel#AddFxModeName {
+    color: #f0f0f0;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+/* --- scenes --- */
+QFrame#AddFxScenesPanel {
+    background-color: #202020;
+    border: 1px solid #333333;
+    border-radius: 3px;
+}
+
+QToolButton#AddFxNewScene {
+    background-color: #2c2c2c;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    color: #cfcfcf;
+    font-size: 11px;
+    padding: 3px 8px;
+}
+
+QToolButton#AddFxNewScene:hover {
+    background-color: #353535;
+    color: #ffffff;
+}
+
+QToolButton#AddFxNewScene::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
+QTreeWidget#AddFxScenes {
+    background-color: #191919;
+    border: 1px solid #303030;
+    border-radius: 3px;
+    font-size: 12px;
+    outline: none;
+}
+
+QTreeWidget#AddFxScenes::item {
+    color: #d8d8d8;
+    padding: 4px 3px;
+}
+
+QTreeWidget#AddFxScenes::item:has-children {
+    color: #9a9a9a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QTreeWidget#AddFxScenes::item:hover {
+    background-color: #262626;
+}
+
+QTreeWidget#AddFxScenes::item:selected {
+    background-color: #2c5f8a;
+    color: #ffffff;
+}
+
+QPushButton#AddFxSceneAction,
+QToolButton#AddFxSceneAction {
+    background-color: #2c2c2c;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    color: #cfcfcf;
+    font-size: 11px;
+    padding: 5px 6px;
+}
+
+QPushButton#AddFxSceneAction:hover,
+QToolButton#AddFxSceneAction:hover {
+    background-color: #353535;
+    color: #ffffff;
+}
+
+QPushButton#AddFxSceneAction:disabled,
+QToolButton#AddFxSceneAction:disabled {
+    color: #5a5a5a;
+}
+
+/* The menu indicator is already in the label text ("… ▾"), so suppress Qt's. */
+QToolButton#AddFxSceneAction::menu-indicator {
+    image: none;
+    width: 0;
+}
+
+QLineEdit#AddFxSceneName {
+    background-color: #191919;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: #f0f0f0;
+    font-size: 13px;
+    padding: 6px 8px;
+}
+
+QLineEdit#AddFxSceneName:focus {
+    border: 1px solid #4a90e2;
+}
+
+QPushButton#AddFxSceneSave {
+    background-color: #2c5f8a;
+    border: 1px solid #4a90e2;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-width: 62px;
+    padding: 7px 14px;
+}
+
+QPushButton#AddFxSceneSave:hover {
+    background-color: #35719f;
+}
+
+QPushButton#AddFxSceneSave:disabled {
+    background-color: #242424;
+    border: 1px solid #333333;
+    color: #5a5a5a;
+}
+
+/* Song-part tags. Outlined, not filled, so they read as tags rather than as
+   another row of buttons — they are `_PartChip` labels, and the checked state
+   arrives as a property. Nothing here may set a width: they are sized by their
+   own text so the nine of them fit one row (ui/fixture_scenes_tab.py). */
+QLabel#AddFxSongPart {
+    background: transparent;
+    border: 1px solid #343434;
+    border-radius: 7px;
+    color: #7a7a7a;
+    font-size: 8px;
+    letter-spacing: 1px;
+    padding: 3px 5px;
+}
+
+QLabel#AddFxSongPart:hover {
+    border: 1px solid #4f4f4f;
+    color: #b8b8b8;
+}
+
+QLabel#AddFxSongPart[checked="true"] {
+    background-color: #24405a;
+    border: 1px solid #4a90e2;
+    color: #bfe0fb;
+}
+
+QLabel#AddFxSongPart[checked="true"]:hover {
+    background-color: #2c4a63;
+    color: #ddf0ff;
+}
+
+QLabel#AddFxSongPart:disabled {
+    border: 1px solid #2a2a2a;
+    color: #454545;
+}
+
+/* The Scenes tab's SIMULATED OUTPUT card: one dark surface carrying the
+   read-out, the caption and the preview. The preview has no panel of its own —
+   it repaints this same gradient (ScenePreview._BACKDROP_TOP/_BOTTOM, which
+   must follow any change here). */
+QFrame#AddFxOutputCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #1a1a1a, stop:1 #0e0e0e);
+    border: 1px solid #303030;
+    border-radius: 3px;
+}
+
+QGraphicsView#AddFxPreview {
+    background: transparent;
+    border: none;
+}
+
+QLabel#AddFxSceneSummary {
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QLabel#AddFxFaderValue {
+    color: #d8d8d8;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QLabel#AddFxFaderAddress {
+    color: #6f6f6f;
+    font-family: monospace;
+    font-size: 10px;
+}
+
+QLabel#AddFxFaderName {
+    color: #8a8a8a;
+    font-size: 9px;
+}
+
+/* A channel the scene being edited does not carry. It is still live — moving
+   the fader is what adds it — so this dims rather than disables. */
+QLabel#AddFxFaderName[absent="true"] {
+    color: #5a5a5a;
+    font-style: italic;
+}
+
+/* A channel whose capabilities name discrete choices: its name opens a picker,
+   so it has to read as a control rather than as a caption. */
+QLabel#AddFxFaderName[pickable="true"] {
+    color: #a8c8d8;
+    text-decoration: underline;
+}
+
+QLabel#AddFxFaderName[pickable="true"]:hover {
+    color: #79cdf0;
+}
+
+QSlider#AddFxFader::groove:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #191919, stop:1 #131313);
+    border: 1px solid #333333;
+    border-radius: 0px;
+    width: 12px;
+}
+
+QSlider#AddFxFader::add-page:vertical {
+    border-radius: 0px;
+    margin: 1px;
+}
+
+QSlider#AddFxFader::sub-page:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #242424, stop:1 #1c1c1c);
+    border-radius: 0px;
+    margin: 1px;
+}
+
+QSlider#AddFxFader::handle:vertical {
+    border-radius: 1px;
+    height: 3px;
+    margin: 0px -3px;
+}
+
+QSlider#AddFxFader:disabled::add-page:vertical {
+    background: #2a2a2a;
+}
+
+/* --- footer --- */
+QFrame#AddFxFooter {
+    background-color: #1f1f1f;
+    border-top: 1px solid #3a3a3a;
+}
+
+QLabel#AddFxFieldLabel {
+    color: #7a7a7a;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+QLabel#AddFxOccupies {
+    color: #c8c8c8;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+QLabel#AddFxStatus {
+    font-size: 10px;
+}
+
+QLabel#AddFxStatus[state="ok"] {
+    color: #6fce7f;
+}
+
+QLabel#AddFxStatus[state="error"] {
+    color: #e05252;
+}
+
+QDialog#AddFixtureDialog QSpinBox#AddFxDmxSpin,
+QDialog#AddFixtureDialog QSpinBox#AddFxChannelSpin {
+    background-color: #1a1a1a;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 18px;
+    padding: 4px 8px;
+}
+
+QDialog#AddFixtureDialog QSpinBox#AddFxDmxSpin:focus,
+QDialog#AddFixtureDialog QSpinBox#AddFxChannelSpin:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxChannelButton {
+    background-color: #2b2b2b;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: #9a9a9a;
+    font-size: 10px;
+    padding: 0;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxChannelButton:hover {
+    background-color: #383838;
+    color: #e0e0e0;
+}
+
+/* A channel already driving a patched fixture — pickable, but flagged. */
+QDialog#AddFixtureDialog QPushButton#AddFxChannelButton[used="true"] {
+    background-color: #3a2a2a;
+    border-color: #5a3a3a;
+    color: #b07070;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxChannelButton:checked {
+    background-color: #3a6ea5;
+    border-color: #79cdf0;
+    color: #ffffff;
+    font-weight: bold;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxOk {
+    background-color: #79cdf0;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    color: #082230;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 7px 22px;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxOk:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxOk:disabled {
+    background-color: #3a4a52;
+    border-color: #35424a;
+    color: #6a7a82;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxCancel {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    border-radius: 5px;
+    color: #cfcfcf;
+    font-size: 12px;
+    padding: 7px 22px;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxCancel:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+/* ── Clip edit dialog ───────────────────────────────────────────────────────
+   Reuses the AddFx* card/fader/chip family (those selectors are unscoped);
+   only the pieces with no counterpart there are named here. */
+
+QDialog#ClipEdit {
+    background-color: #262626;
+}
+
+QDialog#ClipEdit QComboBox#ClipEditVerb {
+    background-color: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+QDialog#ClipEdit QComboBox#ClipEditVerb:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#ClipEdit QComboBox#ClipEditVerb::drop-down {
+    border: none;
+    width: 22px;
+}
+
+/* Group headers in the verb picker are set NoItemFlags, so Qt draws them
+   disabled — this makes them read as section titles rather than dead rows. */
+QDialog#ClipEdit QComboBox#ClipEditVerb QAbstractItemView::item:disabled {
+    color: #7a7a7a;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding-top: 6px;
+}
+
+QLabel#AddFxStatus[state="error"] {
+    color: #e05252;
+}
+
+QLabel#AddFxStatus[state="info"] {
+    color: #7a7a7a;
+}
+
+/* The discrete-channel picker, floating over the fader that opened it. */
+QWidget#ClipEditPopover {
+    background-color: #262626;
+    border: 1px solid #45484b;
+    border-radius: 6px;
 }

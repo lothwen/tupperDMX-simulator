@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Dict, List
 
 from core import fixture_library
+from core.fixture_sidecar import (
+    SIDECAR_SUFFIX, parse_sidecar, target_filename,
+)
 from core.show.model import (
     AUDIO_DIR,
     FIXTURES_DIR,
@@ -27,28 +30,70 @@ logger = get_logger("show.bundle")
 BUNDLE_SUFFIX = ".showpack"
 
 
-def _def_files_by_name(directory) -> Dict[str, Path]:
-    """{fixture-type name: def file} for a fixtures dir (defs are keyed by
-    their internal "name", not the filename)."""
-    out: Dict[str, Path] = {}
+def _def_files_by_name(directory) -> Dict[str, List[Path]]:
+    """{registry key: [OFL file, sidecar?, effects artwork...]} for one dir.
+
+    A definition is one or two files plus an optional folder — the OFL document,
+    optionally the `.tdmx.json` sidecar carrying its scene banks, and optionally
+    the `<stem>.effects/` artwork its effects name — so all of it has to travel
+    together or the bundled fixture arrives without its clips or without its
+    animations. Keys are the registry name (the sidecar's `key` override, else
+    the OFL `name`), not the filename.
+
+    **The OFL document is always first**: the writer takes its directory as the
+    root the arcnames are relative to, which is what keeps the artwork inside a
+    folder on the way into the zip.
+    """
+    out: Dict[str, List[Path]] = {}
     if not directory or not os.path.isdir(str(directory)):
         return out
-    for path in sorted(Path(directory).glob("*.json")):
+
+    paths = sorted(Path(directory).glob("*.json"))
+
+    def read(path):
         try:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    sidecars: Dict[str, Path] = {}
+    sidecar_data: Dict[str, dict] = {}
+    for path in paths:
+        if not path.name.endswith(SIDECAR_SUFFIX):
             continue
-        name = str(data.get("name", "")).strip() if isinstance(data, dict) else ""
-        if name:
-            out[name] = path
+        data = read(path)
+        if data is None:
+            continue
+        target = target_filename(path.name, parse_sidecar(data, str(path)))
+        sidecars[target] = path
+        sidecar_data[target] = data
+
+    for path in paths:
+        if path.name.endswith(SIDECAR_SUFFIX):
+            continue
+        data = read(path)
+        if data is None:
+            continue
+        key = str(sidecar_data.get(path.name, {}).get("key")
+                  or data.get("name", "")).strip()
+        if not key:
+            continue
+        files = [path]
+        if path.name in sidecars:
+            files.append(sidecars[path.name])
+        effects_dir = fixture_library.effects_dir_for(path)
+        if effects_dir.is_dir():
+            files.extend(sorted(p for p in effects_dir.iterdir() if p.is_file()))
+        out[key] = files
     return out
 
 
-def used_nonshipped_defs(show: Show) -> Dict[str, Path]:
+def used_nonshipped_defs(show: Show) -> Dict[str, List[Path]]:
     """Def files that must travel with the show: every type used by the patch
     whose winning definition comes from the user or show-local layer (unique
     types AND overrides of shipped ones)."""
-    candidates: Dict[str, Path] = {}
+    candidates: Dict[str, List[Path]] = {}
     candidates.update(_def_files_by_name(fixture_library.fixtures_dir_user()))
     candidates.update(_def_files_by_name(show.fixtures_dir))  # show layer wins
     used_types = {f.type for f in show.fixtures}
@@ -122,8 +167,11 @@ def export_bundle(show: Show, dest_zip, *, include_history: bool = False) -> Lis
                                        f"{path.relative_to(owned_dir).as_posix()}")
         for src, arc in {**audio_map, **guide_map, **midi_map}.items():
             zf.write(src, arc)
-        for _name, path in used_nonshipped_defs(show).items():
-            zf.write(path, f"{FIXTURES_DIR}/{path.name}")
+        for _name, def_files in used_nonshipped_defs(show).items():
+            root = def_files[0].parent      # the OFL document's directory
+            for path in def_files:
+                arc = path.relative_to(root).as_posix()
+                zf.write(path, f"{FIXTURES_DIR}/{arc}")
         if include_history and show.versions_dir.is_dir():
             for path in sorted(show.versions_dir.rglob("*")):
                 if path.is_file():

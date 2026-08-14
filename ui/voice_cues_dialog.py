@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (QDialog, QDialogButtonBox, QDoubleSpinBox,
 from audio import tts
 from core.config import VoiceCueConfig
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
 
 
 class VoiceCuesDialog(QDialog):

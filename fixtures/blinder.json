@@ -1,30 +1,155 @@
 {
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
   "name": "blinder",
-  "render": "blinder",
-  "channels": [
-    {"field": "brightness", "role": "brightness", "flags": ["blend"]},
-    {"field": "cool1",      "role": "white_cool", "flags": ["blend"]},
-    {"field": "cool2",      "role": "white_cool", "flags": ["blend"]},
-    {"field": "warm1",      "role": "white_warm", "flags": ["blend"]},
-    {"field": "warm2",      "role": "white_warm", "flags": ["blend"]},
-    {"field": "strobe",     "role": "strobe",     "flags": []},
-    {"field": "mode",       "role": "mode",       "flags": []},
-    {"field": "speed",      "role": "speed",      "flags": []}
+  "shortName": "TDMXBLIND",
+  "categories": [
+    "Blinder",
+    "Dimmer"
   ],
-  "banks": {
-    "BLINDER_SCENES": [
-      {"brightness": 25, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
-      {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0, "song_parts": ["BREAK"]},
-      {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
-      {"brightness": 75, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 200, "mode": 0, "speed": 0, "song_parts": ["OUTRO"]},
-      {"brightness": 255, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 250, "speed": 0},
-      {"brightness": 1, "cool1": 0, "cool2": 0, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
-      {"brightness": 255, "cool1": 255, "cool2": 255, "warm1": 255, "warm2": 255, "strobe": 0, "mode": 0, "speed": 0},
-      {"brightness": 0, "cool1": 0, "cool2": 0, "warm1": 0, "warm2": 0, "strobe": 0, "mode": 0, "speed": 0}
-    ]
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2025-06-25",
+    "lastModifyDate": "2026-07-31"
   },
-  "chases": [
-    {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [0, 5], "song_parts": ["END"]},
-    {"banks": ["BLINDER_SCENES", "BLINDER_SCENES"], "scenes": [1, 5], "song_parts": ["BRIDGE", "INST", "SOLO"]}
+  "comment": "In-house two-cell warm/cold white blinder.",
+  "physical": {
+    "dimensions": [
+      100,
+      200,
+      120
+    ],
+    "bulb": {
+      "type": "2x COB warm/cold white"
+    },
+    "lens": {
+      "degreesMinMax": [
+        60,
+        60
+      ]
+    }
+  },
+  "availableChannels": {
+    "brightness": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "cool1": {
+      "name": "Cold white 1",
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Cold White"
+      }
+    },
+    "cool2": {
+      "name": "Cold white 2",
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Cold White"
+      }
+    },
+    "warm1": {
+      "name": "Warm white 1",
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Warm White"
+      }
+    },
+    "warm2": {
+      "name": "Warm white 2",
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Warm White"
+      }
+    },
+    "strobe": {
+      "name": "Strobe",
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            7
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [
+            8,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "0.5Hz",
+          "speedEnd": "20Hz"
+        }
+      ]
+    },
+    "mode": {
+      "name": "Built-in program",
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            9
+          ],
+          "type": "NoFunction",
+          "comment": "Manual"
+        },
+        {
+          "dmxRange": [
+            10,
+            249
+          ],
+          "type": "Effect",
+          "effectName": "Auto program",
+          "speedStart": "slow",
+          "speedEnd": "fast"
+        },
+        {
+          "dmxRange": [
+            250,
+            255
+          ],
+          "type": "Effect",
+          "effectName": "Sound active",
+          "soundControlled": true
+        }
+      ]
+    },
+    "speed": {
+      "name": "Program speed",
+      "defaultValue": 0,
+      "capability": {
+        "type": "EffectSpeed",
+        "speedStart": "slow",
+        "speedEnd": "fast"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "8ch",
+      "shortName": "8ch",
+      "channels": [
+        "brightness",
+        "cool1",
+        "cool2",
+        "warm1",
+        "warm2",
+        "strobe",
+        "mode",
+        "speed"
+      ]
+    }
   ]
 }

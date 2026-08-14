@@ -24,7 +24,7 @@ from PyQt6.QtGui import (QColor, QBrush, QPen, QLinearGradient, QPainter,
                          QPolygonF, QIcon)
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF, QSize
 
-from ui import icons
+from ui.widgets import icons
 
 from .base import BaseTrack
 from .clip_geometry import (
@@ -961,7 +961,7 @@ class AutoSceneClip(QGraphicsObject):
         painter.drawRect(rect)
 
 
-# Header toggle-bar buttons (SVG icons via ui.icons; frames styled via the app
+# Header toggle-bar buttons (SVG icons via ui.widgets.icons; frames styled via the app
 # stylesheet by objectName). The lock swaps open<->closed through its icon's
 # On state; the eye keeps one glyph and signals "muted" via its checked (amber)
 # background. The chevron points down when expanded and right when collapsed.
@@ -1040,7 +1040,9 @@ class TrackHeaderWidget(QWidget):
         text_col.setSpacing(0)
         self.name_label = QLabel(label)
         self.name_label.setObjectName("TrackName")
-        addr = f"Ch. {channel + 1}"
+        # 0-based, the raw MIDI channel — the same number the patch stores and
+        # every other surface shows.
+        addr = f"Ch. {channel}"
         if dmx_end >= dmx_start:
             addr += f"  ·  DMX {dmx_start}–{dmx_end}"
         self.info_label = QLabel(addr)

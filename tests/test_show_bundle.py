@@ -41,19 +41,52 @@ def _assert(cond, msg):
 
 
 CUSTOM_DEF = {
+    "$schema": ("https://raw.githubusercontent.com/OpenLightingProject/"
+                "open-fixture-library/master/schemas/fixture.json"),
     "name": "laser_x",
-    "render": "generic",
-    "channels": [{"field": "brightness", "role": "brightness", "flags": ["blend"]}],
+    "categories": ["Laser"],
+    "meta": {"authors": ["test"], "createDate": "2026-01-01",
+             "lastModifyDate": "2026-01-01"},
+    "availableChannels": {"brightness": {"capability": {"type": "Intensity"}}},
+    "modes": [{"name": "1ch", "channels": ["brightness"]}],
+}
+
+
+# A definition is one or two files. This one ships a sidecar with scene banks;
+# laser_x above ships none, so the bundle has to handle both.
+PAIRED_DEF = {
+    "$schema": ("https://raw.githubusercontent.com/OpenLightingProject/"
+                "open-fixture-library/master/schemas/fixture.json"),
+    "name": "wash_y",
+    "categories": ["Color Changer"],
+    "meta": {"authors": ["test"], "createDate": "2026-01-01",
+             "lastModifyDate": "2026-01-01"},
+    "availableChannels": {
+        "red": {"capability": {"type": "ColorIntensity", "color": "Red"}}},
+    "modes": [{"name": "1ch", "channels": ["red"]}],
+}
+
+PAIRED_SIDECAR = {
+    "tdmx": 1,
+    "modes": {"*": {"banks": {"WASH_SCENES": [{"red": 255}, {"red": 0}]}}},
 }
 
 
 def _rich_show(tmp):
-    """A show with referenced audio, an owned midi and a show-local def."""
+    """A show with referenced audio, an owned midi and two show-local defs."""
     show = store.create_show(tmp, "Gira")
     (show.fixtures_dir / "laser_x.json").write_text(json.dumps(CUSTOM_DEF))
-    fixture_library.clear_cache()  # the def was written after the layer was set
+    (show.fixtures_dir / "wash_y.json").write_text(json.dumps(PAIRED_DEF))
+    (show.fixtures_dir / "wash_y.tdmx.json").write_text(json.dumps(PAIRED_SIDECAR))
+    # A show-local def may ship its own effect artwork, which is a third thing
+    # that has to travel — and it has to stay INSIDE its folder in the zip.
+    art = show.fixtures_dir / "wash_y.effects"
+    art.mkdir()
+    (art / "01-ON.gif").write_bytes(b"GIF89a")
+    fixture_library.clear_cache()  # the defs were written after the layer was set
     show.fixtures = [FixtureInstance(type="ledbar", dmx_start=1, channel=0),
-                     FixtureInstance(type="laser_x", dmx_start=90, channel=1)]
+                     FixtureInstance(type="laser_x", dmx_start=90, channel=1),
+                     FixtureInstance(type="wash_y", dmx_start=95, channel=2)]
 
     external = Path(tmp) / "guias" / "marea.mp3"
     external.parent.mkdir()
@@ -81,6 +114,13 @@ def test_export_import_roundtrip():
                 "referenced audio is COLLECTED into audio/ (collect & save)")
         _assert("fixtures/laser_x.json" in names,
                 "the non-shipped fixture def travels with the bundle")
+        _assert("fixtures/wash_y.json" in names
+                and "fixtures/wash_y.tdmx.json" in names,
+                "a definition's sidecar travels with it, or it arrives bankless")
+        _assert("fixtures/laser_x.tdmx.json" not in names,
+                "a definition with no sidecar contributes only its own file")
+        _assert("fixtures/wash_y.effects/01-ON.gif" in names,
+                "a definition's effect artwork travels with it, in its own folder")
 
         # Import on a "different machine" (another folder).
         target = Path(tmp) / "otra-maquina"
@@ -93,6 +133,13 @@ def test_export_import_roundtrip():
         _assert(song.audio == str(root / "audio" / "marea.mp3")
                 and os.path.exists(song.audio),
                 "imported audio is self-contained (lives inside the show)")
+
+        fixture_library.clear_cache()
+        reopened = fixture_library.load_fixture_defs(force_reload=True)
+        _assert("wash_y" in reopened and "laser_x" in reopened,
+                "both show-local definitions resolve in the reopened show")
+        _assert(list(reopened["wash_y"].banks) == ["WASH_SCENES"],
+                "the bundled sidecar's scene banks survived the round trip")
         _assert(Path(song.midi).read_bytes() == b"midi-bytes",
                 "owned midi arrived intact")
         _assert(song.title == "Marea" and song.key == "Am", "song metadata arrived")

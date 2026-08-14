@@ -1,103 +1,422 @@
 {
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
   "name": "ledbar",
-  "render": "bar",
-  "bar_count": 8,
-  "channels": [
-    {"field": "brightness", "role": "brightness", "flags": ["blend", "knob_level"]},
-    {"field": "blue",       "role": "blue",       "flags": ["blend"]},
-    {"field": "green",      "role": "green",      "flags": ["blend"]},
-    {"field": "red",        "role": "red",        "flags": ["blend"]},
-    {"field": "animation",  "role": "animation",  "flags": []},
-    {"field": "speed",      "role": "speed",      "flags": ["knob_speed"]},
-    {"field": "direction",  "role": "direction",  "flags": []}
+  "shortName": "TDMXBAR",
+  "categories": [
+    "Pixel Bar",
+    "Color Changer",
+    "Strobe"
   ],
-  "banks": {
-    "ANIMATIONS": [
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 132, "speed": 255, "direction": 0, "name": "Cuadrados"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 128, "speed": 255, "direction": 0, "name": "Cuadr. pink/white"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 255, "direction": 0, "name": "Fade In/Out fast"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 12, "speed": 255, "direction": 0, "name": "Loading bar Arriba"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 16, "speed": 255, "direction": 0, "name": "Loading bar abajo"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 20, "speed": 255, "direction": 0, "name": "Ping Pong", "song_parts": ["INST", "SOLO"]},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 24, "speed": 255, "direction": 0, "name": "Lluvia", "song_parts": ["BRIDGE", "INST", "SOLO"]},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 28, "speed": 255, "direction": 0, "name": "Estrellas", "song_parts": ["INST", "SOLO"]}
+  "meta": {
+    "authors": [
+      "TupperDMX"
     ],
-    "FILLS": [
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 68, "speed": 255, "direction": 0, "name": "Fuego"},
-      {"brightness": 255, "blue": 0, "green": 0, "red": 150, "animation": 68, "speed": 255, "direction": 0, "name": "Fuego rojo"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 72, "speed": 255, "direction": 0, "name": "Fuego azul"},
-      {"brightness": 255, "blue": 0, "green": 255, "red": 0, "animation": 72, "speed": 255, "direction": 0, "name": "Fuego verde"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 76, "speed": 255, "direction": 0, "name": "Psicodelia"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 0, "animation": 76, "speed": 255, "direction": 0, "name": "Psicodelia azul"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 88, "speed": 255, "direction": 0, "name": "Relleno azul"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 76, "speed": 255, "direction": 0, "name": "Psicodelia"}
+    "createDate": "2025-06-25",
+    "lastModifyDate": "2026-07-31"
+  },
+  "comment": "In-house LED bar rig. The eight physical bars mirror one 7-channel DMX slice, so they are modelled as one fixture with an 8x40 emitter matrix - which is also the geometry of the animation GIFs the `animation` channel selects (8 columns, one per bar; 40 rows, one per LED).\nThe templateChannels block below is required by the OFL schema once a matrix is declared (dependentRequired) and is deliberately unused: no mode inserts it. Do not add a mode that does - 8x40 pixel channels would far exceed the controller's 96-channel universe.",
+  "physical": {
+    "dimensions": [
+      50,
+      1000,
+      60
     ],
-    "FILLS2": [
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 0, "speed": 255, "direction": 0, "name": " ON"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 96, "speed": 150, "direction": 0, "name": "Relleno", "song_parts": ["VERSE"]},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow", "song_parts": ["INTRO"]},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 68, "speed": 255, "direction": 0, "name": "Fuego"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 76, "speed": 255, "direction": 0, "name": "Psicodelia"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 8, "speed": 100, "direction": 0, "name": "Fade In/Out slow"}
-    ],
-    "MULTICOLOR": [
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 100, "speed": 255, "direction": 0, "name": "MULTICOLOR #1"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 104, "speed": 255, "direction": 0, "name": "MULTICOLOR #2"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 108, "speed": 255, "direction": 0, "name": "MULTICOLOR #3"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 112, "speed": 255, "direction": 0, "name": "MULTICOLOR #4"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 116, "speed": 255, "direction": 0, "name": "MULTICOLOR #5"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0, "name": "RGB party"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0, "name": "RGB party"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 80, "speed": 255, "direction": 0, "name": "RGB party"}
-    ],
-    "STROBES": [
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 30, "direction": 0, "name": "STROBE slow"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 60, "direction": 0, "name": "STROBE medium"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 4, "speed": 100, "direction": 0, "name": "STROBE fast"},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 136, "speed": 255, "direction": 0, "name": "STROBE RGB Mix"},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0}
-    ],
-    "TUBES": [
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 32, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 36, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 40, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 44, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 48, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 52, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 56, "speed": 255, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 60, "speed": 255, "direction": 0}
-    ],
-    "RADARS": [
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 64, "speed": 150, "direction": 0, "name": "RADAR slow"},
-      {"brightness": 255, "blue": 255, "green": 255, "red": 255, "animation": 124, "speed": 200, "direction": 0, "name": "RADAR fast"},
-      {"brightness": 255, "blue": 254, "green": 254, "red": 254, "animation": 120, "speed": 255, "direction": 0, "name": "Mix raro"},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0},
-      {"brightness": 0, "blue": 0, "green": 0, "red": 0, "animation": 0, "speed": 0, "direction": 0}
+    "bulb": {
+      "type": "40x RGB LED"
+    },
+    "matrixPixels": {
+      "dimensions": [
+        50,
+        25,
+        60
+      ],
+      "spacing": [
+        440,
+        0,
+        0
+      ]
+    }
+  },
+  "matrix": {
+    "pixelCount": [
+      8,
+      40,
+      1
     ]
   },
-  "chases": [
-    {"banks": ["STROBES", "FILLS2"], "scenes": [1, 0], "song_parts": ["OUTRO"]},
-    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 5], "song_parts": ["OUTRO"]},
-    {"banks": ["STROBES", "ANIMATIONS"], "scenes": [1, 6], "song_parts": ["OUTRO"]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [0, 0]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [1, 1]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [2, 2]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [3, 3]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [4, 4]},
-    {"banks": ["MULTICOLOR", "ANIMATIONS"], "scenes": [5, 5]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 0], "song_parts": ["CHORUS"]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 3], "song_parts": ["CHORUS"]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 4], "song_parts": ["CHORUS"]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 5], "song_parts": ["CHORUS"]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 6], "song_parts": ["CHORUS"]},
-    {"banks": ["FILLS2", "ANIMATIONS"], "scenes": [0, 7], "song_parts": ["CHORUS"]}
+  "availableChannels": {
+    "brightness": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "blue": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "green": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "red": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "animation": {
+      "name": "Animation",
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            3
+          ],
+          "type": "Effect",
+          "effectName": "On"
+        },
+        {
+          "dmxRange": [
+            4,
+            7
+          ],
+          "type": "Effect",
+          "effectName": "Strobo"
+        },
+        {
+          "dmxRange": [
+            8,
+            11
+          ],
+          "type": "Effect",
+          "effectName": "Fade"
+        },
+        {
+          "dmxRange": [
+            12,
+            15
+          ],
+          "type": "Effect",
+          "effectName": "Loading corta arriba"
+        },
+        {
+          "dmxRange": [
+            16,
+            19
+          ],
+          "type": "Effect",
+          "effectName": "Loading abajo"
+        },
+        {
+          "dmxRange": [
+            20,
+            23
+          ],
+          "type": "Effect",
+          "effectName": "Pingpong"
+        },
+        {
+          "dmxRange": [
+            24,
+            27
+          ],
+          "type": "Effect",
+          "effectName": "Lluvia abajo"
+        },
+        {
+          "dmxRange": [
+            28,
+            31
+          ],
+          "type": "Effect",
+          "effectName": "Lluvia random derecha"
+        },
+        {
+          "dmxRange": [
+            32,
+            35
+          ],
+          "type": "Effect",
+          "effectName": "Tube1"
+        },
+        {
+          "dmxRange": [
+            36,
+            39
+          ],
+          "type": "Effect",
+          "effectName": "Tube2"
+        },
+        {
+          "dmxRange": [
+            40,
+            43
+          ],
+          "type": "Effect",
+          "effectName": "Tube3"
+        },
+        {
+          "dmxRange": [
+            44,
+            47
+          ],
+          "type": "Effect",
+          "effectName": "Tube4"
+        },
+        {
+          "dmxRange": [
+            48,
+            51
+          ],
+          "type": "Effect",
+          "effectName": "Tube5"
+        },
+        {
+          "dmxRange": [
+            52,
+            55
+          ],
+          "type": "Effect",
+          "effectName": "Tube6"
+        },
+        {
+          "dmxRange": [
+            56,
+            59
+          ],
+          "type": "Effect",
+          "effectName": "Tube7"
+        },
+        {
+          "dmxRange": [
+            60,
+            63
+          ],
+          "type": "Effect",
+          "effectName": "Tube8"
+        },
+        {
+          "dmxRange": [
+            64,
+            67
+          ],
+          "type": "Effect",
+          "effectName": "Radar"
+        },
+        {
+          "dmxRange": [
+            68,
+            71
+          ],
+          "type": "Effect",
+          "effectName": "Fuego"
+        },
+        {
+          "dmxRange": [
+            72,
+            75
+          ],
+          "type": "Effect",
+          "effectName": "Fuego azul"
+        },
+        {
+          "dmxRange": [
+            76,
+            79
+          ],
+          "type": "Effect",
+          "effectName": "Plasma psychodelic"
+        },
+        {
+          "dmxRange": [
+            80,
+            83
+          ],
+          "type": "Effect",
+          "effectName": "Plasma liquid color war"
+        },
+        {
+          "dmxRange": [
+            84,
+            87
+          ],
+          "type": "Effect",
+          "effectName": "Gotas"
+        },
+        {
+          "dmxRange": [
+            88,
+            91
+          ],
+          "type": "Effect",
+          "effectName": "Gotas cooldrops orange"
+        },
+        {
+          "dmxRange": [
+            92,
+            95
+          ],
+          "type": "Effect",
+          "effectName": "Starfield"
+        },
+        {
+          "dmxRange": [
+            96,
+            99
+          ],
+          "type": "Effect",
+          "effectName": "Vivasuecia"
+        },
+        {
+          "dmxRange": [
+            100,
+            103
+          ],
+          "type": "Effect",
+          "effectName": "Colormania1"
+        },
+        {
+          "dmxRange": [
+            104,
+            107
+          ],
+          "type": "Effect",
+          "effectName": "Colormania2"
+        },
+        {
+          "dmxRange": [
+            108,
+            111
+          ],
+          "type": "Effect",
+          "effectName": "Colormania3"
+        },
+        {
+          "dmxRange": [
+            112,
+            115
+          ],
+          "type": "Effect",
+          "effectName": "Fading pixels"
+        },
+        {
+          "dmxRange": [
+            116,
+            119
+          ],
+          "type": "Effect",
+          "effectName": "High traffic"
+        },
+        {
+          "dmxRange": [
+            120,
+            123
+          ],
+          "type": "Effect",
+          "effectName": "Regions random"
+        },
+        {
+          "dmxRange": [
+            124,
+            127
+          ],
+          "type": "Effect",
+          "effectName": "Radar 2w fade"
+        },
+        {
+          "dmxRange": [
+            128,
+            131
+          ],
+          "type": "Effect",
+          "effectName": "Squares pink white"
+        },
+        {
+          "dmxRange": [
+            132,
+            135
+          ],
+          "type": "Effect",
+          "effectName": "Squares white"
+        },
+        {
+          "dmxRange": [
+            136,
+            139
+          ],
+          "type": "Effect",
+          "effectName": "Strobo+rain"
+        },
+        {
+          "dmxRange": [
+            140,
+            255
+          ],
+          "type": "NoFunction"
+        }
+      ]
+    },
+    "speed": {
+      "name": "Animation speed",
+      "defaultValue": 255,
+      "capability": {
+        "type": "EffectSpeed",
+        "speedStart": "slow",
+        "speedEnd": "fast"
+      }
+    },
+    "direction": {
+      "name": "Animation direction",
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            127
+          ],
+          "type": "Generic",
+          "comment": "Forward"
+        },
+        {
+          "dmxRange": [
+            128,
+            255
+          ],
+          "type": "Generic",
+          "comment": "Reverse"
+        }
+      ]
+    }
+  },
+  "templateChannels": {
+    "$pixelKey brightness": {
+      "capability": {
+        "type": "Intensity"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "7ch",
+      "shortName": "7ch",
+      "channels": [
+        "brightness",
+        "blue",
+        "green",
+        "red",
+        "animation",
+        "speed",
+        "direction"
+      ]
+    }
   ]
 }

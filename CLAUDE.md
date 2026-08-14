@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) when working in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository. It records
+what you **cannot** derive by reading the code — layering rules, invariants, and the
+reasons behind decisions that look arbitrary. It is not an index of files or functions.
 
-## Project Overview
-
-TupperDMX Simulator is a PyQt6 lighting-control app that syncs MP3 playback
-with MIDI-triggered DMX sequences and a metronome, renders LED bars and blinders
-on a virtual stage in real time, and ships a pure-Python "software controller"
-emulating a hardware DMX controller via MIDI when targeting localhost Art-Net.
+TupperDMX Simulator is a PyQt6 lighting-control app that syncs MP3 playback with
+MIDI-triggered DMX sequences and a metronome, renders fixtures on a virtual stage
+in real time, and ships a pure-Python "software controller" emulating a hardware
+DMX controller via MIDI.
 
 ## Development Commands
 
@@ -17,441 +17,382 @@ uv run python main.py    # run the app
 uv run python main.py --headless   # no GUI (SBC/rack): web remote is the only interface
 uv add <package>         # add a dep
 uv lock --upgrade        # refresh lockfile
+uv run pytest            # headless tests (offscreen Qt + shared QApplication in tests/conftest.py)
 ```
 
-Build/distribution commands and CI details live in `BUILD.md`.
+Build/distribution and CI details live in `BUILD.md`. Each test file is also runnable
+standalone via its `main()`.
 
-Headless characterization tests live in `tests/`. Run the whole suite with
-`uv run pytest` (offscreen Qt + a shared QApplication are set up in
-`tests/conftest.py`; CI runs this too). Each file is also still runnable
-standalone via its `main()` — `uv run python tests/test_clip_ops.py` prints
-`ALL TESTS PASSED` — which is handy for the Qt GUI repro (`test_crash_repro.py`
-supports a `--sync` flag that way).
+**PyQt6 is pinned to 6.8 LTS** — 6.11 crashed QMediaPlayer on pause/resume; playback no
+longer uses QMediaPlayer, but QAudioSink/QAudioDecoder ride the same stack. TTS voice
+models (~60 MB) download on demand into `userprefs_dir()/tts_voices/`, never bundled.
 
-### Key Dependencies
-PyQt6 (GUI + multimedia; **pinned to 6.8 LTS** — 6.11 crashed QMediaPlayer on
-pause/resume; playback no longer uses QMediaPlayer, but QAudioSink/QAudioDecoder
-still ride the same Qt Multimedia stack), mido/python-rtmidi (MIDI), custom
-asyncio Art-Net UDP receiver, librosa (BPM detection), pyserial (USB DMX via
-the stock VCP/ftdi_sio drivers), platformdirs (user-config paths), aiohttp
-(embedded web-remote server), mutagen (setlist duration probes),
-piper-tts + onnxruntime (offline TTS for voice cues + spoken count-in; voice
-models ~60 MB download on demand into `userprefs_dir()/tts_voices/`, never
-bundled).
+## Packages and layering
 
-## Architecture Overview
+- `main.py` — the only root source file: a thin entry point that parses `--headless`
+  **before any Qt import** (it sets `QT_QPA_PLATFORM=offscreen`).
+- `core/` — the **Qt-free** domain layer (config, show/, paths, OFL parsing, the
+  fixture library and state model, note layout, I/O routing).
+- `app/` — the shared core: QtCore/QtMultimedia only, **never** QtWidgets or `ui/`.
+- `audio/`, `dmx/`, `midi/`, `software_controller/`, `webremote/` — the widget-free
+  subsystems (`webremote`'s `state`/`commands`/`peaks` are Qt-free too).
+- `stage/` (the render engine) and `timeline/` are **top-level**: they are QtWidgets,
+  but import nothing from `ui/` (only `core/`, PyQt6, `tupperlogger`), which is what
+  earns them the root.
+- `ui/` — the desktop view in three layers: `ui/widgets/` (leaf toolkit, no app
+  knowledge, safe for anyone to import), `ui/fixture/` (the fixture-editing subsystem —
+  the timeline reaches in for `console` and `affordances`), and the root.
+- `fixtures/` — shipped definitions: a strict OFL `*.json` + optional `*.tdmx.json`
+  sidecar + optional `*.effects/` artwork folder. A **subfolder is the manufacturer**
+  and namespaces the key (`fixtures/ADJ/focus-spot-4z.json` → `"ADJ/Focus Spot 4Z"`);
+  a file at the root keeps its **bare** key, which is what saved patches refer to —
+  which is why the artwork folder is `ledbar.effects/` and not `ledbar/`.
 
-### Core Components
+**No eager re-exports at any level; import the submodule you want.** `ui/__init__.py`
+is a docstring because re-exporting the window and its dialogs meant
+`from ui.widgets import icons` — which the timeline tracks do — dragged in the stage
+engine, the MIDI worker, the DMX manager and the web remote (70+ modules to import an
+icon factory). For the same reason `timeline/widgets/__init__.py` does **not**
+re-export `clip_edit`.
 
-- **`app/` — the shared application core (no QtWidgets, never imports `ui/`)**:
-  `core.py` (`AppCore`) is the ONE orchestration object — it constructs and
-  wires every widget-free collaborator (ShowManager, BpmState, AudioEngine,
-  DMXManager, MidiManager, MediaController, AudioController, PlaylistCore,
-  WebRemoteManager) plus the Fase-4 logic (spoken count-in, voice-cue TTS
-  rendering, `on_song_precount_toggled`/`set_count_in_bars`), and owns
-  `preview_clip`, `apply_io_config`/`apply_audio_config`, the transport
-  methods, `save_config` and the idempotent `shutdown()` (flush FIRST, then
-  webremote→media→audio→engine→dmx→midi). `bpm.py` (`BpmState`: the
-  logic-level BPM holder — clamps 40–300, dedupes; widgets are views of it),
-  `playlist.py` (`PlaylistCore`: nav + song-load logic, signals
-  `song_loaded`/`audio_missing`/`setlist_changed`), `headless.py`
-  (`run_headless`: QGuiApplication + offscreen, SIGINT/SIGTERM → shutdown).
-  Widget halves ride AppCore signals: `software_controller_changed` (emitted
-  AFTER controller seeding), `patch_reloaded`/`show_reloaded`,
-  `config_save_failed`, `precount_changed`.
-- **`ui/main_window.py` — `MainWindow`**: the desktop view over `AppCore`.
-  Builds the widget tree, aliases the core's collaborators onto itself
-  (`self.media_controller = core.media_controller`, …) and connects the
-  widget halves (dialogs, timeline/toolbar refresh, stage/DMX monitors);
-  `closeEvent` → `core.shutdown()`. `main.py` (repo root) is the thin
-  launcher: parses `--headless` BEFORE any Qt import (sets
-  `QT_QPA_PLATFORM=offscreen`), then runs GUI (QApplication + theme +
-  `Config.load()` + `open_or_create_startup_show()` + logging) or
-  `app.headless.run_headless(config)`. Headless force-enables the web remote
-  in memory when prefs disabled it (never persisted); TTS voices are never
-  downloaded headless — provision `userprefs_dir()/tts_voices/` from the
-  desktop (Settings ▸ AUDIO ▸ Download) or by copying it over.
-- **`core/show/` + `app/show_manager.py` — the Show project layer**: a show
-  is a **folder** `Name.show/` (`show.json` manifest + owned `midis/` +
-  `audio/` for imported bundles + show-local `fixtures/` defs + `versions/`
-  snapshots). The Qt-free package holds `model.py` (`Show`, `ShowError`,
-  `song_status()`), `manifest.py` (dict ↔ `Show`; owned midis stored relative,
-  referenced audio absolute, missing paths PRESERVED for relinking),
-  `store.py` (atomic JSON, create/load/save/duplicate, `allocate_midi_path`;
-  loading a show activates its fixture-defs layer), `migrate.py` (startup
-  chain last→recents→create; one-time legacy-userprefs migration),
-  `versions.py` (snapshots: show.json+midis, retention 25 unpinned, pinned
-  named ones never pruned, undoable restore), `relink.py` (basename search),
-  `bundle.py` (`.showpack` zip: collect & save ALL audio — backings AND
-  guides into `audio/`, the show's own `audio/` shipped wholesale with its
-  filenames reserved against collisions — plus non-shipped defs).
-  `ShowManager` (QtCore-only, owned by `AppCore`, attach FIRST in `__init__`)
-  **aliases** `config.playlist`/`config.fixtures` onto the show's objects so
-  every existing reader mutates the show in place; persistence funnels through
-  `AppCore.save_config()` → `notify_changed()` (manifest saved iff its
-  serialized content changed) and `flush()` (debounced ~3 s autosave of the
-  active song's `.mid`, forced on song switch / close / manual Save; opening
-  snapshot + ≤1 automatic snapshot per 5 min of writes).
-- **`audio/` — the audio engine (Fase 4 live player)**: ONE stereo QAudioSink
-  feeds every audio path. Qt-free `mixer.py` (`Mixer`: backing/click/voice
-  buses, per-bus volume/mute/RMS, one-shot clips, and the L/R **routing
-  modes** — `stereo` | `split_backing_left` | `split_backing_right`, split =
-  backing downmixed mono on one channel, click+voice on the other);
-  `engine.py` (`AudioEngine`: **push-mode** sink on the configured output
-  device — a 15 ms Qt-thread timer tops up the ~120 ms buffer; push on
-  purpose: a Python pull-QIODevice deadlocks/aborts inside QAudioSink.stop(),
-  the audio thread blocking on the GIL — Float32 w/ Int16 fallback,
-  end-of-backing watchdog; `load_backing` dedupes an in-flight decode of the
-  same path — restarting QAudioDecoder mid-decode aborts with "no audio
-  data");
-  `decode.py` (async QAudioDecoder → int16 (n,2)@44100, whole song in RAM);
-  `tts.py` (piper render + WAV cache keyed sha1(voice|text) in
-  `userprefs_dir()/tts_cache/`; count-in words per voice language;
-  **nothing synthesizes during playback — cache-first always**, and every
-  path degrades gracefully to None when piper/voice is missing).
-- **`app/media_controller.py` — `MediaController`**: backing playback + MIDI
-  sync through the engine. Owns timeline position (the `time.time()` master
-  clock; engine slaved with 150 ms drift resync, audio waits while
-  `t − offset < 0`); key methods `start_playback`, `play_pause_playback`,
-  `stop_playback`, `seek_to_position`. **Count-in = negative timeline time**:
-  with `song.precount` on, `start_playback` begins at `-(bars×4 beats)`
-  (`set_count_in(enabled, bars)` + `set_bpm`); audio/MIDI/lights wait for
-  t ≥ 0; pause during count-in resets to 0, seeking cancels it. Also fires
-  the song's **voice cues** (`set_voice_cues([(t, samples)])`, pointer reset
-  on stop/seek) onto the voice bus. **Guide track**: each song can carry an
-  optional full-mix design reference (`song.guide` + `guide_offset`); the
-  editor's monitor (`set_monitor`, `MONITOR_BACKING`/`MONITOR_GUIDE`) picks
-  which file feeds the engine via `active_file()`/`active_offset()` — a
-  missing guide silently falls back to the backing. The monitor is
-  **session-only in-memory state** (always BACKING at launch, never
-  persisted), so headless/web-remote/live playback can never inherit it.
-- **`app/audio_controller.py` — `AudioController`**: Drift-free metronome
-  scheduler. `start_metronome(timeline_position_sec)` aligns beats to
-  timeline (floor-based math, so negative count-in positions number
-  correctly toward beat 1 at t=0); beeps play via `engine.trigger_click` —
-  high pitch on downbeat (1), low on 2/3/4. AppCore speaks the count-in
-  numbers ("uno dos tres cuatro", pre-rendered per voice) on the beats of
-  the LAST count-in bar when `config.audio.count_in_voice` is on.
-- **`dmx/` — `DMXManager`**: I/O coordinator driven by `config.io` via
-  `apply_io()`: owns the software `DMXController`'s lifecycle (emits
-  `software_controller_changed`), builds its DMX output *sinks*
-  (`StageFrameBridge` in-process feed → stage, `ArtNetSender` → network,
-  `USBDMXSender` → dongle), and runs the stage-input worker (`ArtnetWorker`
-  pure listener on 0.0.0.0, or `USBDMXWorker` FTDI reader) when the stage
-  input isn't the internal controller.
-- **`midi/` — `MidiManager` + `MidiWorker`**: `MidiManager` is a thin
-  lifecycle/signals (`data_changed`) facade delegating edits to collaborators
-  that share one `MidiDocument` (state + `reconcile_blackouts`). `MidiWorker`
-  does timeline-synced threaded output with **fan-out** per `MidiRouting`
-  (`core/io_routing.py`): `note_on` verbs to `DMXController.handle_note_on()`
-  and/or the full stream to an external mido port, independently.
-- **`ui/stage_controller.py` — `StageController`**: Virtual stage rendering +
-  scenario designer. Updates fixture color/intensity from live DMX data;
-  dispatches render per type (bespoke `LedBar`/`Blinder`, else the data-driven
-  `GenericFixture`, all in `ui/stage_fixtures.py`). `set_design_mode()` makes fixtures movable/
-  selectable; `add_fixture`/`remove_selected`/drag-to-move mutate `config.fixtures`
-  and emit `fixture_added/moved/removed/selected`. The floating
-  `ui/fixture_designer.py` panel (Menu ▸ "Design stage") drives it.
-- **`core/fixture_library.py`**: data-driven fixture-type *library* — `FixtureDef`
-  (channels with semantic role + flags, render hint, plus scene `banks`/`chases`)
-  loaded from `fixtures/*.json` in three layers — shipped `fixtures/`, writable
-  `userprefs_dir()/fixtures/`, and the open show's `fixtures/`
-  (`set_show_fixtures_dir()`); later layers override by name; memoized. Every type —
-  including the built-in `ledbar`/`blinder` — is a library def;
-  `software_controller.build_fixture_types()` builds the whole `FIXTURE_TYPES`
-  registry from it (no Python singletons), and
-  `config.fixture_channel_count()`/`known_fixture_types()` derive from it.
-- **`software_controller/`**: Pure-Python DMX controller (no hardware needed).
-  `DMXController` manages a 96-channel universe, patched data-driven from
-  `config.fixtures` (type name + DMX address; default `ledbar`@1, two
-  `blinder`s@33/65). `handle_note_on(channel, pitch, velocity)` uses a
-  **generalized note map**: the pitch is a universal *verb* and the MIDI
-  **channel selects the fixture** (its index in the patch); per-fixture verbs
-  resolve against that fixture's own def. Layout: 1–23 channel-offset sets
-  (velocity×2), 24–35 scene loaders, 36–47 bank select, 48 take-manual /
-  49 manual / 50 blackout-fixture, 51 blackout-all (global), 52–59 timing /
-  palette / scene step, 60 START, 61–69 song parts (global), 72–75 color macros.
-  The 20 Hz output loop fans each universe snapshot to pluggable *sinks*
-  (`set_sinks()`; `ArtNetSender` UDP, `USBDMXSender` FTDI DMX TX, or the Qt
-  `StageFrameBridge`); each type's scene banks/chases live in its
-  `fixtures/*.json` def. (Saved `.mid` from the old positional layout are
-  upgraded by `scripts/migrate_midi_v2.py`.)
-- **`webremote/`**: Embedded tablet remote (Settings ▸ WEB REMOTE, off by
-  default; plain HTTP on the stage LAN, no auth; headless mode force-enables
-  it in memory). `WebRemoteWorker`
-  (`server.py`) runs an aiohttp HTTP+WS app on its own asyncio loop in a
-  QThread (ArtNetWorker pattern); `WebRemoteManager` (`manager.py`, owned by
-  `AppCore`) subscribes to existing signals, publishes full-state snapshots
-  plus 10 Hz `pos` / per-beat `beat` events, and executes inbound commands on
-  the Qt thread — transport via AppCore/PlaylistCore, cues/blackout/
-  panic via `preview_clip` (so `config.io` routing applies). Blackout is a
-  toggle: panic stops playback and sends note 51 only when
-  `blackout_all_state` is off. Qt-free logic in `state.py` (snapshot schema,
-  section spans, mtime-cached duration/BPM probes), `commands.py` (action
-  whitelist/parse) and `peaks.py` (waveform bins for the canvas). The
-  no-build page lives in `webremote/static/` and is responsive: a CSS-grid
-  (`grid-template-areas`) reflows the same blocks into a 3-column tablet
-  layout, a portrait-tablet rail layout, and a single-column phone layout
-  (≤600px) where the body scrolls under a sticky header + fixed transport,
-  the setlist becomes a "+"-triggered drawer, and a slim seek bar replaces
-  waveform-tap. The Fase-4 widgets are live: KEY chip (per-song `key`),
-  UP NEXT count-in pill (next song's precount / "SEGUE"), the AUTO COUNT-IN
-  card (toggle = current song `precount`, stepper = global bars → WS commands
-  `set_precount` / `set_countin_bars`), CLICK/BACKING meters fed by real bus
-  RMS (`levels` on the 10 Hz `pos` event), and a countdown treatment while
-  `position < 0` (count-in).
+## Architecture
+
+### Orchestration
+
+`app/core.py` (`AppCore`) is the ONE orchestration object: it constructs and wires
+every widget-free collaborator, owns the count-in/voice-cue logic, `preview_clip`, the
+transport, `save_config` and the idempotent `shutdown()` (flush FIRST, then
+webremote→media→audio→engine→dmx→midi). `ui/main_window.py` is the desktop *view* over
+it — it builds the widget tree, aliases the core's collaborators onto itself and
+connects the widget halves, which ride AppCore signals. Headless force-enables the web
+remote in memory (never persisted) and never downloads TTS voices.
+
+### The Show project layer (`core/show/` + `app/show_manager.py`)
+
+A show is a **folder** `Name.show/` — `show.json` plus owned `midis/`, `audio/` (for
+imported bundles), show-local `fixtures/` and `versions/`. `core/show/` is Qt-free:
+owned midis are stored relative and referenced audio absolute, **missing paths are
+preserved** for relinking, loading a show activates its fixture-defs layer, and
+`.showpack` bundles collect ALL audio, backings AND guides.
+
+`ShowManager` (QtCore-only, **attach FIRST** in `AppCore.__init__`) **aliases**
+`config.playlist`/`config.fixtures` onto the show's objects, so every reader mutates
+the show in place. Persistence funnels through `save_config()` → `notify_changed()`
+(saved iff content changed) and `flush()` (~3 s debounced `.mid` autosave, forced on
+song switch/close/Save; opening snapshot + at most one automatic snapshot per 5 min).
+
+### Audio and the transport
+
+**ONE stereo QAudioSink feeds every path.** The Qt-free mixer carries backing/click/
+voice buses with per-bus volume/mute/RMS and the L/R routing modes `stereo` |
+`split_backing_left` | `split_backing_right`. The engine is a **push-mode** sink with
+a 15 ms Qt-thread timer topping up a ~120 ms buffer — push on purpose, because a
+Python pull-QIODevice deadlocks inside `QAudioSink.stop()` on the GIL. `load_backing`
+dedupes an in-flight decode of the same path, since restarting QAudioDecoder mid-decode
+aborts. TTS is piper + a WAV cache: **nothing synthesizes during playback — cache-first
+always**, every path degrading to None when piper or the voice is missing.
+
+`app/media_controller.py` owns the timeline position (a `time.time()` master clock;
+the engine is slaved with 150 ms drift resync).
+
+- **Count-in is negative timeline time.** With `song.precount` on, playback begins at
+  `-(bars × 4 beats)`; audio/MIDI/lights wait for t ≥ 0; pausing during the count-in
+  resets to 0 and seeking cancels it. AppCore speaks the numbers on the LAST count-in
+  bar when `config.audio.count_in_voice` is on.
+- **Guide track**: a song may carry a full-mix reference and the BACKING|GUIDE monitor
+  picks which file feeds the engine. The monitor is **session-only in-memory state**
+  (always BACKING at launch), so headless/web-remote can never inherit it.
+  MIDI/DMX/metronome/cues are timeline-driven and identical under either.
+- **Metronome sync**: on start/resume, compute the beats elapsed and the remainder to
+  the next boundary — play immediately if within `0.001s`, else a single-shot timer to
+  the next beat then regular intervals. Always restart on seek-during-playback or BPM
+  change. Beat alignment is floor-based, so negative count-in positions number correctly
+  toward beat 1 at t=0.
+
+### I/O routing (`config.io` + `core/io_routing.py`)
+
+All routing is explicit in Settings ▸ Input / Output — no toolbar selectors, no
+localhost magic. Applying `config.io` sets the MIDI routing and drives
+`DMXManager.apply_io(io)`, which owns the software `DMXController` lifecycle → its
+output *sinks* → the stage-input worker. With the defaults ("All software") the
+controller runs and feeds the stage **in-process** via `StageFrameBridge` — no UDP
+loopback. Cardinalities: MIDI out 1→N (a stateful command protocol — fan-out is fine,
+**fan-in is forbidden**), controller DMX out 1→N (idempotent snapshots), stage DMX in =
+exactly one selectable feed.
+
+### The render engine (`stage/`)
+
+**Two stages, in this order — the OFL *category* picks the body and the kind of light
+it makes; the *capabilities* its channels declare pick the layers that shape that
+light.** All 17 categories and all 43 capability types resolve.
+
+- `registry.renderer_for(fdef)` maps a category to a **profile** — never a type name.
+  The fixture's own category order wins (OFL lists the most important first), falling
+  back to the shape of its channels (makes fog ⇒ hazer, pans ⇒ mover).
+- `optics.py` — **what kind of light a fixture throws**: `BeamKind` is `NONE` (a
+  surface light, no shaft in the air), `WASH` or `HARD`. `beam_kind()` decides
+  **whether** there is a shaft and `resting_half_angle()` **how wide** — kept apart on
+  purpose, since conflating them drew an ARRI SkyPanel with a 57.5° beam. A `stage.beam`
+  sidecar hint wins outright, then beam-shaping evidence, then the declared lens (a
+  spread ≥2.5× read as a **zoom range** rather than a gate), else the profile's
+  `beam_fallback`. **What is NOT evidence matters as much**: `Frost` rides on wash
+  heads, a bare `WheelSlot` is whatever its slots are, and `physical.lens.degreesMinMax`
+  is the beam angle every emitting fixture has — reading any of them as hardness drew 32
+  wash movers as spots. `test_stage_optics.py` carries the archetype table.
+- `profiles/` declares only the housing, its origins, its emission and its
+  `beam_fallback`; **it never reads a capability.** `features/` are the capability
+  layers mutating a shared `BeamParams`, **discovered once at construction** — so a
+  "Moving Head" that is really a wash simply has no gobo layer. Graceful degradation,
+  no per-fixture code anywhere.
+- `geometry.Aim`: a fixture is aimed in a **room** (a unit vector from pan/tilt) and
+  only then flattened onto the front elevation, so `(axis_deg, foreshorten)` IS that
+  vector and the fog march can rebuild it. **Home (half travel, DMX 127/128) is
+  straight down**; **tilt swings the beam and pan turns the plane it swings in** — at
+  tilt home *pan cannot move a beam at all*. `PanTiltFeature` slews the pan/tilt, never
+  the projection, so a yoke can never have turned where its beam did not.
+- **Rigging** (`FixtureInstance.hanging`, persisted): flown = housing upside down +
+  beam at the floor. **Every profile draws its chassis the way it stands on the deck,
+  into `body.housing`** — the one item a flown fixture turns 180°, **never the body
+  item**: the GPU offsets each body's lights by its *position* alone, so a turned body
+  would send the raster and the shader two different beams; the light's half of the flip
+  is `Aim`'s. `add_fixture` *guesses* rigging from where the fixture lands and writes it
+  down — a guess re-evaluated live would turn a fixture over mid-drag.
+- `metrics.preview_def` **throws the real scale away**, normalising every body to one
+  size, because a **beam is 1220 units and a halo caps at 400 whatever body made them**
+  — real dimensions put a scanner head inside its own beam and left an ARRI panel no
+  room for its glow. (A raster halo is the item's bounding rect, so it must move
+  through `GlowingEllipse.set_glow_radius` or the old halo stays painted.)
+- `clock.py` is ONE 30 Hz timer for everything that animates, subscribed weakly.
+
+**Atmosphere**: a beam is invisible in clean air, so visibility is the one genuinely
+cross-fixture quantity. `StageController` owns one `Atmosphere`; any body resolving a
+fog output contributes, sources combine without exceeding full, and the level drifts on
+the shared clock (~1.5 s attack, ~12 s decay; `Fog` weighs 0.6 against `Haze`'s 1.0).
+The manual baseline `config.window.stage_haze` goes through `set_haze_baseline` →
+`Atmosphere.settle` (**straight to the target, no drift**) → `refresh_air()`; **both
+halves are load-bearing**, since a body reads `atmosphere.level` only on the frame it
+draws.
+
+**`puffs.py` — smoke that outlives its channel.** Parcels carry a birth time, so a
+machine switched off does not clear the stage. **Every quantity is derived from a
+parcel's age, never integrated**, so the field looks the same at 30 Hz or twice an
+hour: it rises and *stops* rising, disperses as `sqrt(2·K·age)` in its own direction (a
+random walk — a constant velocity biased away from centre was the reported "two-branch
+tree"), and curls with X and Y **decorrelated** (one shared sine is a parcel sliding
+down a diagonal). **Both renderers read the same field and the same `PARCEL_*` shape** —
+a parcel drawn as a clean Gaussian is a *sphere*, and the eye finds the circles. Qt
+composites `SourceOver`, so parcels **saturate rather than add**: alpha does not stand
+in for count, and over-compensating draws separate balls.
+
+**`light.py` — the GPU's view of the same frame.** A brush is 8-bit sRGB: it cannot
+hold "twice as bright as white" and two overlapping do not add, so every emission also
+describes its light as data — `LightPrimitive`s (POINT / CONE / QUAD / LINE / BLOB) in
+one growable `array('f')`. They are **body-local** (dragging needs a repaint, not a
+re-render), colour is **linear** and `intensity` is **unbounded**, which is how two
+lights add past full instead of clipping. Haze is deliberately NOT baked in; it reaches
+the shader as a uniform. `cone_geometry()` is shared by the raster cone and the light
+list so the two cannot drift. A **LINE is thinner than the pixel that draws it** and GL
+has no coverage, so the vertex shader widens its quad to `MIN_LINE_HALF_PX` device
+pixels and hands the brightness back — widen without dimming and a fan is a smear; do
+neither and it rasterises to dashes.
+
+#### `gpu/` — the optional HDR renderer
+
+`config.window.stage_gpu`, off by default. `StageView.setViewport(QOpenGLWidget())`
+with the light composited in `drawForeground` inside `beginNativePainting()`: every
+primitive accumulates into an RGBA16F FBO with `glBlendFunc(GL_ONE, GL_ONE)` — light
+**adds** — then exposure, an ACES filmic tonemap and an additive composite. `_restore()`
+puts blend/scissor/viewport back, since `endNativePainting` only restores what Qt
+tracks. In GPU mode the raster stops drawing **spill** while faces stay lit. Everything
+fails soft to raster and logs once. Four constraints, documented in `gpu/layer.py`: a
+`QOpenGLWidget` *parented into* the viewport renders opaque and hides the scene; the
+format must `setRenderableType(OpenGL)` or Wayland/EGL hands out GL ES where nothing
+compiles; it must NOT set a version/profile or EGL fails outright; draw calls come from
+`QOpenGLFunctions_4_1_Core`. **`QWidget.grab()` cannot read back a GL viewport** —
+scripted screenshots need raster.
+
+**`gpu/fog.py` — volumetric fog** (`config.window.fog.enabled`, off by default, needs
+`stage_gpu`; after the Settings dialog, `MainWindow` must call
+`StageController.apply_stage_config()` because it hands back a **new**
+`StageFogConfig`). It sits between accumulate and resolve, so fog lands in the HDR
+buffer *before* the tonemap and is simply more light. Three passes: a quarter-scale
+RG16F **medium map** (an eighth aliased the per-parcel noise; depth extent is stored
+density-**weighted** so it averages rather than sums), the **march**, and a **temporal**
+average. The projection is orthographic, so a pixel's view ray needs no depth buffer,
+and cost follows lit area — each light gets **one bounded quad**.
+
+- **`STRIDE` stays 16**: a BLOB's `spin` and `variant` ride in the
+  `half_width`/`softness` slots a parcel has no use for.
+- **Lights and media share ONE instance buffer**, media packed after lights, which is
+  why `_upload_instances()` is its own step and not part of the light pass: behind
+  `_accumulate`'s `count == 0` early return, a stage whose only emitter was a fog
+  machine uploaded nothing and the medium pass drew out of a buffer that had never been
+  allocated — a segfault.
+- **The segment is solved, not swept.** A beam is a thin sheet in depth (~66 units)
+  while an even march steps ~58, so the shaft never appeared: each ray is clipped to the
+  bounding-sphere chord, then to the cone or the laser's tube. A `FOG_POINT_REACH` of 10
+  lamp-radii (**not** the sprite's `GLOW_REACH` of 60) calibrates it.
+- **The air is ragged and drifts** — two `turbulence()` octaves clamped at zero, the
+  holes being what read as volume. Since it flows, `_frame_signature` excludes time (it
+  would make `_settle` reset its own countdown); `air_is_drifting()` answers instead.
+  **The baseline takes all of `turbulence()`; a parcel takes 0.4 of it**, because smoke
+  arrives from the medium map already ragged and drifting with the machine that made
+  it — a second field on its own current made GPU smoke read as a texture sliding behind
+  blobs. **Ambient** lights baseline haze at 0.09: not full (the backdrop is already a
+  lit room), not zero (or HAZE shows nothing without a shaft).
+- **Three** fog framebuffers, not two: averaging A into B while sampling B is a feedback
+  loop that ramped fog to white over four frames. `QOpenGLFramebufferObject` also hands
+  out **GL_NEAREST**, so `_smooth()` must set GL_LINEAR. And **an empty light list is
+  not an empty frame**: the guard also asks `_air_worth_drawing()`, and `_accumulate`
+  still clears the HDR buffer or a dark stage keeps the last lit one.
+- **The stage clip is switched OFF for the march** (GL scissors in absolute framebuffer
+  pixels while the clip is in *surface* pixels, and every fog target is a different
+  size); clipping is `_resolve`'s job. The march is dithered, so `request_repaint` asks
+  for `CONVERGE_FRAMES` more frames after the rig settles **and then stops** — the only
+  thing here that can spin; that countdown is reset by `_frame_signature()`, **not** by
+  the march running.
+
+### Domain layer
+
+- **`core/fixture_state.py`** — the Qt-free photometric model covering **all 43 OFL
+  capability types**. **Emitters** come from matrix pixel keys, matrix groups, or — with
+  no matrix — repeated channels, which is how a multi-cell blinder resolves without
+  special-casing. `capability_at(fdef, index, values)` is the ONE "what is this channel
+  doing right now"; it takes the whole slice on purpose, because a switching channel's
+  meaning lives on another slot. `solve_color(fdef, rgb)` is the **inverse** the
+  controller's palettes write through — inverting the SAME model, so what the controller
+  writes is what the stage draws.
+- **`core/ofl.py`** — the Open Fixture Library (12.5.1) parser. `resolve_mode()`
+  flattens one mode to ordered DMX slots with matrix inserts expanded, fine channels
+  linked to their coarse channel, and unresolvable slots **kept in place so they still
+  consume an address**. A switching channel's `channel` holds the resolution at the
+  trigger's default, so labels stay static while `fixture_state` picks the live one per
+  frame. Deliberately lenient: unknown capability types are preserved, not rejected.
+- **`core/fixture_library.py`** — a definition is **one or two files plus an optional
+  folder**: `fixtures/<x>.json` (strict OFL), an optional `fixtures/<x>.tdmx.json`
+  sidecar carrying what OFL cannot express (scene `banks`, `chases`, `song_parts`,
+  per-channel `label`/`flags`, `stage` hints, the `effects` artwork map), and an
+  optional `fixtures/<x>.effects/` folder holding that artwork. **Artwork is resolved
+  per fixture, never by name across all of them** — `effect_asset()` reads the
+  sidecar's map against that def's own folder, so a user-layer or show-local fixture
+  can ship animations (a global `assets/` bucket never could) and two fixtures may
+  each have an `01-ON.gif`. Anything travelling with a definition — the `.showpack`
+  bundler, the fork into the user layer — carries all three.
+  **What a channel *does* is never declared there**,
+  and a fixture straight from OFL works with no sidecar. Loaded in three layers —
+  shipped, `userprefs_dir()/fixtures/`, the open show's — later layers overriding by
+  key, memoized, and **sidecars never cross layers**. **A channel has no summarised
+  description and there is no role enum**: everything reads its capabilities.
+  `save_fixture_banks()` is the ONE writer: it round-trips the **raw** sidecar JSON so
+  unmodelled keys survive, and **forks the definition into the user layer** when the
+  source dir isn't persistable. The OFL document itself is never written — a type's DMX
+  footprint is untouchable from the editor.
+- **`software_controller/`** — a pure-Python DMX controller (no hardware needed)
+  managing a 96-channel universe patched from `config.fixtures`. `handle_note_on` uses a
+  **generalized note map**: the pitch is a universal *verb* and the MIDI **channel
+  selects the fixture** (its index in the patch). Layout: 1–23 channel-offset sets
+  (velocity×2), 24–35 scene loaders, 36–47 bank select, 48 take-manual / 49 manual /
+  50 blackout-fixture, 51 blackout-all, 52–59 timing/palette/scene step, 60 START,
+  61–69 song parts, 72–75 colour macros. START has no `song_index` — its velocity packs
+  the palette (`hue_index = velocity // 6`; `mode = PALETTE_MODES[velocity % 6]`).
+- **`webremote/`** — embedded tablet remote, off by default; plain HTTP on the stage
+  LAN, no auth. aiohttp HTTP+WS on its own asyncio loop in a QThread; inbound commands
+  execute on the Qt thread, and cues/blackout/panic go through `preview_clip` so
+  `config.io` routing applies. Blackout is a toggle: panic sends note 51 only when
+  `blackout_all_state` is off.
 
 ### Configuration & persistence (`core/config.py` + `core/show/`)
 
-Storage splits across three places:
-- **`config.json`** (shipped, read-only): `fixtures` (the *seed* patch for
-  brand-new shows), bundled via PyInstaller, resolved at runtime by
-  `shipped_config_path()` (`_MEIPASS`).
-- **`userprefs.json`** (user-writable, MACHINE-level only): `window`, `artnet`
-  — the controller's Art-Net *output* target — `volume` (audio/metronome/voice
-  buses), `logging`, `io` — the explicit I/O routing, `IOConfig` — `audio`
-  (`AudioConfig`: output device id, click/voice channel routing mode, global
-  `count_in_bars`, `count_in_voice`, `tts_voice`), `webremote` (server
-  enable/port + the default cue set that seeds NEW shows) and
-  `last_show_path`/`recent_shows`.
-  Resolved by `userprefs_path()` via `platformdirs` (e.g. `~/.config/tupperDMX/`
-  on Linux). Written atomically (temp + `os.replace`). Legacy
-  `last_dmx_source`/`last_midi_port` keys migrate one-time into `io`; legacy
-  `playlist`/`fixtures` keys are still *parsed* (they're the source the
-  one-time show migration adopts) but never written again.
-- **`<Name>.show/show.json`** (the SHOW manifest, per project): the setlist
-  (`songs` with `id`/`title`/`key`/`precount`/`voice_cues` — the per-song
-  spoken-guide list `[{time, text}]` — /`offset`/`guide`+`guide_offset` —
-  the optional full-mix design reference, referenced in place like the
-  backing — /paths + a derived
-  `cache` of duration/bpm), `current_song_index`, the fixture **patch**
-  (`fixtures`) and `webremote_cues`. Owned `.mid` files live in `midis/` and
-  are written by the autosave; audio is *referenced in place* (absolute path)
-  unless it arrived inside a bundle. The `.mid` stays the canonical sequence
-  format — authoring extras plain MIDI can't carry (stable scene `group_id`,
-  custom `scene_name`, per-clip fades) ride inside it as `tdmx1:{json}` text
-  metas (`midi/codec.py`; "Export MIDI…" writes an `interop=True` copy
-  without them).
+Three files, with a strict split of what belongs where:
 
-`Config.load()` reads shipped+prefs; the startup show is resolved by
-`core/show/migrate.open_or_create_startup_show()` (first launch converts the
-legacy prefs playlist/patch into `~/Documents/TupperDMX/Untitled.show/`,
-copying the `.mid`s in and leaving originals untouched). After
-`ShowManager.attach()`, `config.playlist`/`config.fixtures` ARE the show's
-objects, so all pre-show code paths keep working unchanged.
+- **`config.json`** (shipped, read-only): the *seed* patch for brand-new shows.
+- **`userprefs.json`** (user-writable, **MACHINE-level only** — whether there is a
+  usable GL driver is a property of the box): `window` (incl. `stage_haze`,
+  `stage_gpu`, `stage_exposure` and the nested `fog`; there is deliberately no
+  `fog_density`, because that IS `stage_haze`), `artnet`, `volume`, `logging`, `io`,
+  `audio`, `webremote` and `last_show_path`/`recent_shows`. Legacy `playlist`/`fixtures`
+  are still parsed (the show migration adopts them) but never written again.
+- **`<Name>.show/show.json`** (the SHOW manifest): the setlist, `current_song_index`,
+  the fixture **patch** and `webremote_cues`. A patch entry is type + `dmx_start` +
+  stable MIDI `channel` + optional `mode` (where `""` means the type's first declared
+  mode, so a renamed mode never strands a patch) + `hanging`, which defaults to **true**
+  so a patch written before fixtures could say which way up they are rigged keeps
+  throwing light at the floor. Owned `.mid` files live in `midis/`; audio is *referenced
+  in place* unless it arrived in a bundle. **The `.mid` stays canonical** — extras plain
+  MIDI can't carry (stable scene `group_id`, `scene_name`, per-clip fades) ride as
+  `tdmx1:{json}` text metas; "Export MIDI…" writes an `interop=True` copy without them.
 
-### UI Architecture
+After `ShowManager.attach()`, `config.playlist`/`config.fixtures` ARE the show's
+objects.
 
-- `ToolbarManager` (`ui/toolbar_manager.py`): SHOW section
-  (header; + New/📂 Open/💾 Save/Save as… buttons,
-  a "…" overflow menu with Import bundle…, and the blue split ⤓ Export
-  QToolButton — main click exports the full .showpack, the ▾ menu offers
-  interop Export MIDI… (`export_midi_action`, gated by
-  `set_export_midi_enabled`) and Export bundle; footer with show name +
-  setlist/patch stats), SETLIST
-  section (header "N songs"; a row of prev / an editable song-selector
-  QComboBox — a "05/11" counter badge + the full setlist; activated() picks a
-  song via `song_selected`, edit+Enter renames via `song_title_edited` / next /
-  remove 🗑; footer BPM / offset / derived "linked" media chip + per-song KEY
-  line-edit (`song_key_edited`) and 🔔 count-in toggle
-  (`song_precount_toggled`)), SONG FILES
-  section (header with the live autosave chip — the ~3 s .mid debounce;
-  three accent-coloured cards 🎹 MIDI / 🎵 BACKING TRACK / 🎧 GUIDE, each a
-  🗁 load button over a right-anchored path well (overflow clips on the
-  left, keeping the filename end visible) that swaps for a dashed
-  "+ Load …" action while empty, plus the ▷ new-MIDI and ✕ guide-clear
-  (`guide_clear_requested` → `MainWindow.clear_guide_track`) header
-  actions), VERSIONS section (header; a snapshot-picker
-  QComboBox — newest first, autosave "● Autosave · time" vs pinned
-  "📌 name · time" — + a Restore button emitting
-  `restore_version_requested(version_id)` → `MainWindow.restore_version_from_toolbar`
-  which confirms then rolls back; footer 📌 Snapshot action + "N autosaves ·
-  M pinned" counts, fed by `set_versions(list_versions(show))`), and the ☰ menu
-  (Settings…, About). `PlaylistController.update_song_counter()` is the central
-  setlist refresh (counter + combobox `set_setlist` + nav + show stats);
-  `MainWindow._refresh_versions_ui` repopulates the picker on
-  `ShowManager.versions_changed` (emitted whenever a snapshot is created:
-  open/attach, autosave `_maybe_snapshot`, restore) plus after a manual
-  snapshot and at startup.
-- `SettingsDialog` (`ui/settings_dialog.py`): modal userprefs editor, two-column
-  **Input / Output** page. An **AUDIO card** (between WEB REMOTE and Logging)
-  edits `config.audio`: output-device combo (QMediaDevices), the
-  stereo/split routing selector, count-in bars + spoken-count toggle, and the
-  TTS voice picker with Download (background thread) and Test buttons.
-  Left: three numbered routing cards editing `config.io`
-  (① sequencer MIDI outputs = checkboxes, ② internal controller — an iOS-style
-  `_ToggleSwitch` for `controller_enabled` greys the body — + DMX output checkboxes
-  incl. the Art-Net target fields, ③ stage input radios) plus quick-mode presets
-  and a compact Logging card. Right: a live signal-flow graph (`ui/io_flow_widget.py`
-  `IOFlowWidget`, rendered from `io_routing.flow_state(io, ip, universe)` — nodes/
-  edges light up, animated dashes MIDI=violet/DMX=amber, dead routes red, stage
-  "BLACKOUT" pill) over a live validation strip from `io_routing.validate()` (hard
-  errors block accept; soft warnings inline). The two universe spinboxes (blocks
-  ②/③) edit the one shared `ArtNetConfig.universe` and mirror each other.
-- `Timeline` (`timeline/manager.py`): waveform, beat detection, seeking, and
-  clip-style MIDI editing — one `MidiEventsTrack` per fixture filter
-  (`ledbar`, `blinder`). Header panel has MASTER / CLICK / VOICE volume rows
-  (each → its engine bus); the ruler draws 🗣 voice-cue markers
-  (`set_voice_cues`), display-only — editing lives in the timeline toolbar's
-  🗣 Cues button → `ui/voice_cues_dialog.py` (per-song table editor with
-  TTS preview). The timeline toolbar (`ui/timeline_toolbar.py`) also hosts
-  the segmented `BACKING | GUIDE` monitor toggle (amber when GUIDE is
-  active, disabled without a guide) → `MediaController.set_monitor`: the
-  waveform draws the monitored track, and dragging it writes that track's
-  offset (`offset` vs `guide_offset`) via
-  `MainWindow.on_waveform_offset_changed`.
-- `ClipLibraryWidget` (`ui/clip_library.py`): right sidebar tabs ("Library",
-  "DMX Channels"). `QToolBox` with one section per fixture (from
-  `config.midi_note_map`) plus one per LED scene bank (from the `ledbar` def's
-  banks via `scene_loader.load_led_scenes()`).
-  Click previews; drag drops onto the timeline; per-fixture pages hide notes 1–7.
-- `DMXDisplayWidget` (`ui/dmx_display.py`): live channel monitor.
-- `ErrorDialogManager` (`ui/error_dialogs.py`): centralized retry/reset dialogs.
+### UI notes
 
-## Critical Behavior Patterns
+- **MIDI channels are 0-15 everywhere** — the raw MIDI channel, on every surface.
+- The fixture browser's footer is the patch decision; OK stays disabled until the patch
+  is legal, and the inspector validates the same two things.
+- `ui/fixture/scenes_tab.py` edits the fixture **library** (a type's sidecar scene
+  banks), not the patch — so the dialog's OK/Cancel doesn't apply; one button writes.
+  Its tree keeps **bank sections** with their scenes beneath, because both orders are
+  what MIDI addresses (36+n bank, 24+n scene) — never flattened; reorder is applied to
+  the data, never by letting Qt move the items (their roles go stale).
+- `ScenePreview` (`ui/fixture/console.py`) **is** the stage engine, fed raw DMX, so a
+  look previews exactly as on stage; **`clear()` it before it goes away** — the bodies
+  own timers on the shared clock.
+- `ui/fixture/affordances.py` — controls chosen from a fixture's capabilities and
+  **never from its name**.
 
-### Metronome Sync
-On start/resume, compute beats elapsed
-(`total_beats_elapsed = timeline_position_sec / beat_duration_sec + 1`) and the
-remainder to the next boundary: play immediately if within `0.001s`, else
-single-shot timer to the next beat then switch to regular intervals. Always
-restart on seek-during-playback or BPM change.
+## Timeline and clip editing
 
-### Media Playback Timeline
-- `time.time()`-based tracking; separate `current_timeline_time` /
-  `playback_start_time` for pause/resume. MP3 position synced via
-  `QMediaPlayer.setPosition()`. `audio.offset` fine-tunes audio↔MIDI/DMX sync.
-- The BACKING|GUIDE monitor swaps which file the engine decodes (one track
-  in RAM at a time; switching mid-play just drops out until the new decode
-  lands and the drift resync repositions it). `guide_offset` plays the same
-  timeline-alignment role for the guide that `offset` plays for the backing.
-  MIDI/DMX/metronome/cues are timeline-driven and identical under either.
-
-### MIDI Event Management
-- Clip-style: each event is a movable, resizable rectangle on its fixture lane.
-  Three drag modes (MOVE, RESIZE_LEFT, RESIZE_RIGHT) with neighbor clamping and
-  zoom-aware edge-snap (beat lines are snap targets). Persistence happens **only**
-  on `mouseRelease` via `*_committed` signals; mid-drag is purely visual.
-- **BLACKOUTs are gap markers**, scoped per fixture (`BLACKOUT` for ledbar,
-  `BLACKOUT_BLINDERS` for blinders), identified by part-name PREFIX
-  (case-insensitive), not note number. `reconcile_blackouts()` forbids
-  zero-duration/adjacent BLACKOUTs and reinserts them to keep clip extents.
-  Deleting a regular clip converts it to a fixture-matching BLACKOUT, not a hole.
-- Scene clips: 7 simultaneous channel-control `note_on` events sharing a
-  `group_id`, rendered as one grouped clip; drags route to the scene API
-  (`add_scene`, group move/resize). Clips support fade-in/out via `FadeEngine`;
-  multi-selection (marquee/ctrl-click) moves/deletes groups via `SelectionEditor`.
-
-### Clip Library Drag-and-Drop
-- MIME types: `application/x-tupperdmx-midi-clip` (single note + velocity),
-  `application/x-tupperdmx-led-scene` (full 7-channel scene payload).
-- `Timeline.can_accept_clip_drop()` validates fixture-under-cursor matches the
-  clip's fixture (scene drops restricted to ledbar); `handle_scene_drop()`
-  calls `MidiManager.add_scene()` to expand the payload into 7 grouped events.
-- Click-to-preview: `preview_requested` → `MainWindow._preview_clip()` routes
-  to active MIDI output (or software controller) without touching the timeline.
-
-### I/O Routing (`config.io` + `core/io_routing.py`)
-All routing is explicit in Settings ▸ Input / Output (no toolbar selectors,
-no localhost magic). `MainWindow._apply_io_config()` applies `config.io`:
-`MediaController.set_midi_routing(midi_routing_from_io(io))` (fan-out:
-internal controller and/or one external port) and `DMXManager.apply_io(io)`
-(controller lifecycle → sinks → stage input). With the defaults ("All
-software" preset) the controller runs and feeds the stage **in-process** via
-`StageFrameBridge` (cross-thread queued signal into `dmx_data_received`) —
-no UDP loopback. `software_controller_changed` still reaches
-`MainWindow` → `MidiManager` exactly as before. Cardinalities: MIDI out 1→N
-(stateful command protocol: fan-out fine, fan-in forbidden), controller DMX
-out 1→N (idempotent snapshots), stage DMX in = exactly one selectable feed.
-
-Color palettes via `generate_song_colors(mode, hue_index)` (HSL→RGB,
-mutex-protected); `PALETTE_MODES = COMPLEMENTARY, ANALOGOUS, TRIADIC,
-COLOR+WHITE, MONOCHROMATIC, SINGLE`. The `START` note has no `song_index` — its
-velocity encodes the palette (`hue_index = velocity // 6`, 12 = random hue;
-`mode = PALETTE_MODES[velocity % 6]`). `pick_scene_from_song_part()` picks
-per-part scenes (all VERSEs share one hardcoded fill). `_apply_blend()`
-interpolates present↔future DMX to avoid blackout artifacts.
-
-## File Organization
-
-- `main.py` (repo root, the only root source file) — thin entry point
-  (`--headless` parsed before any Qt import); the window lives in
-  `ui/main_window.py`, the headless runner in `app/headless.py`.
-- `app/` — the shared application core (QtCore/QtMultimedia only — NEVER
-  QtWidgets or `ui/`; no eager re-exports): `core.py` (`AppCore`), `bpm.py`
-  (`BpmState`), `playlist.py` (`PlaylistCore`), `media_controller.py`,
-  `audio_controller.py`, `show_manager.py` (`ShowManager`: aliasing,
-  autosave, open/restore), `headless.py` (`run_headless`).
-- `core/` — Qt-free shared domain layer (no eager re-exports; import
-  submodules directly): `config.py` (dataclass config — see Configuration &
-  persistence), `show/` (the show-project package: `model.py`, `manifest.py`,
-  `store.py`, `migrate.py`, `versions.py`, `relink.py`, `bundle.py`),
-  `paths.py` (single source of `bundle_dir()`/`asset_path()`/
-  `userprefs_dir()`/`default_shows_dir()`, dev vs. PyInstaller `_MEIPASS`),
-  `fixture_library.py`
-  (data-driven fixture-type library: `FixtureDef`, JSON loaders, role/flag
-  maps, plus the per-type presentation colours `GROUP_COLORS`/
-  `color_for_type()`), `note_layout.py` (note → label/colour lookup),
-  `io_routing.py` (pure routing logic: `MidiRouting`, presets, `validate()`,
-  `flow_text()`, and `flow_state()` → `FlowState`, the render-ready
-  signal-flow graph state), `buildinfo.py` (build metadata accessor).
-- `fixtures/` (repo root) — shipped fixture-type definitions (`*.json`).
-- `audio/` — the audio engine package (no eager re-exports): `mixer.py`
-  (Qt-free three-bus stereo mixer + routing modes + beep synthesis),
-  `engine.py` (`AudioEngine`: the push-mode QAudioSink bridge on the
-  configured output device), `decode.py` (async QAudioDecoder → PCM),
-  `tts.py` (piper voices/download, sha1-keyed WAV render cache, count-in
-  words).
-- `ui/` — `main_window.py` (`MainWindow`, the desktop view over `AppCore`),
-  `playlist_controller.py` (widget half of the playlist: timeline/toolbar
-  refresh + relink dialogs — guides relink silently, no dialog — over
-  `app.playlist.PlaylistCore`),
-  `stage_controller.py`, `stage_fixtures.py` (Qt render
-  objects: bespoke `LedBar`/`Blinder`, the data-driven `GenericFixture`, and
-  the `DesignableFixture` mixin — design-mode move/select + drag-release
-  position write-back), `fixture_designer.py` (scenario-designer panel + add
-  dialog), `dmx_display.py`, `clip_library.py`, `toolbar_manager.py`,
-  `settings_dialog.py` (incl. the Input/Output section + AUDIO card),
-  `io_flow_widget.py`, `voice_cues_dialog.py` (per-song spoken-cue editor),
-  `error_dialogs.py`, `about_dialog.py`.
-- `dmx/` — `manager.py` (I/O coordinator: `apply_io`, `StageFrameBridge`,
-  stage-input worker lifecycle), `artnet_worker.py` (asyncio UDP pure
-  listener on 0.0.0.0), `usb_worker.py` (FTDI/serial reader), `base.py`.
-- `midi/` — `manager.py` (facade: worker lifecycle, signals, data proxies),
-  `document.py` (`MidiDocument`: state, queries, mutators, `reconcile_blackouts`),
-  `codec.py` (`mido.MidiFile` ↔ event/note lists), `fade_engine.py`,
-  `clip_editor.py` (single-clip CRUD/move/resize), `scene_editor.py`
-  (scene-group ops), `selection_editor.py` (multi-select), `constants.py`,
-  `worker.py` (threaded output with controller/port fan-out).
-- `software_controller/` — `main.py` (`DMXController`), `artnet_sender.py`,
-  `usb_dmx_sender.py` (FTDI DMX512 TX: break/MAB/start-code, self-disabling),
-  `scene_loader.py` (`load_led_scenes()` → immutable `LedScene` records sourced
-  from the `ledbar` fixture def's banks). Scene banks/chases live in the
-  `fixtures/*.json` defs (no more `dmx.py`/`dmx_config.json`).
-- `webremote/` — `server.py` (`WebRemoteWorker`: aiohttp HTTP+WS in a
-  QThread), `manager.py` (`WebRemoteManager`: Qt bridge — worker lifecycle,
-  snapshots, command execution), Qt-free `state.py` / `commands.py` /
-  `peaks.py`, and `static/` (the shipped tablet page: `index.html`,
-  `style.css`, `app.js`; bundled via build.spec).
-- `timeline/` — `manager.py` (coordinator, one `MidiEventsTrack` per fixture
-  filter), `tracks/` (`base.py`, `ruler.py`, `waveform.py`, `midi_events.py`),
-  `widgets/` (`tooltip.py`, `content_view.py`, `midi_event_edit.py`,
-  `scene_edit.py` — gradient slider/color wheel/animation grid,
-  `start_event_edit.py` — START-event editor, `resize_handle.py`).
-- `tests/` — headless characterization tests (standalone scripts; see above).
-- `tupperlogger/` — custom logger with file rotation.
-
-## Timeline Architecture Notes
-
-- `RulerTrack` / `WaveformTrack` / one `MidiEventsTrack` per `fixture_filter`
-  extend `BaseTrack`; Timeline exposes `PIXELS_PER_SECOND` and `fixture_at_y()`
-  for drop routing.
 - Tracks separate **content items** (cleared on redraw) from **header items**
-  (persistent, e.g. metronome controls). Waveform/MIDI heights resize via
-  `TrackResizeHandle` (persisted as `window.waveform_track_height` /
-  `window.midi_events_track_height`). Cross-component sync via
-  `MidiManager.data_changed` (events cached in `_cached_events`); scene groups
+  (persistent). Cross-component sync rides `MidiManager.data_changed`; scene groups
   collapse to one `DraggableMidiEvent` via `build_render_units()`.
+- Clip drags have three modes (MOVE, RESIZE_LEFT, RESIZE_RIGHT) with neighbour clamping
+  and zoom-aware edge-snap. **Persistence happens only on `mouseRelease`** via
+  `*_committed` signals; mid-drag is purely visual.
+- **BLACKOUTs are gap markers**, scoped per fixture and identified by part-name
+  **PREFIX** (case-insensitive), *not* note number. `reconcile_blackouts()` forbids
+  zero-duration/adjacent BLACKOUTs and reinserts them to keep clip extents; deleting a
+  regular clip converts it to a fixture-matching BLACKOUT, not a hole.
+- Scene clips are 7 simultaneous `note_on` events sharing a `group_id`, rendered as one
+  clip; drags route to the scene API.
+
+**A clip is edited against the fixture it lives on, never against a table.** Its note is
+a *verb*, its MIDI channel selects the fixture, its velocity is that verb's parameter —
+so `Timeline._fdef(channel)` resolves the patch entry first and everything follows from
+that `FixtureDef`.
+
+- A scene group gets the console; any other clip gets its verb's editor from
+  `verb_editors.py`, off a table whose predicates mirror `handle_note_on`'s match arms.
+  **Retyping resets the velocity**: channel-at-200 is velocity 100, which carried across
+  would select chase #100. The picker is gated by the same `note_applies_to`
+  drag-and-drop validates with, so the dialog can never author a clip a drop would have
+  refused.
+- **Only `present | touched` is submitted.** Submitting every fader would silently widen
+  a scene, since an absent channel holds the last frame's value while a present one at
+  its default *forces* it. Growth goes through `update_scene(..., remove=...)`, which
+  never drops below 2 members.
+- **Only a fixture's first 23 slots are reachable** (24 up are scene-load), so
+  `field_note_map` caps there and the fader strip greys the tail.
+- **Live output is opt-in**, never persisted, 30 ms-throttled, and locked out while the
+  transport plays or the lane is muted/locked. Payloads **lead with note 48
+  TAKE_MANUAL**, or the auto/song-part program overwrites them next frame. Cancel
+  re-sends the opening values *once* — a re-send, not a restore.
+- **"Save as scene…" writes the fixture library immediately**, independent of
+  OK/Cancel — it edits a type every show shares.
+- Writes go through `move_event`/`move_scene` for the time (they clamp and keep the
+  BLACKOUT markers honest, unlike `edit_event(time=...)`), then **`_schedule_refresh()`
+  — never `refresh_from_manager()`**.
+
+## Testing notes
+
+Tests are headless and GL-free (CI's offscreen platform cannot make a context).
+`ofl_factory.py` builds synthetic OFL documents so a capability nobody ships a fixture
+for can still be exercised. `test_capability_coverage.py`, `test_renderer_registry.py`
+and `test_stage_optics.py` carry the three tables that fail loudly when OFL gains a
+capability type, category or wheel-slot type nobody handled.
+
+NB **`[255] * channel_count` is not a "fixture on" frame** — on anything with a shutter
+it selects a strobe, so use `_lit_frame()`.
 
 ## Common Debugging
 
@@ -459,15 +400,10 @@ interpolates present↔future DMX to avoid blackout artifacts.
 # Tail today's log
 tail -f logs/tupperDMX_$(date +%Y%m%d).log
 
-# Reset user prefs: delete userprefs.json from the platformdirs path above
-# (shipped config.json is read-only and stays put). Show data is NOT in
-# prefs — each show is a self-contained <Name>.show/ folder (default under
-# ~/Documents/TupperDMX/), with its own versions/ snapshot history.
-
 # Enumerate MIDI outputs
 python -c "import mido; print(mido.get_output_names())"
 
-# Smoke-test software controller (emits nothing without sinks; give it one)
+# Smoke-test the software controller — it emits NOTHING without sinks, so give it one
 uv run python -c "
 from software_controller.main import DMXController
 from software_controller.artnet_sender import ArtNetSender
@@ -476,7 +412,6 @@ c = DMXController(); c.set_sinks([ArtNetSender(ip='127.0.0.1', port=6454)])
 c.start_background(); time.sleep(2); c.stop()"
 ```
 
-## Key Import Reminders
-
-- Timeline editing dialogs need both `QDialog` and `QMessageBox` imported;
-  error dialogs require a parent widget reference for consistent styling.
+Reset user prefs by deleting `userprefs.json` from the platformdirs path. Show data is
+NOT in prefs — each show is a self-contained `<Name>.show/` folder with its own
+`versions/` history.

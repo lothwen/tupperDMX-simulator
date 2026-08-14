@@ -30,9 +30,43 @@ def _setup_logging(config):
             f"Failed to setup logging system: {e}")
 
 
+def _stage_gpu_requested() -> bool:
+    """Whether to ask Qt for an OpenGL surface, decided before Qt starts.
+
+    The surface format has to be set before `QApplication` exists, which is
+    before `Config.load()` has run, so this reads the single key it needs
+    straight out of userprefs. Anything at all going wrong means "no": the
+    raster stage is the answer that works everywhere.
+    """
+    import json
+    # Resolved at call time, not bound at import: the module-level name would
+    # be a private copy that a test redirecting the prefs directory cannot
+    # reach, which is how the bug this guards against went unnoticed.
+    from core.config import userprefs_path
+    try:
+        with open(userprefs_path(), "r", encoding="utf-8") as handle:
+            window = json.load(handle).get("window", {})
+        return bool(window.get("stage_gpu", False))
+    except (OSError, ValueError, AttributeError):
+        # No prefs yet, or unreadable: first launch looks exactly like this.
+        return False
+    except Exception as exc:
+        # Anything else is a bug in here, not a user's missing file. Say so —
+        # swallowing it silently turns "the GPU stage does nothing" into an
+        # unexplainable report, which is precisely how this went wrong once.
+        print(f"warning: could not read the stage renderer preference: {exc!r}",
+              file=sys.stderr)
+        return False
+
+
 def run_gui(argv):
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
+
+    if _stage_gpu_requested():
+        # Before QApplication, or it has no effect at all.
+        from stage.gpu.layer import configure_surface_format
+        configure_surface_format()
 
     app = QApplication(argv)
     # Wayland matches a window to its taskbar icon via the app_id (derived from
