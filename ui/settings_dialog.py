@@ -1,9 +1,11 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
-# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Logging).
+# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Virtual
+# ABOUTME: stage, Logging).
 
 import html
 import threading
+from dataclasses import asdict
 
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QSpinBox,
@@ -20,9 +22,9 @@ from core import buildinfo, io_routing
 from core.config import Config, IOConfig
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
-from ui import icons
+from ui.widgets import icons
 from ui.io_flow_widget import IOFlowWidget
-from ui.toggle_switch import ToggleSwitch
+from ui.widgets.toggle_switch import ToggleSwitch
 from webremote.state import lan_ip
 
 
@@ -41,7 +43,8 @@ class SettingsDialog(QDialog):
     _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
 
     _PAGES = (("swap", "Input / Output"), ("monitor", "Web Remote"),
-              ("volume", "Audio"), ("list-view", "Logging"))
+              ("volume", "Audio"), ("bolt", "Virtual stage"),
+              ("list-view", "Logging"))
 
     def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
@@ -64,6 +67,7 @@ class SettingsDialog(QDialog):
         self.pages.addWidget(self._build_io_page())
         self.pages.addWidget(self._build_webremote_page())
         self.pages.addWidget(self._build_audio_page())
+        self.pages.addWidget(self._build_stage_page())
         self.pages.addWidget(self._build_logging_page())
         right.addWidget(self.pages, 1)
 
@@ -569,8 +573,132 @@ class SettingsDialog(QDialog):
         hint = QLabel("Level changes apply on the next launch.")
         hint.setObjectName("SettingsDimLabel")
         layout.addWidget(hint)
+
         layout.addStretch(1)
         return page
+
+    def _build_stage_page(self) -> QWidget:
+        page, layout = self._make_page("Virtual stage", "renderer · fog")
+
+        self.stage_gpu_check = QCheckBox("Render the stage light on the GPU")
+        self.stage_gpu_check.setChecked(self.config.window.stage_gpu)
+        self.stage_gpu_check.setToolTip(
+            "Accumulate every fixture's light in one high-dynamic-range buffer "
+            "and tonemap it with the ACES filmic curve.\n"
+            "Beams add where they cross and blow out instead of flattening "
+            "to white.\n"
+            "Needs a working OpenGL driver; falls back to the normal renderer "
+            "if there isn't one.")
+        layout.addWidget(self.stage_gpu_check)
+
+        gpu_hint = QLabel("Applies on the next launch.")
+        gpu_hint.setObjectName("SettingsDimLabel")
+        layout.addWidget(gpu_hint)
+
+        self._build_fog_controls(layout)
+
+        layout.addStretch(1)
+        return page
+
+    def _build_fog_controls(self, layout: QVBoxLayout) -> None:
+        """Volumetric fog: the switch, and what the march costs.
+
+        What the fog *looks* like is not here — that is the FOG row on the
+        stage's edit toolbar, because it is tuned by eye against a rig. These
+        are the settings you pick once for the machine you are running on.
+        """
+        fog = self.config.window.fog
+
+        layout.addSpacing(10)
+        self.fog_check = QCheckBox("Volumetric fog")
+        self.fog_check.setChecked(fog.enabled)
+        self.fog_check.setToolTip(
+            "March every view ray through the air instead of scaling each "
+            "beam's brightness by one stage-wide haze number.\n"
+            "Shafts are integrated through the fog that is actually there, so "
+            "a beam brightens crossing a puff of smoke and god rays fall out "
+            "on their own.\n"
+            "Needs the GPU renderer above.")
+        self.fog_check.setEnabled(self.stage_gpu_check.isChecked())
+        layout.addWidget(self.fog_check)
+
+        # A ray march has nowhere to run on the raster path, so the whole block
+        # follows the checkbox above it rather than being separately wrong.
+        self.stage_gpu_check.toggled.connect(self.fog_check.setEnabled)
+
+        quality = QFrame()
+        quality.setObjectName("SettingsSubCard")
+        form = QFormLayout(quality)
+        form.setContentsMargins(18, 6, 0, 0)
+        form.setSpacing(6)
+
+        self.fog_steps_spin = QSpinBox()
+        self.fog_steps_spin.setRange(4, 128)
+        self.fog_steps_spin.setValue(fog.march_steps)
+        self.fog_steps_spin.setToolTip(
+            "Samples along each view ray. The biggest cost here, and the "
+            "difference between smooth shafts and visible banding.\n"
+            "24 is comfortable on integrated graphics.")
+        form.addRow("March steps:", self.fog_steps_spin)
+
+        self.fog_resolution_combo = QComboBox()
+        for caption, value in (("Quarter (fastest)", 0.25), ("Half", 0.5),
+                               ("Full (slowest)", 1.0)):
+            self.fog_resolution_combo.addItem(caption, value)
+        self._select_fog_resolution(fog.resolution)
+        self.fog_resolution_combo.setToolTip(
+            "What fraction of the window the fog is marched at before being "
+            "scaled back up.\n"
+            "Fog is soft and low-frequency, so resolution is much cheaper to "
+            "give up than step count.")
+        form.addRow("Resolution:", self.fog_resolution_combo)
+
+        self.fog_distance_spin = QSpinBox()
+        self.fog_distance_spin.setRange(100, 8000)
+        self.fog_distance_spin.setSingleStep(100)
+        self.fog_distance_spin.setSuffix(" px")
+        self.fog_distance_spin.setValue(int(fog.max_distance))
+        self.fog_distance_spin.setToolTip(
+            "How deep the marched slab of air is, in stage units.")
+        form.addRow("Max distance:", self.fog_distance_spin)
+
+        self.fog_jitter_spin = QSpinBox()
+        self.fog_jitter_spin.setRange(0, 200)
+        self.fog_jitter_spin.setSuffix(" %")
+        self.fog_jitter_spin.setValue(int(round(fog.jitter * 100)))
+        self.fog_jitter_spin.setToolTip(
+            "How far each ray's start is dithered, trading banding for noise "
+            "that is then averaged away over a few frames.\n"
+            "At 0 the bands come back.")
+        form.addRow("Jitter:", self.fog_jitter_spin)
+
+        self.fog_light_dir_spin = QSpinBox()
+        self.fog_light_dir_spin.setRange(0, 360)
+        self.fog_light_dir_spin.setSuffix("°")
+        self.fog_light_dir_spin.setValue(int(round(fog.light_dir_deg)))
+        self.fog_light_dir_spin.setToolTip(
+            "Which way the stage-wide key on the medium comes from. "
+            "90° is straight down the picture, the way every other angle on "
+            "this stage is measured.")
+        form.addRow("Ambient from:", self.fog_light_dir_spin)
+
+        layout.addWidget(quality)
+        quality.setEnabled(fog.enabled and self.stage_gpu_check.isChecked())
+        self.fog_check.toggled.connect(
+            lambda on: quality.setEnabled(on and self.stage_gpu_check.isChecked()))
+        self.stage_gpu_check.toggled.connect(
+            lambda on: quality.setEnabled(on and self.fog_check.isChecked()))
+
+        fog_hint = QLabel("Fog appearance lives on the stage's edit toolbar.")
+        fog_hint.setObjectName("SettingsDimLabel")
+        layout.addWidget(fog_hint)
+
+    def _select_fog_resolution(self, value: float) -> None:
+        """Pick the nearest offered resolution — prefs may hold anything in
+        range, and the combo offers three sensible ones."""
+        best = min(range(self.fog_resolution_combo.count()),
+                   key=lambda i: abs(self.fog_resolution_combo.itemData(i) - value))
+        self.fog_resolution_combo.setCurrentIndex(best)
 
     def _build_flow_panel(self) -> QFrame:
         panel = QFrame()
@@ -766,6 +894,18 @@ class SettingsDialog(QDialog):
         self.config.artnet.universe = self.universe_spin.value()
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
+        self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
+        # Through the config's own parser, so the dialog and a hand-edited
+        # prefs file agree about what is in range.
+        self.config.window.fog = Config._parse_fog({
+            **asdict(self.config.window.fog),
+            "enabled": self.fog_check.isChecked(),
+            "march_steps": self.fog_steps_spin.value(),
+            "resolution": self.fog_resolution_combo.currentData(),
+            "max_distance": float(self.fog_distance_spin.value()),
+            "jitter": self.fog_jitter_spin.value() / 100.0,
+            "light_dir_deg": float(self.fog_light_dir_spin.value()),
+        })
         self.config.webremote.enabled = self.webremote_toggle.isChecked()
         self.config.webremote.port = self.webremote_port_spin.value()
         self.config.audio.output_device = self.audio_device_combo.currentData() or ""

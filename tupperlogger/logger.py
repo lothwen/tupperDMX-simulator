@@ -135,7 +135,7 @@ class TupperDMXLogger:
             "ui.main",
             "ui.timeline",
             "ui.fixtures",
-            "ui.stage"
+            "stage"
         ]
         
         for logger_name in ui_loggers:

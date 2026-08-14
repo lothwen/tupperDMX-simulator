@@ -28,7 +28,7 @@ app = QApplication.instance() or QApplication([])
 import pytest
 
 from core import config as config_module, fixture_library
-from core.config import Config, SongConfig
+from core.config import Config, FixtureInstance, SongConfig
 from core.show import store
 
 
@@ -46,12 +46,12 @@ def _assert(cond, msg):
     print(f"  ok: {msg}")
 
 
-def _boot(tmp):
+def _boot(tmp, fixtures=()):
     """A real show + AppCore, exactly like app/headless.py boots it (minus
     the web-remote socket: config leaves it disabled)."""
     from app.core import AppCore
 
-    show = store.create_show(tmp, "Rack")
+    show = store.create_show(tmp, "Rack", fixtures=fixtures)
     show.playlist.songs.append(SongConfig(id="s1", title="Uno"))
     show.playlist.songs.append(SongConfig(id="s2", title="Dos"))
     show.playlist.current_song_index = 0
@@ -121,10 +121,49 @@ def test_headless_core_contract():
                 "controller stopped on shutdown")
 
 
+def test_repatch_keeps_the_rig_in_auto():
+    """A patch edit must not drop every fixture out of the song-part program.
+
+    `repatch` builds each Fixture fresh, so the auto flag — a runtime *mirror*
+    of what the .mid persists as its note-71 setup — comes back at its default
+    of off. Nothing else re-seeds it (that only happens when the controller
+    *instance* changes), so editing a fixture in the designer left the whole rig
+    ignoring every song-part marker while the timeline's 'A' buttons still said
+    it was in auto: the notes went on arriving and stopped doing anything.
+    """
+    print("test_repatch_keeps_the_rig_in_auto")
+    patch = [FixtureInstance(type="ledbar", dmx_start=1),
+             FixtureInstance(type="blinder", dmx_start=33)]
+    with tempfile.TemporaryDirectory() as tmp:
+        config_module.userprefs_path = lambda: Path(tmp) / "userprefs.json"
+        core, config, _ = _boot(tmp, fixtures=patch)
+        try:
+            controller = core.software_controller
+            for channel in (0, 1):
+                core.midi_manager.set_fixture_auto(channel, True)
+            _assert(core.midi_manager.auto_channels() == {0, 1},
+                    "the document has both lanes in auto")
+            _assert(all(controller.is_fixture_auto(c) for c in (0, 1)),
+                    "and the controller mirrors it")
+
+            # What a designer edit does: the address moved, so the patch is
+            # hot-swapped onto the running controller.
+            config.fixtures[1].dmx_start = 40
+            core.repatch_controller()
+
+            _assert(core.midi_manager.auto_channels() == {0, 1},
+                    "the document still has both lanes in auto")
+            _assert(all(controller.is_fixture_auto(c) for c in (0, 1)),
+                    "and the repatched controller still agrees with it")
+        finally:
+            core.shutdown()
+
+
 def main():
     orig_prefs = config_module.userprefs_path
     try:
         test_headless_core_contract()
+        test_repatch_keeps_the_rig_in_auto()
     finally:
         config_module.userprefs_path = orig_prefs
         fixture_library.set_show_fixtures_dir(None)

@@ -48,12 +48,14 @@ def test_describe_note_per_fixture():
     defs = load_fixture_defs()
     led, bli = defs["ledbar"], defs["blinder"]
 
-    _assert(note_layout.describe_note(1, led).part == "Brightness",
-            "note 1 -> fixture's first channel name")
+    _assert(note_layout.describe_note(1, led).part == "Intensity",
+            "note 1 -> what the fixture's first channel does")
     _assert(note_layout.describe_note(4, led).part == "Red",
-            "note 4 -> ledbar Red channel")
+            "note 4 -> ledbar Red channel, named by its OFL colour")
     _assert(note_layout.describe_note(4, led).color == "#aa3333",
             "Red channel gets a red swatch")
+    _assert(note_layout.describe_note(7, led).part == "Direction",
+            "note 7 -> the sidecar label, for a channel OFL only calls Generic")
     # Note 8 is the blinder's 8th channel; for the 7-channel ledbar it resolves
     # to a generic label (the applicability gate is note_applies_to, below).
     _assert(note_layout.describe_note(8, bli).part == "Speed",
@@ -94,6 +96,66 @@ def test_build_note_map_order():
     _assert("50" in m and "51" in m, "blackout verbs present in the note map")
     _assert(list(m).index("50") < list(m).index("51"),
             "BLACKOUT (50) precedes BLACKOUT ALL (51) for prefix-search")
+
+
+def test_verb_choices():
+    """The authoring picker: every verb worth offering on a fixture, named by
+    that fixture, grouped the way handle_note_on dispatches."""
+    print("test_verb_choices")
+    defs = load_fixture_defs()
+    led, bli = defs["ledbar"], defs["blinder"]
+
+    groups = dict(note_layout.verb_choices(led))
+    _assert(list(groups) == ["Channels", "Scenes", "Banks", "Chases",
+                             "Control", "Colour", "Show"],
+            f"groups in dispatch order ({list(groups)})")
+
+    channels = [note for note, _label, _color in groups["Channels"]]
+    _assert(channels == list(range(1, 8)),
+            f"one channel verb per ledbar channel ({channels})")
+    labels = [label for _n, label, _c in groups["Channels"]]
+    _assert(labels[3] == "Red",
+            f"named from the fixture's own capabilities ({labels})")
+
+    # Every offered note must survive the drop validator, or the picker can
+    # author something drag-and-drop would have refused.
+    for _label, entries in groups.items():
+        for note, _text, _color in entries:
+            _assert_quiet(note_layout.note_applies_to(note, led),
+                          f"note {note} passes note_applies_to")
+    print("  ok: every offered verb passes note_applies_to")
+
+    # A blinder has 8 channels and exactly one bank.
+    bgroups = dict(note_layout.verb_choices(bli))
+    _assert([n for n, _l, _c in bgroups["Channels"]] == list(range(1, 9)),
+            "the blinder offers its 8 channels")
+    _assert([n for n, _l, _c in bgroups["Banks"]] == [36],
+            "and only the one bank select it has a bank for")
+
+    scene_notes = [n for n, _l, _c in bgroups["Scenes"]
+                   if note_layout.SCENE_LOAD_RANGE[0] <= n
+                   <= note_layout.SCENE_LOAD_RANGE[1]]
+    first_bank = next(iter(bli.banks.values()))
+    _assert(len(scene_notes) == min(12, len(first_bank)),
+            f"scene verbs are bounded by the scenes that exist ({scene_notes})")
+
+    # Song parts are global and channel-less; offering them on a fixture lane
+    # would let a clip become a channel-scoped song part.
+    _assert(all(not note_layout.is_song_part(n)
+                for _l, entries in groups.items() for n, _t, _c in entries),
+            "song parts are excluded by default")
+    with_parts = dict(note_layout.verb_choices(led, include_song_parts=True))
+    _assert(any(note_layout.is_song_part(n)
+                for n, _t, _c in with_parts["Show"]),
+            "and offered when asked for (the waveform band)")
+
+    no_channels = dict(note_layout.verb_choices(led, include_channels=False))
+    _assert("Channels" not in no_channels, "channels can be suppressed")
+
+
+def _assert_quiet(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
 
 
 def test_blinder_scene_roundtrip(tmp_path=None):
@@ -152,6 +214,7 @@ def main():
     test_describe_note_per_fixture()
     test_note_applies_to()
     test_build_note_map_order()
+    test_verb_choices()
     test_blinder_scene_roundtrip()
     test_chase_load_verb()
     print("\nALL TESTS PASSED")

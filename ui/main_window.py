@@ -7,9 +7,11 @@ from dataclasses import asdict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
-                             QStyle, QTabWidget, QDialog, QInputDialog)
-from PyQt6.QtGui import QShortcut, QKeySequence
-from PyQt6.QtCore import (Qt, QTimer, QEvent, QVariantAnimation,
+                             QStyle, QTabWidget, QDialog, QInputDialog,
+                             QAbstractSpinBox, QComboBox, QLineEdit,
+                             QPlainTextEdit, QTextEdit)
+from PyQt6.QtGui import QGuiApplication, QShortcut, QKeySequence
+from PyQt6.QtCore import (Qt, QSize, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
 
 from app.core import AppCore
@@ -22,15 +24,16 @@ from core.show import store as show_store
 from core.show.model import ShowError
 from timeline import Timeline
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
 from ui.about_dialog import AboutDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
-from ui.fixture_designer import StageEditToolbar, FixtureInspector
+from ui.fixture.designer import StageEditToolbar, FixtureInspector
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
-from ui.stage_controller import StageController
+from ui.stage_window import StageWindow
+from stage.controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.voice_cues_dialog import VoiceCuesDialog
@@ -202,6 +205,7 @@ class MainWindow(QMainWindow):
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
         self.toolbar_manager.about_requested.connect(self.show_about_dialog)
+        self.toolbar_manager.dock_stage_requested.connect(self.dock_stage)
     
     def setup_ui(self):
         """Setup the main UI layout."""
@@ -250,6 +254,13 @@ class MainWindow(QMainWindow):
         self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
         self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
+        # The clip editor can write a fixture's scene banks, which the library
+        # panel has already read — rebuild it rather than wait for a restart.
+        self.timeline.library_changed.connect(
+            lambda: self.clip_library.refresh_configuration(self.config))
+        # Auditioning a clip from the editor takes the same route as the clip
+        # library's click-to-preview, so config.io routing applies.
+        self.timeline.preview_requested.connect(self.app_core.preview_clip)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
         # mirror live zoom (Fit / Ctrl+wheel) back onto the toolbar slider.
@@ -262,20 +273,28 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
         self.timeline_toolbar.voice_cues_requested.connect(self.show_voice_cues_dialog)
+        self.timeline_toolbar.add_track_requested.connect(self.add_fixture_from_timeline)
 
-        # Bundle the timeline toolbar + tracks into one resizable section.
+        # Bundle the timeline toolbar + tracks into one resizable section. The
+        # layout is kept because undocking flips the two (see _set_toolbar_at_bottom).
         timeline_section = QWidget()
-        section_layout = QVBoxLayout(timeline_section)
-        section_layout.setContentsMargins(0, 0, 0, 0)
-        section_layout.setSpacing(0)
-        section_layout.addWidget(self.timeline_toolbar)
-        section_layout.addWidget(self.timeline)
+        self._timeline_section_layout = QVBoxLayout(timeline_section)
+        self._timeline_section_layout.setContentsMargins(0, 0, 0, 0)
+        self._timeline_section_layout.setSpacing(0)
+        self._timeline_section_layout.addWidget(self.timeline_toolbar)
+        self._timeline_section_layout.addWidget(self.timeline)
         timeline_section.setMinimumHeight(160)
+
+        # The timeline shares a row with nothing while the stage is docked. Once
+        # it is undocked the right sidebar moves in beside it, so the timeline
+        # gets the whole window height and the library a full-height column.
+        self.timeline_row = QSplitter(Qt.Orientation.Horizontal)
+        self.timeline_row.addWidget(timeline_section)
 
         # Vertical splitter: drag the divider to resize the timeline section.
         self.vertical_splitter = QSplitter(Qt.Orientation.Vertical)
         self.vertical_splitter.addWidget(self.main_content)
-        self.vertical_splitter.addWidget(timeline_section)
+        self.vertical_splitter.addWidget(self.timeline_row)
         self.vertical_splitter.setCollapsible(0, False)
         self.vertical_splitter.setCollapsible(1, False)
         self.main_layout.addWidget(self.vertical_splitter, 1)
@@ -306,6 +325,9 @@ class MainWindow(QMainWindow):
         self._dmx_panel_collapsed = False
         self._last_dmx_width = 250
         self._panel_animation = None
+        # Which splitter currently hosts the sidebar — main_content while the
+        # stage is docked, timeline_row once it is undocked.
+        self._sidebar_splitter = self.main_content
         self.dmx_toggle_button = QPushButton(stage_view)
         self.dmx_toggle_button.setObjectName("DmxPanelToggle")
         self.dmx_toggle_button.setFixedSize(28, 28)
@@ -326,6 +348,23 @@ class MainWindow(QMainWindow):
         stage_view.add_overlay(self.edit_stage_button, anchor="top-right", reference="background")
         self.edit_stage_button.show()
 
+        # Detach the stage into its own window (a second display, typically),
+        # which hands the whole main window to the timeline. Registered after
+        # "Edit stage" so the overlay row puts it to that button's left, and
+        # kept visible in edit mode — the stage is designable either way.
+        self._stage_window = None
+        self._docked_content_sizes = None
+        self._collapsed_before_undock = False
+        self.dock_stage_button = QPushButton()
+        self.dock_stage_button.setObjectName("StageDockButton")
+        self.dock_stage_button.setIconSize(QSize(18, 18))
+        self.dock_stage_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dock_stage_button.clicked.connect(self._toggle_stage_dock)
+        self._update_dock_stage_button()
+        self.dock_stage_button.adjustSize()
+        stage_view.add_overlay(self.dock_stage_button, anchor="top-right", reference="background")
+        self.dock_stage_button.show()
+
         self.edit_toolbar = StageEditToolbar(
             self.stage_controller, self._on_patch_changed, self.exit_edit_mode)
         stage_view.add_overlay(self.edit_toolbar, anchor="top-left", reference="background")
@@ -345,14 +384,29 @@ class MainWindow(QMainWindow):
 
     def _apply_initial_collapsed_state(self) -> None:
         """Collapse the DMX panel without animation at startup."""
-        sizes = self.main_content.sizes()
+        self._set_sidebar_collapsed(True)
+
+    def _set_sidebar_collapsed(self, collapsed: bool) -> None:
+        """Collapse/expand the sidebar in whichever splitter now hosts it.
+
+        The animation-free half of `_toggle_dmx_panel`, so startup and the
+        undock re-flow can reach the same state without a 200ms slide.
+        """
+        splitter = self._sidebar_splitter
+        sizes = splitter.sizes()
         if len(sizes) < 2:
             return
         total = sizes[0] + sizes[1]
-        self._last_dmx_width = sizes[1] if sizes[1] > 0 else 250
-        self.main_content.setSizes([total, 0])
-        self.right_sidebar.setVisible(False)
-        self._dmx_panel_collapsed = True
+        if collapsed:
+            self._last_dmx_width = sizes[1] if sizes[1] > 0 else self._last_dmx_width
+        # Visible first: a hidden child gets no width from the splitter.
+        self.right_sidebar.setVisible(not collapsed)
+        if collapsed:
+            splitter.setSizes([total, 0])
+        else:
+            width = max(0, min(self._last_dmx_width or 250, total - 200))
+            splitter.setSizes([total - width, width])
+        self._dmx_panel_collapsed = collapsed
         self._update_dmx_toggle_button()
 
     def _toggle_dmx_panel(self) -> None:
@@ -361,7 +415,8 @@ class MainWindow(QMainWindow):
                 and self._panel_animation.state() == QAbstractAnimation.State.Running):
             return
 
-        sizes = self.main_content.sizes()
+        splitter = self._sidebar_splitter
+        sizes = splitter.sizes()
         if len(sizes) < 2:
             return
         total = sizes[0] + sizes[1]
@@ -387,7 +442,7 @@ class MainWindow(QMainWindow):
         anim.setStartValue(start_value)
         anim.setEndValue(end_value)
         anim.valueChanged.connect(
-            lambda val: self.main_content.setSizes([total - int(val), int(val)])
+            lambda val: splitter.setSizes([total - int(val), int(val)])
         )
 
         def on_finished():
@@ -471,6 +526,9 @@ class MainWindow(QMainWindow):
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
         self.timeline_toolbar.update_play_pause_icon(is_playing)
+        # A clip editor's live output must not fight the sequencer for the
+        # same DMX slots, so it is disarmed for the duration.
+        self.timeline.set_transport_playing(is_playing)
         
         if is_playing:
             # Start metronome synchronized to current timeline position
@@ -562,10 +620,16 @@ class MainWindow(QMainWindow):
         old_artnet = asdict(self.config.artnet)
         old_webremote = asdict(self.config.webremote)
         old_audio = asdict(self.config.audio)
+        old_fog = asdict(self.config.window.fog)
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+
+        # The dialog hands back a NEW fog object, so the light layer is still
+        # holding the old one until it is told otherwise.
+        if asdict(self.config.window.fog) != old_fog:
+            self.stage_controller.apply_stage_config()
 
         # Re-apply the routing when it (or the Art-Net target the sinks and
         # listener read from) changed.
@@ -606,6 +670,143 @@ class MainWindow(QMainWindow):
         self.edit_stage_button.show()
         stage_view.reposition_overlays()
 
+    # ------------------------------------------------------------------
+    # Stage docking
+    # ------------------------------------------------------------------
+    def _toggle_stage_dock(self):
+        self.dock_stage() if self._stage_window is not None else self.undock_stage()
+
+    def _update_dock_stage_button(self):
+        floating = self._stage_window is not None
+        self.dock_stage_button.setIcon(
+            icons.icon("dock" if floating else "undock", "#ffffff"))
+        self.dock_stage_button.setToolTip(
+            "Dock the stage back into the main window" if floating
+            else "Open the stage in its own window")
+
+    def _stage_window_size(self) -> QSize:
+        """The stage's own aspect ratio, as big as the screen comfortably takes.
+
+        Sized from the SCENE, not from the docked view: the view is whatever
+        shape the splitter left it and the stage letterboxes inside it, so
+        carrying that size over opened the window with the black bars baked in.
+        A window that matches the scene has no bars at all.
+        """
+        scene = self.stage_controller.scene.sceneRect()
+        aspect = (scene.width() / scene.height()) if scene.height() else 1.5
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+
+        width = 1100
+        if available is not None:
+            width = min(width, int(available.width() * 0.6))
+        height = int(width / aspect)
+        if available is not None and height > available.height() * 0.8:
+            height = int(available.height() * 0.8)
+            width = int(height * aspect)
+        return QSize(max(480, width), max(320, height))
+
+    def _set_toolbar_at_bottom(self, at_bottom: bool) -> None:
+        """Put the timeline toolbar under the tracks rather than over them.
+
+        Undocked the timeline owns the whole window, and its controls sit
+        better along the bottom edge — the tracks then start at the very top.
+        `removeWidget` leaves the toolbar parented to the section, so this is a
+        reorder rather than a rebuild.
+        """
+        layout = self._timeline_section_layout
+        layout.removeWidget(self.timeline_toolbar)
+        layout.insertWidget(1 if at_bottom else 0, self.timeline_toolbar)
+
+    def undock_stage(self):
+        """Move the stage into its own window, giving the timeline the height.
+
+        The overlay buttons are children of the view's viewport, so they travel
+        with it and need no handling here.
+        """
+        if self._stage_window is not None:
+            return
+        stage_view = self.stage_controller.get_stage_view()
+
+        # A collapsed sidebar would be stranded: its toggle is a stage overlay,
+        # which is about to leave with the stage. Remember the state rather than
+        # persisting this expansion — docking restores what the user chose.
+        self._collapsed_before_undock = self._dmx_panel_collapsed
+        if self._dmx_panel_collapsed:
+            self._set_sidebar_collapsed(False)
+
+        self.stage_controller.suspend_gpu_light()
+        self._docked_content_sizes = self.main_content.sizes()
+        self._set_toolbar_at_bottom(True)
+
+        # Sidebar first, while main_content still has its geometry to measure.
+        self.timeline_row.addWidget(self.right_sidebar)
+        self._sidebar_splitter = self.timeline_row
+        # Keep whatever width it had rather than the default — the splitter
+        # clamps it down anyway if the timeline toolbar's minimum needs the room.
+        target = (self._docked_content_sizes[1] if len(self._docked_content_sizes) > 1
+                  and self._docked_content_sizes[1] > 0 else self._last_dmx_width or 250)
+        width = max(0, min(target, self.timeline_row.width() - 200))
+        self.timeline_row.setSizes([self.timeline_row.width() - width, width])
+
+        self._stage_window = StageWindow()
+        self._stage_window.dock_requested.connect(self.dock_stage)
+        # One statement: the view must never be left parentless.
+        self._stage_window.layout().addWidget(stage_view)
+        self._stage_window.resize(self._stage_window_size())
+        self._stage_window.show()
+        self._stage_window.raise_()
+
+        # A hidden child takes no room in a splitter — this is what frees the
+        # height for the timeline.
+        self.main_content.setVisible(False)
+        self.dmx_toggle_button.hide()   # it drives THIS window's sidebar
+
+        self._update_dock_stage_button()
+        self.toolbar_manager.set_dock_stage_enabled(True)
+        # Deferred: the view needs a native window of its own before a GL
+        # viewport can be built on it.
+        QTimer.singleShot(0, self.stage_controller.resume_gpu_light)
+        self.logger.info("Stage undocked into its own window")
+
+    def dock_stage(self):
+        """Put the stage back into the main window."""
+        if self._stage_window is None:
+            return
+        stage_view = self.stage_controller.get_stage_view()
+        self.stage_controller.suspend_gpu_light()
+        self._set_toolbar_at_bottom(False)
+
+        window, self._stage_window = self._stage_window, None
+        window.dock_requested.disconnect()
+
+        self.main_content.setVisible(True)
+        self.main_content.insertWidget(0, stage_view)
+        self.main_content.insertWidget(1, self.right_sidebar)
+        self._sidebar_splitter = self.main_content
+        self.main_content.setSizes(
+            self._docked_content_sizes or [self.width() - 250, 250])
+
+        self.dmx_toggle_button.show()
+        if self._collapsed_before_undock:
+            self._set_sidebar_collapsed(True)
+
+        window.close_silently()
+        window.deleteLater()
+
+        self._update_dock_stage_button()
+        self.toolbar_manager.set_dock_stage_enabled(False)
+        QTimer.singleShot(0, self.stage_controller.resume_gpu_light)
+        self.logger.info("Stage docked back into the main window")
+
+    def add_fixture_from_timeline(self):
+        """Timeline toolbar's "+ Add track": a timeline lane IS a patched
+        fixture, so this enters the stage designer and opens the same fixture
+        browser the edit toolbar's Add button uses. Edit mode stays on
+        afterwards so the new fixture can be dragged into place."""
+        self.enter_edit_mode()
+        self.edit_toolbar.open_add_fixture()
+
     def _on_fixture_selected(self, instance):
         """Show + populate the inspector for the selected fixture (or hide it)."""
         stage_view = self.stage_controller.get_stage_view()
@@ -617,14 +818,16 @@ class MainWindow(QMainWindow):
 
     def _patch_ui_signature(self):
         """What the timeline / clip library / DMX monitor depend on (per fixture).
-        Excludes x/y so a stage drag-move doesn't churn the UI."""
-        return tuple((f.type, f.dmx_start, f.channel, f.name)
+        Excludes x/y so a stage drag-move doesn't churn the UI. `mode` is in:
+        it changes the channel count, and with it the valid note range."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel, f.name)
                      for f in self.config.fixtures)
 
     def _patch_dmx_signature(self):
         """What the software DMX engine depends on (per fixture). Excludes the
-        name so a rename never re-patches (and never blacks out) the rig."""
-        return tuple((f.type, f.dmx_start, f.channel)
+        name so a rename never re-patches (and never blacks out) the rig;
+        includes `mode`, which changes the fixture's DMX footprint."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel)
                      for f in self.config.fixtures)
 
     def _on_patch_changed(self):
@@ -646,7 +849,7 @@ class MainWindow(QMainWindow):
         controller = getattr(self, "software_controller", None)
         if controller is not None and dmx_sig != self._last_dmx_sig:
             self._last_dmx_sig = dmx_sig
-            controller.repatch(self.config.fixtures)
+            self.app_core.repatch_controller()
 
         self.toolbar_manager.update_show_stats()
 
@@ -662,6 +865,9 @@ class MainWindow(QMainWindow):
         self.timeline.rebuild_for_patch(self.config.fixtures)
         self.clip_library.refresh_configuration(self.config)
         self.dmx_display.refresh_configuration(self.config)
+        # The stage too: opening a show rebinds config.fixtures to a new list,
+        # and without this the previous show's rig stayed lit until a restart.
+        self.stage_controller.sync_from_config(self.config)
 
     def _on_show_reloaded(self):
         """Counters, show name, autosave chip and title after a show reload."""
@@ -1163,10 +1369,27 @@ class MainWindow(QMainWindow):
             title += f" - {file_name}"
         self.setWindowTitle(title)
 
+    def _spacebar_toggles_playback(self):
+        """True when Space means play/pause instead of a keystroke for a widget.
+
+        The filter is installed on the QApplication, so it sees every key press
+        in the process: while a dialog is up, or a text field in this window has
+        focus, Space belongs to them and must not reach the transport.
+        """
+        active = QApplication.activeWindow()
+        if active is not None and active is not self:
+            return False
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
+                              QAbstractSpinBox)):
+            return False
+        return not (isinstance(focus, QComboBox) and focus.isEditable())
+
     def eventFilter(self, source, event):
         """Global event filter to capture spacebar from any widget."""
-        if (event.type() == QEvent.Type.KeyPress and 
-            event.key() == Qt.Key.Key_Space):
+        if (event.type() == QEvent.Type.KeyPress and
+            event.key() == Qt.Key.Key_Space and
+            self._spacebar_toggles_playback()):
             # Toggle play/pause when spacebar is pressed anywhere
             self.play_pause_playback()
             return True  # Event handled, don't pass to widget
@@ -1178,6 +1401,11 @@ class MainWindow(QMainWindow):
 
         # Remove global event filter
         QApplication.instance().removeEventFilter(self)
+
+        # A floating stage is a second top-level window: left open it keeps the
+        # app alive after the main window is gone.
+        if self._stage_window is not None:
+            self.dock_stage()
 
         # Flush the show first, clean up every component, save config — all
         # in the core (idempotent, shared with headless shutdown).

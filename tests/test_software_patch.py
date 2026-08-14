@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.config import FixtureInstance, FixturePosition
 from software_controller.main import (
     DMXController,
-    FIXTURE_TYPES,
+    fixture_type_for,
 )
 
 
@@ -80,7 +80,7 @@ def test_patch_matches_legacy_default():
 
     _assert(cfg_driven.num_fixtures == 3, "three fixtures patched from config")
     _assert([f.type for f in cfg_driven.fixtures] ==
-            [FIXTURE_TYPES["ledbar"], FIXTURE_TYPES["blinder"], FIXTURE_TYPES["blinder"]],
+            [fixture_type_for("ledbar"), fixture_type_for("blinder"), fixture_type_for("blinder")],
             "patch types are [ledbar, blinder, blinder]")
     _assert([f.dmx_base for f in cfg_driven.fixtures] == [1, 33, 65],
             "patch DMX bases match the shipped addresses")
@@ -112,10 +112,10 @@ def test_none_defaults_but_explicit_empty_is_empty():
 
 def test_generic_fixture_inert_and_output_unchanged():
     print("test_generic_fixture_inert_and_output_unchanged")
-    # A library-defined generic type (par_rgb, 4ch) patched alongside the
+    # A library-defined generic type (par-rgbw, 6ch) patched alongside the
     # built-ins must build without raising (synthetic default bank) and, since
     # the note sequence never addresses it, leave the full present[] unchanged.
-    with_generic = SHIPPED_FIXTURES + [FixtureInstance(type="par_rgb", dmx_start=9)]
+    with_generic = SHIPPED_FIXTURES + [FixtureInstance(type="par-rgbw", dmx_start=9)]
     ctrl = DMXController(with_generic)
     _assert(ctrl.num_fixtures == 4, "generic fixture added to the patch")
 

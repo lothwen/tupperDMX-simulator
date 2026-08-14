@@ -11,10 +11,11 @@ via the document (the MIDI channel selects the fixture).
 Operates on a shared MidiDocument and a FadeEngine (groups regenerate their
 fade ramps on move/resize/update); commit is injected."""
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Iterable, Tuple
 import uuid
 
 from tupperlogger import get_logger
+from core.fixture_library import cache_generation
 from core.note_layout import TAKE_MANUAL
 from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
@@ -37,27 +38,37 @@ class SceneEditor:
         self._doc = doc
         self._fades = fades
         self._commit = commit
-        # Lazily-loaded scene library, cached per fixture type.
-        self._scene_cache: Dict[str, List[Scene]] = {}
+        # Lazily-loaded scene library, cached per (fixture type, mode) — a
+        # type's scenes are written against one mode's channel set.
+        self._scene_cache: Dict[tuple, List[Scene]] = {}
         self.logger = get_logger("midi.scene_editor")
 
-    def _fixture_type_for(self, channel) -> str:
-        """Fixture-type name patched at `channel`; defaults to ledbar when no
-        patch resolves (synthetic data / tests)."""
+    def _fixture_type_for(self, channel) -> tuple:
+        """(fixture type, mode) patched at `channel`; defaults to the ledbar in
+        its default mode when no patch resolves (synthetic data / tests)."""
         fdef = self._doc._fdef_for_channel(channel)
-        return fdef.name if fdef else DEFAULT_FIXTURE_TYPE
+        return (fdef.name, fdef.mode) if fdef else (DEFAULT_FIXTURE_TYPE, "")
 
-    def _get_scenes(self, fixture_type: str) -> List[Scene]:
-        """Return the cached scene library for a fixture type."""
-        if fixture_type not in self._scene_cache:
+    def _get_scenes(self, fixture: tuple) -> List[Scene]:
+        """Return the cached scene library for a (fixture type, mode).
+
+        Keyed on the library's cache generation too: saving a scene from the
+        editor calls `fixture_library.clear_cache()`, and without the generation
+        in the key this cache would keep answering with the pre-save banks for
+        the rest of the process — so a scene renamed in the library would never
+        be recognised again by `_lookup_scene_name`.
+        """
+        key = fixture + (cache_generation(),)
+        if key not in self._scene_cache:
+            fixture_type, mode = fixture
             try:
-                self._scene_cache[fixture_type] = load_scenes(fixture_type)
+                self._scene_cache[key] = load_scenes(fixture_type, mode)
             except Exception as exc:
                 self.logger.warning(
                     f"Could not load scene library for '{fixture_type}': {exc}"
                 )
-                self._scene_cache[fixture_type] = []
-        return self._scene_cache[fixture_type]
+                self._scene_cache[key] = []
+        return self._scene_cache[key]
 
     def _lookup_scene_name(self, cluster: List[Dict[str, Any]]) -> Optional[str]:
         """Match a freshly-clustered scene against the fixture's scene library.
@@ -301,26 +312,82 @@ class SceneEditor:
         )
         return True
 
+    # A group is a group because it has more than one member: build_render_units
+    # degenerates a single-member group into an ungrouped clip, and
+    # reattach_groups only clusters runs of 2+. So removal stops here.
+    MIN_GROUP_MEMBERS = 2
+
     def update_scene(self, group_id: str, channels: Dict[str, int],
-                     name: Optional[str] = None) -> bool:
+                     name: Optional[str] = None, *,
+                     remove: Optional[Iterable[str]] = None) -> bool:
         """Update channel velocities (and optionally name) of a scene group.
 
-        Time and group membership stay unchanged. For each known channel in
-        `channels`, the matching event's velocity is set to channel_value//2.
-        Channels missing from the dict are left alone.
+        Time and group membership stay unchanged except where asked:
+
+          * a channel in `channels` that HAS a member has its velocity set to
+            channel_value//2;
+          * a channel in `channels` with NO member gets one inserted, in the
+            group, at the group's time — so a scene can grow onto channels it
+            was never created with (a partial scene, or a fixture whose mode
+            gained channels);
+          * a channel in `remove` has its member deleted, never taking the
+            group below MIN_GROUP_MEMBERS;
+          * a channel in neither is left completely alone.
+
+        The last point is the important one, and why growth has to be asked for
+        rather than inferred: at runtime an absent channel keeps whatever the
+        previous frame left in it, while a present one at its default FORCES
+        that value. Those are different looks, so the caller decides.
         """
         members = self._doc._group_members(group_id)
         if not members:
             return False
+        anchor = members[0]
+        time = anchor["time"]
+        channel = anchor.get("channel")
+        scene_name = name if name is not None else anchor.get("scene_name")
         members_by_note = {m["note"]: m for m in members}
+        remove_fields = set(remove or ())
 
-        for ch_name, note in self._doc.channel_note_map(members[0].get("channel")):
+        inserted = removed = 0
+        for ch_name, note in self._doc.channel_note_map(channel):
+            evt = members_by_note.get(note)
+
+            if ch_name in remove_fields:
+                if evt is None:
+                    continue
+                if len(members_by_note) <= self.MIN_GROUP_MEMBERS:
+                    self.logger.warning(
+                        f"update_scene {group_id}: refusing to drop '{ch_name}' "
+                        f"— a scene group needs at least "
+                        f"{self.MIN_GROUP_MEMBERS} members"
+                    )
+                    continue
+                self._doc._delete_event_internal(evt["id"])
+                members_by_note.pop(note, None)
+                removed += 1
+                continue
+
             if ch_name not in channels:
                 continue
-            evt = members_by_note.get(note)
-            if evt is None:
-                continue
             new_vel = _channel_to_velocity(channels[ch_name])
+
+            if evt is None:
+                # Grow the group. _add_event_internal appends to BOTH
+                # midi_events and midi_notes and re-sorts, so the mirror below
+                # is neither needed nor wanted here.
+                added = self._doc._add_event_internal(
+                    note, time, new_vel, group_id=group_id,
+                    scene_name=scene_name, channel=channel)
+                if added is None:
+                    self.logger.warning(
+                        f"update_scene {group_id}: could not add '{ch_name}' "
+                        f"(note {note} has no meaning on this fixture)"
+                    )
+                    continue
+                inserted += 1
+                continue
+
             evt["velocity"] = new_vel
             # Mirror in midi_notes (matched by note + time). Skip is_fade
             # entries — they belong to the group's fade ramp, not the
@@ -334,14 +401,22 @@ class SceneEditor:
                     break
 
         if name is not None:
-            for m in members:
+            for m in self._doc._group_members(group_id):
                 m["scene_name"] = name
 
+        if inserted or removed:
+            # A grown group can land on a cap-BLACKOUT, the same reason
+            # add_scene reconciles. Do it BEFORE regenerating the ramps:
+            # reconcile can drop a trailing BLACKOUT, which moves the group's
+            # right edge — and that edge is the fade-out ramp's anchor.
+            self._doc.reconcile_blackouts(self._doc._event_fixture(anchor))
         # Brightness V may have changed → fade ramp endpoint changes.
         self._fades.regenerate_group(group_id)
         self._commit()
         self.logger.info(
             f"Updated scene {group_id}"
+            + (f" (+{inserted} channel(s))" if inserted else "")
+            + (f" (-{removed} channel(s))" if removed else "")
             + (f" (renamed to '{name}')" if name is not None else "")
         )
         return True

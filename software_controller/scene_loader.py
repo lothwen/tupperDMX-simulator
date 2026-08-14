@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Dict, List
 
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import resolve_fixture
 
 
 @dataclass(frozen=True)
@@ -22,7 +22,7 @@ class Scene:
     values: Dict[str, int]
 
 
-def load_scenes(fixture_type: str) -> List[Scene]:
+def load_scenes(fixture_type: str, mode: str = "") -> List[Scene]:
     """Read the scene banks of a fixture-library type and return a flat list.
 
     Scenes preserve their bank, position (0-based index), and per-channel
@@ -30,9 +30,10 @@ def load_scenes(fixture_type: str) -> List[Scene]:
     "{BANK} #{1-based-index}". Scenes missing any of the fixture's channel
     fields, or with all channels zero (reserved placeholder slots), are
     skipped so a single bad row doesn't block the library. Returns [] if the
-    type is unknown.
+    type is unknown. `mode` picks which mode's channel set the scenes must
+    cover; empty means the type's default.
     """
-    fdef = load_fixture_defs().get(fixture_type)
+    fdef = resolve_fixture(fixture_type, mode)
     if fdef is None:
         return []
 

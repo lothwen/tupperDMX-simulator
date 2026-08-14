@@ -8,18 +8,19 @@ from typing import Dict, List, Tuple
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
                              QLineEdit, QToolButton, QButtonGroup, QScrollArea,
-                             QLayout, QLayoutItem, QApplication, QSizePolicy)
+                             QLayout, QApplication, QSizePolicy)
 from PyQt6.QtGui import QColor, QPainter, QDrag
-from PyQt6.QtCore import Qt, QMimeData, QSize, QRect, QPoint, pyqtSignal
+from PyQt6.QtCore import Qt, QMimeData, QSize, QPoint, pyqtSignal
 
 from core import note_layout
 from core.config import Config
 from core.fixture_library import GROUP_COLORS
-from core.fixture_library import (FixtureDef, load_fixture_defs,
-                             ROLE_RED, ROLE_GREEN, ROLE_BLUE)
+from core.fixture_library import FixtureDef, color_slots, resolve_fixture
+from midi.scene_editor import TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
-from ui import icons
+from ui.widgets import icons
+from ui.widgets.chips import FlowLayout
 
 
 # Custom MIME type carries a JSON payload {"note": int, "velocity": int}.
@@ -47,80 +48,6 @@ _SHOW_COLOR = '#888888'
 # width.
 _PILL_WIDTH = 114
 _PILL_HEIGHT = 28
-
-
-class FlowLayout(QLayout):
-    """A layout that lays items left-to-right and wraps to the next row when it
-    runs out of width (the standard Qt FlowLayout example). Used for the pill
-    bar and the clip-card grid so both reflow with the panel width."""
-
-    def __init__(self, parent=None, margin=0, spacing=6):
-        super().__init__(parent)
-        if parent is not None:
-            self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
-        self._items: List[QLayoutItem] = []
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self):
-        return len(self._items)
-
-    def itemAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items[index]
-        return None
-
-    def takeAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
-        return None
-
-    def expandingDirections(self):
-        return Qt.Orientation(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self._do_layout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
-
-    def _do_layout(self, rect, test_only):
-        m = self.contentsMargins()
-        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
-        x = effective.x()
-        y = effective.y()
-        line_height = 0
-        spacing = self.spacing()
-        for item in self._items:
-            hint = item.sizeHint()
-            next_x = x + hint.width() + spacing
-            if next_x - spacing > effective.right() and line_height > 0:
-                x = effective.x()
-                y = y + line_height + spacing
-                next_x = x + hint.width() + spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x = next_x
-            line_height = max(line_height, hint.height())
-        return y + line_height - rect.y() + m.bottom()
 
 
 class ClipPill(QFrame):
@@ -348,7 +275,7 @@ class ClipLibraryWidget(QWidget):
 
         self.pill_bar = QWidget()
         self.pill_bar.setObjectName("ClipPillBar")
-        self.pill_flow = FlowLayout(self.pill_bar, margin=0, spacing=6)
+        self.pill_flow = FlowLayout(self.pill_bar, spacing=6)
         root.addWidget(self.pill_bar)
 
         root.addWidget(self._build_header_row())
@@ -361,7 +288,7 @@ class ClipLibraryWidget(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.card_grid = QWidget()
         self.card_grid.setObjectName("ClipCardGrid")
-        self.card_flow = FlowLayout(self.card_grid, margin=0, spacing=6)
+        self.card_flow = FlowLayout(self.card_grid, spacing=6)
         self.card_scroll.setWidget(self.card_grid)
         root.addWidget(self.card_scroll, 1)
 
@@ -424,22 +351,27 @@ class ClipLibraryWidget(QWidget):
     # ------------------------------------------------------------------
     # Group model
     # ------------------------------------------------------------------
-    def _patched_types(self) -> List[str]:
-        """Unique fixture-type names, deduped, ordered by DMX address (matching
-        the DMX-sorted timeline)."""
-        seen: List[str] = []
+    def _patched_types(self) -> List[Tuple[str, str]]:
+        """Unique patched (fixture type, mode) pairs, deduped, ordered by DMX
+        address (matching the DMX-sorted timeline).
+
+        Mode is part of the identity: the same type in two modes exposes
+        different channels, so each needs its own group of clips."""
+        seen: List[Tuple[str, str]] = []
         for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
             t = getattr(inst, "type", None)
-            if t and t not in seen:
-                seen.append(t)
+            if t and (t, getattr(inst, "mode", "")) not in seen:
+                seen.append((t, getattr(inst, "mode", "")))
         return seen
 
-    def _fixture_index_for_type(self, ftype: str) -> int:
-        """Stable MIDI channel of the first patched fixture of ``ftype`` (by DMX
-        address, matching the displayed group). The channel selects which
-        fixture handle_note_on targets; defaults to 0 if the type isn't patched."""
+    def _fixture_index_for_type(self, ftype: str, mode: str = "") -> int:
+        """Stable MIDI channel of the first patched fixture of ``ftype`` in
+        ``mode`` (by DMX address, matching the displayed group). The channel
+        selects which fixture handle_note_on targets; defaults to 0 if the type
+        isn't patched."""
         for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
-            if getattr(inst, "type", None) == ftype:
+            if (getattr(inst, "type", None) == ftype
+                    and getattr(inst, "mode", "") == mode):
                 return getattr(inst, "channel", 0)
         return 0
 
@@ -448,19 +380,18 @@ class ClipLibraryWidget(QWidget):
         fixture a channel-controls group, one group per scene bank and a chases
         group, all sharing the fixture's colour, plus a global Show group."""
         groups: List[Dict] = []
-        defs = load_fixture_defs()
-        for i, ftype in enumerate(self._patched_types()):
-            fdef = defs.get(ftype)
+        for i, (ftype, mode) in enumerate(self._patched_types()):
+            fdef = resolve_fixture(ftype, mode)
             if fdef is None:
                 continue
             color = _GROUP_COLORS[i % len(_GROUP_COLORS)]
-            channel = self._fixture_index_for_type(ftype)
+            channel = self._fixture_index_for_type(ftype, mode)
 
             clips = self._fixture_clips(fdef, channel)
             if clips:
                 groups.append({"label": ftype.replace("_", " ").capitalize(),
                                "color": color, "clips": clips})
-            for bank, bank_clips in self._bank_groups(ftype, fdef, channel):
+            for bank, bank_clips in self._bank_groups(ftype, mode, fdef, channel):
                 groups.append({"label": bank.replace("_", " ").capitalize(),
                                "color": color, "clips": bank_clips})
             chase_clips = self._chase_clips(fdef, channel)
@@ -491,11 +422,11 @@ class ClipLibraryWidget(QWidget):
                                          channel, self._clip_type(note)))
         return clips
 
-    def _bank_groups(self, ftype: str, fdef: FixtureDef, channel: int
+    def _bank_groups(self, ftype: str, mode: str, fdef: FixtureDef, channel: int
                      ) -> List[Tuple[str, List[Dict]]]:
         """``(bank_name, [clip, ...])`` per scene bank of the fixture."""
         by_bank: Dict[str, List[Scene]] = defaultdict(list)
-        for scene in load_scenes(ftype):
+        for scene in load_scenes(ftype, mode):
             by_bank[scene.bank].append(scene)
         out: List[Tuple[str, List[Dict]]] = []
         for bank in sorted(by_bank.keys()):
@@ -561,7 +492,11 @@ class ClipLibraryWidget(QWidget):
 
     def _scene_clip(self, fdef: FixtureDef, scene: Scene, channel: int) -> Dict:
         r, g, b = note_layout.scene_rgb(fdef, scene.values)
-        preview: List[Tuple[int, int, int]] = []
+        # Lead with take-manual, exactly as add_scene folds it into a dropped
+        # scene: without it the auto/song-part program overwrites the channel
+        # values on its next frame and the audition shows nothing.
+        preview: List[Tuple[int, int, int]] = [
+            (int(channel), note_layout.TAKE_MANUAL, TAKE_MANUAL_VELOCITY)]
         for ch_name, note in note_layout.field_note_map(fdef):
             if ch_name not in scene.values:
                 continue
@@ -585,9 +520,13 @@ class ClipLibraryWidget(QWidget):
 
     @staticmethod
     def _is_palette_sentinel(fdef: FixtureDef, values: Dict[str, int]) -> bool:
-        rgb = [ch.field for ch in fdef.channels
-               if ch.role in (ROLE_RED, ROLE_GREEN, ROLE_BLUE)]
-        return len(rgb) == 3 and all(int(values.get(f, 0)) >= 254 for f in rgb)
+        """Whether a scene hands its colour to the live palette — the same
+        R/G/B-at-full rule `DMXController.load_scene` applies."""
+        slots = color_slots(fdef)
+        fields = [fdef.channels[slots[colour]].field
+                  for colour in ("Red", "Green", "Blue") if colour in slots]
+        return len(fields) == 3 and all(int(values.get(f, 0)) >= 254
+                                        for f in fields)
 
     # ------------------------------------------------------------------
     # Rendering

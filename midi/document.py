@@ -16,7 +16,7 @@ import uuid
 import mido
 
 from tupperlogger import get_logger
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import load_fixture_defs, resolve_fixture
 from core import note_layout
 from .constants import (
     BLACKOUT_PART_NAME,
@@ -146,7 +146,9 @@ class MidiDocument:
             return None
         inst = self._fixture_by_channel(ch)
         ftype = getattr(inst, "type", None) if inst else None
-        return load_fixture_defs().get(ftype) if ftype else None
+        if not ftype:
+            return None
+        return resolve_fixture(ftype, getattr(inst, "mode", ""))
 
     def _fdef_or_default(self, channel):
         """The FixtureDef at `channel`, or the default fixture's def when no
@@ -154,7 +156,7 @@ class MidiDocument:
         out-of-range channel). The default's channel layout is data-driven —
         read from its library def, not hardcoded."""
         return (self._fdef_for_channel(channel)
-                or load_fixture_defs().get(DEFAULT_FIXTURE_TYPE))
+                or resolve_fixture(DEFAULT_FIXTURE_TYPE))
 
     def _note_info(self, note: int, channel=None, velocity=None):
         """UI metadata for a (note, channel) — the synthetic/test note map

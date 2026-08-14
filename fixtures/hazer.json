@@ -1,0 +1,75 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "hazer",
+  "shortName": "TDMXHAZER",
+  "categories": [
+    "Hazer"
+  ],
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2026-08-04",
+    "lastModifyDate": "2026-08-04"
+  },
+  "comment": "A generic haze machine: a thin, even layer that fills the room and makes every other fixture's beam visible.",
+  "physical": {
+    "dimensions": [
+      330,
+      210,
+      280
+    ]
+  },
+  "availableChannels": {
+    "Haze Output": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "FogOutput",
+        "fogOutputStart": "off",
+        "fogOutputEnd": "strong"
+      }
+    },
+    "Fan Speed": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 0],
+          "type": "Speed",
+          "speed": "stop"
+        },
+        {
+          "dmxRange": [1, 255],
+          "type": "Speed",
+          "speedStart": "slow",
+          "speedEnd": "fast"
+        }
+      ]
+    },
+    "Haze Type": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "FogType",
+        "fogType": "Haze"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "2ch",
+      "shortName": "2ch",
+      "channels": [
+        "Haze Output",
+        "Fan Speed"
+      ]
+    },
+    {
+      "name": "3ch",
+      "shortName": "3ch",
+      "channels": [
+        "Haze Output",
+        "Fan Speed",
+        "Haze Type"
+      ]
+    }
+  ]
+}

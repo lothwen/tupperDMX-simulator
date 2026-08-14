@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "par-rgbw",
+  "shortName": "TDMXPAR",
+  "categories": [
+    "Color Changer",
+    "Dimmer"
+  ],
+  "meta": {
+    "authors": [
+      "TupperDMX"
+    ],
+    "createDate": "2025-06-25",
+    "lastModifyDate": "2026-08-13"
+  },
+  "comment": "A generic LED PAR",
+  "physical": {
+    "dimensions": [
+      180,
+      200,
+      180
+    ],
+    "bulb": {
+      "type": "RGBW LED"
+    },
+    "lens": {
+      "degreesMinMax": [
+        75,
+        75
+      ]
+    }
+  },
+  "availableChannels": {
+    "brightness": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "red": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "green": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "blue": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    },
+    "white": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "White"
+      }
+    },
+    "strobe": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [
+            0,
+            7
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Open"
+        },
+        {
+          "dmxRange": [
+            8,
+            255
+          ],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Strobe",
+          "speedStart": "0.5Hz",
+          "speedEnd": "20Hz"
+        }
+      ]
+    }
+  },
+  "modes": [
+    {
+      "name": "6ch",
+      "shortName": "6ch",
+      "channels": [
+        "brightness",
+        "red",
+        "green",
+        "blue",
+        "white",
+        "strobe"
+      ]
+    }
+  ]
+}

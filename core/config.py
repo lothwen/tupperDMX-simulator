@@ -7,8 +7,13 @@ import os
 import uuid
 from pathlib import Path
 
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import (
+    fixture_modes, load_fixture_defs, resolve_fixture,
+)
 from core.paths import bundle_dir, userprefs_dir
+from tupperlogger import get_logger
+
+logger = get_logger("config")
 
 
 def shipped_config_path() -> str:
@@ -26,6 +31,65 @@ def userprefs_path() -> Path:
 
 
 @dataclass
+class StageFogConfig:
+    """Volumetric fog on the virtual stage. GPU path only, off by default.
+
+    How *much* fog there is is deliberately NOT here: that is
+    `WindowConfig.stage_haze`, which already exists and already has a slider.
+    One density control, not two. These are the things that decide what that
+    density then looks like, and how expensive it is to draw.
+    """
+
+    # Needs `stage_gpu` as well — a ray march has nowhere to run on the raster
+    # path. Off by default for the same reason `stage_gpu` is.
+    enabled: bool = False
+
+    # -- the look ------------------------------------------------------
+    # How far up from the floor the fog reaches, in scene units, and how sharply
+    # it thins on the way. Haze settles: there is more of it round the ankles
+    # than in the truss, and a slab of even density reads as a bug.
+    height: float = 520.0
+    height_falloff: float = 1.6
+    # What colour the air scatters. Not white: real haze is very slightly cool.
+    color: str = "#dfe4ee"
+    # How much of the light that passes through the fog comes back to the eye.
+    scattering: float = 1.0
+    # Henyey-Greenstein g. Positive is forward-scattering, which is why a beam
+    # aimed at you is blinding and the same beam crossing the stage is a shaft.
+    anisotropy: float = 0.55
+    # How ragged the air is, 0..3. 0 is a perfectly smooth medium, which
+    # integrates to a translucent sheet laid over the picture — the "white
+    # filter" look. Real haze has structure at every scale and drifts, and this
+    # is that structure: how far the density swings either side of the smooth
+    # field. 1 is "a pocket of air can be completely empty"; past that the
+    # billows separate into distinct banks with clear air between them, which is
+    # a real stage under a smoke machine rather than one under a hazer.
+    texture: float = 1.1
+    # How big those features are, in scene units. Around a third of the stage's
+    # height is what reads as billows rather than as grain.
+    texture_scale: float = 260.0
+    # A stage-wide key light for the medium itself, so smoke is visible before
+    # any fixture is. `light_dir_deg` is measured the way every other axis on
+    # this stage is: 90 is straight down the picture.
+    light_intensity: float = 0.35
+    light_dir_deg: float = 255.0
+
+    # -- what it costs -------------------------------------------------
+    # Samples along each view ray. The single biggest cost, and the single
+    # biggest difference between smooth shafts and visible banding.
+    march_steps: int = 24
+    # How deep the marched slab is, in scene units.
+    max_distance: float = 1400.0
+    # How far each ray's start is dithered, to trade banding for noise the
+    # temporal pass then averages away. 0 disables it and the bands come back.
+    jitter: float = 0.8
+    # Fraction of the viewport the fog is marched at, upsampled on resolve.
+    # Half is the shipped default: fog is low-frequency, so the resolution it
+    # is computed at is much cheaper to give up than the step count.
+    resolution: float = 0.5
+
+
+@dataclass
 class WindowConfig:
     width: int = 1280
     height: int = 720
@@ -36,6 +100,20 @@ class WindowConfig:
     # Rows "S" mode: every fixture lane collapsed to one row. Persisted so the
     # section height (fitted to collapsed lanes) stays consistent on reload.
     tracks_collapsed: bool = False
+    # How hazy the virtual stage's air is before any hazer runs, 0..1. Beams are
+    # only visible because there is something for them to scatter off, so this
+    # is what a rig with no hazer patched still gets to see.
+    stage_haze: float = 0.15
+    # Draw the stage's light on the GPU: one HDR buffer everything adds into,
+    # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
+    # Off by default — it needs a working OpenGL context, and the raster path
+    # is the one that survives a venue machine with no usable driver.
+    stage_gpu: bool = False
+    # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
+    stage_exposure: float = 1.0
+    # Volumetric fog: what `stage_haze` looks like once it is marched through
+    # rather than multiplied into a beam's alpha. Needs `stage_gpu`.
+    fog: StageFogConfig = field(default_factory=StageFogConfig)
 
 
 @dataclass
@@ -109,12 +187,14 @@ class FixturePosition:
     y: int
 
 
-def fixture_channel_count(type_name: str) -> int:
+def fixture_channel_count(type_name: str, mode: str = "") -> int:
     """DMX channel count for a fixture type (0 if the type is unknown).
 
-    Every type — including the built-in ledbar/blinder — is now data-driven
-    from the fixture library, so the count comes from its definition."""
-    fdef = load_fixture_defs().get(type_name)
+    Every type — including the built-in ledbar/blinder — is data-driven from the
+    fixture library, so the count comes from its definition. A fixture's mode
+    decides how many channels it occupies, so pass it whenever one is known; an
+    empty mode means the type's default."""
+    fdef = resolve_fixture(type_name, mode)
     return fdef.channel_count if fdef else 0
 
 
@@ -132,10 +212,16 @@ class FixtureInstance:
     dmx_start: int
     name: str = ""                                             # user alias (optional)
     channel: int = -1                                          # stable MIDI channel (0-15); -1 = unassigned
+    mode: str = ""                                             # OFL mode; "" = the type's first
     x: int = 0
     y: int = 0
+    # How it is rigged: True = flown, hanging under a truss (housing upside
+    # down, beam thrown at the floor); False = standing on the deck (housing
+    # the right way up, beam thrown at the ceiling). True is the default
+    # because a beam that points down is what every stage drew before a fixture
+    # could say which way up it was.
+    hanging: bool = True
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
-    multiply_factor: float = 2.0                               # blinder render
 
 
 @dataclass
@@ -294,7 +380,13 @@ class Config:
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
                 timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
-                tracks_collapsed=bool(window_data.get("tracks_collapsed", False))
+                tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
+                stage_haze=cls._validate_float(
+                    window_data.get("stage_haze", 0.15), 0.0, 1.0),
+                stage_gpu=bool(window_data.get("stage_gpu", False)),
+                stage_exposure=cls._validate_float(
+                    window_data.get("stage_exposure", 1.0), 0.1, 4.0),
+                fog=cls._parse_fog(window_data.get("fog")),
             )
 
         if "artnet" in data:
@@ -491,6 +583,65 @@ class Config:
             return value
         return None
 
+    @classmethod
+    def _parse_fog(cls, fog_data: Any) -> StageFogConfig:
+        """The stage's volumetric-fog settings, clamped to what can be drawn.
+
+        Every bound here is a real limit rather than taste: a march of 0 steps
+        draws nothing, one of 512 stalls the frame, and a resolution above 1
+        would render more fog pixels than there are screen pixels to show them.
+        """
+        if not isinstance(fog_data, dict):
+            return StageFogConfig()
+        defaults = StageFogConfig()
+        return StageFogConfig(
+            enabled=bool(fog_data.get("enabled", defaults.enabled)),
+            height=cls._validate_float(
+                fog_data.get("height", defaults.height), 1.0, 4000.0),
+            height_falloff=cls._validate_float(
+                fog_data.get("height_falloff", defaults.height_falloff), 0.0, 12.0),
+            color=cls._validate_hex_color(
+                fog_data.get("color", defaults.color), defaults.color),
+            scattering=cls._validate_float(
+                fog_data.get("scattering", defaults.scattering), 0.0, 8.0),
+            # Fully forward or fully backward scattering is a singularity in the
+            # Henyey-Greenstein phase function, so it stops just short of both.
+            anisotropy=cls._validate_float(
+                fog_data.get("anisotropy", defaults.anisotropy), -0.95, 0.95),
+            # Past 1 the thin side of the noise clamps against empty air, which
+            # is the point rather than a limit: that is what separates billows
+            # into banks with clear air between them. The ceiling is where the
+            # structure stops getting coarser and starts being two-tone.
+            texture=cls._validate_float(
+                fog_data.get("texture", defaults.texture), 0.0, 3.0),
+            texture_scale=cls._validate_float(
+                fog_data.get("texture_scale", defaults.texture_scale),
+                20.0, 2000.0),
+            light_intensity=cls._validate_float(
+                fog_data.get("light_intensity", defaults.light_intensity), 0.0, 4.0),
+            light_dir_deg=cls._validate_float(
+                fog_data.get("light_dir_deg", defaults.light_dir_deg), 0.0, 360.0),
+            march_steps=cls._validate_int(
+                fog_data.get("march_steps", defaults.march_steps), 4, 128),
+            max_distance=cls._validate_float(
+                fog_data.get("max_distance", defaults.max_distance), 100.0, 8000.0),
+            jitter=cls._validate_float(
+                fog_data.get("jitter", defaults.jitter), 0.0, 2.0),
+            resolution=cls._validate_float(
+                fog_data.get("resolution", defaults.resolution), 0.125, 1.0),
+        )
+
+    @staticmethod
+    def _validate_hex_color(value: Any, fallback: str) -> str:
+        """A `#rrggbb` string, or the default. Nothing else reaches a shader."""
+        if isinstance(value, str) and len(value) == 7 and value.startswith("#"):
+            try:
+                int(value[1:], 16)
+            except ValueError:
+                return fallback
+            return value.lower()
+        return fallback
+
     @staticmethod
     def _parse_fixtures(fixtures_data: Any) -> List[FixtureInstance]:
         """Parse the flat fixtures list. Each entry carries an explicit type +
@@ -505,7 +656,21 @@ class Config:
                 continue
             fixture_type = str(entry.get("type", ""))
             if fixture_type not in known_fixture_types() or "dmx_start" not in entry:
+                # A patch entry whose type no longer resolves is dropped, and
+                # the fixture simply disappears from the show — so say why.
+                logger.warning(
+                    f"Dropping patched fixture '{fixture_type or '?'}': "
+                    f"{'no dmx_start' if fixture_type in known_fixture_types() else 'unknown type'}")
                 continue
+
+            # An unknown mode falls back to the type's default rather than
+            # dropping the fixture. Storing "" rather than the resolved name
+            # means renaming a mode in a def never strands a saved patch.
+            mode = str(entry.get("mode", "") or "")
+            if mode and mode not in fixture_modes(fixture_type):
+                logger.warning(f"Fixture '{fixture_type}' has no mode '{mode}'; "
+                               f"using its default mode")
+                mode = ""
 
             bars = []
             for bar_data in entry.get("bars", []):
@@ -520,10 +685,13 @@ class Config:
                 dmx_start=Config._validate_int(entry["dmx_start"], 1, 512),
                 name=str(entry.get("name", "")),
                 channel=Config._validate_int(entry.get("channel", -1), -1, 15),
+                mode=mode,
                 x=Config._validate_int(entry.get("x", 0), 0, 10000),
                 y=Config._validate_int(entry.get("y", 0), 0, 10000),
+                # A patch saved before fixtures could be rigged either way is
+                # read as flown, which is where its beams already pointed.
+                hanging=bool(entry.get("hanging", True)),
                 bars=bars,
-                multiply_factor=Config._validate_float(entry.get("multiply_factor", 2.0), 0.1, 10.0),
             ))
 
         # Assign a stable MIDI channel to any fixture that lacks one. Scanning in
@@ -717,7 +885,7 @@ class Config:
         for fixture in self.fixtures:
             type_counts[fixture.type] = type_counts.get(fixture.type, 0) + 1
             fixture_name = f"{fixture.type.capitalize()} {type_counts[fixture.type]}"
-            channel_count = fixture_channel_count(fixture.type)
+            channel_count = fixture_channel_count(fixture.type, fixture.mode)
             channels = list(range(fixture.dmx_start, fixture.dmx_start + channel_count))
             if channels:
                 used_channels[fixture_name] = channels

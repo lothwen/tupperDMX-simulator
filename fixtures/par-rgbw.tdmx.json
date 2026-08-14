@@ -1,0 +1,262 @@
+{
+  "tdmx": 1,
+  "modes": {
+    "*": {
+      "channels": {
+        "brightness": {
+          "flags": [
+            "blend",
+            "knob_level"
+          ]
+        }
+      },
+      "banks": {
+        "COLORS": [
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "strobe": 0,
+            "name": "White wash",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "brightness": 200,
+            "red": 255,
+            "green": 90,
+            "blue": 0,
+            "white": 60,
+            "strobe": 0,
+            "name": "Warm amber",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "brightness": 200,
+            "red": 0,
+            "green": 0,
+            "blue": 255,
+            "white": 0,
+            "strobe": 0,
+            "name": "Deep blue",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "red": 255,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "strobe": 0,
+            "name": "Red",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 255,
+            "blue": 0,
+            "white": 0,
+            "strobe": 0,
+            "name": "Green"
+          },
+          {
+            "brightness": 255,
+            "red": 255,
+            "green": 0,
+            "blue": 255,
+            "white": 0,
+            "strobe": 0,
+            "name": "Magenta",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 180,
+            "blue": 255,
+            "white": 0,
+            "strobe": 0,
+            "name": "Cyan"
+          },
+          {
+            "brightness": 0,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "strobe": 0,
+            "name": "Blackout"
+          }
+        ],
+        "STROBES": [
+          {
+            "brightness": 40,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "strobe": 0,
+            "name": "Low white"
+          },
+          {
+            "brightness": 128,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "strobe": 0,
+            "name": "Half white"
+          },
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "strobe": 40,
+            "name": "Strobe white slow"
+          },
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "strobe": 200,
+            "name": "Strobe white fast",
+            "song_parts": [
+              "OUTRO"
+            ]
+          },
+          {
+            "brightness": 255,
+            "red": 0,
+            "green": 0,
+            "blue": 255,
+            "white": 0,
+            "strobe": 120,
+            "name": "Strobe blue"
+          },
+          {
+            "brightness": 255,
+            "red": 255,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "strobe": 120,
+            "name": "Strobe red"
+          },
+          {
+            "brightness": 60,
+            "red": 255,
+            "green": 90,
+            "blue": 0,
+            "white": 30,
+            "strobe": 0,
+            "name": "Warm glow",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "brightness": 0,
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "strobe": 0,
+            "name": "Blackout"
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Colour cycle",
+          "banks": [
+            "COLORS",
+            "COLORS",
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            1,
+            2,
+            5,
+            6
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Chorus flash",
+          "banks": [
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            0,
+            7
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "name": "Strobe hits",
+          "banks": [
+            "STROBES",
+            "STROBES"
+          ],
+          "scenes": [
+            4,
+            5
+          ],
+          "song_parts": [
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Outro pulse",
+          "banks": [
+            "STROBES",
+            "COLORS"
+          ],
+          "scenes": [
+            3,
+            7
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "name": "End blink",
+          "banks": [
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            2,
+            7
+          ],
+          "song_parts": [
+            "END"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -66,7 +66,7 @@ tres ángulos** y no tiene sentido hacerlas por separado.
 **Por qué aquí (primero)**
 Casi todo está acoplado a los 2 tipos actuales: `fixtures.py`, `config.py`/`config.json`,
 `software_controller/` (constantes de canal, escenas, `handle_note_on`),
-`ui/stage_controller.py`, `ui/clip_library.py`, `timeline/`, `midi/constants.py`. Hacer
+`stage/controller.py`, `ui/clip_library.py`, `timeline/`, `midi/constants.py`. Hacer
 cualquier otra idea antes implicaría tocar este código cableado y luego rehacerlo. Es la
 inversión que más trabajo futuro ahorra.
 
@@ -76,6 +76,11 @@ inversión que más trabajo futuro ahorra.
 2. Patch/config data-driven: `config.json` describe instancias con *tipo* + dirección
    (hoy solo guarda posición y `dmx_start`, sin tipo).
 3. Importador de librería (OFL) + diseñador de escenario en el stage.
+   *(Hecho: `fixtures/*.json` son documentos OFL 12.5.1 válidos — cualquier
+   fixture del proyecto OFL se puede soltar en la carpeta y funciona; los
+   extras de autoría (bancos, chases, flags) viven en un sidecar
+   `*.tdmx.json`. El motor del stage dibuja por `categories` + capabilities,
+   así que un fixture nuevo no necesita código Python.)*
 4. Mapa MIDI por tipo de fixture.
 5. Timeline: pistas dinámicas (1 por fixture) con agrupado/colapso.
 

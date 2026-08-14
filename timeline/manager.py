@@ -16,11 +16,11 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
 from PyQt6.QtGui import QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from .widgets import (ContentView, MidiEventEditDialog, StartEventEditDialog,
-                      TrackResizeHandle, CustomTooltip)
-from .widgets.scene_edit import SceneEditDialog
+from .widgets import (ContentView, StartEventEditDialog, TrackResizeHandle,
+                      CustomTooltip)
+from .widgets.clip_edit import ClipEditDialog
 from core import note_layout
-from core.fixture_library import load_fixture_defs
+from core.fixture_library import load_fixture_defs, resolve_fixture
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
@@ -46,6 +46,12 @@ class Timeline(QWidget):
     midi_data_changed = pyqtSignal()  # Emitted when MIDI data is modified
     track_heights_changed = pyqtSignal(int, int)  # waveform_height, midi_events_height (on commit)
     zoom_changed = pyqtSignal(float)  # current horizontal zoom factor (m11)
+    # The clip editor wrote a fixture's scene banks, so anything showing the
+    # library (the clip-library panel) is now stale.
+    library_changed = pyqtSignal()
+    # Audition a clip on the real rig: [(channel, note, velocity), ...], the
+    # same payload the clip library previews with.
+    preview_requested = pyqtSignal(list)
 
     # Constants
     HEADER_WIDTH = 240
@@ -63,6 +69,10 @@ class Timeline(QWidget):
         super().__init__(parent)
         self.audio_file = audio_file
         self.midi_manager = midi_manager
+
+        # Whether the sequencer is running, told by MainWindow. Gates a clip
+        # dialog's live output — see set_transport_playing.
+        self._transport_playing = False
 
         # The patch: one MIDI events track is built per fixture, in patch order
         # (a fixture's index == the MIDI channel that routes to it).
@@ -310,9 +320,16 @@ class Timeline(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Tracks hang from the top. A QGraphicsView centres a scene smaller than
+        # its viewport, which parked the lanes in the middle of the empty space
+        # once the section grew tall (undocking the stage hands it the whole
+        # window) — a timeline reads top-down, so anchor it there.
+        top_left = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+
         self.header_view = QGraphicsView(self)
         self.header_scene = QGraphicsScene(self)
         self.header_view.setScene(self.header_scene)
+        self.header_view.setAlignment(top_left)
         self.header_view.setFixedWidth(self.HEADER_WIDTH)
         self.header_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.header_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -328,6 +345,7 @@ class Timeline(QWidget):
         # count (<200) — and eliminates the use-after-free SIGSEGV.
         self.content_scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.content_view.setScene(self.content_scene)
+        self.content_view.setAlignment(top_left)
         # Track selection centrally so multi-select affordances and the
         # persisted id set stay in sync as clips are (de)selected.
         self.content_scene.selectionChanged.connect(self._on_selection_changed)
@@ -1161,8 +1179,9 @@ class Timeline(QWidget):
     def on_midi_event_edit_by_id(self, event_id: str):
         """Edit dialog request for the event with `event_id`.
 
-        Routes to a scene-specific dialog when the event belongs to a
-        scene group, otherwise falls back to the per-event dialog.
+        Scene groups get the console; START keeps its own palette editor (its
+        velocity packs a hue and a mode, which is not a verb parameter like the
+        others); everything else is one clip on one fixture.
         """
         if not self.midi_manager or not event_id:
             return
@@ -1177,43 +1196,131 @@ class Timeline(QWidget):
 
         if int(event_data.get('note', -1)) == START_NOTE:
             dialog = StartEventEditDialog(event_data)
-        else:
-            dialog = MidiEventEditDialog(event_data, self.midi_manager.midi_note_map)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
             new_values = dialog.get_values()
             if self.midi_manager.edit_event(event_id, **new_values):
                 self._schedule_refresh()
-                self.logger.info(
-                    f"MIDI event edited: note={new_values['note']}, "
-                    f"time={new_values['time']:.3f}s, velocity={new_values['velocity']}"
-                )
+            return
+
+        channel = event_data.get('channel')
+        dialog = ClipEditDialog.for_clip(
+            fdef=self._fdef(channel),
+            type_name=self._fixture_type(channel) or "",
+            channel=channel, dmx_start=self._dmx_start(channel),
+            note=int(event_data.get('note', 0)),
+            velocity=int(event_data.get('velocity', 0)),
+            time=float(event_data.get('time', 0.0)),
+            song_duration=self.midi_manager.song_end_time(),
+            locked=self._is_locked(channel))
+        self._wire_clip_dialog(dialog)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            result = dialog.get_values()
+        finally:
+            dialog.close()
+        if result is None:
+            return
+        if self.midi_manager.edit_event(event_id, note=result.note,
+                                        velocity=result.velocity):
+            self._retime_clip(event_id, event_data, result.time)
+            self._schedule_refresh()
+            self.logger.info(
+                f"Clip edited: note={result.note}, velocity={result.velocity}, "
+                f"time={result.time:.3f}s"
+            )
 
     def _edit_scene(self, group_id: str):
-        """Open the scene editing dialog for the group with `group_id`."""
+        """Open the console for the scene group with `group_id`."""
         members = [e for e in self._cached_events
                    if e.get('group_id') == group_id]
         if not members:
             return
-        # Reconstruct channels dict from per-note velocities (controller's
-        # convention: channel value = velocity * 2). Default to 0 for any
-        # missing channels (partial groups).
+        channel = members[0].get('channel')
+        # Channel value = velocity * 2 (the controller's convention). A channel
+        # with no member is NOT part of this scene — it is shown at the
+        # fixture's default and dimmed, and only joins if the user moves it.
         velocity_by_note = {m['note']: m['velocity'] for m in members}
-        field_note = self.midi_manager.channel_note_map(members[0].get('channel'))
-        channels = {ch_name: min(255, velocity_by_note.get(note, 0) * 2)
-                    for ch_name, note in field_note}
+        field_note = self.midi_manager.channel_note_map(channel)
+        channels = {ch_name: min(255, velocity_by_note[note] * 2)
+                    for ch_name, note in field_note if note in velocity_by_note}
+        present = set(channels)
         current_name = (members[0].get('scene_name')
                         or f"Scene @ {members[0]['time']:.2f}s")
 
-        dialog = SceneEditDialog(current_name, channels)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            values = dialog.get_values()
-            if self.midi_manager.update_scene(group_id,
-                                              channels=values['channels'],
-                                              name=values['name']):
-                self._schedule_refresh()
-                self.logger.info(
-                    f"Scene '{values['name']}' updated (group_id={group_id})"
-                )
+        dialog = ClipEditDialog.for_scene(
+            fdef=self._fdef(channel),
+            type_name=self._fixture_type(channel) or "",
+            channel=channel, dmx_start=self._dmx_start(channel),
+            name=current_name, channels=channels, present=present,
+            time=float(members[0]['time']),
+            song_duration=self.midi_manager.song_end_time(),
+            locked=self._is_locked(channel))
+        self._wire_clip_dialog(dialog)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            result = dialog.get_values()
+        finally:
+            dialog.close()
+        if result is None:
+            return
+        if self.midi_manager.update_scene(group_id, channels=result.channels,
+                                          name=result.name,
+                                          remove=result.removed):
+            self._retime_scene(group_id, float(members[0]['time']), result.time)
+            self._schedule_refresh()
+            self.logger.info(
+                f"Scene '{result.name}' updated (group_id={group_id})"
+            )
+
+    def _wire_clip_dialog(self, dialog):
+        """Connect a clip dialog's outward signals."""
+        dialog.library_changed.connect(self.library_changed)
+        dialog.live_messages.connect(self._on_clip_edit_live)
+        dialog.set_transport_playing(self._transport_playing)
+
+    def set_transport_playing(self, playing: bool) -> None:
+        """Told by MainWindow. A clip dialog's live output is locked out while
+        the sequencer runs — the worker's own note_ons would fight it."""
+        self._transport_playing = bool(playing)
+
+    def _on_clip_edit_live(self, messages):
+        """Forward a clip dialog's live values, unless something says not to."""
+        if self._transport_playing or not messages:
+            return
+        channel = messages[0][0]
+        if self.midi_manager and (self.midi_manager.is_fixture_muted(channel)
+                                  or self.midi_manager.is_fixture_locked(channel)):
+            return
+        self.preview_requested.emit(messages)
+
+    def _retime_clip(self, event_id: str, event_data: dict,
+                     new_time: float) -> None:
+        """Move a clip to the time the dialog asked for, if it changed.
+
+        Deliberately `move_event` rather than `edit_event(time=...)`: only the
+        former searches for a free slot and keeps the BLACKOUT gap markers
+        honest. It can refuse, and then the clip simply stays where it was.
+        """
+        if abs(new_time - float(event_data.get('time', 0.0))) < 1e-4:
+            return
+        if not self.midi_manager.move_event(event_id, new_time):
+            self.logger.info(
+                f"Clip kept at {event_data.get('time', 0.0):.3f}s — no room at "
+                f"{new_time:.3f}s"
+            )
+
+    def _retime_scene(self, group_id: str, old_time: float,
+                      new_time: float) -> None:
+        """Same for a scene group."""
+        if abs(new_time - old_time) < 1e-4:
+            return
+        if not self.midi_manager.move_scene(group_id, new_time):
+            self.logger.info(
+                f"Scene kept at {old_time:.3f}s — no room at {new_time:.3f}s"
+            )
 
     def on_midi_event_delete_by_id(self, event_id: str):
         """Delete request for the event with `event_id`.
@@ -1307,7 +1414,22 @@ class Timeline(QWidget):
 
     def _fdef(self, channel):
         """FixtureDef of the patched fixture with stable `channel`, or None."""
-        return load_fixture_defs().get(self._fixture_type(channel))
+        inst = self._fixture_for_channel(channel)
+        if inst is None:
+            return None
+        return resolve_fixture(inst.type, getattr(inst, "mode", ""))
+
+    def _dmx_start(self, channel) -> int:
+        """First DMX address of the fixture with stable `channel` (1 if none)."""
+        inst = self._fixture_for_channel(channel)
+        return int(getattr(inst, "dmx_start", 1) or 1) if inst else 1
+
+    def _is_locked(self, channel) -> bool:
+        """Whether the lane is read-only. Drops already check this; editing
+        did not, which was the one door left open."""
+        if channel is None or not self.midi_manager:
+            return False
+        return bool(self.midi_manager.is_fixture_locked(channel))
 
     def _note_is_song_part(self, note: int) -> bool:
         return bool(self.midi_manager
@@ -1366,7 +1488,7 @@ class Timeline(QWidget):
         if target_idx is not None and self.midi_manager.is_fixture_locked(target_idx):
             return False
         target_type = self._fixture_type(target_idx)
-        fdef = load_fixture_defs().get(target_type)
+        fdef = self._fdef(target_idx)
         if not (fdef and fdef.banks):
             return False
         return fixture_type is None or fixture_type == target_type
@@ -1391,47 +1513,61 @@ class Timeline(QWidget):
         return True
 
     def on_add_event_requested(self, time_seconds, fixture_index=None):
-        """Handle request to add a new MIDI event at the specified time.
+        """Add a new clip at `time_seconds`.
 
         `fixture_index` (the lane the request came from) targets that exact
         fixture; song parts ignore it and stay global.
         """
         if not self.midi_manager:
             return
+        if self._is_locked(fixture_index):
+            return
 
-        # Create event data with default values
-        new_event_data = {
-            'time': time_seconds,
-            'velocity': 127,
-            'note': None  # Will be set by dialog
-        }
+        dialog = ClipEditDialog.for_clip(
+            fdef=self._fdef(fixture_index),
+            type_name=self._fixture_type(fixture_index) or "",
+            channel=fixture_index, dmx_start=self._dmx_start(fixture_index),
+            note=None, velocity=0, time=time_seconds,
+            song_duration=self.midi_manager.song_end_time(), is_new=True)
+        self._wire_clip_dialog(dialog)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            result = dialog.get_values()
+        finally:
+            dialog.close()
+        if result is None:
+            return
 
-        dialog = MidiEventEditDialog(new_event_data, self.midi_manager.midi_note_map, is_new_event=True)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Get the new values from dialog
-            new_values = dialog.get_values()
-
-            # Route to the lane's fixture unless it's a global song part.
-            channel = (None if self._note_is_song_part(new_values['note'])
-                       else fixture_index)
-            event_id = self.midi_manager.add_event(
-                new_values['note'],
-                new_values['time'],
-                new_values['velocity'],
-                channel,
-            )
-
-            if event_id:
-                # Refresh the timeline display
+        if result.kind == "new_scene":
+            group_id = self.midi_manager.add_scene(
+                result.time, result.channels, result.name, fixture_index)
+            if group_id:
                 self._schedule_refresh()
-                
-                # Get part name for logging
-                note_info = self.midi_manager.midi_note_map.get(str(new_values['note']))
-                part_name = getattr(note_info, 'part', f'Note {new_values["note"]}') if note_info else f'Note {new_values["note"]}'
-                self.logger.info(f"MIDI event added: {part_name} at {new_values['time']:.3f}s, velocity={new_values['velocity']}")
-            else:
-                self.logger.error(f"Failed to add MIDI event: note {new_values['note']} not in note map")
+                self.logger.info(
+                    f"Scene added: '{result.name}' at {result.time:.3f}s "
+                    f"on fixture #{fixture_index} (group_id={group_id})"
+                )
+            return
+
+        # Route to the lane's fixture unless it's a global song part.
+        channel = (None if self._note_is_song_part(result.note)
+                   else fixture_index)
+        event_id = self.midi_manager.add_event(result.note, result.time,
+                                               result.velocity, channel)
+        if event_id:
+            self._schedule_refresh()
+            info = note_layout.describe_note(result.note,
+                                             self._fdef(fixture_index),
+                                             result.velocity)
+            name = info.part if info else f"Note {result.note}"
+            self.logger.info(
+                f"Clip added: {name} at {result.time:.3f}s, "
+                f"velocity={result.velocity}"
+            )
+        else:
+            self.logger.error(
+                f"Failed to add clip: note {result.note} has no meaning here")
 
     # Legacy compatibility methods
     def set_files(self, audio_file, midi_file=None):
