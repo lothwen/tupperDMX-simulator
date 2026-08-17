@@ -104,6 +104,7 @@
     pos = { t: s.position, wall: performance.now(), playing: s.playing };
     $("show-name").textContent = s.show_name || "—";
     $("show-name").classList.toggle("placeholder-text", !s.show_name);
+    renderShows(s.shows);
     renderSetlist(s);
     renderNowPlaying(s);
     renderCues(s.cues);
@@ -144,6 +145,44 @@
     if (song.bpm != null) parts.push(song.bpm + " BPM");
     parts.push(song.duration != null ? fmtDur(song.duration) : "—");
     return parts.join(" · ");
+  }
+
+  function closeShowMenu() {
+    $("show-picker").classList.remove("open");
+    $("show-btn").setAttribute("aria-expanded", "false");
+  }
+
+  function renderShows(shows) {
+    shows = shows || [];
+    var menu = $("show-menu");
+    menu.innerHTML = "";
+    // One show (or none) means nothing to switch to: the chevron goes away.
+    $("show-picker").classList.toggle("single", shows.length < 2);
+    if (shows.length < 2) closeShowMenu();
+    shows.forEach(function (show) {
+      var li = document.createElement("li");
+      if (show.current) li.className = "current";
+
+      var tick = document.createElement("span");
+      tick.className = "tick";
+      tick.textContent = show.current ? "✓" : "";
+      li.appendChild(tick);
+
+      var label = document.createElement("span");
+      label.className = "show-label";
+      label.textContent = show.name;
+      li.appendChild(label);
+
+      // The open show is inert (same rule as the current setlist row): only
+      // the name goes back to the app, which resolves it to a folder.
+      if (!show.current) {
+        li.addEventListener("click", function () {
+          closeShowMenu();
+          send({ action: "open_show", name: show.name });
+        });
+      }
+      menu.appendChild(li);
+    });
   }
 
   function renderSetlist(s) {
@@ -450,6 +489,15 @@
     var frac = (ev.clientX - rect.left) / rect.width;
     send({ action: "seek", time: Math.max(0, frac) * state.duration });
   });
+
+  // Show picker: the header show name deploys the list of shows sitting in the
+  // same folder; a tap anywhere else closes it.
+  $("show-btn").addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    var open = $("show-picker").classList.toggle("open");
+    this.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  document.addEventListener("click", closeShowMenu);
 
   // Setlist drawer (phone): the header "+" opens it, the backdrop closes it.
   $("btn-setlist").addEventListener("click", function () {

@@ -1,5 +1,6 @@
 # ABOUTME: Qt-side web-remote bridge: owns the server worker's QThread, builds
 # ABOUTME: state snapshots from the live managers and executes remote commands.
+import os
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer
@@ -141,6 +142,8 @@ class WebRemoteManager(QObject):
             w.on_song_precount_toggled(bool(cmd.get("on")))
         elif action == "set_countin_bars":
             w.set_count_in_bars(cmd.get("bars", 2))
+        elif action == "open_show":
+            self._open_show_by_name(cmd.get("name", ""))
         # Immediate feedback: every command ends with a fresh snapshot.
         self._publish_full()
 
@@ -155,6 +158,26 @@ class WebRemoteManager(QObject):
         """The open show project, or None (e.g. test fakes without one)."""
         manager = getattr(self.core, "show_manager", None)
         return manager.show if manager is not None else None
+
+    def _open_show_by_name(self, name: str) -> None:
+        """Switch to another show in the menu's folder, by display name — the
+        desktop's Open show path exactly (stop, flush, load, remember in
+        userprefs, rebuild). A name that resolves to nothing is dropped: the
+        remote can only open what build_shows() published."""
+        manager = getattr(self.core, "show_manager", None)
+        if manager is None:
+            return
+        current = manager.show
+        root = remote_state.resolve_show(
+            name, current.root if current is not None else None)
+        if root is None:
+            self.logger.warning(f"Web remote: no show named '{name}'")
+            return
+        if current is not None and \
+                os.path.normpath(str(root)) == os.path.normpath(str(current.root)):
+            return
+        self.core.stop_playback()
+        manager.open_show(root)
 
     def _cues(self) -> list:
         """Active cue set: the open show's; config only serves showless
@@ -193,6 +216,8 @@ class WebRemoteManager(QObject):
             cues=[{"index": i, "label": c.label, "color": c.color}
                   for i, c in enumerate(self._cues())],
             show_name=show.name if show is not None else None,
+            shows=remote_state.build_shows(
+                show.root if show is not None else None),
         )
 
     def _publish_full(self, *_) -> None:
