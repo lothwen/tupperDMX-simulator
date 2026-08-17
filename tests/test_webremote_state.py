@@ -23,7 +23,7 @@ from core.paths import default_shows_dir
 from webremote.state import (compute_sections, build_setlist, build_state,
                              build_shows, resolve_show, shows_dir,
                              probe_duration, probe_bpm)
-from webremote.peaks import _downsample
+from webremote.peaks import _downsample, compute_peaks
 
 
 def _assert(cond, msg):
@@ -199,6 +199,37 @@ def test_downsample():
     _assert(bins == [0.0] * 4, "all-zero input does not divide by zero")
 
 
+def test_downsample_engine_pcm():
+    print("test_downsample_engine_pcm")
+    # What the engine hands over is not mono floats: int16 (n, 2) frames.
+    pcm = np.zeros((8, 2), dtype=np.int16)
+    pcm[1, 0] = 1000
+    pcm[5, 1] = -2000
+    _assert(_downsample(pcm, 4) == [0.5, 0.0, 1.0, 0.0],
+            "stereo frames bin along time and take the louder channel")
+
+    # abs(-32768) is -32768 in int16: the peak has to come off min/max instead,
+    # and a clipped master is exactly where it would have shown up.
+    clipped = np.array([[-32768, 0], [100, 100]], dtype=np.int16)
+    _assert(_downsample(clipped, 2) == [1.0, 100 / 32768.0],
+            "a full-scale negative sample is the peak, not a negative one")
+
+
+def test_compute_peaks_never_reads_the_file():
+    print("test_compute_peaks_never_reads_the_file")
+    pcm = np.zeros((16, 2), dtype=np.int16)
+    pcm[3] = 500
+    # A path that does not exist: it is the cache key, never opened. Decoding
+    # here is what dragged librosa (and scipy, and a BLAS) into the remote.
+    bins = compute_peaks("/no/such/song.mp3", pcm, bins=4)
+    _assert(len(bins) == 4 and max(bins) == 1.0,
+            "peaks come from the passed PCM, not from the path")
+
+    # None would blow up in _downsample, so being served proves the cache hit.
+    _assert(compute_peaks("/no/such/song.mp3", None, bins=4) == bins,
+            "a repeat is served from the cache without touching the PCM")
+
+
 def main():
     test_compute_sections()
     test_build_setlist()
@@ -206,6 +237,8 @@ def main():
     test_build_state_schema()
     test_build_shows()
     test_downsample()
+    test_downsample_engine_pcm()
+    test_compute_peaks_never_reads_the_file()
     print("\nALL TESTS PASSED")
 
 

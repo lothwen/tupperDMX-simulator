@@ -67,6 +67,7 @@ class WebRemoteManager(QObject):
         worker.command_received.connect(self._on_command)
         worker.client_count_changed.connect(self._publish_full)
         worker.error_occurred.connect(self.logger.error)
+        worker.set_decoded_audio_source(self._decoded_audio)
 
         thread.started.connect(worker.run)
         thread.finished.connect(worker.deleteLater)
@@ -219,6 +220,25 @@ class WebRemoteManager(QObject):
             shows=remote_state.build_shows(
                 show.root if show is not None else None),
         )
+
+    def _decoded_audio(self):
+        """(setlist index, decoded path, PCM) for the track the engine holds,
+        or None while nothing is loaded — the samples /api/waveform draws.
+
+        The ONE thing here called from the web-remote thread instead of the Qt
+        one, which is what lets the waveform be built without decoding the file
+        a second time. It is safe because it reads nothing Qt: the mixer hands
+        the array out under its own lock and then swaps rather than mutates it,
+        and the index is a plain attribute read. During a decode the engine has
+        cleared both, so a stale song can never be handed out as the new one."""
+        engine = getattr(self.core, "audio_engine", None)
+        if engine is None:
+            return None
+        pcm = engine.backing_samples()
+        path = engine.loaded_path()
+        if pcm is None or not path:
+            return None
+        return (self.config.playlist.current_song_index, path, pcm)
 
     def _publish_full(self, *_) -> None:
         if self.worker is None:

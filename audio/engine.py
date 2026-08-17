@@ -189,6 +189,15 @@ class AudioEngine(QObject):
     def is_backing_loaded(self) -> bool:
         return self.mixer.has_backing()
 
+    def backing_samples(self):
+        """The decoded PCM of the loaded track (int16 (n, 2)), or None."""
+        return self.mixer.backing_samples()
+
+    def loaded_path(self) -> Optional[str]:
+        """The file that PCM came from — the guide when it is the monitored
+        track, so never assume it is the song's backing."""
+        return self._loaded_path
+
     def duration(self) -> float:
         return self.mixer.duration_seconds()
 
