@@ -1,0 +1,313 @@
+/* Print stylesheet for the TupperDMX Simulator user manual.
+   A4, light and print-friendly; accent colours taken from the application. */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 16mm 16mm;
+}
+
+:root {
+  --ink:        #1c1f24;
+  --ink-soft:   #4a5058;
+  --ink-faint:  #767d87;
+  --rule:       #d8dce2;
+  --rule-soft:  #e9ecf0;
+  --panel:      #f5f7f9;
+  --accent:     #2f6fb0;   /* the app's selection blue */
+  --accent-dk:  #1d4c7d;
+  --warn-bg:    #fdf6e6;
+  --warn-edge:  #d9a441;
+  --code-bg:    #f2f4f7;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  font-size: 10.5pt;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: #ffffff;
+  font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.55;
+  hyphens: auto;
+}
+
+/* ---------------------------------------------------------------- cover -- */
+
+.cover {
+  page-break-after: always;
+  break-after: page;
+  height: 245mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: left;
+  border-left: 5pt solid var(--accent);
+  padding-left: 12mm;
+}
+
+.cover img.logo {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 10mm;
+}
+
+.cover h1 {
+  font-size: 30pt;
+  line-height: 1.12;
+  margin: 0 0 3mm 0;
+  letter-spacing: -0.4pt;
+  border: 0;
+  padding: 0;
+}
+
+.cover .subtitle {
+  font-size: 13pt;
+  color: var(--ink-soft);
+  margin: 0 0 14mm 0;
+  font-weight: 400;
+}
+
+.cover .meta {
+  font-size: 9.5pt;
+  color: var(--ink-faint);
+  line-height: 1.9;
+}
+
+.cover .meta strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ toc -- */
+
+.toc {
+  page-break-after: always;
+  break-after: page;
+}
+
+.toc h2 {
+  font-size: 15pt;
+  margin: 0 0 6mm 0;
+  padding: 0 0 2mm 0;
+  border-bottom: 1.5pt solid var(--accent);
+  color: var(--accent-dk);
+}
+
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc > ul > li {
+  margin: 0 0 1.4mm 0;
+  font-weight: 600;
+}
+
+.toc ul ul {
+  margin: 0.6mm 0 2mm 0;
+  padding-left: 7mm;
+}
+
+.toc ul ul li {
+  font-weight: 400;
+  color: var(--ink-soft);
+  margin: 0.3mm 0;
+  font-size: 9.5pt;
+}
+
+.toc a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* -------------------------------------------------------------- headings -- */
+
+.chapter {
+  page-break-before: always;
+  break-before: page;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 650;
+  color: var(--ink);
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+h1 {
+  font-size: 21pt;
+  line-height: 1.2;
+  margin: 0 0 6mm 0;
+  padding-bottom: 2.5mm;
+  border-bottom: 2pt solid var(--accent);
+  color: var(--accent-dk);
+  letter-spacing: -0.3pt;
+}
+
+h2 {
+  font-size: 14pt;
+  margin: 8mm 0 3mm 0;
+  padding-bottom: 1.2mm;
+  border-bottom: 0.75pt solid var(--rule);
+}
+
+h3 {
+  font-size: 11.5pt;
+  margin: 6mm 0 2mm 0;
+  color: var(--accent-dk);
+}
+
+h4 {
+  font-size: 10.5pt;
+  margin: 4mm 0 1.5mm 0;
+  color: var(--ink-soft);
+}
+
+p {
+  margin: 0 0 3mm 0;
+  orphans: 2;
+  widows: 2;
+}
+
+/* ----------------------------------------------------------------- text -- */
+
+strong { font-weight: 650; }
+
+a {
+  color: var(--accent-dk);
+  text-decoration: none;
+}
+
+ul, ol {
+  margin: 0 0 3.5mm 0;
+  padding-left: 6mm;
+}
+
+li { margin: 0 0 1.2mm 0; }
+
+li > ul, li > ol { margin-top: 1.2mm; }
+
+hr {
+  border: 0;
+  border-top: 0.75pt solid var(--rule);
+  margin: 7mm 0;
+}
+
+code {
+  font-family: "JetBrains Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  font-size: 0.87em;
+  background: var(--code-bg);
+  border: 0.5pt solid var(--rule-soft);
+  border-radius: 2pt;
+  padding: 0.3mm 1mm;
+  white-space: nowrap;
+}
+
+pre {
+  background: var(--code-bg);
+  border: 0.75pt solid var(--rule);
+  border-left: 2.5pt solid var(--accent);
+  border-radius: 2pt;
+  padding: 2.5mm 3mm;
+  margin: 0 0 4mm 0;
+  overflow-x: auto;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  white-space: pre;
+  font-size: 8.5pt;
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------------- tables -- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 4.5mm 0;
+  font-size: 9.3pt;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+thead th {
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  font-weight: 650;
+  border-bottom: 1pt solid var(--accent);
+  padding: 1.6mm 2mm;
+}
+
+tbody td {
+  border-bottom: 0.5pt solid var(--rule-soft);
+  padding: 1.5mm 2mm;
+  vertical-align: top;
+}
+
+tbody tr:last-child td { border-bottom: 0.75pt solid var(--rule); }
+
+td code, th code { white-space: normal; }
+
+/* -------------------------------------------------------------- figures -- */
+
+figure {
+  margin: 0 0 5mm 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  text-align: center;
+}
+
+figure img {
+  max-width: 100%;
+  max-height: 155mm;
+  height: auto;
+  border: 0.75pt solid var(--rule);
+  border-radius: 2pt;
+  background: #ffffff;
+}
+
+figcaption {
+  margin-top: 1.6mm;
+  font-size: 8.6pt;
+  color: var(--ink-faint);
+  font-style: italic;
+  line-height: 1.4;
+  text-align: center;
+}
+
+figcaption .fignum {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--accent-dk);
+}
+
+/* -------------------------------------------------------------- callout -- */
+
+blockquote {
+  margin: 0 0 4.5mm 0;
+  padding: 2.8mm 3.5mm;
+  background: var(--warn-bg);
+  border: 0.5pt solid #eadfc0;
+  border-left: 2.5pt solid var(--warn-edge);
+  border-radius: 2pt;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+blockquote p { margin: 0 0 2mm 0; }
+blockquote p:last-child { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- misc --- */
+
+.chapter > h1 + p { font-size: 11pt; color: var(--ink-soft); }
