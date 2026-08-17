@@ -341,16 +341,40 @@ class Config:
         prefs = userprefs_path()
         if prefs.exists():
             try:
-                with open(prefs, 'r') as f:
+                # utf-8-sig, not the locale encoding: this file is meant to be
+                # hand-edited (the rack box exports it over SMB), and an editor
+                # on a Windows client leaves a UTF-8 BOM that json.load rejects
+                # outright — which used to cost the operator the whole file.
+                with open(prefs, 'r', encoding='utf-8-sig') as f:
                     cls._apply_userprefs(config, json.load(f))
             except (json.JSONDecodeError, ValueError, KeyError) as e:
+                kept = cls._preserve_bad_prefs(prefs)
                 print(f"Warning: error parsing userprefs '{prefs}': {e}")
-                print("Using default user preferences.")
+                print("Using default user preferences" + (
+                    f"; the unparseable file was kept as '{kept}'."
+                    if kept else "."))
         else:
             # First launch: create userprefs.json eagerly with defaults.
             config.save()
 
         return config
+
+    @staticmethod
+    def _preserve_bad_prefs(prefs: Path) -> Optional[Path]:
+        """Move an unparseable userprefs.json aside, returning where it went.
+
+        Loading defaults over it is not neutral: the very next save() rewrites
+        the file, and `last_show_path`/`recent_shows` are the ONLY record of
+        which show to open — losing them silently boots into a brand-new empty
+        show, which on a headless box (no dialog, no show picker) looks exactly
+        like the app ignoring the preferences.
+        """
+        kept = prefs.with_name(prefs.name + ".bad")
+        try:
+            os.replace(prefs, kept)
+            return kept
+        except OSError:
+            return None
 
     @classmethod
     def _apply_shipped(cls, config: "Config", data: Dict[str, Any]) -> None:

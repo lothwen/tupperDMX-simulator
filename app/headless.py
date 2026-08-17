@@ -14,7 +14,7 @@ from tupperlogger import get_logger
 from webremote import state as remote_state
 
 
-def run_headless(config, argv=None) -> int:
+def run_headless(config, argv=None, show_path=None) -> int:
     """Run the application core without a window until SIGINT/SIGTERM.
 
     QGuiApplication on purpose (not QApplication): QtMultimedia needs a
@@ -28,7 +28,7 @@ def run_headless(config, argv=None) -> int:
     # Resolve the show project this machine had open (dialog-free by design;
     # a song whose audio went missing keeps its manifest path for a later
     # desktop relink and simply won't play).
-    show = open_or_create_startup_show(config)
+    show = open_or_create_startup_show(config, explicit_path=show_path)
     logger.info(f"Show: {show.root}")
 
     app = QGuiApplication(list(argv) if argv else [sys.argv[0]])

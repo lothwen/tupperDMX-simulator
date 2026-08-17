@@ -59,7 +59,7 @@ def _stage_gpu_requested() -> bool:
         return False
 
 
-def run_gui(argv):
+def run_gui(argv, show_path=None):
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
@@ -109,7 +109,7 @@ def run_gui(argv):
     try:
         # Resolve the show project this machine had open, migrating the legacy
         # userprefs playlist/patch into a default show on first launch.
-        show = open_or_create_startup_show(config)
+        show = open_or_create_startup_show(config, explicit_path=show_path)
         logger.info(f"Show: {show.root}")
 
         from ui.main_window import MainWindow
@@ -141,7 +141,7 @@ def run_gui(argv):
         raise
 
 
-def run_headless_mode(argv):
+def run_headless_mode(argv, show_path=None):
     try:
         config = Config.load()
     except Exception as e:
@@ -156,8 +156,17 @@ def run_headless_mode(argv):
     logger.info("Starting TupperDMX Simulator (headless)")
     logger.info(f"Configuration loaded (data: config.json, prefs: {userprefs_path()})")
 
-    from app.headless import run_headless
-    return run_headless(config, argv)
+    try:
+        # Imported here, not at module scope, so the failure lands after the
+        # logging system is up: the whole Qt/audio/DMX graph is pulled in on
+        # this line, and on a rack box a missing shared library shows up
+        # nowhere else. run_gui has always had a crash dialog; headless had
+        # neither that nor a log line, so a startup crash was silent.
+        from app.headless import run_headless
+        return run_headless(config, argv, show_path=show_path)
+    except Exception:
+        logger.critical("Headless startup failed", exc_info=True)
+        raise
 
 
 def main():
@@ -166,6 +175,12 @@ def main():
         "--headless", action="store_true",
         help="run without a GUI (SBC/rack mode): software controller, DMX/MIDI "
              "I/O, playback and the web remote — the remote is the only interface")
+    parser.add_argument(
+        "--show", metavar="PATH", default=None,
+        help="open this Name.show/ folder instead of the one userprefs.json "
+             "remembers, and remember it from then on. Headless has no show "
+             "picker, so this is how a rack box is pointed at a show copied "
+             "onto it; an unloadable path falls back to the usual resolution")
     # Qt consumes its own arguments (-platform, -style, ...): pass them on.
     args, qt_args = parser.parse_known_args(sys.argv[1:])
     qt_argv = [sys.argv[0]] + qt_args
@@ -175,9 +190,9 @@ def main():
         # import (same recipe as tests/conftest.py); setdefault so an operator
         # can still pick another platform plugin explicitly.
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-        sys.exit(run_headless_mode(qt_argv))
+        sys.exit(run_headless_mode(qt_argv, show_path=args.show))
 
-    run_gui(qt_argv)
+    run_gui(qt_argv, show_path=args.show)
 
 
 if __name__ == "__main__":
