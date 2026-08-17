@@ -87,14 +87,6 @@ hidden_imports = [
     # path dies with an ImportError in a frozen build only, never in dev.
     "PyQt6.QtOpenGLWidgets",
 
-    # Audio processing
-    "librosa",
-    "librosa.core",
-    "librosa.feature",
-    "librosa.util",
-    "soundfile",
-    "audioread",
-    
     # MIDI
     "mido",
     "mido.backends",
@@ -109,9 +101,7 @@ hidden_imports = [
     
     # Other
     "mutagen",
-    "matplotlib",
     "numpy",
-    "scipy",
 
     # TTS (voice models are downloaded at runtime into the userprefs dir,
     # never bundled; piper ships its espeak-ng phoneme data as package data —

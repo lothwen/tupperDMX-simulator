@@ -70,6 +70,11 @@ class Timeline(QWidget):
         self.audio_file = audio_file
         self.midi_manager = midi_manager
 
+        # How the waveform band gets its samples: set_audio_source() installs
+        # path -> (duration, PCM). Kept as an injected callable because the
+        # samples live in the audio engine, which this layer does not import.
+        self.audio_source = None
+
         # Whether the sequencer is running, told by MainWindow. Gates a clip
         # dialog's live output — see set_transport_playing.
         self._transport_playing = False
@@ -1583,6 +1588,20 @@ class Timeline(QWidget):
 
         QTimer.singleShot(0, self.fit_to_width)
     
+    def set_audio_source(self, source) -> None:
+        """Install the waveform band's sample source: a callable taking an
+        audio path and returning (duration, PCM) — the duration from a header
+        read so layout never waits, the PCM only when the engine already holds
+        that exact file."""
+        self.audio_source = source
+
+    def redraw_waveform(self) -> None:
+        """Rebuild the waveform pixmap for the current file. Called when a
+        decode finishes: the band was laid out from the duration alone while
+        the samples were still on their way."""
+        if self.audio_file:
+            self.waveform_track.draw_waveform(self.audio_file, self._waveform_y())
+
     def set_waveform_offset(self, offset_sec: float) -> None:
         """Set the waveform offset position."""
         if self.waveform_track.waveform_item:

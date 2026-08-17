@@ -97,8 +97,11 @@ Everything the app writes lands under `/var/lib/tupperdmx`: `logs/`,
 ## Why a separate interpreter
 
 `post-build.sh` fetches CPython 3.13 through uv rather than using the target's
-own `python3`: buildroot ships 3.14, and several dependencies (numba/llvmlite
-above all) publish no cp314 wheel. The wheels are resolved **on the build host**
+own `python3`: buildroot ships 3.14, and numba/llvmlite published no cp314
+wheel. **Those left with librosa** — nothing in the current dependency set is
+known to lack a cp314 wheel, so the separate interpreter may no longer be
+needed; it is kept until someone builds and boots an image on the target's own
+3.14. The wheels are resolved **on the build host**
 — host and target are both x86_64/glibc, so they are the same manylinux wheels
 the target would have downloaded — which is what lets the box boot with no
 network at the venue.
@@ -248,8 +251,9 @@ if it bothers you; nothing about show loading depends on it.
 Beyond python/uv/app, `x86_config` enables the runtime library closure of
 QtCore/QtGui/QtMultimedia, which is not obvious from the app's dependency list:
 
-- **C++ toolchain + OpenMP** — every manylinux wheel needs `libstdc++`;
-  scipy/scikit-learn need `libgomp`.
+- **C++ toolchain** — every manylinux wheel needs `libstdc++`. `libgomp` was
+  here for scipy/scikit-learn, which left with librosa; onnxruntime (piper)
+  still wants OpenMP, so it stays.
 - **mesa3d (softpipe) + the X11 libs** — `libGL.so.1` and `libEGL.so.1` are
   `DT_NEEDED` of `libQt6Gui`, so the loader needs them *even under the offscreen
   platform plugin*. Nothing renders through them.

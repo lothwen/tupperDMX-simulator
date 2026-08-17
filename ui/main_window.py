@@ -37,6 +37,7 @@ from stage.controller import StageController
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.voice_cues_dialog import VoiceCuesDialog
+from webremote.state import probe_duration
 
 
 class MainWindow(QMainWindow):
@@ -244,6 +245,9 @@ class MainWindow(QMainWindow):
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
             fixtures=self.config.fixtures,
         )
+        self.timeline.set_audio_source(self._waveform_audio_info)
+        # The decode the song change kicked off lands after the band is drawn.
+        self.audio_engine.backing_loaded.connect(self._on_backing_decoded)
         self.timeline.seek_requested.connect(self.seek_playback)
         self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
@@ -477,6 +481,27 @@ class MainWindow(QMainWindow):
             mc.set_audio_offset(offset_sec)
             self.config.update_current_song(offset=offset_sec)
         self.save_config()
+
+    def _waveform_audio_info(self, audio_file):
+        """(duration, PCM) for the timeline's waveform band.
+
+        The duration is a mutagen header read, so the band is laid out at the
+        right width immediately. The samples are only ever the ones the engine
+        already decoded to PLAY this file — the timeline draws
+        media_controller.active_file(), which is exactly what the engine
+        loads, so the path check is enough to keep guide and backing apart.
+        None while that decode is still running; _on_backing_decoded redraws."""
+        if not audio_file:
+            return None, None
+        engine = self.audio_engine
+        pcm = (engine.backing_samples()
+               if engine.loaded_path() == audio_file else None)
+        return probe_duration(audio_file), pcm
+
+    def _on_backing_decoded(self, path):
+        """Engine finished decoding: fill in the waveform it was drawn without."""
+        if path == self.timeline.audio_file:
+            self.timeline.redraw_waveform()
 
     def _on_monitor_changed(self, monitor):
         """Editor monitor switched: redraw the waveform for the monitored

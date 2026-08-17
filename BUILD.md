@@ -226,8 +226,8 @@ uv run pyinstaller --debug=all --console build.spec
 
 ### Runtime Dependencies
 All runtime dependencies are automatically detected and bundled:
-- PyQt6 (GUI framework)
-- librosa (audio processing)
+- PyQt6 (GUI framework, and — via QtMultimedia/ffmpeg — the only audio decoder)
+- numpy (PCM, the stage engine, waveform binning)
 - mido/python-rtmidi (MIDI)
 - pyartnet (DMX Art-Net)
 - pyserial (USB DMX)

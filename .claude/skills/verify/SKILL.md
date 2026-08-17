@@ -7,7 +7,7 @@ description: Drive the real TupperDMX MainWindow headless to verify GUI/playback
 
 The desktop app runs fine under `QT_QPA_PLATFORM=offscreen` on this machine
 (real audio decode via the ffmpeg backend, real QAudioSink on the system
-device, librosa/matplotlib waveform all work headless). The recipe is a
+device, the QPainter waveform all work headless). The recipe is a
 driver script that mirrors `main.run_gui()` and steps through the UI with
 `QTimer.singleShot`-scheduled functions:
 

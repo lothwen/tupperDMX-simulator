@@ -4,19 +4,49 @@ Waveform track for audio visualization.
 Handles audio waveform rendering and dragging functionality.
 """
 
-import io
-import librosa
-import matplotlib.pyplot as plt
-
 from PyQt6.QtWidgets import (QGraphicsRectItem,
                              QGraphicsTextItem, QGraphicsDropShadowEffect)
-from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF
+from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap, QPainter
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QLine
 from PyQt6.QtWidgets import QGraphicsObject, QGraphicsItem
 
 from .base import BaseTrack
 from .song_sections import SongSectionItem
+from core.waveform import bin_extremes
 from tupperlogger import get_logger
+
+
+def render_waveform_pixmap(pcm, width: int, height: int) -> QPixmap:
+    """One column per pixel, drawn straight onto a transparent pixmap.
+
+    Replaces a matplotlib figure whose width was the whole song (a 4-minute
+    song is a 5000 px canvas, i.e. a 50-inch figure at 100 dpi) rendered to PNG
+    and decoded back. The bins are the asymmetric min/max envelope rather than
+    a symmetric bar, which is the shape the plotted version had."""
+    pixmap = QPixmap(max(1, width), max(1, height))
+    pixmap.fill(Qt.GlobalColor.transparent)
+    if pcm is None or len(pcm) == 0 or width < 1:
+        return pixmap   # geometry now, samples when the decode lands
+
+    mins, maxs = bin_extremes(pcm, width)
+    scale = max(float(maxs.max()), -float(mins.min()))
+    if scale <= 0:
+        return pixmap   # digital silence draws nothing, not a division by zero
+    # Half-height off the LAST row, not the row count: at height/2 a full-scale
+    # sample lands on y == height, one row outside the pixmap, and Qt clips it
+    # away rather than complaining.
+    mid = (height - 1) / 2.0
+    top = mid - maxs / scale * mid
+    bottom = mid - mins / scale * mid
+    # Whole columns in one drawLines call: 5000 individual drawLine calls out
+    # of a Python loop is most of the cost of drawing at all.
+    lines = [QLine(x, int(top[x]), x, int(bottom[x])) for x in range(width)]
+
+    painter = QPainter(pixmap)
+    painter.setPen(QPen(QColor("white"), 1))
+    painter.drawLines(lines)
+    painter.end()
+    return pixmap
 
 
 class DraggableWaveform(QGraphicsObject):
@@ -102,6 +132,15 @@ class WaveformTrack(BaseTrack):
         self._section_items.clear()
         self._stale_sections = []
         
+    def _audio_info(self, audio_file: str):
+        """(duration, PCM) for `audio_file` from the source the app injected.
+        A timeline built without one (a bare widget, a test) degrades to a band
+        with no waveform rather than raising."""
+        source = getattr(self.timeline_manager, "audio_source", None)
+        if source is None:
+            return None, None
+        return source(audio_file)
+
     def draw_waveform(self, audio_file: str, y_offset: int):
         """Draw waveform from audio file."""
         # Preserve any existing horizontal offset (e.g. song-start offset) so
@@ -113,8 +152,15 @@ class WaveformTrack(BaseTrack):
             self.waveform_item = None
 
         try:
-            y, sr = librosa.load(audio_file, sr=None)
-            song_length_seconds = librosa.get_duration(y=y, sr=sr)
+            # Duration is a header read and the samples are whatever the audio
+            # engine already decoded for playback — nothing is decoded here, so
+            # this never blocks the UI thread. The samples can legitimately be
+            # missing (the decode this same song change started is still
+            # running); the band is laid out anyway and redrawn on arrival.
+            song_length_seconds, pcm = self._audio_info(audio_file)
+            if not song_length_seconds:
+                self.logger.warning(f"No duration for {audio_file}")
+                return
 
             # Tell the MIDI manager the real song length so its clip-edit
             # bounds aren't pinned to the (potentially tiny) duration of
@@ -134,25 +180,11 @@ class WaveformTrack(BaseTrack):
                 self.timeline_manager.ruler_track.redraw()
 
             waveform_height = self.get_track_height()
-            
-            dpi = 100
+
             # Only create waveform for actual song duration, not extended space
             waveform_width = int(song_length_seconds * self.timeline_manager.PIXELS_PER_SECOND)
-            fig = plt.figure(figsize=(waveform_width / dpi, waveform_height / dpi), dpi=dpi)
-            ax = fig.add_subplot(1, 1, 1)
-            librosa.display.waveshow(y, sr=sr, ax=ax, color='w')
-            ax.set_xlim([0, song_length_seconds])
-            ax.axis('off')
-            fig.tight_layout(pad=0)
-            fig.patch.set_alpha(0)
-            ax.patch.set_alpha(0)
-
-            buf = io.BytesIO()
-            fig.savefig(buf, format='png', transparent=True)
-            buf.seek(0)
-            waveform_pixmap = QPixmap()
-            waveform_pixmap.loadFromData(buf.read())
-            plt.close(fig)
+            waveform_pixmap = render_waveform_pixmap(
+                pcm, waveform_width, waveform_height)
 
             self.waveform_item = DraggableWaveform(waveform_pixmap)
             self.waveform_item.setYPos(y_offset)
