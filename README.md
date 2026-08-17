@@ -1,106 +1,128 @@
 # TupperDMX Simulator
 
-A PyQt6-based lighting control application that synchronizes MP3 audio playback with MIDI-triggered DMX lighting sequences. Visualizes DMX-controlled LED fixtures and blinders in real-time on a virtual stage.
+[![Latest release](https://img.shields.io/github/v/release/lothwen/tupperDMX-simulator?label=release&color=blue)](https://github.com/lothwen/tupperDMX-simulator/releases/latest)
+[![Build](https://github.com/lothwen/tupperDMX-simulator/actions/workflows/build.yml/badge.svg)](https://github.com/lothwen/tupperDMX-simulator/actions/workflows/build.yml)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](https://www.python.org/)
+[![License: WTFPL](https://img.shields.io/badge/license-WTFPL-lightgrey)](LICENSE.txt)
 
-## Features
+A lighting-control application for live bands. It plays the backing track, runs the
+click for the drummer, fires DMX cues from a MIDI timeline and draws the result on a
+virtual stage — all from one clock, so the lights land on the beat whether or not any
+lighting hardware is plugged in.
 
-### Audio & Playback
-- MP3 audio playback synchronized to a MIDI timeline
-- Drift-free metronome with configurable BPM and beat subdivision
-- High/low pitch distinction for downbeats
-- Audio offset configuration for fine-tuning sync
-- Playlist management with previous/next/remove navigation
+Design the show at home against a virtual rig, carry the whole project to the venue in
+one folder, run the night from a tablet.
 
-### MIDI Control
-- Load and play MIDI files synchronized to audio
-- Clip-style MIDI event editing — move, resize, snap, fade, multi-select, add, and delete events on per-fixture timeline tracks (ledbar, blinder)
-- Real-time MIDI output to hardware ports or the built-in software controller
-
-### Clip Library
-- Right-sidebar panel with draggable clips grouped per fixture and per LED scene bank (FILLS, ANIMATIONS, TUBES, ...)
-- Drag a clip onto the matching fixture's timeline track to insert an event
-- Drag an LED scene to drop a 7-channel scene group at the cursor time
-- Click any item to audition it live through the active MIDI output without modifying the timeline
-
-### DMX Lighting Output
-- **Art-Net (UDP)**: Send DMX data over the network to Art-Net-compatible fixtures
-- **USB DMX**: Direct output via FTDI/serial USB DMX interfaces
-- Real-time DMX channel monitor showing all 512 channels
-
-### Software-Emulated Controller
-No hardware? No problem. When Art-Net is pointed at localhost, a pure-Python DMX controller activates automatically. Select "Software emulated" as the MIDI output port and MIDI notes drive the lighting engine directly:
-- 7-channel LED bar with scene banks (FILLS, ANIMATIONS, TUBES, STROBES, MULTICOLOR, and more)
-- Two blinder fixtures with independent scene control
-- 53 MIDI note mappings covering scenes, colors, song parts, and fixture control
-- Smooth scene blending and color palette generation (complementary, analogous, triadic, color+white, monochromatic, and single-hue modes)
-- Chase sequences and animated lighting effects
-- Song part markers: INTRO, VERSE, CHORUS, BRIDGE, SOLO, OUTRO, and more
-
-### Virtual Stage Visualization
-- Real-time rendering of LED bar and blinder fixtures
-- Colors and intensity update live from DMX data
-
-### Timeline
-- Waveform visualization with beat markers
-- Zoomable and pannable content view
-- Per-fixture MIDI event tracks with resizable track heights and BLACKOUT-aware gap handling
+![The main window, mid-design: a lit virtual stage above the clip timeline, with the show toolbar on top and the clip library on the right.](docs/manual/images/main-window.png)
 
 ---
 
-## Requirements
+## What it does
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager (recommended)
-- Audio output device
-- Optional: MIDI interface, Art-Net device, or USB DMX interface
+**Audio and click.** One stereo output carries three buses — backing track, metronome
+click and a spoken voice guide — each with its own volume and mute. The click can be
+sent to one side and the backing to the other, so the musicians hear the click on
+in-ears while the room hears only the music. Optional spoken count-in, and an optional
+per-song *guide* track (a full-mix reference used while designing, never played live).
+
+**MIDI-driven lighting.** Each song owns a MIDI file, edited in the app as *clips* on a
+timeline, one lane per patched fixture. A clip's note is a **verb** (set a channel, load
+a scene, run a chase, black out), its MIDI channel selects **which fixture** the verb
+applies to, and its velocity is that verb's parameter. Move, resize, fade, snap,
+multi-select, drag from the clip library.
+
+**A virtual stage.** Every patched fixture is drawn in real time from the DMX actually
+being sent — beams, haze, smoke, and on machines with a usable OpenGL driver an HDR
+renderer with volumetric fog. Fixtures are described by
+[Open Fixture Library](https://open-fixture-library.org/) definitions: all 17 OFL
+categories and all 43 capability types resolve, so how a light is drawn comes from what
+its channels declare, never from its name.
+
+**A software DMX controller.** A pure-Python controller emulating a hardware lighting
+desk is built in. With the factory settings it runs in-process and feeds the stage
+directly, so **the app is fully usable with no hardware at all** — no interface, no MIDI
+cable, no lights. When there *is* a rig, the same controller drives it over Art-Net or a
+USB DMX interface.
+
+**A tablet remote.** An optional web page on the local network shows the setlist, the
+current section, a visual metronome, a scrubbable waveform and a grid of manual cues.
+It is how the show is actually run from the stage.
+
+**Shows are folders.** A show is `MyBand2026.show/` — a manifest, the MIDI files it
+owns, any audio that came in with it, show-local fixture definitions and a `versions/`
+history. Autosaved and snapshotted; exportable as a self-contained `.showpack` bundle.
 
 ---
 
-## Installation & Running
+## Install and run
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# Clone the repository
 git clone https://github.com/lothwen/tupperDMX-simulator.git
 cd tupperDMX-simulator
 
-# Install dependencies
-uv sync
-
-# Run the application
-uv run python main.py
+uv sync                            # install deps + create .venv
+uv run python main.py              # run the app
+uv run python main.py --headless   # no GUI (SBC/rack): the web remote is the interface
 ```
 
----
+Prefer a binary? Grab one from the
+[latest release](https://github.com/lothwen/tupperDMX-simulator/releases/latest) —
+Linux, Windows and macOS builds are produced by CI on tagged releases.
 
-## Quick Start
-
-1. **Load an audio file** via the toolbar (MP3 supported)
-2. **Load a MIDI file** to associate lighting cues with the timeline
-3. **Choose a DMX output**:
-   - For hardware: set Art-Net IP/port or select your USB DMX device
-   - For software simulation: set Art-Net IP to `127.0.0.1` and select "Software emulated" as the MIDI port
-4. **Set BPM** to match your track
-5. **Press Play** — audio, MIDI, metronome, and DMX all run in sync
+**Requirements:** Python 3.13+ (only when running from source) and an audio output
+device. Lighting hardware, MIDI hardware and a GPU are all optional.
 
 ---
 
-## Building Executables
+## Three ways to run a show
+
+| | Plays the audio | Makes the DMX | Operator touches |
+|---|---|---|---|
+| **Mode 1** | BBeat player | `tupperDMX-arduino` | the player — this app is the *design tool* |
+| **Mode 2** | TupperDMX Simulator | TupperDMX Simulator | a laptop on stage |
+| **Mode 3** | TupperDMX Simulator | TupperDMX Simulator | a tablet, over the web remote |
+
+The internal software controller is a port of the Arduino firmware's logic, so a note
+that produces a look here produces the same look there. See
+[chapter 2](docs/manual/02-operating-modes.md) for the signal chains.
+
+---
+
+## Documentation
+
+**[📕 User manual (PDF)](docs/Manual_TupperDMX.pdf)** — the whole thing in one file.
+Or read it a chapter at a time:
+
+| | |
+|---|---|
+| [1. Introduction](docs/manual/01-introduction.md) | what it is, and the five words you need |
+| [2. Operating modes](docs/manual/02-operating-modes.md) | the three signal chains, and which one is yours |
+| [3. The main interface](docs/manual/03-main-interface.md) | the window, panel by panel |
+| [4. The stage view](docs/manual/04-stage-view.md) | placing, rigging and aiming the rig |
+| [5. The Add fixture dialog](docs/manual/05-add-fixture-dialog.md) | the library, modes, channels and patching |
+| [6. The timeline](docs/manual/06-timeline.md) | clips, tracks, scenes and blackouts |
+| [7. The top toolbar](docs/manual/07-top-toolbar.md) | shows, setlist, song files, versions |
+| [8. Clip library and DMX monitor](docs/manual/08-clip-library-and-dmx.md) | auditioning cues, watching the universe |
+| [9. Settings](docs/manual/09-settings.md) | audio, I/O routing, stage, web remote, logging |
+| [10. The web remote](docs/manual/10-web-remote.md) | running the night from a tablet |
+| [11. A show from start to finish](docs/manual/11-example-workflow.md) | the worked example |
+| [Appendix A. MIDI notes](docs/manual/12-appendix-midi-notes.md) | the note-map reference |
+
+**For contributors:** [BUILD.md](BUILD.md) (packaging and CI) ·
+[ROADMAP.md](ROADMAP.md) (what's next) ·
+[CLAUDE.md](CLAUDE.md) (architecture, layering rules and the reasoning behind them) ·
+[docs/manual/README.md](docs/manual/README.md) (rebuilding the manual and its screenshots)
 
 ```bash
-# Install build dependencies
-uv sync --extra build
-
-# Build for current platform
-make build
+uv run pytest        # headless test suite (offscreen Qt)
+make build           # standalone executable in dist/
 ```
-
-Produces a standalone executable in `dist/`. Cross-platform builds (Windows, macOS, Linux) are automated via GitHub Actions on tagged releases.
 
 ---
 
-## Platform Support
+## Platform support
 
 | Platform | Status |
 |----------|--------|
@@ -112,4 +134,4 @@ Produces a standalone executable in `dist/`. Cross-platform builds (Windows, mac
 
 ## License
 
-See [LICENSE.txt](LICENSE.txt) for details.
+[WTFPL](LICENSE.txt) — do what the fuck you want to.
