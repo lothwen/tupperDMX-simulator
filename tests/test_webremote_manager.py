@@ -11,8 +11,10 @@ Run with:
     uv run python tests/test_webremote_manager.py
 """
 
+import asyncio
 import sys
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -25,6 +27,7 @@ from core.config import Config, SongConfig
 from core.note_layout import NoteInfo
 from midi.constants import SONG_PART_NOTES
 from webremote.manager import WebRemoteManager
+from webremote.server import WebRemoteWorker, WAVEFORM_WAIT_S
 
 
 def _assert(cond, msg):
@@ -329,6 +332,28 @@ def test_no_worker_is_safe():
     _assert(window.calls == [], "publishing without a worker is a no-op")
 
 
+def test_waveform_wait_aborts_on_stop():
+    print("test_waveform_wait_aborts_on_stop")
+    # A /api/waveform parked waiting for a decode must let go when the server
+    # is stopping: aiohttp's cleanup waits for in-flight handlers, so holding
+    # on outlives WebRemoteManager's 5 s grace and the QThread is terminated
+    # mid-flight ("Destroyed while thread is still running").
+    worker = WebRemoteWorker(0)
+    worker.set_decoded_audio_source(lambda: None)   # never satisfied
+
+    async def scenario():
+        asyncio.get_running_loop().call_later(0.2, worker.stop_event.set)
+        started = time.monotonic()
+        result = await worker._await_decoded(0)
+        return result, time.monotonic() - started
+
+    result, elapsed = asyncio.run(scenario())
+    _assert(result is None, "a wait cut short by stop() reports no samples")
+    _assert(elapsed < 2.0,
+            f"and returns as the server stops ({elapsed:.2f}s), rather than "
+            f"holding on for WAVEFORM_WAIT_S ({WAVEFORM_WAIT_S:.0f}s)")
+
+
 def main():
     test_transport_actions()
     test_select_song()
@@ -340,6 +365,7 @@ def main():
     test_show_provides_cues_and_name()
     test_open_show_by_name()
     test_no_worker_is_safe()
+    test_waveform_wait_aborts_on_stop()
     print("\nALL TESTS PASSED")
 
 

@@ -12,7 +12,7 @@
 #
 # Layout it produces:
 #   /opt/tupperdmx/            the app source (main.py, app/, core/, ...)
-#   /opt/tupperdmx/python/     relocatable CPython + every dependency
+#   /usr/lib/pythonX.Y/site-packages/   every dependency, for buildroot's python3
 #   /usr/bin/uv, /usr/bin/uvx  for on-box maintenance
 #   /var/lib/tupperdmx/        HOME and working directory of the service
 set -euo pipefail
@@ -28,11 +28,6 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SRC_DIR=$(dirname "$HERE")          # the repository root
 APP_DIR="$TARGET_DIR/opt/tupperdmx"
 
-# The interpreter the app runs under. Deliberately NOT the target's own
-# python3: buildroot ships 3.14, and several of the heavy dependencies
-# (numba/llvmlite in particular) publish no cp314 wheel yet. uv's managed
-# CPython is relocatable, so it can be built here and moved to /opt.
-PYTHON_VERSION="${TUPPERDMX_PYTHON_VERSION:-3.13}"
 UV_VERSION="${TUPPERDMX_UV_VERSION:-0.12.0}"
 # The musl build is static: it does not care what the target's libc is.
 UV_ASSET="uv-x86_64-unknown-linux-musl.tar.gz"
@@ -46,8 +41,8 @@ DL_DIR="${BR2_DL_DIR:-${BASE_DIR:-$HERE}/dl}/tupperdmx"
 # under three names. Buildroot's target-finalize then runs
 # support/scripts/fix-rpath over TARGET_DIR, and `patchelf
 # --make-rpath-relative` edits in place: it rewrote PyQt6's `$ORIGIN/Qt6/lib`
-# to the absolute on-target `/opt/tupperdmx/python/.../PyQt6/Qt6/lib` through
-# all three names at once. Right for the image, fatal for the .venv -- the
+# to the absolute on-target site-packages path through all three names at
+# once. Right for the image, fatal for the .venv -- the
 # loader falls back to the host's system Qt and every QtMultimedia import dies
 # on a missing symbol, so `make` silently broke the checkout it was built from.
 # Exported rather than passed per-command so a uv step added later inherits it;
@@ -59,12 +54,12 @@ msg() { echo ">>> tupperdmx: $*"; }
 
 # --- 1. the app source ------------------------------------------------------
 # Everything the app imports at runtime, minus the build- and dev-only trees.
-# /python is excluded rather than deleted: it lives inside APP_DIR but is
-# produced by step 3, and --delete would wipe it on every rebuild.
+# Nothing is excluded from --delete any more: /opt/tupperdmx used to hold a
+# bundled interpreter under /python, and letting rsync remove it is how an
+# image built before that change loses it.
 msg "installing the app source into /opt/tupperdmx"
 mkdir -p "$APP_DIR"
 rsync -a --delete \
-    --exclude '/python' \
     --exclude '/.git' \
     --exclude '/.github' \
     --exclude '/.venv' \
@@ -107,43 +102,46 @@ install -D -m 0755 "$uv_unpack/uv" "$TARGET_DIR/usr/bin/uv"
 install -D -m 0755 "$uv_unpack/uvx" "$TARGET_DIR/usr/bin/uvx"
 
 
-# --- 3. the interpreter and its dependencies --------------------------------
-# Rebuilt only when missing or on a version bump: this downloads ~1.5 GB of
-# wheels the first time, and uv's own cache makes later runs near-instant.
-want="Python ${PYTHON_VERSION}."
-have=$("$APP_DIR/python/bin/python3" -V 2>/dev/null || true)
-case "$have" in
-    "$want"*) ;;
-    *)
-        msg "fetching CPython ${PYTHON_VERSION} (relocatable)"
-        rm -rf "$APP_DIR/python"
-        stage=$(mktemp -d)
-        uv python install --install-dir "$stage" "$PYTHON_VERSION"
-        # --install-dir leaves a versioned directory plus an absolute symlink
-        # alias next to it; take the real directory and give it a fixed name,
-        # so the init script has a stable path across patch releases.
-        interp=$(find "$stage" -maxdepth 1 -type d -name 'cpython-*' | head -n1)
-        if [ -z "$interp" ]; then
-            echo "post-build.sh: uv installed no interpreter under $stage" >&2
-            exit 1
-        fi
-        mkdir -p "$APP_DIR"
-        mv "$interp" "$APP_DIR/python"
-        rm -rf "$stage"
-        ;;
-esac
+# --- 3. the dependencies, into buildroot's own python3 ----------------------
+# The app runs under the TARGET's interpreter. That is only possible because
+# every dependency publishes a cp314 manylinux wheel -- numba and llvmlite,
+# which did not, left the project with librosa. If a future dependency has no
+# wheel for buildroot's python, the fix is to go back to a bundled interpreter
+# (see git history), not to build it here: uv would build it for the host.
+#
+# The version is read out of the rootfs rather than pinned, because buildroot
+# moves it and installing into a directory nothing imports from fails SILENTLY
+# -- the box would boot and die on `import PyQt6` with no clue why.
+py_lib=$(find "$TARGET_DIR/usr/lib" -maxdepth 1 -type d -name 'python3.*' \
+    | sort -V | tail -n1)
+if [ -z "$py_lib" ]; then
+    echo "post-build.sh: no python3 in the target rootfs" >&2
+    echo "  enable BR2_PACKAGE_PYTHON3 and its SSL/ZLIB/BZIP2/XZ/DECIMAL modules" >&2
+    exit 1
+fi
+py_version=${py_lib##*/python}          # e.g. 3.14
+site="$py_lib/site-packages"
 
-msg "installing the locked dependencies"
+msg "installing the locked dependencies for target python ${py_version}"
+mkdir -p "$site"
 req=$(mktemp)
 # --no-emit-project: the app itself is the source tree from step 1, not a wheel.
 uv export --project "$SRC_DIR" --frozen --no-dev --no-emit-project \
     --format requirements-txt -o "$req"
-# --target the interpreter's OWN site-packages: it is a real site directory, so
-# .pth files are honoured and nothing has to set PYTHONPATH. `sync` (not
-# `install`) so a removed dependency disappears from the image too. Nothing
-# installed here may share an inode with the cache -- see UV_LINK_MODE above.
-uv pip sync --python "$APP_DIR/python/bin/python3" \
-    --target "$APP_DIR/python/lib/python${PYTHON_VERSION}/site-packages" "$req"
+# Resolved for the TARGET rather than this host: --python-version and
+# --python-platform pick the wheels buildroot's interpreter can load, without
+# uv ever running it (it cannot -- it is a target binary). manylinux_2_28 is
+# the oldest floor onnxruntime publishes; the target's glibc is far newer.
+# python-rtmidi still has no Linux wheel and IS built here, which is sound only
+# because host and target are both x86_64/glibc.
+#
+# `sync` (not `install`) so a removed dependency disappears from the image too
+# -- that is what strips librosa/scipy/numba out of a tree built before they
+# were dropped. Nothing installed here may share an inode with the cache: see
+# UV_LINK_MODE above.
+uv pip sync --python-version "$py_version" \
+    --python-platform x86_64-manylinux_2_28 \
+    --target "$site" "$req"
 rm -f "$req"
 
 
