@@ -1,0 +1,35 @@
+# ABOUTME: Kernel options the app needs on top of board/pc/linux.config, which
+# ABOUTME: is a 90-line minimal config carrying USB storage and onboard HDA
+# ABOUTME: audio but no USB serial and no MIDI of any kind.
+#
+# Merged in through BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES, so buildroot's own
+# board/pc/linux.config stays untouched and upgradeable.
+
+#
+# USB serial: how the DMX dongle appears
+#
+# dmx/usb_worker.py resolves an FTDI serial number (VID 0x0403) to /dev/ttyUSB*
+# and opens it at 250000 baud, 8N2 -- DMX512 on the wire. Without ftdi_sio the
+# dongle never enumerates as a tty, so list_ports.comports() returns nothing and
+# the worker fails with "No FTDI serial port found" no matter what is plugged in.
+CONFIG_USB_SERIAL=y
+CONFIG_USB_SERIAL_FTDI_SIO=y
+# The other bridge chips found on serial gear that ends up in a rack: not used
+# by the DMX path, which is FTDI-only, but a few KB each and the difference
+# between "works" and "a device night that needs a kernel rebuild".
+CONFIG_USB_SERIAL_CP210X=y
+CONFIG_USB_SERIAL_PL2303=y
+CONFIG_USB_SERIAL_CH341=y
+# CDC-ACM: Arduino-class boards and anything exposing a USB modem interface.
+CONFIG_USB_ACM=y
+
+#
+# MIDI
+#
+# python-rtmidi speaks to the ALSA *sequencer*, not to raw devices, so without
+# this there are no MIDI ports at all -- the software controller has nothing to
+# bind to and no hardware controller can reach it.
+CONFIG_SND_SEQUENCER=y
+# snd-usb-audio drives USB MIDI controllers and USB audio interfaces alike; the
+# stock config only has onboard HDA. CONFIG_SND_USB alone is just the menu gate.
+CONFIG_SND_USB_AUDIO=y
