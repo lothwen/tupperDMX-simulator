@@ -11,7 +11,13 @@
 <header id="topbar">
   <div class="topbar-left">
     <div class="live-row"><span class="live-dot"></span><span class="kicker">REMOTE · LIVE</span></div>
-    <div id="show-name" class="placeholder-text">—</div>
+    <div id="show-picker">
+      <button id="show-btn" aria-haspopup="true" aria-expanded="false">
+        <span id="show-name" class="placeholder-text">—</span>
+        <svg class="chev" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+      </button>
+      <ul id="show-menu"></ul>
+    </div>
   </div>
   <div class="topbar-center">
     <div id="top-clock" class="clock">00:00<span class="clock-ms">.000</span></div>

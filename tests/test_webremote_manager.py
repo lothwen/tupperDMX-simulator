@@ -249,11 +249,14 @@ def test_show_provides_cues_and_name():
     show_name come from the show; config cues only serve showless windows."""
     print("test_show_provides_cues_and_name")
     import types
+    from pathlib import Path
+
     from core.config import WebCueConfig
 
     manager, config, window = _make_manager()
     show = types.SimpleNamespace(
         name="Directo Billares 2026",
+        root=Path("/no/such/dir/Directo Billares 2026.show"),
         cues=[WebCueConfig("Solo", "#ffffff", [[1, 24, 100]])])
     window.show_manager = types.SimpleNamespace(show=show)
 
@@ -271,6 +274,49 @@ def test_show_provides_cues_and_name():
     state = manager._build_state()
     _assert(state["show_name"] is None and len(state["cues"]) == 6,
             "no open show -> config cues and null show_name")
+
+
+def test_open_show_by_name():
+    """The show picker: the snapshot lists the folders beside the open show,
+    and an open_show command stops playback and routes to the SAME
+    ShowManager.open_show the desktop's Open show dialog uses."""
+    print("test_open_show_by_name")
+    import tempfile
+    import types
+    from pathlib import Path
+
+    manager, config, window = _make_manager()
+    with tempfile.TemporaryDirectory() as tmp:
+        parent = Path(tmp)
+        for name in ("Gira 2026.show", "Billares.show"):
+            (parent / name).mkdir()
+            (parent / name / "show.json").write_text("{}")
+
+        show = types.SimpleNamespace(name="Gira 2026",
+                                     root=parent / "Gira 2026.show", cues=[])
+        opened = []
+        window.show_manager = types.SimpleNamespace(
+            show=show, open_show=lambda path: opened.append(path))
+
+        state = manager._build_state()
+        _assert(state["shows"] == [{"name": "Billares", "current": False},
+                                   {"name": "Gira 2026", "current": True}],
+                "the snapshot lists the sibling shows, marking the open one")
+
+        manager._execute({"action": "open_show", "name": "Billares"})
+        _assert(window.calls == ["stop"], "opening a show stops playback first")
+        _assert(opened == [parent / "Billares.show"],
+                "the name resolves to its folder and goes to ShowManager.open_show")
+
+        window.calls.clear()
+        opened.clear()
+        manager._execute({"action": "open_show", "name": "Gira 2026"})
+        _assert(opened == [] and window.calls == [],
+                "re-selecting the open show is a no-op")
+
+        manager._execute({"action": "open_show", "name": "../elsewhere"})
+        _assert(opened == [] and window.calls == [],
+                "a name that isn't in the listing opens nothing")
 
 
 def test_no_worker_is_safe():
@@ -292,6 +338,7 @@ def main():
     test_countin_commands()
     test_build_state_snapshot()
     test_show_provides_cues_and_name()
+    test_open_show_by_name()
     test_no_worker_is_safe()
     print("\nALL TESTS PASSED")
 

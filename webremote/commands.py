@@ -6,8 +6,10 @@ from typing import Any, Optional
 
 ACTIONS = frozenset({
     "play_pause", "stop", "next", "prev", "seek", "cue", "select_song",
-    "blackout", "panic", "set_precount", "set_countin_bars",
+    "blackout", "panic", "set_precount", "set_countin_bars", "open_show",
 })
+
+MAX_SHOW_NAME = 200
 
 
 def parse_command(raw: Any) -> Optional[dict]:
@@ -55,5 +57,14 @@ def parse_command(raw: Any) -> Optional[dict]:
         if isinstance(bars, bool) or not isinstance(bars, int) or bars < 1:
             return None
         cmd["bars"] = bars  # upper clamp happens at execution time
+
+    if action == "open_show":
+        # A show's display name, never a path: it is looked up in the published
+        # listing at execution time, so it can only ever name a folder the
+        # remote was already shown.
+        name = raw.get("name")
+        if not isinstance(name, str) or not name or len(name) > MAX_SHOW_NAME:
+            return None
+        cmd["name"] = name
 
     return cmd

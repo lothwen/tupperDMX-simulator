@@ -102,6 +102,19 @@ def test_countin_command_validation():
                 f"set_countin_bars bars={bad!r} is rejected")
 
 
+def test_open_show_validation():
+    print("test_open_show_validation")
+    cmd = parse_command({"type": "cmd", "action": "open_show", "name": "Gira 2026"})
+    _assert(cmd == {"action": "open_show", "name": "Gira 2026"},
+            "open_show carries its show name")
+    for bad in (None, "", 3, True, ["Gira"], "x" * 201):
+        raw = {"type": "cmd", "action": "open_show", "name": bad}
+        _assert(parse_command(raw) is None,
+                f"open_show name={bad!r} is rejected")
+    _assert(parse_command({"type": "cmd", "action": "open_show"}) is None,
+            "open_show without a name is rejected")
+
+
 def test_worker_handle_text_delegates():
     print("test_worker_handle_text_delegates")
     worker = WebRemoteWorker(port=8765, static_dir=".")
@@ -119,7 +132,7 @@ def test_actions_whitelist_is_closed():
     print("test_actions_whitelist_is_closed")
     _assert(ACTIONS == {"play_pause", "stop", "next", "prev", "seek", "cue",
                         "select_song", "blackout", "panic",
-                        "set_precount", "set_countin_bars"},
+                        "set_precount", "set_countin_bars", "open_show"},
             "the remote action whitelist is exactly the frozen protocol set")
 
 
@@ -130,6 +143,7 @@ def main():
     test_seek_validation()
     test_indexed_validation()
     test_countin_command_validation()
+    test_open_show_validation()
     test_worker_handle_text_delegates()
     test_actions_whitelist_is_closed()
     print("\nALL TESTS PASSED")

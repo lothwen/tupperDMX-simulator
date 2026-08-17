@@ -12,12 +12,16 @@ Run with:
 
 import sys
 import os
+import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 
+from core.paths import default_shows_dir
 from webremote.state import (compute_sections, build_setlist, build_state,
+                             build_shows, resolve_show, shows_dir,
                              probe_duration, probe_bpm)
 from webremote.peaks import _downsample
 
@@ -113,12 +117,13 @@ def test_build_state_schema():
         setlist={"current": 0, "songs": []},
         sections=[], cues=[{"index": 0, "label": "Warm", "color": "#fff"}])
 
-    expected_keys = {"type", "show_name", "playing", "position", "duration",
-                     "bpm", "beats_per_bar", "blackout", "countin", "setlist",
-                     "sections", "cues"}
+    expected_keys = {"type", "show_name", "shows", "playing", "position",
+                     "duration", "bpm", "beats_per_bar", "blackout", "countin",
+                     "setlist", "sections", "cues"}
     _assert(set(state) == expected_keys, "state message has the frozen schema keys")
     _assert(state["type"] == "state", "type tag is 'state'")
     _assert(state["show_name"] is None, "show name is a Phase-3 placeholder (null)")
+    _assert(state["shows"] == [], "the show list defaults to empty")
     _assert(state["beats_per_bar"] == 4, "beats_per_bar is constant 4 this phase")
     _assert(state["countin"] == {"enabled": False, "bars": 2},
             "countin defaults to disabled / 2 bars when not provided")
@@ -139,6 +144,42 @@ def test_build_state_schema():
                         sections=[], cues=[])
     _assert(state["duration"] is None, "unknown duration serializes as null")
     _assert(state["blackout"] is True, "blackout flag passes through")
+
+
+def test_build_shows():
+    print("test_build_shows")
+    with tempfile.TemporaryDirectory() as tmp:
+        parent = Path(tmp)
+        for name in ("Zaragoza.show", "billares.show", "Gira 2026.show"):
+            (parent / name).mkdir()
+            (parent / name / "show.json").write_text("{}")
+        (parent / "not-a-show").mkdir()   # no manifest: not a show folder
+
+        current = parent / "Gira 2026.show"
+        _assert(shows_dir(current) == parent,
+                "the menu lists the folder holding the open show")
+        _assert(shows_dir(None) == default_shows_dir(),
+                "with no show open it falls back to the default shows dir")
+
+        shows = build_shows(current)
+        _assert([s["name"] for s in shows] == ["billares", "Gira 2026", "Zaragoza"],
+                "every sibling show folder is listed, by name, .show stripped")
+        _assert([s["current"] for s in shows] == [False, True, False],
+                "the open show is the marked entry")
+        _assert(all(set(s) == {"name", "current"} for s in shows),
+                "no filesystem path ever reaches a client")
+
+        _assert(resolve_show("Zaragoza", current) == parent / "Zaragoza.show",
+                "a display name resolves back to its folder")
+        _assert(resolve_show("nope", current) is None,
+                "an unknown name resolves to nothing")
+        _assert(resolve_show("../../etc", current) is None,
+                "a path-shaped name matches nothing (names are never joined)")
+
+        _assert(build_shows(parent / "not-a-show" / "x.show") == [],
+                "a folder holding no shows lists empty")
+        _assert(build_shows(parent / "missing" / "x.show") == [],
+                "a folder that doesn't exist lists empty instead of raising")
 
 
 def test_downsample():
@@ -163,6 +204,7 @@ def main():
     test_build_setlist()
     test_probes_missing_files()
     test_build_state_schema()
+    test_build_shows()
     test_downsample()
     print("\nALL TESTS PASSED")
 

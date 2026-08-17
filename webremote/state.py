@@ -1,9 +1,15 @@
 # ABOUTME: Pure (Qt-free) web-remote state building: song-section spans from
-# ABOUTME: song-part markers, setlist metadata probes (mtime-cached) and the
-# ABOUTME: full state-message assembly — single source of the WS schema.
+# ABOUTME: song-part markers, setlist metadata probes (mtime-cached), the show
+# ABOUTME: folder listing and the full state-message assembly — single source
+# ABOUTME: of the WS schema.
 import os
 import socket
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from core.paths import default_shows_dir
+from core.show.migrate import shows_present_in
+from core.show.model import SHOW_DIR_SUFFIX
 
 # (kind, path, mtime) -> value. Files on the setlist rarely change while the
 # app runs; mtime keying keeps repeated snapshot builds free.
@@ -100,18 +106,63 @@ def build_setlist(songs: list, current_index: int) -> dict:
     }
 
 
+def _display_name(root: Path) -> str:
+    """Folder name without the .show suffix (the desktop's own naming rule)."""
+    name = root.name
+    return name[:-len(SHOW_DIR_SUFFIX)] if name.endswith(SHOW_DIR_SUFFIX) else name
+
+
+def shows_dir(current_root=None) -> Path:
+    """Folder the remote's show menu lists: the one holding the open show, so
+    the menu always contains (and can mark) the show on screen; the default
+    shows dir only serves a box with no show open."""
+    return Path(current_root).parent if current_root else default_shows_dir()
+
+
+def _listing(current_root=None) -> List[Tuple[str, Path]]:
+    """(display name, root) for every show folder in that directory, by name —
+    sorted so a name shared by two folders always resolves to the same one."""
+    entries = [(_display_name(root), root)
+               for root in shows_present_in(shows_dir(current_root))]
+    entries.sort(key=lambda e: (e[0].lower(), str(e[1])))
+    return entries
+
+
+def build_shows(current_root=None) -> List[dict]:
+    """The 'shows' block: [{'name','current'}] for the folders the remote may
+    switch to. Only names travel to clients — never paths, same rule as the
+    setlist's audio — so a client names an entry and resolve_show() maps it
+    back; nothing a remote sends is ever joined onto a path."""
+    current = os.path.normpath(str(current_root)) if current_root else None
+    return [{"name": name,
+             "current": current is not None
+             and os.path.normpath(str(root)) == current}
+            for name, root in _listing(current_root)]
+
+
+def resolve_show(name: str, current_root=None) -> Optional[Path]:
+    """Inverse of build_shows: the root a client-supplied display name refers
+    to, or None when it names nothing in the menu's folder."""
+    for entry_name, root in _listing(current_root):
+        if entry_name == name:
+            return root
+    return None
+
+
 def build_state(*, playing: bool, position: float, duration: Optional[float],
                 bpm: int, blackout: bool, setlist: dict,
                 sections: List[dict], cues: List[dict],
                 show_name: Optional[str] = None,
+                shows: Optional[List[dict]] = None,
                 countin: Optional[dict] = None) -> dict:
     """Assemble the full 'state' WS message (the schema's single source).
     ``position`` may be negative while the count-in runs (clients render it
     as a countdown); ``countin`` = {'enabled': current song's precount,
-    'bars': the global count-in length}."""
+    'bars': the global count-in length}; ``shows`` = build_shows()."""
     return {
         "type": "state",
         "show_name": show_name,
+        "shows": shows if shows is not None else [],
         "playing": bool(playing),
         "position": float(position),
         "duration": float(duration) if duration else None,
