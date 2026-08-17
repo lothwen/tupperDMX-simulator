@@ -197,9 +197,13 @@ class WebRemoteWorker(QObject):
         length of a decode, so 'not there yet' and 'this is the previous song'
         are the same state and there is nothing to race against — whereas an
         event fired on load would have to be matched up with whichever request
-        was waiting for it."""
+        was waiting for it.
+
+        Watches stop_event as well as the clock: aiohttp's cleanup waits for
+        in-flight handlers, so a request parked here would hold the whole
+        thread past the manager's 5 s grace and get it terminated mid-flight."""
         deadline = time.monotonic() + WAVEFORM_WAIT_S
-        while True:
+        while not self.stop_event.is_set():
             source = self._decoded_audio
             current = source() if source is not None else None
             if current is not None and current[0] == index:
@@ -210,6 +214,7 @@ class WebRemoteWorker(QObject):
                     f"{WAVEFORM_WAIT_S:.0f}s")
                 return None
             await asyncio.sleep(0.05)
+        return None
 
     async def _handle_ws(self, request):
         ws = web.WebSocketResponse(heartbeat=30)

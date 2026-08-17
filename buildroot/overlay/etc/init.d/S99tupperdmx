@@ -8,7 +8,10 @@
 # libpulse) already running.
 #
 
-DAEMON=/opt/tupperdmx/python/bin/python3
+# Buildroot's own python3; the dependencies are installed into its
+# site-packages by post-build.sh. main.py's directory goes on sys.path by
+# virtue of being the script, so /opt/tupperdmx needs no PYTHONPATH.
+DAEMON=/usr/bin/python3
 APP=/opt/tupperdmx/main.py
 # HOME *and* working directory. config.logging.log_dir is relative, so the logs
 # land in $DATA_DIR/logs; userprefs.json goes to $DATA_DIR/.config and the show

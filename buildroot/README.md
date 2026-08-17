@@ -25,7 +25,7 @@ make olddefconfig
 make                                                     # image: output/images/disk.img
 ```
 
-The first build downloads ~900 MB of Python wheels on the **build host**; later
+The first build downloads ~400 MB of Python wheels on the **build host**; later
 builds hit uv's cache and take seconds. To carry config changes back:
 
 ```bash
@@ -58,9 +58,9 @@ wheel's files in `TARGET_DIR`, in the cache, and in the repository's own `.venv`
 are one inode under three names. Buildroot's `target-finalize` then runs
 `support/scripts/fix-rpath target`, whose `patchelf --make-rpath-relative` edits
 **in place** — it rewrote PyQt6's `$ORIGIN/Qt6/lib` to the absolute on-target
-`/opt/tupperdmx/python/.../PyQt6/Qt6/lib` through all three at once. Correct for
-the image, fatal for the `.venv`: the loader falls back to the host's system Qt
-and every `QtMultimedia` import dies with
+site-packages path through all three at once. Correct for the image, fatal for
+the `.venv`: the loader falls back to the host's system Qt and every
+`QtMultimedia` import dies with
 
 ```
 undefined symbol: _Zls6QDebugN17QVideoFrameFormat11PixelFormatE, version Qt_6
@@ -76,14 +76,14 @@ uv sync --frozen --reinstall-package pyqt6 \
 ```
 
 To check a suspect tree: `patchelf --print-rpath .venv/lib/python3.*/site-packages/PyQt6/QtMultimedia.abi3.so`
-must print `$ORIGIN/Qt6/lib`, never an `/opt/tupperdmx` path.
+must print `$ORIGIN/Qt6/lib`, never an absolute on-target path.
 
 ## What ends up on the target
 
 | Path | What |
 | --- | --- |
 | `/opt/tupperdmx/` | the app source (no `tests/`, `docs/`, `.venv`, `.git`) |
-| `/opt/tupperdmx/python/` | relocatable CPython 3.13 + every locked dependency (~900 MB) |
+| `/usr/lib/python3.14/site-packages/` | every locked dependency (~390 MB), under buildroot's own python3 |
 | `/usr/bin/uv`, `/usr/bin/uvx` | static musl build, for on-box maintenance |
 | `/var/lib/tupperdmx/` | `HOME` and working directory of the service |
 | `/etc/init.d/S99tupperdmx` | the init script |
@@ -94,21 +94,59 @@ Everything the app writes lands under `/var/lib/tupperdmx`: `logs/`,
 `.config/tupperDMX/userprefs.json` and the show projects in
 `Documents/TupperDMX/`. Back up that one directory and you have the box.
 
-## Why a separate interpreter
+## The interpreter
 
-`post-build.sh` fetches CPython 3.13 through uv rather than using the target's
-own `python3`: buildroot ships 3.14, and numba/llvmlite published no cp314
-wheel. **Those left with librosa** — nothing in the current dependency set is
-known to lack a cp314 wheel, so the separate interpreter may no longer be
-needed; it is kept until someone builds and boots an image on the target's own
-3.14. The wheels are resolved **on the build host**
-— host and target are both x86_64/glibc, so they are the same manylinux wheels
-the target would have downloaded — which is what lets the box boot with no
-network at the venue.
+The app runs under **buildroot's own `python3`** (3.14), and `post-build.sh`
+installs the locked dependencies into its `/usr/lib/python3.14/site-packages`.
+That is a real site directory, so `.pth` files are honoured and nothing needs
+`PYTHONPATH`; `/opt/tupperdmx` reaches `sys.path` by being `main.py`'s own
+directory.
 
-The dependencies install into that interpreter's own `site-packages` via
-`uv pip sync --target`, so it is a real site directory: `.pth` files are
-honoured and nothing needs `PYTHONPATH`.
+It did not used to work. Buildroot ships 3.14 and numba/llvmlite published no
+cp314 wheel, so the build fetched a **relocatable CPython 3.13** through uv and
+bundled it under `/opt/tupperdmx/python/`. Those two came in with librosa, and
+left with it — every remaining dependency has a cp314 manylinux wheel.
+
+The wheels are still resolved **on the build host**, which is what lets the box
+boot with no network at the venue. uv cannot run a target binary to ask what it
+supports, so the resolution is pinned explicitly instead:
+
+```
+uv pip sync --python-version 3.14 --python-platform x86_64-manylinux_2_28 --target ...
+```
+
+`manylinux_2_28` is the oldest floor onnxruntime publishes; the target's glibc
+is 2.43, far newer. The version itself is read out of the rootfs rather than
+written down, because installing into a directory nothing imports from fails
+*silently* — the box boots and dies on `import PyQt6` with no hint why.
+
+**`python-rtmidi` still has no Linux wheel** and is compiled during the build.
+That is sound only because host and target are both x86_64/glibc — the same
+assumption the manylinux wheels rest on. If a future dependency has no wheel
+for buildroot's python, the answer is to go back to a bundled interpreter (it
+is in the git history), *not* to build it on the host.
+
+### Enabling the python modules it needs
+
+Buildroot's `python3` is minimal by default — most stdlib C modules are
+separate config options, and five of them are load-bearing here:
+
+| Option | Needed by |
+| --- | --- |
+| `BR2_PACKAGE_PYTHON3_SSL` | aiohttp — the web remote is the only interface |
+| `BR2_PACKAGE_PYTHON3_ZLIB` | aiohttp, mutagen, and `.showpack` (`ZIP_DEFLATED`) |
+| `BR2_PACKAGE_PYTHON3_DECIMAL` | mutagen, numpy (pulls in `mpdecimal`) |
+| `BR2_PACKAGE_PYTHON3_BZIP2` | numpy |
+| `BR2_PACKAGE_PYTHON3_XZ` | numpy (pulls in `xz`) |
+
+They are already set in `x86_config`. The list came from running the headless
+app and reading back which of buildroot's optional modules `sys.modules`
+actually held — `sqlite3`, `curses`, `readline` and `pyexpat` are genuinely
+unused, so they stay off.
+
+> **These are configure-time options on an already-built package**, which is
+> exactly the trap described above: `make python3-dirclean` before rebuilding,
+> or python3 stays as it was and the app dies on `import ssl`.
 
 ## Service control
 
@@ -220,7 +258,7 @@ share is not enough on its own to *select* it. Two ways to say which one:
 /etc/init.d/S99tupperdmx restart
 
 # Or pin one explicitly, which also becomes the remembered show:
-/opt/tupperdmx/python/bin/python3 /opt/tupperdmx/main.py --headless \
+/usr/bin/python3 /opt/tupperdmx/main.py --headless \
     --show /var/lib/tupperdmx/Documents/TupperDMX/Billares2026.show
 ```
 
