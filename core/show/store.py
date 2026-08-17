@@ -85,7 +85,10 @@ def load_show(root) -> Show:
     if not manifest.is_file():
         raise ShowError(f"'{root}' is not a show folder (no {MANIFEST_NAME})")
     try:
-        data = json.loads(manifest.read_text())
+        # utf-8-sig for the same reason userprefs.json uses it: a manifest
+        # hand-edited over the rack box's SMB share comes back with a BOM,
+        # and a show that will not parse is a show that will not open.
+        data = json.loads(manifest.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as e:
         raise ShowError(f"Cannot read '{manifest}': {e}") from e
     fixture_library.set_show_fixtures_dir(root / FIXTURES_DIR)

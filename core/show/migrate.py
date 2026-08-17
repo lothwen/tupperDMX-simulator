@@ -20,8 +20,14 @@ MAX_RECENT_SHOWS = 8
 
 
 def remember_show(config, root) -> None:
-    """Record root as this machine's current + most recent show (userprefs)."""
-    path = str(root)
+    """Record root as this machine's current + most recent show (userprefs).
+
+    Stored absolute (but NOT symlink-resolved): the pointer outlives the
+    process that wrote it, and the next run's working directory is whatever
+    started it — a relative path here, which `--show Documents/x.show` makes
+    easy to produce, would resolve somewhere else or nowhere at all.
+    """
+    path = os.path.abspath(str(root))
     config.last_show_path = path
     config.recent_shows = ([path] +
                            [p for p in config.recent_shows if p != path])[:MAX_RECENT_SHOWS]
@@ -72,12 +78,24 @@ def migrate_config_to_show(config, shows_dir) -> Show:
     return show
 
 
-def open_or_create_startup_show(config, shows_dir=None) -> Show:
-    """Resolve the show to open at startup: last_show_path, then the recent
-    list, else migrate/create a default show. Persists the updated pointers
-    via config.save(), which is also what makes the migration one-time — the
-    second launch takes the last_show_path branch."""
+def shows_present_in(shows_dir) -> list:
+    """Show folders already sitting in shows_dir, most recently modified first."""
+    try:
+        found = [p for p in Path(shows_dir).iterdir() if store.is_show_dir(p)]
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def open_or_create_startup_show(config, shows_dir=None, explicit_path=None) -> Show:
+    """Resolve the show to open at startup, in order: an explicitly requested
+    path (--show), last_show_path, the recent list, a show folder already
+    present in the shows dir, and only then a freshly created default show.
+    Persists the updated pointers via config.save(), which is also what makes
+    the migration one-time — the second launch takes the last_show_path branch."""
     candidates = []
+    if explicit_path:
+        candidates.append(str(explicit_path))
     if config.last_show_path:
         candidates.append(config.last_show_path)
     candidates += [p for p in config.recent_shows if p not in candidates]
@@ -92,7 +110,23 @@ def open_or_create_startup_show(config, shows_dir=None) -> Show:
         config.save()
         return show
 
-    show = migrate_config_to_show(config, shows_dir or default_shows_dir())
+    shows_dir = Path(shows_dir or default_shows_dir())
+    # Nothing the prefs pointed at was usable. Before inventing an empty show,
+    # adopt one that is already on disk: headless has no show picker, so an
+    # operator who copies a .show folder onto the box over the share has no way
+    # to select it, and creating "Untitled" instead buries it for good.
+    for root in shows_present_in(shows_dir):
+        try:
+            show = store.load_show(root)
+        except ShowError as e:
+            logger.warning(f"Skipping unloadable show '{root}': {e}")
+            continue
+        logger.info(f"Adopted the show already present at '{root}'")
+        remember_show(config, show.root)
+        config.save()
+        return show
+
+    show = migrate_config_to_show(config, shows_dir)
     logger.info(f"Created show '{show.root}' "
                 f"({len(show.playlist.songs)} songs adopted from userprefs)")
     remember_show(config, show.root)
