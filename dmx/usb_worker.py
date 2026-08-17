@@ -11,6 +11,10 @@ from .base import DMXWorkerBase, DMXConnectionStatus
 # FTDI USB vendor ID; all supported DMX dongles are FTDI-based.
 FTDI_VID = 0x0403
 
+# The DMX512 line rate. Deliberately NOT a POSIX standard baud rate, which is
+# what makes open_dmx_port() below necessary.
+DMX_BAUDRATE = 250000
+
 
 def find_port_by_serial(serial_number: str) -> Optional[str]:
     """Resolve an FTDI serial number to its serial port (COMx / /dev/ttyUSB*)."""
@@ -18,6 +22,59 @@ def find_port_by_serial(serial_number: str) -> Optional[str]:
         if port.vid == FTDI_VID and port.serial_number == serial_number:
             return port.device
     return None
+
+
+def open_dmx_port(port: str, **kwargs) -> serial.Serial:
+    """Open `port` with DMX512 line settings: 250000 baud, 8 bits, 2 stop, no parity.
+
+    250000 has no `termios.B*` constant, so on Linux pyserial takes its
+    custom-baudrate path — and that path hands `BOTHER` to `termios.tcsetattr`
+    *before* applying the rate through the `TCSETS2` ioctl that would have
+    worked. The `TCSETS` ioctl behind `tcsetattr` rejects any non-standard
+    CBAUD with EINVAL, so the open dies with "(22, 'Invalid argument')" and the
+    ioctl is never reached. Open at a standard rate and drive that ioctl
+    ourselves instead.
+
+    The direct open is still tried first: it is what succeeds on Windows and on
+    any platform whose pyserial/libc/kernel combination handles 250000, and it
+    keeps this workaround dormant once one of them does.
+
+    NB the returned port reports the standard rate in `.baudrate`, and assigning
+    that (or anything else pyserial reconfigures the port through) re-runs the
+    failing `tcsetattr`. Read and write the port; do not re-configure it.
+    """
+    settings = dict(
+        bytesize=serial.EIGHTBITS,
+        stopbits=serial.STOPBITS_TWO,
+        parity=serial.PARITY_NONE,
+        **kwargs,
+    )
+    try:
+        return serial.Serial(port, baudrate=DMX_BAUDRATE, **settings)
+    except Exception as direct_error:
+        logger = get_logger("dmx.usb")
+        try:
+            device = serial.Serial(port, baudrate=115200, **settings)
+        except Exception:
+            # Not the baud rate at all — the port is busy, gone or forbidden.
+            # Report why the rate we actually want failed, not the retry.
+            raise direct_error
+        # pyserial's own TCSETS2 helper, private but the only public-free way to
+        # reach it; absent on backends that never needed it (e.g. Windows).
+        set_special_baudrate = getattr(device, "_set_special_baudrate", None)
+        if set_special_baudrate is None:
+            device.close()
+            raise direct_error
+        try:
+            set_special_baudrate(DMX_BAUDRATE)
+        except Exception:
+            device.close()
+            raise
+        logger.info(
+            f"{port} opened at {DMX_BAUDRATE} baud via the custom-baudrate ioctl "
+            f"(direct open failed: {direct_error})"
+        )
+        return device
 
 
 class USBDMXWorker(DMXWorkerBase):
@@ -34,7 +91,7 @@ class USBDMXWorker(DMXWorkerBase):
         self.logger = get_logger("dmx.usb")
 
         # USB DMX configuration
-        self.baudrate = 250000
+        self.baudrate = DMX_BAUDRATE
         self.line_property = (8, 2, 0)  # 8 data bits, 2 stop bits, no parity
         self.read_timeout = 0.1  # 100ms timeout for reads
 
@@ -83,14 +140,7 @@ class USBDMXWorker(DMXWorkerBase):
             port = find_port_by_serial(self.device_id)
             if port is None:
                 raise ConnectionError(f"No FTDI serial port found for {self.device_id}")
-            self.device = serial.Serial(
-                port,
-                baudrate=self.baudrate,
-                bytesize=serial.EIGHTBITS,
-                stopbits=serial.STOPBITS_TWO,
-                parity=serial.PARITY_NONE,
-                timeout=self.read_timeout,
-            )
+            self.device = open_dmx_port(port, timeout=self.read_timeout)
             self.device.reset_input_buffer()
 
             self._set_status(DMXConnectionStatus.CONNECTED)

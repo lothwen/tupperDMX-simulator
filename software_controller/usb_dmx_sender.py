@@ -23,18 +23,11 @@ class USBDMXSender:
         parts = device_string.split(":")
         device_id = parts[2] if len(parts) >= 3 else device_string
         try:
-            import serial
-            from dmx.usb_worker import find_port_by_serial
+            from dmx.usb_worker import find_port_by_serial, open_dmx_port
             port = find_port_by_serial(device_id)
             if port is None:
                 raise ConnectionError(f"No FTDI serial port found for {device_id}")
-            self.device = serial.Serial(
-                port,
-                baudrate=250000,
-                bytesize=serial.EIGHTBITS,
-                stopbits=serial.STOPBITS_TWO,
-                parity=serial.PARITY_NONE,
-            )
+            self.device = open_dmx_port(port)
             self.logger.info(f"USB DMX sender opened: {device_string} ({port})")
         except Exception as e:
             self.logger.error(f"USB DMX sender failed to open {device_string}: {e}")
