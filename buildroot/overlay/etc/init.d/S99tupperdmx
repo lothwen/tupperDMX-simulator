@@ -1,0 +1,101 @@
+#!/bin/sh
+#
+# Start/stop the TupperDMX Simulator in headless mode.
+#
+# Headless is the SBC/rack mode: no GUI at all, the embedded web remote is the
+# only interface. S99 puts it last on purpose -- it needs S41dhcpcd (an address
+# to serve the remote on) and S50pulseaudio (QtMultimedia's audio backend is
+# libpulse) already running.
+#
+
+DAEMON=/opt/tupperdmx/python/bin/python3
+APP=/opt/tupperdmx/main.py
+# HOME *and* working directory. config.logging.log_dir is relative, so the logs
+# land in $DATA_DIR/logs; userprefs.json goes to $DATA_DIR/.config and the show
+# projects to $DATA_DIR/Documents/TupperDMX. One writable place, easy to back up.
+DATA_DIR=/var/lib/tupperdmx
+PIDFILE=/var/run/tupperdmx.pid
+# Everything the app writes to stdout/stderr, this run only (truncated on each
+# start): the console half of the logging system, plus anything that dies before
+# it comes up. logs/ is the rotated history; this is the current boot.
+BOOTLOG=$DATA_DIR/boot.log
+# pulseaudio runs in system mode (see S50pulseaudio), so name its socket rather
+# than relying on the client's per-user runtime path, which root does not have.
+PULSE_SERVER=unix:/var/run/pulse/native
+export PULSE_SERVER
+
+# Nothing to do if the post-build step never populated /opt/tupperdmx.
+[ -x "$DAEMON" ] || exit 0
+[ -f "$APP" ] || exit 0
+
+start() {
+	printf 'Starting tupperdmx: '
+	mkdir -p "$DATA_DIR"
+	cd "$DATA_DIR" || { echo 'FAIL (no data dir)'; exit 1; }
+	# -b backgrounds it and -m writes the pidfile: main.py --headless runs a
+	# Qt event loop in the foreground until it is signalled.
+	#
+	# Run it through a shell that reopens $BOOTLOG and then execs, rather than
+	# redirecting this command: -b hands the daemon /dev/null on all three
+	# standard descriptors, so a redirection out here captures nothing the app
+	# ever says. That is not a cosmetic loss -- an ImportError, a missing
+	# shared library or a traceback raised before the logging system is up has
+	# NOWHERE else to go, and the box comes up looking like a clean boot that
+	# simply ignores its preferences. `exec` twice keeps the pid start-stop-
+	# daemon recorded with -m, so -K and the status check still find it.
+	HOME="$DATA_DIR" \
+	start-stop-daemon -S -q -b -m -p "$PIDFILE" \
+		-x /bin/sh -- -c "exec >'$BOOTLOG' 2>&1; exec '$DAEMON' '$APP' --headless"
+	if [ $? -ne 0 ]; then echo 'FAIL (start-stop-daemon)'; return 1; fi
+	# The daemon is backgrounded, so its exit status never reaches this script:
+	# without this check a process that dies on startup still prints OK, which
+	# is exactly how a crash-on-boot stayed invisible.
+	sleep 2
+	if start-stop-daemon -K -t -q -p "$PIDFILE"; then
+		echo 'OK'
+	else
+		echo "FAIL (died on startup -- see $BOOTLOG)"
+		return 1
+	fi
+}
+
+stop() {
+	printf 'Stopping tupperdmx: '
+	# SIGTERM is the clean path: run_headless() catches it and runs the same
+	# shutdown as closing the window, which flushes the pending .mid autosave.
+	# Busybox start-stop-daemon has no --retry, so wait for the flush here.
+	start-stop-daemon -K -q -p "$PIDFILE"
+	i=0
+	while [ $i -lt 20 ] && start-stop-daemon -K -t -q -p "$PIDFILE"; do
+		sleep 1
+		i=$((i + 1))
+	done
+	rm -f "$PIDFILE"
+	echo 'OK'
+}
+
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  restart|reload)
+	stop
+	start
+	;;
+  status)
+	if start-stop-daemon -K -t -q -p "$PIDFILE"; then
+		echo "tupperdmx running (pid $(cat "$PIDFILE"))"
+	else
+		echo 'tupperdmx not running'
+		exit 1
+	fi
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+esac
+
+exit $?

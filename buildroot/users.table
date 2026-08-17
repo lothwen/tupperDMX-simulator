@@ -1,0 +1,22 @@
+# ABOUTME: Buildroot users table: the interactive account used to SSH into the
+# ABOUTME: box, since sshd's built-in PermitRootLogin default is
+# ABOUTME: prohibit-password and root therefore cannot log in with a password.
+#
+# Fields: username uid group gid password home shell groups comment
+#
+# `=tupperdmx` is clear text and gets crypt-encoded by support/scripts/mkusers
+# using BR2_TARGET_GENERIC_PASSWD_METHOD (sha-256 here). It is deliberately its
+# own password, not BR2_TARGET_GENERIC_ROOT_PASSWD: this account is the way in,
+# and root keeps its own credential. (The manual claims `=` means MD5; the
+# script actually honours the configured method.)
+#
+# uid/gid are pinned rather than -2/auto on purpose: automatic IDs can shift
+# when the package set changes, and /home/tupperdmx plus anything created over
+# SSH would then silently change owner across a rebuild. 1000 is the first user
+# ID and is free -- the skeleton stops at operator (37) and nobody (65534), and
+# buildroot's own packages take system IDs from [100...999].
+#
+# This account is NOT how the app runs: S99tupperdmx still starts it as root
+# (it needs the DMX/MIDI devices and writes /var/lib/tupperdmx). Use `su` for
+# anything privileged once logged in.
+tupperdmx 1000 tupperdmx 1000 =tupperdmx /home/tupperdmx /bin/sh - TupperDMX operator
