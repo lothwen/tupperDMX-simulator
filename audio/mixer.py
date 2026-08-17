@@ -123,6 +123,13 @@ class Mixer:
         with self._lock:
             return self._backing is not None
 
+    def backing_samples(self) -> Optional[np.ndarray]:
+        """The installed song, or None. set_backing() swaps the array whole
+        and nothing mutates it in place, so a reader on another thread may
+        keep using the returned reference after the lock is dropped."""
+        with self._lock:
+            return self._backing
+
     def duration_seconds(self) -> float:
         with self._lock:
             if self._backing is None:

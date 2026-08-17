@@ -5,7 +5,8 @@ import errno
 import json
 import os
 import threading
-from typing import List, Optional
+import time
+from typing import Callable, List, Optional, Tuple
 
 from aiohttp import web, WSMsgType, WSCloseCode
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -20,6 +21,14 @@ from webremote.state import probe_duration
 def default_static_dir() -> str:
     """Shipped web page location (bundle_dir handles dev vs. PyInstaller)."""
     return os.path.join(bundle_dir(), "webremote", "static")
+
+
+# How long /api/waveform waits for the engine to finish decoding the song it
+# was asked about. The remote fires the moment the state message says the song
+# changed, which is BEFORE the decode that same change started has finished, so
+# arriving early is the normal path rather than an error. Generous because the
+# SBC decodes a five-minute track far slower than a laptop does.
+WAVEFORM_WAIT_S = 20.0
 
 
 class WebRemoteWorker(QObject):
@@ -42,6 +51,7 @@ class WebRemoteWorker(QObject):
         self._clients: set = set()          # touched only from the server loop
         self._latest_state: Optional[dict] = None
         self._song_paths: List[Optional[str]] = []
+        self._decoded_audio: Optional[Callable[[], Optional[Tuple]]] = None
         self.logger = get_logger("webremote.server")
 
     def run(self) -> None:
@@ -113,6 +123,15 @@ class WebRemoteWorker(QObject):
         paths are never sent to clients."""
         self._song_paths = list(paths)
 
+    def set_decoded_audio_source(
+            self, source: Optional[Callable[[], Optional[Tuple]]]) -> None:
+        """Install what /api/waveform reads samples through: a callable
+        returning (setlist index, decoded path, PCM) for the track the engine
+        currently holds, or None while nothing is loaded. Installed from the Qt
+        thread, but CALLED from the server loop — see WebRemoteManager for why
+        that is safe."""
+        self._decoded_audio = source
+
     def _post(self, payload: str) -> None:
         loop = self._loop
         if loop is not None and loop.is_running():
@@ -157,10 +176,40 @@ class WebRemoteWorker(QObject):
         if not path or not os.path.exists(path):
             return web.json_response({"error": "unknown song"}, status=404)
 
+        decoded = await self._await_decoded(index)
+        if decoded is None:
+            return web.json_response({"error": "song not decoded"}, status=409)
+        decoded_path, pcm = decoded
+
         loop = asyncio.get_running_loop()
-        bins = await loop.run_in_executor(None, compute_peaks, path)
+        # Off the server loop: binning a five-minute track is tens of ms of
+        # numpy, which releases the GIL but would still stall the WS traffic.
+        bins = await loop.run_in_executor(
+            None, compute_peaks, decoded_path, pcm)
         duration = await loop.run_in_executor(None, probe_duration, path)
         return web.json_response({"song": index, "duration": duration, "bins": bins})
+
+    async def _await_decoded(self, index: int) -> Optional[Tuple[str, object]]:
+        """Wait for the engine to be holding setlist `index`, then hand back
+        (decoded path, PCM). None if it never turns up.
+
+        Polled rather than pushed: the engine clears the mixer for the whole
+        length of a decode, so 'not there yet' and 'this is the previous song'
+        are the same state and there is nothing to race against — whereas an
+        event fired on load would have to be matched up with whichever request
+        was waiting for it."""
+        deadline = time.monotonic() + WAVEFORM_WAIT_S
+        while True:
+            source = self._decoded_audio
+            current = source() if source is not None else None
+            if current is not None and current[0] == index:
+                return current[1], current[2]
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    f"Waveform for song {index}: nothing decoded after "
+                    f"{WAVEFORM_WAIT_S:.0f}s")
+                return None
+            await asyncio.sleep(0.05)
 
     async def _handle_ws(self, request):
         ws = web.WebSocketResponse(heartbeat=30)
