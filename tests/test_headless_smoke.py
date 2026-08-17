@@ -29,7 +29,7 @@ import pytest
 
 from core import config as config_module, fixture_library
 from core.config import Config, FixtureInstance, SongConfig
-from core.show import store
+from core.show import store, versions
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +59,8 @@ def _boot(tmp, fixtures=()):
 
     config = Config()
     config.webremote.enabled = False  # no sockets in CI
-    core = AppCore(config, show)
+    # snapshot_on_open=False exactly as app.headless.run_headless builds it.
+    core = AppCore(config, show, snapshot_on_open=False)
     core.start()
     return core, config, show
 
@@ -77,6 +78,12 @@ def test_headless_core_contract():
             _assert(core.midi_manager.software_controller
                     is core.software_controller,
                     "MIDI stream points at the controller")
+
+            # No editor exists headless, so booting must not checkpoint the
+            # show: on a rack box that turned every power-on into another
+            # identical copy of midis/ under versions/.
+            _assert(versions.list_versions(show) == [],
+                    "headless takes no opening snapshot")
 
             # The frozen web-remote snapshot works without a window.
             state = core.webremote_manager._build_state()

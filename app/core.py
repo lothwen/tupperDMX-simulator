@@ -44,7 +44,8 @@ class AppCore(QObject):
     # (time_sec, samples)); queued back onto the Qt thread before installing.
     _voice_cues_rendered = pyqtSignal(str, object)
 
-    def __init__(self, config: Config, show=None, force_webremote=False):
+    def __init__(self, config: Config, show=None, force_webremote=False,
+                 snapshot_on_open=True):
         super().__init__()
         self.config = config
         self.logger = get_logger("app.core")
@@ -54,7 +55,8 @@ class AppCore(QObject):
         # The open show project (attach FIRST: it aliases config.playlist /
         # config.fixtures onto the show's objects, and the managers below
         # capture config.fixtures in their constructors).
-        self.show_manager = ShowManager(config, self)
+        self.show_manager = ShowManager(config, self,
+                                        snapshot_on_open=snapshot_on_open)
         if show is not None:
             self.show_manager.attach(show)
 
