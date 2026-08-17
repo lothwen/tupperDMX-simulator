@@ -41,7 +41,15 @@ def run_headless(config, argv=None, show_path=None) -> int:
             "Web remote disabled in prefs — force-enabling on port "
             f"{config.webremote.port}: it is the only interface in headless mode")
 
-    core = AppCore(config, show, force_webremote=force_webremote)
+    # No opening version snapshot: that snapshot is the crash-recovery baseline
+    # for an EDITING session, and there is no editor here — the timeline, the
+    # fixture console and the patch all live in ui/. The remote can still change
+    # the current song, which show.json records through the ordinary autosave;
+    # what it cannot do is rewrite a .mid, so copying midis/ into versions/ on
+    # every boot only grows the history (and the flash wear) with identical
+    # copies of a show nobody touched.
+    core = AppCore(config, show, force_webremote=force_webremote,
+                   snapshot_on_open=False)
     core.start()
     logger.info(
         "Headless mode up — web remote at "

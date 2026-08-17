@@ -43,10 +43,11 @@ class ShowManager(QObject):
     midi_path_allocated = pyqtSignal(str)     # a song got its owned .mid on first save
     setlist_changed = pyqtSignal()            # flush created an untitled song
 
-    def __init__(self, config, core=None):
+    def __init__(self, config, core=None, snapshot_on_open=True):
         super().__init__()
         self.config = config
         self.core = core
+        self.snapshot_on_open = snapshot_on_open
         self.logger = get_logger("show.manager")
         self.show: Optional[Show] = None
         self._last_manifest_json: Optional[str] = None
@@ -65,17 +66,21 @@ class ShowManager(QObject):
     def attach(self, show: Show) -> None:
         """Adopt `show` as the open project. The show-local fixture-defs
         layer is already active (store.load_show/create_show set it). Takes
-        the opening safety snapshot (crash-recovery baseline)."""
+        the opening safety snapshot (crash-recovery baseline) unless
+        `snapshot_on_open` is off."""
         self.show = show
         self.config.playlist = show.playlist
         self.config.fixtures = show.fixtures
         self._midi_dirty = False
         self._last_manifest_json = self._serialized()
-        try:
-            versions.take_snapshot(show)
-            versions.prune(show)
-        except Exception as e:
-            self.logger.error(f"Opening snapshot failed: {e}")
+        if self.snapshot_on_open:
+            try:
+                versions.take_snapshot(show)
+                versions.prune(show)
+            except Exception as e:
+                self.logger.error(f"Opening snapshot failed: {e}")
+        # Set either way: it paces _maybe_snapshot, so leaving it at 0 would
+        # let the first real change checkpoint immediately.
         self._last_snapshot_monotonic = time.monotonic()
         self.show_changed.emit()
         self.versions_changed.emit()
