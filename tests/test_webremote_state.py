@@ -3,8 +3,8 @@ Characterization test: web-remote state building (Qt-free).
 
 Covers compute_sections (span derivation from song-part markers),
 build_setlist (titles/probe tolerance), build_state (schema shape) and
-peaks._downsample (bin maxima + normalization) — all pure functions, no
-sockets, no Qt.
+core.waveform.peak_envelope (bin maxima + normalization) as the remote's
+/api/waveform uses it — all pure functions, no sockets, no Qt.
 
 Run with:
     uv run python tests/test_webremote_state.py
@@ -23,7 +23,8 @@ from core.paths import default_shows_dir
 from webremote.state import (compute_sections, build_setlist, build_state,
                              build_shows, resolve_show, shows_dir,
                              probe_duration, probe_bpm)
-from webremote.peaks import _downsample, compute_peaks
+from core.waveform import peak_envelope
+from webremote.peaks import compute_peaks
 
 
 def _assert(cond, msg):
@@ -182,20 +183,20 @@ def test_build_shows():
                 "a folder that doesn't exist lists empty instead of raising")
 
 
-def test_downsample():
+def testpeak_envelope():
     print("test_downsample")
     ramp = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-    bins = _downsample(ramp, 4)
+    bins = peak_envelope(ramp, 4)
     _assert(bins == [0.25, 0.5, 0.75, 1.0],
             "abs-max per bin, normalized so the peak is 1.0")
 
-    bins = _downsample(np.array([-4.0, 1.0, 2.0, 1.0]), 2)
+    bins = peak_envelope(np.array([-4.0, 1.0, 2.0, 1.0]), 2)
     _assert(bins == [1.0, 0.5], "negative samples count by absolute value")
 
-    bins = _downsample(np.array([]), 4)
+    bins = peak_envelope(np.array([]), 4)
     _assert(bins == [0.0, 0.0, 0.0, 0.0], "empty input yields silent bins")
 
-    bins = _downsample(np.zeros(16), 4)
+    bins = peak_envelope(np.zeros(16), 4)
     _assert(bins == [0.0] * 4, "all-zero input does not divide by zero")
 
 
@@ -205,13 +206,13 @@ def test_downsample_engine_pcm():
     pcm = np.zeros((8, 2), dtype=np.int16)
     pcm[1, 0] = 1000
     pcm[5, 1] = -2000
-    _assert(_downsample(pcm, 4) == [0.5, 0.0, 1.0, 0.0],
+    _assert(peak_envelope(pcm, 4) == [0.5, 0.0, 1.0, 0.0],
             "stereo frames bin along time and take the louder channel")
 
     # abs(-32768) is -32768 in int16: the peak has to come off min/max instead,
     # and a clipped master is exactly where it would have shown up.
     clipped = np.array([[-32768, 0], [100, 100]], dtype=np.int16)
-    _assert(_downsample(clipped, 2) == [1.0, 100 / 32768.0],
+    _assert(peak_envelope(clipped, 2) == [1.0, 100 / 32768.0],
             "a full-scale negative sample is the peak, not a negative one")
 
 
@@ -225,7 +226,7 @@ def test_compute_peaks_never_reads_the_file():
     _assert(len(bins) == 4 and max(bins) == 1.0,
             "peaks come from the passed PCM, not from the path")
 
-    # None would blow up in _downsample, so being served proves the cache hit.
+    # None would blow up in the binning, so being served proves the cache hit.
     _assert(compute_peaks("/no/such/song.mp3", None, bins=4) == bins,
             "a repeat is served from the cache without touching the PCM")
 
@@ -236,7 +237,7 @@ def main():
     test_probes_missing_files()
     test_build_state_schema()
     test_build_shows()
-    test_downsample()
+    testpeak_envelope()
     test_downsample_engine_pcm()
     test_compute_peaks_never_reads_the_file()
     print("\nALL TESTS PASSED")

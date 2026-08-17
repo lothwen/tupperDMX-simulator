@@ -165,7 +165,7 @@ class TupperDMXLogger:
     
     def _silence_noisy_third_party_loggers(self) -> None:
         """Cap third-party libraries at WARNING so their DEBUG/INFO chatter doesn't flood our handlers."""
-        for name in ("numba", "matplotlib", "PIL", "librosa", "asyncio", "urllib3"):
+        for name in ("asyncio", "aiohttp"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
     def get_logger(self, name: str) -> logging.Logger:

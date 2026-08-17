@@ -5,10 +5,11 @@ description = "PyQt6-based lighting control application that synchronizes MP3 au
 requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.14.1",
-    "librosa>=0.11.0",
-    "matplotlib>=3.10.5",
     "mido>=1.3.3",
     "mutagen>=1.47.0",
+    # Direct: audio/, stage/, core/ and the waveform binning all use it. It
+    # used to arrive only as a librosa/matplotlib transitive.
+    "numpy>=2.0",
     "piper-tts>=1.4.2",
     "platformdirs>=4.9.6",
     "pyartnet>=1.0.1",
@@ -37,6 +38,9 @@ icon = "assets/icons/TupperDMX-icon.png"
 dev = [
     "jsonschema>=4.26.0",
     "pytest>=9.0.3",
+    # scripts/play_analyze_wav.py only — a standalone R&D prototype, excluded
+    # from the SBC image. Dev-only so the runtime stays scipy-free.
+    "scipy>=1.14",
 ]
 
 [tool.pytest.ini_options]

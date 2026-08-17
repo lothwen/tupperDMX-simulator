@@ -27,13 +27,14 @@ jobs:
 
     - name: Install system libraries
       # libasound2-dev: python-rtmidi has no Linux wheel and builds from source
-      #   against ALSA. libsndfile1: soundfile/librosa runtime (insurance).
-      #   libpulse0: QtMultimedia (imported via ui.media_controller) links it.
+      #   against ALSA.
+      #   libpulse0: QtMultimedia (imported via ui.media_controller) links it,
+      #   and it is the ONLY audio decoder now that librosa/soundfile are gone.
       #   The rest: headless-Qt platform plugin for offscreen PyQt6.
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          libasound2-dev libsndfile1 libpulse0 \
+          libasound2-dev libpulse0 \
           libegl1 libgl1 libxkbcommon0 libdbus-1-3
 
     - name: Install dependencies (incl. dev group)
