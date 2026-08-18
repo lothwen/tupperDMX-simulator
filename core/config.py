@@ -305,6 +305,20 @@ class Config:
     # Show-project pointers (machine-level: which show this machine had open).
     last_show_path: Optional[str] = None
     recent_shows: List[str] = field(default_factory=list)
+    # What userprefs.json held the last time we read or wrote it. Not a
+    # preference: reload_prefs() compares the file against it to tell an
+    # operator's edit from the echo of the app's own save().
+    _last_written: Optional[Dict[str, Any]] = field(
+        default=None, init=False, repr=False, compare=False)
+
+    #: Sections reload_prefs() adopts from disk while the app runs. Everything
+    #: else in the file is deliberately excluded: `playlist`/`fixtures` are the
+    #: legacy keys the show migration reads once, and after
+    #: ShowManager.attach() the live attributes ARE the open show's objects --
+    #: overwriting them would detach the show. `last_show_path`/`recent_shows`
+    #: would mean swapping the show out from under a running session.
+    RELOADABLE_SECTIONS = ("window", "artnet", "volume", "logging", "io",
+                           "audio", "webremote")
 
     def next_free_channel(self) -> int:
         """Lowest non-negative MIDI channel not used by any patched fixture.
@@ -346,7 +360,9 @@ class Config:
                 # on a Windows client leaves a UTF-8 BOM that json.load rejects
                 # outright — which used to cost the operator the whole file.
                 with open(prefs, 'r', encoding='utf-8-sig') as f:
-                    cls._apply_userprefs(config, json.load(f))
+                    data = json.load(f)
+                cls._apply_userprefs(config, data)
+                config._last_written = data
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 kept = cls._preserve_bad_prefs(prefs)
                 print(f"Warning: error parsing userprefs '{prefs}': {e}")
@@ -358,6 +374,42 @@ class Config:
             config.save()
 
         return config
+
+    def reload_prefs(self) -> List[str]:
+        """Re-read userprefs.json and adopt the machine-level sections that
+        changed on disk, returning their names.
+
+        Returns [] when the file matches what we last read or wrote — which is
+        how the echo of our own save() is told apart from an operator's edit,
+        by content rather than by mtime (atomic_write_json replaces the file, so
+        there is no stable inode or timestamp to compare).
+
+        Only RELOADABLE_SECTIONS are adopted, and the whole file is parsed
+        through the ordinary _apply_userprefs() so a hand-edited value is
+        validated and clamped exactly as it would be at startup.
+
+        Unlike load(), a malformed file is NOT quarantined: the likely cause is
+        catching an editor between its truncate and its write, and moving that
+        aside would destroy an edit in progress. The exception goes to the
+        caller, which decides whether to look again.
+        """
+        with open(userprefs_path(), 'r', encoding='utf-8-sig') as f:
+            data = json.load(f)
+        if data == self._last_written:
+            return []
+
+        fresh = Config()
+        self._apply_userprefs(fresh, data)
+        adopted = []
+        for name in self.RELOADABLE_SECTIONS:
+            if asdict(getattr(fresh, name)) != asdict(getattr(self, name)):
+                setattr(self, name, getattr(fresh, name))
+                adopted.append(name)
+        # Recorded even when nothing was adopted: the file did change (a show
+        # pointer, a legacy key), and re-parsing it on every later event would
+        # be pure work.
+        self._last_written = data
+        return adopted
 
     @staticmethod
     def _preserve_bad_prefs(prefs: Path) -> Optional[Path]:
@@ -803,7 +855,9 @@ class Config:
         try:
             # Local import: core.show modules import from core.config.
             from core.show.store import atomic_write_json
-            atomic_write_json(userprefs_path(), self._userprefs_to_dict())
+            data = self._userprefs_to_dict()
+            atomic_write_json(userprefs_path(), data)
+            self._last_written = data
             return True
         except Exception as e:
             print(f"Error saving userprefs: {e}")

@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         core.patch_reloaded.connect(self._on_patch_reloaded)
         core.show_reloaded.connect(self._on_show_reloaded)
         core.config_save_failed.connect(self._on_config_save_failed)
+        core.prefs_reloaded.connect(self._on_prefs_reloaded)
         self.dmx_manager.dmx_data_received.connect(self.update_dmx)
         self.dmx_manager.error_occurred.connect(self.on_dmx_error)
         self.midi_manager.error_occurred.connect(self.on_midi_error)
@@ -669,6 +670,26 @@ class MainWindow(QMainWindow):
 
         self.save_config()
         self.logger.info("Settings updated")
+
+    def _on_prefs_reloaded(self, adopted):
+        """View half of a live userprefs reload — the core has already applied
+        its own. Mirrors what show_settings_dialog() re-applies, minus what a
+        running window cannot change: `stage_gpu` needs a GL context built
+        before the stage exists (the dialog says so too), and the window
+        geometry belongs to the window, not to the file."""
+        if "window" in adopted:
+            self.stage_controller.set_haze_baseline(self.config.window.stage_haze)
+            self.stage_controller.apply_stage_config()
+            if self.config.window.stage_gpu != (self.stage_controller.light_layer
+                                                is not None):
+                self.logger.warning(
+                    "userprefs stage_gpu changed — it only takes effect on the "
+                    "next launch")
+        if "volume" in adopted:
+            self.timeline.set_volumes(
+                audio=self.config.volume.audio,
+                metronome=self.config.volume.metronome,
+                voice=self.config.volume.voice)
 
     def show_about_dialog(self):
         """Show the About dialog with build provenance."""
