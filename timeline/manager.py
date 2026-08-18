@@ -295,6 +295,22 @@ class Timeline(QWidget):
     def _update_voice_db(self, value: int) -> None:
         self._voice_db_label.setText(self._format_db(value))
 
+    def set_volumes(self, audio=None, metronome=None, voice=None) -> None:
+        """Move the header sliders to volumes that changed elsewhere (a live
+        userprefs reload). Signals are blocked: these values have already been
+        applied to the buses, and re-emitting them as user edits would bounce
+        straight back out as another save."""
+        for value, slider, update_db in (
+                (audio, self.audio_volume_slider, self._update_audio_db),
+                (metronome, self.metronome_volume_slider, self._update_metro_db),
+                (voice, self.voice_volume_slider, self._update_voice_db)):
+            if value is None:
+                continue
+            blocked = slider.blockSignals(True)
+            slider.setValue(int(round(float(value) * 100)))
+            slider.blockSignals(blocked)
+            update_db(slider.value())
+
     def _update_track_counts(self) -> None:
         """Refresh the TRACKS counter (live fixtures · placeholder groups)."""
         self.track_count_label.setText(f"{len(self.fixtures)} · {self._group_count} grp")

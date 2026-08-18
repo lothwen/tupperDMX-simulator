@@ -11,16 +11,18 @@ from app.audio_controller import AudioController
 from app.bpm import BpmState
 from app.media_controller import MediaController
 from app.playlist import PlaylistCore
+from app.prefs_watcher import PrefsWatcher
 from app.show_manager import ShowManager
 from audio import tts
 from audio.engine import AudioEngine
 from audio.mixer import BUS_VOICE
+from core import config as core_config
 from core import note_layout
 from core.config import Config, userprefs_path
 from core.io_routing import midi_routing_from_io
 from dmx import DMXManager
 from midi import MidiManager
-from tupperlogger import get_logger
+from tupperlogger import get_logger, setup_logging
 from webremote.manager import WebRemoteManager
 
 
@@ -39,6 +41,10 @@ class AppCore(QObject):
     patch_reloaded = pyqtSignal()
     show_reloaded = pyqtSignal()
     config_save_failed = pyqtSignal(str)  # prefs path; UI shows the dialog
+    # userprefs.json was edited outside the app and the core half has already
+    # been re-applied; carries the list of adopted section names so the view
+    # can re-apply its own half (the stage, the header sliders).
+    prefs_reloaded = pyqtSignal(object)
     precount_changed = pyqtSignal(bool)   # current song's count-in flag
     # Rendered voice cues arriving from the TTS worker thread (song_id, list of
     # (time_sec, samples)); queued back onto the Qt thread before installing.
@@ -50,6 +56,7 @@ class AppCore(QObject):
         self.config = config
         self.logger = get_logger("app.core")
         self._shutdown_done = False
+        self._prefs_watcher = None
         self._voice_cues_rendered.connect(self._on_voice_cues_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
@@ -125,6 +132,7 @@ class AppCore(QObject):
         self.playlist_controller.load_current_song()
         self.apply_io_config()
         self.webremote_manager.apply_config()
+        self._start_prefs_watcher()
 
     # ------------------------------------------------------------------
     # Config application
@@ -142,6 +150,79 @@ class AppCore(QObject):
         self.media_controller.set_count_in(
             song.precount if song else False, self.config.audio.count_in_bars)
         self._refresh_count_words()
+
+    def apply_volume_config(self):
+        """Apply config.volume to the three live buses."""
+        self.media_controller.set_audio_volume(self.config.volume.audio)
+        self.audio_controller.set_metronome_volume(self.config.volume.metronome)
+        self.audio_engine.set_bus_volume(BUS_VOICE, self.config.volume.voice)
+
+    # ------------------------------------------------------------------
+    # Live prefs reload
+    # ------------------------------------------------------------------
+    def _start_prefs_watcher(self):
+        """Watch userprefs.json so an edit made outside the app takes effect
+        without a restart. That is the only way to change a setting on a
+        headless rack box, where the Settings dialog does not exist and the
+        prefs file is reached over the share."""
+        if self._prefs_watcher is not None:
+            return
+        try:
+            # Resolved through the module rather than the name imported above,
+            # because that is how Config.save()/reload_prefs() reach it: bound
+            # at import, the watcher can end up watching a different file than
+            # the one they actually read and write.
+            self._prefs_watcher = PrefsWatcher(core_config.userprefs_path(), self)
+            self._prefs_watcher.changed.connect(self._on_prefs_file_changed)
+        except Exception as e:
+            # A machine with no inotify watches left still runs, it just
+            # stops noticing edits.
+            self.logger.warning(f"Live prefs reload unavailable: {e}")
+            self._prefs_watcher = None
+
+    def _on_prefs_file_changed(self):
+        """Adopt an external edit to userprefs.json, live.
+
+        Applied in the same order and by the same methods the Settings dialog
+        uses, so there is one way to apply a setting however it was changed —
+        logging first, so everything after it is logged at the level the file
+        now asks for.
+        """
+        try:
+            adopted = self.config.reload_prefs()
+        except (OSError, ValueError) as e:  # JSONDecodeError is a ValueError
+            # Almost always a half-written file rather than a broken one, so
+            # look again before saying anything (and never quarantine it).
+            if self._prefs_watcher is None or not self._prefs_watcher.retry():
+                self.logger.warning(f"Could not read edited userprefs.json: {e}")
+            return
+
+        if not adopted:
+            return
+        self.logger.info(
+            f"userprefs.json edited outside the app — adopting: {', '.join(adopted)}")
+
+        if "logging" in adopted:
+            setup_logging(
+                level=self.config.logging.level,
+                console_output=self.config.logging.console_output,
+                file_output=self.config.logging.file_output,
+                log_dir=self.config.logging.log_dir,
+                max_file_size=self.config.logging.max_file_size,
+                backup_count=self.config.logging.backup_count)
+        if "volume" in adopted:
+            self.apply_volume_config()
+        if "audio" in adopted:
+            self.apply_audio_config()
+        # The Art-Net target is what the sinks and the stage listener are built
+        # around, so it re-runs the same routing application `io` does.
+        if "io" in adopted or "artnet" in adopted:
+            self.apply_io_config()
+        if "webremote" in adopted:
+            self.webremote_manager.apply_config()
+
+        # Last: the view's half runs against a core that has already caught up.
+        self.prefs_reloaded.emit(adopted)
 
     def save_config(self):
         """Save configuration. Single persistence funnel: machine prefs go to
@@ -429,6 +510,12 @@ class AppCore(QObject):
             return
         self._shutdown_done = True
         self.logger.info("Shutting down application core")
+
+        # Before anything else: the final save_config() below would otherwise
+        # be reported back to us as an edit, mid-teardown.
+        if self._prefs_watcher is not None:
+            self._prefs_watcher.stop()
+            self._prefs_watcher = None
 
         try:
             self.show_manager.flush("close")

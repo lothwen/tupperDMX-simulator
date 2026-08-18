@@ -325,6 +325,10 @@ Three files, with a strict split of what belongs where:
 After `ShowManager.attach()`, `config.playlist`/`config.fixtures` ARE the show's
 objects.
 
+**userprefs.json is re-read while the app runs.** `AppCore` watches it
+(`app/prefs_watcher.py`), because editing that file over the share is the only way
+to change a setting on a headless rack box.
+
 ### UI notes
 
 - **MIDI channels are 0-15 everywhere** — the raw MIDI channel, on every surface.
