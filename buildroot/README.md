@@ -78,6 +78,36 @@ uv sync --frozen --reinstall-package pyqt6 \
 To check a suspect tree: `patchelf --print-rpath .venv/lib/python3.*/site-packages/PyQt6/QtMultimedia.abi3.so`
 must print `$ORIGIN/Qt6/lib`, never an absolute on-target path.
 
+### The wheels want manylinux sonames
+
+The dependencies are manylinux (RHEL) wheels; buildroot is not RHEL, and the
+two do not always agree on what a library is called. bzip2 is the one that
+bites: PyQt6's bundled `libavformat` links `libbz2.so.1`, buildroot installs
+`libbz2.so.1.0.<x>` aliased only as `libbz2.so.1.0`. `post-build.sh` adds the
+missing symlink.
+
+The failure is silent and misleading. `libffmpegmediaplugin.so` does not load,
+so Qt reports
+
+```
+No QtMultimedia backends found. Only QMediaDevices, QAudioDevice, QSoundEffect, QAudioSink, and QAudioSource are available.
+Failed to initialize QAudioDecoder "Not available"
+```
+
+and **no song plays**, because decoding a file is the only route audio takes to
+the mixer — while the metronome and the spoken count-in still work, since numpy
+synthesises those and `QAudioSink` needs no backend. On the web remote it shows
+up only as `Waveform for song N: nothing decoded after 20s`.
+
+To list every soname the target is missing, on the box (busybox has no `ldd`,
+so ask the loader directly):
+
+```bash
+LD_TRACE_LOADED_OBJECTS=1 /lib/ld-linux-x86-64.so.2 \
+    /usr/lib/python3.14/site-packages/PyQt6/Qt6/plugins/multimedia/libffmpegmediaplugin.so \
+    | grep 'not found'
+```
+
 ## What ends up on the target
 
 | Path | What |
@@ -313,9 +343,30 @@ nothing else this app needs. `linux.fragment` is merged on top of it through
 | `_CP210X`, `_PL2303`, `_CH341`, `USB_ACM` | the other bridge chips on serial gear that ends up in a rack |
 | `CONFIG_SND_SEQUENCER` | python-rtmidi binds to the ALSA **sequencer**; without it there are no MIDI ports at all |
 | `CONFIG_SND_USB_AUDIO` | USB MIDI controllers *and* USB audio interfaces. The stock config sets only `CONFIG_SND_USB`, which is just the menu gate |
+| `CONFIG_BLK_DEV_NVME` | the stock config drives ATA and USB storage only, so an NVMe disk never appears. Built in, not a module: root is on it and there is no initramfs |
 
 After editing the fragment, `make linux-reconfigure` — buildroot does not notice
 the file changing on its own.
+
+**Do not run the show off an SD card.** A cold 15 MB backing track read at
+**0.2 MB/s** through a USB card reader — 95 seconds — and `QAudioDecoder`
+blocks on that read, so the backing joins the timeline late and the web remote
+reports `Waveform for song N: nothing decoded after 20s`. It looks exactly like
+a slow decoder, and it is not: the same file on NVMe decodes in 0.84 s (448×
+realtime).
+
+To measure a medium, drop the page cache first or you are timing RAM — which is
+what makes the second read of the same song look instant:
+
+```bash
+sync; echo 3 > /proc/sys/vm/drop_caches
+dd if=<song>.mp3 of=/dev/null bs=1M
+```
+
+Worth reading when it comes out slow: `/sys/kernel/debug/mmc*/ios` for the SD
+host's negotiated clock and bus width, and the `speed` file up the device's
+`/sys` path for the USB link — a reader that enumerated at full-speed is USB
+1.1 and caps near 1 MB/s.
 
 ## Logging in
 

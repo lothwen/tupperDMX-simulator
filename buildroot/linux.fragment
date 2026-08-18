@@ -33,3 +33,16 @@ CONFIG_SND_SEQUENCER=y
 # snd-usb-audio drives USB MIDI controllers and USB audio interfaces alike; the
 # stock config only has onboard HDA. CONFIG_SND_USB alone is just the menu gate.
 CONFIG_SND_USB_AUDIO=y
+
+#
+# Storage
+#
+# board/pc/linux.config drives ATA and USB storage and nothing else, so an NVMe
+# disk does not appear at all. That is not a comfort choice: the box read a cold
+# 15 MB backing track off a USB SD reader at 0.2 MB/s -- 95 seconds -- and since
+# QAudioDecoder blocks on that read, the song joins the timeline late and the
+# web remote gives up on its waveform ("nothing decoded after 20s"). The same
+# image on NVMe decodes that file in 0.84 s; the decoder was never the problem.
+# Built in rather than a module, because the root filesystem is on it and this
+# image has no initramfs. Selects NVME_CORE on its own, and PCI is already on.
+CONFIG_BLK_DEV_NVME=y
