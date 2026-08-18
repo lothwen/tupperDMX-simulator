@@ -145,7 +145,35 @@ uv pip sync --python-version "$py_version" \
 rm -f "$req"
 
 
-# --- 4. runtime state -------------------------------------------------------
+# --- 4. manylinux soname compatibility --------------------------------------
+# The wheels are built on manylinux (RHEL), where bzip2's soname is
+# `libbz2.so.1`. Buildroot installs the library as libbz2.so.1.0.<x> and
+# aliases it only as `libbz2.so.1.0`, so PyQt6's bundled libavformat -- and
+# with it libffmpegmediaplugin.so -- does not load. Qt then says "No
+# QtMultimedia backends found", QAudioDecoder reports "Not available", and the
+# box plays NOTHING: decoding a file is the only way audio reaches the mixer.
+# The metronome and the spoken count-in still work (numpy synthesises those,
+# and QAudioSink needs no backend), which is exactly what makes this look like
+# a slow SBC or a codec problem instead of a missing symlink.
+#
+# Resolved out of the rootfs rather than written down, for the same reason the
+# python version above is.
+bz2_lib="$TARGET_DIR/usr/lib/libbz2.so.1"
+bz2_real=$(find "$TARGET_DIR/usr/lib" -maxdepth 1 -type f -name 'libbz2.so.1.*' \
+    | sort -V | tail -n1)
+if [ -e "$bz2_lib" ]; then
+    :   # already the name the wheels ask for
+elif [ -n "$bz2_real" ]; then
+    msg "linking libbz2.so.1 -> $(basename "$bz2_real") for the manylinux wheels"
+    ln -sf "$(basename "$bz2_real")" "$bz2_lib"
+else
+    echo "post-build.sh: no libbz2 in the target rootfs" >&2
+    echo "  enable BR2_PACKAGE_BZIP2, or QtMultimedia loses its ffmpeg plugin" >&2
+    exit 1
+fi
+
+
+# --- 5. runtime state -------------------------------------------------------
 # HOME and working directory of the service: logs/, .config/userprefs.json and
 # the show projects all land here, on the writable rootfs.
 install -d -m 0755 "$TARGET_DIR/var/lib/tupperdmx"
