@@ -141,6 +141,19 @@ class WaveformTrack(BaseTrack):
             return None, None
         return source(audio_file)
 
+    def clear_waveform(self):
+        """Drop the drawn waveform: the song has no monitored track any more
+        (its backing/guide was cleared, or the setlist went empty). Nothing
+        else redraws this band, so without it the last song's pixmap stays on
+        the scene under a track that no longer exists."""
+        if self.waveform_item is None:
+            return
+        if self.waveform_item.scene():
+            self.content_scene.removeItem(self.waveform_item)
+        if self.waveform_item in self.items:
+            self.items.remove(self.waveform_item)
+        self.waveform_item = None
+
     def draw_waveform(self, audio_file: str, y_offset: int):
         """Draw waveform from audio file."""
         # Preserve any existing horizontal offset (e.g. song-start offset) so

@@ -3,8 +3,8 @@ Characterization test: the toolbar's SETLIST + SONG FILES sections
 (ui/toolbar_manager.py).
 
 Covers the song-selector combobox (populate without firing selection, pick →
-song_selected, edit + Enter → song_title_edited), the counter badge / song
-count, and the footer (BPM / offset / linked chip).
+song_selected, edit + Enter → song_title_edited), the +/🗑 setlist actions,
+the counter badge / song count, and the footer (BPM / offset / linked chip).
 
 Run with:
     uv run python tests/test_toolbar_setlist_panel.py
@@ -72,6 +72,25 @@ def test_setlist_pick_and_rename():
             "editing the text + Enter fires song_title_edited")
 
 
+def test_new_and_remove_actions():
+    print("test_new_and_remove_actions")
+    manager = _manager()
+    fired = []
+    manager.new_song_requested.connect(lambda: fired.append("new"))
+    manager.remove_song_requested.connect(lambda: fired.append("remove"))
+
+    manager.new_song_button.click()
+    _assert(fired == ["new"], "+ requests a new song")
+    manager.remove_button.click()
+    _assert(fired == ["new", "remove"], "🗑 requests the removal")
+
+    manager.set_setlist([], 0)
+    manager.set_navigation_enabled(False, False)
+    _assert(manager.new_song_button.isEnabled(),
+            "+ stays enabled on an empty setlist (it is how the first song "
+            "can be made)")
+
+
 def test_counter_and_footer():
     print("test_counter_and_footer")
     manager = _manager()
@@ -99,6 +118,7 @@ def test_counter_and_footer():
 def main():
     test_setlist_populate_is_silent()
     test_setlist_pick_and_rename()
+    test_new_and_remove_actions()
     test_counter_and_footer()
     print("\nALL TESTS PASSED")
 

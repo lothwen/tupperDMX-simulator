@@ -76,12 +76,19 @@ class PlaylistCore(QObject):
         if song.guide and guide is None:
             self.logger.warning(f"Missing guide for '{song.title}': {song.guide}")
         core.media_controller.set_guide(guide, song.guide_offset)
+        # Re-pick the monitor for THIS song (guide when it has one) before the
+        # backing lands, so only the monitored file is ever decoded. A no-op
+        # unless the desktop enabled it — headless stays on the backing.
+        core.media_controller.auto_select_monitor()
 
         # Apply audio file
         if song.audio and not os.path.exists(song.audio):
-            # Missing media: keep the path (it's the relink key), surface the
-            # state; the UI layer offers recovery, headless just logs.
+            # Missing media: keep the path on the SONG (it's the relink key)
+            # but clear it on the controller, or the previous song's backing
+            # would still be loaded and play under this one. Surface the
+            # state: the UI layer offers recovery, headless just logs.
             self.logger.warning(f"Missing audio for '{song.title}': {song.audio}")
+            core.media_controller.set_files(None)
             self.audio_missing.emit(song)
         elif song.audio:
             core.media_controller.set_files(song.audio)
@@ -176,6 +183,26 @@ class PlaylistCore(QObject):
         self.setlist_changed.emit()
         core.save_config()
         self.logger.info(f"Switched to song {index + 1}/{total}")
+
+    def add_empty_song(self):
+        """Append an empty song (no backing, no guide, empty MIDI track) and
+        make it current.
+
+        The ONE way the setlist grows: loading a file only ever edits the
+        current song, so a song exists first and collects its tracks after."""
+        core = self.core
+
+        # Stop playback and save pending edits before switching away
+        core.stop_playback()
+        core.show_manager.flush("song-new")
+
+        index = core.config.add_song()
+        core.config.set_current_song_index(index)
+        self.load_current_song()
+        self.setlist_changed.emit()
+        core.save_config()
+        self.logger.info(f"Added empty song at index {index}")
+        return index
 
     def remove_current_song(self):
         """Remove the current song from the playlist (the entry — and its

@@ -75,6 +75,9 @@ class FakeMediaController:
     def set_guide(self, path, offset_sec=0.0):
         self.log.append(("set_guide", path, offset_sec))
 
+    def auto_select_monitor(self):
+        self.log.append("auto_select_monitor")
+
     def set_audio_offset(self, offset):
         self.log.append(("set_audio_offset", offset))
 
@@ -196,8 +199,12 @@ def test_missing_audio_is_surfaced_not_loaded():
         playlist.load_song(song)
 
         _assert(missing == [song], "audio_missing emitted with the song")
-        _assert(all(c[0] != "set_files" for c in core.log if isinstance(c, tuple)),
-                "media never touched for a missing file")
+        _assert(("set_files", None) in core.log,
+                "the media controller is CLEARED, never fed the missing path "
+                "(and never left holding the previous song's backing)")
+        _assert(all(c[1] != song.audio for c in core.log
+                    if isinstance(c, tuple) and c[0] == "set_files"),
+                "the missing path is never handed to media")
         _assert(song.audio and not os.path.exists(song.audio),
                 "the broken path is preserved (it's the relink key)")
         _assert(loaded == [(song, True)], "the rest of the song still loads")
@@ -268,6 +275,31 @@ def test_navigation_bounds_and_order():
                 "prev at the start is a no-op")
 
 
+def test_add_empty_song():
+    print("test_add_empty_song")
+    with tempfile.TemporaryDirectory() as tmp:
+        first = _song(tmp, "uno")
+        core, playlist, loaded, _, setlist_events = _make(tmp, songs=[first])
+
+        index = playlist.add_empty_song()
+
+        songs = core.config.playlist.songs
+        _assert(index == 1 and len(songs) == 2, "appended after the current song")
+        _assert(core.config.playlist.current_song_index == 1,
+                "the new song becomes current")
+        new = songs[1]
+        _assert(new.audio is None and new.guide is None and not new.midi,
+                "it starts with no tracks at all")
+        _assert(new.id and new.id != first.id, "it gets its own stable id")
+        _assert(loaded[-1][0] is new, "it is loaded (empty MIDI track and all)")
+        _assert(("set_files", None) in core.log,
+                "media cleared: the previous song's backing does not follow")
+        _assert(setlist_events, "setlist_changed emitted (counter/combo refresh)")
+        _assert("stop_playback" in core.log and ("flush", "song-new") in core.log,
+                "playback stopped and pending edits flushed first")
+        _assert("save_config" in core.log, "the show records the new song")
+
+
 def test_remove_current_song():
     print("test_remove_current_song")
     with tempfile.TemporaryDirectory() as tmp:
@@ -297,6 +329,7 @@ def main():
     test_bad_midi_falls_back_to_empty_track()
     test_empty_state()
     test_navigation_bounds_and_order()
+    test_add_empty_song()
     test_remove_current_song()
     print("\nALL TESTS PASSED")
 

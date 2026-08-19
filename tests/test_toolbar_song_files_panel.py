@@ -3,10 +3,10 @@ Characterization test: the toolbar's SONG FILES cards (ui/toolbar_manager.py).
 
 Covers the three per-file cards (MIDI / BACKING TRACK / GUIDE): the load
 buttons and dashed empty-state actions firing load_file_requested, the
-new-track and guide-clear header actions, the path-well/empty-action swap
-on the update_*_display methods, and the right-anchored path well (overflow
-clips on the left so the filename end stays visible) with its full-path
-tooltip.
+new-track and the backing/guide clear header actions, the path-well/
+empty-action swap on the update_*_display methods, and the right-anchored
+path well (overflow clips on the left so the filename end stays visible)
+with its full-path tooltip.
 
 Run with:
     uv run python tests/test_toolbar_song_files_panel.py
@@ -55,6 +55,7 @@ def test_load_buttons_fire_signals():
     fired = []
     manager.load_file_requested.connect(fired.append)
     manager.new_midi_track_requested.connect(lambda: fired.append("new_track"))
+    manager.audio_clear_requested.connect(lambda: fired.append("clear_backing"))
     manager.guide_clear_requested.connect(lambda: fired.append("clear_guide"))
 
     for kind, file_type in (("midi", "midi"), ("backing", "audio"),
@@ -66,6 +67,9 @@ def test_load_buttons_fire_signals():
     _card_button(_card(toolbar, "midi"), "new empty MIDI").click()
     _assert(fired[-1] == "new_track",
             "the new-track action requests a new MIDI track")
+    _card_button(_card(toolbar, "backing"), "Clear backing").click()
+    _assert(fired[-1] == "clear_backing",
+            "the clear action requests the backing clear")
     _card_button(_card(toolbar, "guide"), "Clear guide").click()
     _assert(fired[-1] == "clear_guide",
             "the clear action requests the guide clear")
@@ -94,13 +98,20 @@ def test_display_swaps_well_and_empty_action():
     _assert(manager.audio_file_label.isHidden()
             and not manager.audio_empty_button.isHidden(),
             "cards start empty: dashed action shown, path well hidden")
-    _assert(manager.guide_clear_button.isHidden(),
-            "✕ guide clear starts hidden")
+    _assert(manager.audio_clear_button.isHidden()
+            and manager.guide_clear_button.isHidden(),
+            "both ✕ clear actions start hidden")
 
     manager.update_audio_file_display("/tmp/song.mp3")
     _assert(not manager.audio_file_label.isHidden()
             and manager.audio_empty_button.isHidden(),
             "a loaded backing shows the path well and hides the action")
+    _assert(not manager.audio_clear_button.isHidden(),
+            "a loaded backing shows the ✕ clear action")
+    manager.update_audio_file_display("")
+    _assert(manager.audio_clear_button.isHidden()
+            and not manager.audio_empty_button.isHidden(),
+            "clearing the backing hides ✕ and restores the dashed action")
 
     manager.update_guide_file_display("/tmp/guide.mp3")
     _assert(not manager.guide_clear_button.isHidden(),

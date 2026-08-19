@@ -3,9 +3,11 @@ Characterization test: the guide-track monitor (backing vs guide).
 
 MediaController with a fake engine + fake MIDI manager (offscreen Qt, no audio
 device): the monitor selects which file feeds the engine, active_offset()
-drives the sync, a missing guide falls back to the backing, guide-only songs
-play only under the GUIDE monitor, and song switches re-resolve the active
-file without touching the monitor.
+drives the sync, a missing guide falls back to the backing, and song switches
+re-resolve the active file without touching the monitor — unless auto-monitor
+(the desktop editor's) re-picks it per song. Backing and guide are equal: a
+song may carry either, both or neither, and one with no monitored track plays
+its click/MIDI alone, bounded by the sequence.
 
 Run with:
     uv run python tests/test_guide_monitor.py
@@ -18,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import tempfile
+import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
@@ -77,7 +80,9 @@ class FakeEngine(QObject):
 
 class FakeMidiManager:
     midi_data = None
+    duration = 0.0
 
+    def get_duration(self): return self.duration
     def set_midi_routing(self, routing): pass
     def is_running(self): return False
     def start_playback(self): return True
@@ -99,6 +104,12 @@ def _make_controller(tmp):
     engine = FakeEngine()
     controller = MediaController(FakeMidiManager(), engine)
     return controller, engine
+
+
+def _advance(controller, seconds):
+    """Move the transport's master clock to `seconds` and tick it once."""
+    controller.playback_start_time = time.time() - seconds
+    controller._on_playback_tick()
 
 
 def test_default_monitor_plays_backing():
@@ -193,14 +204,88 @@ def test_guide_only_song():
         controller.set_files(None)
         _assert(engine.loaded is None,
                 "no backing + BACKING monitor -> nothing decoded")
-        _assert(not controller.start_playback(),
-                "guide-only song refuses to start under BACKING monitor")
+        _assert(controller.start_playback(),
+                "guide-only song still plays under BACKING (click only)")
+        _assert(not engine.active, "...with the backing bus left silent")
+        controller.stop_playback()
 
         controller.set_monitor(MONITOR_GUIDE)
         _assert(engine.loaded == guide, "GUIDE monitor decodes the guide")
         _assert(controller.start_playback(),
                 "guide-only song plays under GUIDE monitor")
         controller.stop_playback()
+
+
+def test_click_only_song_runs_to_the_sequence_end():
+    print("test_click_only_song_runs_to_the_sequence_end")
+    with tempfile.TemporaryDirectory() as tmp:
+        controller, engine = _make_controller(tmp)
+        controller.midi_manager.duration = 5.0
+        controller.set_files(None)
+        _assert(controller.start_playback(),
+                "a song with no track at all starts (click + MIDI + lights)")
+        _advance(controller, 4.0)
+        _assert(controller.is_playing, "still playing inside the sequence")
+        _advance(controller, 5.5)
+        _assert(not controller.is_playing, "stopped at the end of the sequence")
+
+
+def test_click_only_song_without_a_sequence_runs_on():
+    print("test_click_only_song_without_a_sequence_runs_on")
+    with tempfile.TemporaryDirectory() as tmp:
+        controller, engine = _make_controller(tmp)
+        controller.set_files(None)
+        controller.start_playback()
+        _advance(controller, 600.0)
+        _assert(controller.is_playing,
+                "nothing bounds the click, so it runs until stopped")
+        controller.stop_playback()
+
+
+def test_click_only_song_pauses_and_resumes():
+    print("test_click_only_song_pauses_and_resumes")
+    with tempfile.TemporaryDirectory() as tmp:
+        controller, engine = _make_controller(tmp)
+        controller.set_files(None)
+        controller.start_playback()
+        _advance(controller, 3.0)
+        controller.play_pause_playback()
+        _assert(not controller.is_playing, "click-only song pauses")
+        controller.play_pause_playback()
+        _assert(controller.is_playing, "click-only song resumes")
+        _assert(controller.get_current_position() >= 3.0,
+                "...from where it was paused, not from the top")
+        controller.stop_playback()
+
+
+def test_auto_monitor_picks_the_track_the_song_has():
+    print("test_auto_monitor_picks_the_track_the_song_has")
+    with tempfile.TemporaryDirectory() as tmp:
+        controller, engine = _make_controller(tmp)
+        backing = _touch(tmp, "backing.mp3")
+        guide = _touch(tmp, "guide.mp3")
+
+        # Off by default (headless/live): the monitor never moves on its own.
+        controller.set_guide(guide, 0.0)
+        controller.auto_select_monitor()
+        _assert(controller.monitor == MONITOR_BACKING,
+                "auto-monitor off -> a guide does not steal the monitor")
+
+        # On (the desktop editor): every song load re-picks.
+        controller.set_auto_monitor(True)
+        controller.auto_select_monitor()
+        controller.set_files(backing)
+        _assert(controller.monitor == MONITOR_GUIDE,
+                "both tracks -> the guide is monitored")
+        _assert(engine.loaded == guide, "...and the guide is what decodes")
+
+        # Next song: backing only.
+        controller.set_guide(None, 0.0)
+        controller.auto_select_monitor()
+        controller.set_files(backing)
+        _assert(controller.monitor == MONITOR_BACKING,
+                "no guide -> back to the backing")
+        _assert(engine.loaded == backing, "...and the backing is what decodes")
 
 
 def test_song_switch_reresolves_active():
@@ -240,6 +325,10 @@ def main():
     test_guide_monitor_without_guide_falls_back()
     test_guide_offset_drives_sync()
     test_guide_only_song()
+    test_click_only_song_runs_to_the_sequence_end()
+    test_click_only_song_without_a_sequence_runs_on()
+    test_click_only_song_pauses_and_resumes()
+    test_auto_monitor_picks_the_track_the_song_has()
     test_song_switch_reresolves_active()
     print("\nALL TESTS PASSED")
 

@@ -48,6 +48,10 @@ class PlaylistController:
     def go_to_song(self, index):
         self.window.playlist_core.go_to_song(index)
 
+    def add_empty_song(self):
+        """Append an empty song and switch to it (SETLIST ▸ +)."""
+        self.window.playlist_core.add_empty_song()
+
     def remove_current_song(self):
         """Confirm with the user, then remove the current song via the core."""
         w = self.window
@@ -96,28 +100,29 @@ class PlaylistController:
         # interactive recovery flow stays backing-only).
         self._refresh_guide_display(song)
 
-        # Audio: waveform + path display (missing media keeps its path — the
-        # core already emitted audio_missing for the recovery flow). The
-        # waveform draws the MONITORED track (backing or guide), which the
-        # core resolved while loading the song.
+        # Audio row: path display (missing media keeps its path — the core
+        # already emitted audio_missing for the recovery flow).
         if song.audio and not os.path.exists(song.audio):
             w.toolbar_manager.update_audio_file_display(
                 f'{icons.img_tag("warning", "#e24a4a", 11)} '
                 f"Missing audio: {song.audio}")
-            w.timeline.set_files(None)
         else:
             w.toolbar_manager.update_audio_file_display(song.audio or "")
-            active = w.media_controller.active_file()
-            if active:
-                w.timeline.set_files(active)
-                # Use QTimer to ensure waveform is drawn before setting offset
-                QTimer.singleShot(
-                    100,
-                    lambda offset=w.media_controller.active_offset():
-                        w.timeline.set_waveform_offset(offset),
-                )
-            else:
-                w.timeline.set_files(None)
+
+        # Waveform: the MONITORED track (backing or guide), which the core
+        # resolved while loading the song — so a song carrying only a guide
+        # still draws one.
+        active = w.media_controller.active_file()
+        if active:
+            w.timeline.set_files(active)
+            # Use QTimer to ensure waveform is drawn before setting offset
+            QTimer.singleShot(
+                100,
+                lambda offset=w.media_controller.active_offset():
+                    w.timeline.set_waveform_offset(offset),
+            )
+        else:
+            w.timeline.set_files(None)
 
         # Voice cues: ruler markers (the PCM render rides the core)
         w.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
@@ -153,6 +158,8 @@ class PlaylistController:
                 w.save_config()
                 self.logger.info(f"Relinked guide automatically to: {candidates[0]}")
                 w.media_controller.set_guide(song.guide, song.guide_offset)
+                # The song HAS a guide after all — re-pick what's monitored.
+                w.media_controller.auto_select_monitor()
             else:
                 w.toolbar_manager.update_guide_file_display(
                     f'{icons.img_tag("warning", "#e24a4a", 11)} '

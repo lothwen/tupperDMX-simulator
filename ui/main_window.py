@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
     def _connect_toolbar_signals(self):
         """Connect toolbar manager signals to appropriate handlers."""
         self.toolbar_manager.load_file_requested.connect(self.open_file_dialog)
+        self.toolbar_manager.audio_clear_requested.connect(self.clear_backing_track)
         self.toolbar_manager.guide_clear_requested.connect(self.clear_guide_track)
         self.toolbar_manager.new_midi_track_requested.connect(self.create_new_midi_track)
         self.toolbar_manager.export_midi_requested.connect(self.export_midi_dialog)
@@ -196,12 +197,16 @@ class MainWindow(QMainWindow):
         self.app_core.precount_changed.connect(
             self.timeline_toolbar.set_song_precount)
         # Editor monitor (backing | guide): toggle → controller → waveform.
+        # The editor re-picks it per song (the guide when the song has one);
+        # only the desktop does — headless always plays the backing.
+        self.media_controller.set_auto_monitor(True)
         self.timeline_toolbar.monitor_changed.connect(
             self.media_controller.set_monitor)
         self.media_controller.monitor_changed.connect(self._on_monitor_changed)
         # Playlist navigation signals
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
+        self.toolbar_manager.new_song_requested.connect(self.playlist_controller.add_empty_song)
         self.toolbar_manager.remove_song_requested.connect(self.playlist_controller.remove_current_song)
         self.toolbar_manager.song_selected.connect(self.playlist_controller.go_to_song)
         # Application menu signals
@@ -1238,44 +1243,49 @@ class MainWindow(QMainWindow):
                         ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
                         return
                     
-                    # Check if song already exists in playlist by audio path
-                    existing_index = self.config.find_song_by_audio(path)
-                    if existing_index is not None:
-                        # Switch to existing song
-                        self.stop_playback()
-                        self.config.set_current_song_index(existing_index)
-                        song = self.config.get_current_song()
-                        if song:
-                            self.playlist_controller.apply_song_config(song)
-                        self.logger.info(f"Switched to existing song at index {existing_index}")
-                    else:
-                        # Add new song to playlist
-                        self.stop_playback()
+                    # Backing track: sets it on the CURRENT song, replacing
+                    # whatever it had — exactly like the guide. Growing the
+                    # setlist is SETLIST ▸ + alone, so picking a file never
+                    # silently spawns a song beside the one being edited.
+                    self.stop_playback()
+                    song = self.config.get_current_song()
+                    if song is None:
                         new_index = self.config.add_song(audio=path)
                         self.config.set_current_song_index(new_index)
                         song = self.config.get_current_song()
-                        if song:
-                            self.playlist_controller.apply_song_config(song)
-                        self.logger.info(f"Added new song to playlist at index {new_index}")
-
+                        self.logger.info(
+                            f"Added first song to the setlist at index {new_index}")
+                    else:
+                        self.config.update_current_song(audio=path, offset=0.0)
+                    self.playlist_controller.apply_song_config(song)
                     self.playlist_controller.update_song_counter()
                     self.save_config()
+                    self.logger.info(f"Backing track set: {path}")
                     
                 elif file_type == 'guide':
-                    # Guide track: attaches to the CURRENT song (never creates
-                    # or switches one — the backing stays the song identity).
+                    # Guide track: attaches to the CURRENT song — or starts one
+                    # of its own when the setlist is empty (a guide is as good
+                    # a reason for a song to exist as a backing).
                     file_ext = path.lower().split('.')[-1]
                     if file_ext not in ['mp3', 'wav']:
                         ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
                         return
                     song = self.config.get_current_song()
                     if song is None:
-                        ErrorDialogManager.show_media_file_error(self, path, "No song selected — load a backing track first.")
-                        return
-                    self.config.update_current_song(guide=path)
-                    self.save_config()
+                        self.stop_playback()
+                        new_index = self.config.add_song(guide=path)
+                        self.config.set_current_song_index(new_index)
+                        song = self.config.get_current_song()
+                        self.logger.info(
+                            f"Added guide-only song to playlist at index {new_index}")
+                    else:
+                        # A different file: its sync offset is not this one's.
+                        self.config.update_current_song(guide=path,
+                                                        guide_offset=0.0)
                     # Full reload keeps engine/waveform/toolbar consistent
                     self.playlist_controller.apply_song_config(song)
+                    self.playlist_controller.update_song_counter()
+                    self.save_config()
                     self.logger.info(f"Guide track set: {path}")
 
                 elif file_type == 'midi':
@@ -1308,6 +1318,20 @@ class MainWindow(QMainWindow):
                 ErrorDialogManager.show_file_permission_error(self, path, "read")
             except Exception as e:
                 ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def clear_backing_track(self):
+        """Remove the current song's backing track (the file stays on disk).
+
+        The SONG survives: its guide, MIDI, cues and offsets stay put and it
+        keeps its place in the setlist — removing a song is the SETLIST
+        panel's 🗑 button."""
+        song = self.config.get_current_song()
+        if song is None or not song.audio:
+            return
+        self.config.update_current_song(audio="", offset=0.0)
+        self.save_config()
+        self.playlist_controller.apply_song_config(song)
+        self.logger.info("Cleared backing track")
 
     def clear_guide_track(self):
         """Remove the current song's guide track (the file stays on disk)."""

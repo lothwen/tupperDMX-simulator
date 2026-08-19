@@ -152,6 +152,27 @@ def test_song_parts_render_on_waveform_overlay():
     _assert(xs[0] < xs[1], "boxes laid out left-to-right by time")
 
 
+def test_clearing_the_track_clears_the_waveform():
+    print("test_clearing_the_track_clears_the_waveform")
+    _, tl = _make()
+    # (duration, PCM) as MainWindow injects it; PCM None = decode still running,
+    # which still lays the band out.
+    tl.set_audio_source(lambda path: (30.0, None))
+
+    tl.set_files("/tmp/backing.wav")
+    _assert(tl.waveform_track.waveform_item is not None,
+            "a monitored track draws the waveform band")
+
+    tl.set_files(None)
+    _assert(tl.waveform_track.waveform_item is None,
+            "clearing the song's last track removes the waveform")
+    _assert(tl.audio_file is None, "and the timeline forgets the file")
+
+    tl.set_files("/tmp/backing.wav")
+    _assert(tl.waveform_track.waveform_item is not None,
+            "loading one back draws it again")
+
+
 def test_blackout_scoped_to_its_fixture():
     print("test_blackout_scoped_to_its_fixture")
     m, tl = _make()
@@ -267,6 +288,7 @@ def main():
     test_membership_by_channel()
     test_add_event_stamps_channel()
     test_song_parts_render_on_waveform_overlay()
+    test_clearing_the_track_clears_the_waveform()
     test_blackout_scoped_to_its_fixture()
     test_display_order_by_dmx_binding_by_channel()
     test_rebuild_for_patch_adds_and_removes_tracks()

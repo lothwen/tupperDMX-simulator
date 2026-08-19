@@ -103,6 +103,7 @@ the engine is slaved with 150 ms drift resync).
   picks which file feeds the engine. The monitor is **session-only in-memory state**
   (always BACKING at launch), so headless/web-remote can never inherit it.
   MIDI/DMX/metronome/cues are timeline-driven and identical under either.
+- **Backing and guide are equal citizens**: a song may carry either, both or neither.
 - **Metronome sync**: on start/resume, compute the beats elapsed and the remainder to
   the next boundary — play immediately if within `0.001s`, else a single-shot timer to
   the next beat then regular intervals. Always restart on seek-during-playback or BPM

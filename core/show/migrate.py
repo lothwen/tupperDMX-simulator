@@ -43,8 +43,8 @@ def _unique_show_name(parent: Path, base: str) -> str:
 
 def _song_title(song) -> str:
     """Display title: audio basename (sans extension), falling back to the
-    MIDI basename — same rule as the web remote's setlist."""
-    path = song.audio or song.midi
+    guide's, then the MIDI's — same rule as the web remote's setlist."""
+    path = song.audio or song.guide or song.midi
     if not path:
         return ""
     return os.path.splitext(os.path.basename(path))[0]
