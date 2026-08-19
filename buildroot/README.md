@@ -443,6 +443,7 @@ nothing else this app needs. `linux.fragment` is merged on top of it through
 | `CONFIG_SND_SEQUENCER` | python-rtmidi binds to the ALSA **sequencer**; without it there are no MIDI ports at all |
 | `CONFIG_SND_USB_AUDIO` | USB MIDI controllers *and* USB audio interfaces. The stock config sets only `CONFIG_SND_USB`, which is just the menu gate |
 | `CONFIG_BLK_DEV_NVME` | the stock config drives ATA and USB storage only, so an NVMe disk never appears. Built in, not a module: root is on it and there is no initramfs |
+| `CONFIG_HIGH_RES_TIMERS` | the stock config sets no timer options, so timers round up to the `CONFIG_HZ=250` periodic tick — 4 ms. The app's 15 ms audio feed and 20 ms playback tick don't care, but the metronome re-arms a single-shot timer per beat, so every click lands up to 4 ms late against a backing track timed in sample offsets |
 
 After editing the fragment, `make linux-reconfigure` — buildroot does not notice
 the file changing on its own.

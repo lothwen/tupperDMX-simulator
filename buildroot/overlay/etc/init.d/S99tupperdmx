@@ -46,8 +46,23 @@ start() {
 	# NOWHERE else to go, and the box comes up looking like a clean boot that
 	# simply ignores its preferences. `exec` twice keeps the pid start-stop-
 	# daemon recorded with -m, so -K and the status check still find it.
+	#
+	# -N -5 raises the app above everything else that shares the box. This is
+	# insurance, not a scheduling fix: the audio feed sits behind a 120 ms
+	# buffer topped up every 15 ms and MIDI is dispatched on a 20 Hz tick, so
+	# no plausible scheduler delay reaches either, and there is normally
+	# nothing to compete with anyway -- dhcpcd, pulseaudio and samba are all
+	# idle during a show. It is the abnormal case that this buys: a samba copy
+	# of the next set's backing tracks landing mid-song is the one thing on
+	# this image that can saturate the machine.
+	#
+	# Applied to the /bin/sh below rather than to python, because nice levels
+	# survive exec -- both execs inherit it. Negative levels need uid 0, which
+	# this script has at boot; -N is busybox's start-stop-daemon FANCY option,
+	# enabled in the buildroot config.
+	#
 	HOME="$DATA_DIR" \
-	start-stop-daemon -S -q -b -m -p "$PIDFILE" \
+	start-stop-daemon -S -q -b -m -N -5 -p "$PIDFILE" \
 		-x /bin/sh -- -c "exec >'$BOOTLOG' 2>&1; exec '$DAEMON' '$APP' --headless"
 	if [ $? -ne 0 ]; then echo 'FAIL (start-stop-daemon)'; return 1; fi
 	# The daemon is backgrounded, so its exit status never reaches this script:
