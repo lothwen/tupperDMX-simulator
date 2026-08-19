@@ -18,6 +18,7 @@ class ToolbarManager(QObject):
 
     # Signals
     load_file_requested = pyqtSignal(str)  # file_type ('midi', 'audio' or 'guide')
+    audio_clear_requested = pyqtSignal()  # remove the current song's backing track
     guide_clear_requested = pyqtSignal()  # remove the current song's guide track
     new_midi_track_requested = pyqtSignal()  # request to create new empty MIDI track
     export_midi_requested = pyqtSignal()  # request to export MIDI file
@@ -37,6 +38,7 @@ class ToolbarManager(QObject):
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
+    new_song_requested = pyqtSignal()     # append an empty song to the setlist
     remove_song_requested = pyqtSignal()
     song_selected = pyqtSignal(int)  # setlist combobox picked a song by index
     # Application menu signals
@@ -55,6 +57,7 @@ class ToolbarManager(QObject):
         # Song-files cards (path wells + empty-state load actions)
         self.audio_file_label: Optional[QLabel] = None
         self.audio_empty_button: Optional[QPushButton] = None
+        self.audio_clear_button: Optional[QToolButton] = None
         self.guide_file_label: Optional[QLabel] = None
         self.guide_empty_button: Optional[QPushButton] = None
         self.guide_clear_button: Optional[QToolButton] = None
@@ -63,6 +66,7 @@ class ToolbarManager(QObject):
         # Playlist navigation widgets
         self.prev_button: Optional[QPushButton] = None
         self.next_button: Optional[QPushButton] = None
+        self.new_song_button: Optional[QPushButton] = None
         self.remove_button: Optional[QPushButton] = None
         self.menu_button: Optional[QToolButton] = None
         self.dock_stage_action = None
@@ -401,8 +405,8 @@ class ToolbarManager(QObject):
 
     def _create_setlist_section(self) -> QFrame:
         """Create the SETLIST section: header (title + song count), a row with
-        prev / song selector combobox / next / remove, and a footer with the
-        current song's BPM, offset and derived media 'linked' chip."""
+        prev / song selector combobox / next / new / remove, and a footer with
+        the current song's BPM, offset and derived media 'linked' chip."""
         section = QFrame()
         section.setFrameStyle(QFrame.Shape.StyledPanel)
         section.setObjectName("ToolbarSection")
@@ -474,6 +478,18 @@ class ToolbarManager(QObject):
         self.next_button.clicked.connect(self.next_song_requested.emit)
         self.next_button.setEnabled(False)
         controls_layout.addWidget(self.next_button)
+
+        # New song: an empty song to fill with whatever tracks the user has
+        # (loading a file only ever edits the CURRENT song, so this is the one
+        # way the setlist grows).
+        self.new_song_button = QPushButton()
+        self.new_song_button.setIcon(icons.icon("plus", "#e6e6e6"))
+        self.new_song_button.setIconSize(QSize(15, 15))
+        self.new_song_button.setFixedSize(28, 30)
+        self.new_song_button.setObjectName("NavButton")
+        self.new_song_button.setToolTip("Add a new empty song to the setlist")
+        self.new_song_button.clicked.connect(self.new_song_requested.emit)
+        controls_layout.addWidget(self.new_song_button)
 
         self.remove_button = QPushButton()
         self.remove_button.setIcon(icons.icon("trash", "#d98a8a"))
@@ -556,12 +572,18 @@ class ToolbarManager(QObject):
                 extras=(new_track_button,))
         cards_layout.addWidget(card, 1)
 
-        # BACKING TRACK card — the live master (song identity, web remote,
-        # headless).
+        # BACKING TRACK card (+ the ✕ clear header action, shown while
+        # loaded) — the live master (web remote, headless). Clearing it leaves
+        # the song standing: it keeps its guide, MIDI and cues, and the
+        # SETLIST panel is where a song is removed.
+        self.audio_clear_button = self._card_button("close", "Clear backing track")
+        self.audio_clear_button.clicked.connect(self.audio_clear_requested.emit)
+        self.audio_clear_button.setVisible(False)
         card, self.audio_file_label, self.audio_empty_button = \
             self._create_file_card(
                 "backing", "music", "BACKING TRACK", 'audio',
-                "Load the backing track for this song", "+ Load backing")
+                "Load the backing track for this song", "+ Load backing",
+                extras=(self.audio_clear_button,))
         cards_layout.addWidget(card, 1)
 
         # GUIDE card (+ the ✕ clear header action, shown while loaded) —
@@ -717,9 +739,13 @@ class ToolbarManager(QObject):
             empty_button.setVisible(not filename)
 
     def update_audio_file_display(self, filename: str) -> None:
-        """Update the BACKING TRACK card."""
+        """Update the BACKING TRACK card (empty = no backing; the ✕ clear
+        action only shows while one is set — including a missing one, which
+        is exactly when you may want it gone)."""
         self._update_file_card(self.audio_file_label,
                                self.audio_empty_button, filename)
+        if self.audio_clear_button:
+            self.audio_clear_button.setVisible(bool(filename))
         self.logger.debug(f"Audio file display updated: {filename or '(empty)'}")
 
     def update_guide_file_display(self, filename: str) -> None:

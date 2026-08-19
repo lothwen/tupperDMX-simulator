@@ -900,19 +900,17 @@ class Config:
             return True
         return False
 
-    def find_song_by_audio(self, audio_path: str) -> Optional[int]:
-        """Find a song index by audio file path. Returns None if not found."""
-        for i, song in enumerate(self.playlist.songs):
-            if song.audio == audio_path:
-                return i
-        return None
+    def add_song(self, audio: Optional[str] = None, midi: Optional[str] = None,
+                 offset: float = 0.0, guide: Optional[str] = None) -> int:
+        """Add a new song to the playlist. Returns the new song's index.
 
-    def add_song(self, audio: str, midi: Optional[str] = None, offset: float = 0.0) -> int:
-        """Add a new song to the playlist. Returns the new song's index."""
+        Every track is optional: a song may arrive as a backing, as a guide
+        (the full-mix reference), or as neither — a click-only sequence."""
         song = SongConfig(
-            audio=self._validate_file_path(audio),
+            audio=self._validate_file_path(audio) if audio else None,
             midi=self._validate_file_path(midi) if midi else None,
             offset=self._validate_float(offset, -3600.0, 3600.0),
+            guide=self._validate_file_path(guide) if guide else None,
             id=str(uuid.uuid4()),
         )
         self.playlist.songs.append(song)
@@ -932,10 +930,14 @@ class Config:
 
     def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None,
                             guide: Optional[str] = None,
-                            guide_offset: Optional[float] = None) -> None:
-        """Update the current song's MIDI, offsets or guide track ("" clears)."""
+                            guide_offset: Optional[float] = None,
+                            audio: Optional[str] = None) -> None:
+        """Update the current song's MIDI, offsets, backing or guide track
+        ("" clears)."""
         song = self.get_current_song()
         if song:
+            if audio is not None:
+                song.audio = self._validate_file_path(audio) if audio else None
             if midi is not None:
                 song.midi = self._validate_file_path(midi) if midi else None
             if offset is not None:

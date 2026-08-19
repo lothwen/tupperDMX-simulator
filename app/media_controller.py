@@ -68,6 +68,10 @@ class MediaController(QObject):
         self.guide_file: Optional[str] = None
         self.guide_offset_sec = 0.0
         self.monitor = MONITOR_BACKING
+        # Auto-monitor: re-pick the monitor on every song load (the guide when
+        # the song has one, else the backing). The desktop editor turns this
+        # on; headless/live never does, so a rack box always plays the backing.
+        self.auto_monitor = False
         # Where playback sends MIDI; set from config.io by MainWindow.
         self.midi_routing = MidiRouting(to_controller=False, port=None)
 
@@ -121,6 +125,20 @@ class MediaController(QObject):
     def set_guide_offset(self, offset_sec: float) -> None:
         """Set the guide's offset relative to the timeline."""
         self.guide_offset_sec = float(offset_sec)
+
+    def set_auto_monitor(self, enabled: bool) -> None:
+        """Let song loads re-pick the monitor (desktop editor only)."""
+        self.auto_monitor = bool(enabled)
+
+    def auto_select_monitor(self) -> None:
+        """Pick the monitor for the song being loaded: its guide when it has
+        one, else its backing. Backing and guide are equal citizens — a song
+        may carry either, both or neither — so the choice is per song, not a
+        sticky session preference. A no-op unless set_auto_monitor() enabled
+        it, which is what keeps headless on the backing."""
+        if not self.auto_monitor:
+            return
+        self.set_monitor(MONITOR_GUIDE if self.guide_file else MONITOR_BACKING)
 
     def set_monitor(self, which: str) -> None:
         """Select which track the editor hears (backing | guide). Session-only
@@ -212,11 +230,10 @@ class MediaController(QObject):
 
     def start_playback(self) -> bool:
         """Start media playback from the beginning (through the count-in when
-        the song has one)."""
-        if not self.active_file():
-            self.logger.warning("Cannot start playback: no audio file loaded")
-            return False
+        the song has one).
 
+        A song with no monitored track still plays: the click, the MIDI and
+        the lights run on their own, bounded by the sequence."""
         self.logger.info("Starting fresh media playback")
 
         # Stop any current playback
@@ -239,9 +256,11 @@ class MediaController(QObject):
                 self.logger.warning("Failed to start MIDI playback, continuing with audio only")
 
         # Ensure the monitored track is (being) loaded and reset its position
-        if not self.engine.is_backing_loaded():
-            self.engine.load_backing(self.active_file())
-        self.engine.set_backing_position(0)
+        active = self.active_file()
+        if active:
+            if not self.engine.is_backing_loaded():
+                self.engine.load_backing(active)
+            self.engine.set_backing_position(0)
         self._reset_cue_pointer(self.current_timeline_time)
 
         # Start playback immediately
@@ -255,10 +274,6 @@ class MediaController(QObject):
 
     def play_pause_playback(self) -> None:
         """Toggle play/pause state."""
-        if not self.active_file():
-            self.logger.warning("Cannot play/pause: no audio file loaded")
-            return
-
         if self.is_playing:
             # Pausing mid count-in makes no musical sense: reset to the top.
             if self.current_timeline_time < 0:
@@ -266,8 +281,11 @@ class MediaController(QObject):
             else:
                 self._pause_playback()
         else:
-            # If we haven't started yet, start from beginning
-            if self.current_timeline_time == 0 or not self.engine.is_backing_loaded():
+            # If we haven't started yet, start from beginning (a click-only
+            # song has nothing to load, so only its position decides)
+            awaiting_decode = (self.active_file() is not None
+                               and not self.engine.is_backing_loaded())
+            if self.current_timeline_time == 0 or awaiting_decode:
                 self.start_playback()
             else:
                 self._resume_playback()
@@ -292,8 +310,9 @@ class MediaController(QObject):
         if self.is_playing:
             return
 
-        # If no media loaded yet, can't resume
-        if not self.active_file() or not self.engine.is_backing_loaded():
+        # If the monitored track hasn't decoded yet, can't resume (a
+        # click-only song has none and resumes fine)
+        if self.active_file() and not self.engine.is_backing_loaded():
             self.logger.warning("Cannot resume: no media loaded")
             return
 
@@ -420,11 +439,33 @@ class MediaController(QObject):
         # Fire voice cues the timeline just crossed
         self._fire_voice_cues()
 
+        # A click-only song has no backing to run out, so the sequence is what
+        # ends it (the engine's `finished` does it for every other song).
+        end = self._click_only_end()
+        if end and self.current_timeline_time >= end:
+            self.logger.info("Reached end of sequence (click-only song)")
+            self.stop_playback()
+            return
+
         # Synchronize audio playback
         self._sync_audio_playback()
 
+    def _click_only_end(self) -> float:
+        """End of a song with no monitored track: the MIDI sequence's own
+        length. 0 when there is no track and no sequence either — nothing
+        bounds the click then, so it runs until the user stops it."""
+        if self.active_file():
+            return 0.0
+        return self.midi_manager.get_duration()
+
     def _sync_audio_playback(self) -> None:
         """Synchronize audio playback with timeline."""
+        if self.active_file() is None:
+            # Click-only song: no backing to keep in sync.
+            if self.engine.is_active():
+                self.engine.pause()
+            return
+
         audio_time_sec = self.current_timeline_time - self.active_offset()
 
         if audio_time_sec < 0:

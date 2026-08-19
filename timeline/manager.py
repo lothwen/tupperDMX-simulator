@@ -1592,15 +1592,18 @@ class Timeline(QWidget):
 
     # Legacy compatibility methods
     def set_files(self, audio_file, midi_file=None):
-        """Set audio file. MIDI files should be loaded via MidiManager."""
+        """Set audio file (None = the song has no monitored track).
+        MIDI files should be loaded via MidiManager."""
         self.audio_file = audio_file
 
         # Clear existing items
         self.midi_event_items.clear()
 
-        # Redraw waveform if audio file provided
+        # Redraw the waveform for the new file, or drop the old one
         if audio_file:
             self.waveform_track.draw_waveform(audio_file, self._waveform_y())
+        else:
+            self.waveform_track.clear_waveform()
 
         QTimer.singleShot(0, self.fit_to_width)
     
