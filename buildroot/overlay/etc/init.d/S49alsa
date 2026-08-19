@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+# Restore the ALSA mixer, before anything opens the card.
+#
+# buildroot's alsa-utils installs alsa-restore.service and alsa-state.service
+# and NOTHING else -- both systemd units, and this image is busybox-init. So
+# nothing ever ran `alsactl restore` and the card came up exactly as the driver
+# left it, which on HDA means Master muted at zero: silence no matter how well
+# the rest of the audio path works, and indistinguishable from the app having
+# no output at all.
+#
+# S49 puts this immediately before S50pulseaudio: pulse reads the mixer when it
+# opens the card, so the levels have to be right by then. rcK stops in reverse
+# order, so `stop` (which saves the mixer) runs after pulse has let go.
+#
+
+ALSACTL=/usr/sbin/alsactl
+# alsactl's compiled-in default path; alsa-utils creates the directory.
+STATE=/var/lib/alsa/asound.state
+
+[ -x "$ALSACTL" ] || exit 0
+
+# A card, not just the subsystem: /proc/asound exists as soon as snd is in the
+# kernel, but it says "no soundcards" until one is found -- which is the normal
+# state of a box whose only interface is a USB one that is not plugged in yet.
+have_card() {
+	grep -q '^ *[0-9]' /proc/asound/cards 2>/dev/null
+}
+
+start() {
+	have_card || { echo 'ALSA mixer: no sound card'; return 0; }
+	printf 'Restoring ALSA mixer: '
+	# `init` is the fallback for hardware this image has never seen. It reads
+	# the rules in /usr/share/alsa/init/, which unmute every playback switch
+	# and set the volumes to 75% -- so a fresh box is audible without anyone
+	# having to find alsamixer first. Trying `restore` before it is what makes
+	# a saved asound.state win over those generic defaults.
+	if [ -f "$STATE" ] && $ALSACTL restore 2>/dev/null; then
+		echo 'OK (asound.state)'
+	elif $ALSACTL init 2>/dev/null; then
+		echo 'OK (defaults)'
+	else
+		echo 'FAIL'
+		return 1
+	fi
+}
+
+stop() {
+	have_card || return 0
+	printf 'Saving ALSA mixer: '
+	# Best effort only: a venue box is as likely to be unplugged as shut down
+	# cleanly, and a yanked cord never reaches rcK. `alsactl store` by hand is
+	# the reliable way to pin a level you care about.
+	if $ALSACTL store 2>/dev/null; then echo 'OK'; else echo 'FAIL'; fi
+}
+
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  restart|reload)
+	start
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+esac
+
+exit $?

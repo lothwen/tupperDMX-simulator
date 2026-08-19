@@ -204,9 +204,11 @@ fi
 # smbd recreates what it needs there on every boot.
 install -d -m 0755 "$TARGET_DIR/var/lib/samba"
 install -d -m 0700 "$TARGET_DIR/var/lib/samba/private"
-# The overlay carries the init script; make sure it is executable even if the
-# checkout lost the mode bit.
-[ -f "$TARGET_DIR/etc/init.d/S99tupperdmx" ] && \
-    chmod 0755 "$TARGET_DIR/etc/init.d/S99tupperdmx"
+# The overlay carries the init scripts; make sure they are executable even if
+# the checkout lost the mode bit.
+for init in S49alsa S99tupperdmx; do
+    [ -f "$TARGET_DIR/etc/init.d/$init" ] && \
+        chmod 0755 "$TARGET_DIR/etc/init.d/$init"
+done
 
 msg "done"
