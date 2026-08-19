@@ -46,3 +46,26 @@ CONFIG_SND_USB_AUDIO=y
 # Built in rather than a module, because the root filesystem is on it and this
 # image has no initramfs. Selects NVME_CORE on its own, and PCI is already on.
 CONFIG_BLK_DEV_NVME=y
+
+#
+# Timers
+#
+# board/pc/linux.config sets no timer options at all, so the kernel falls back
+# to CONFIG_HZ_PERIODIC at CONFIG_HZ=250 and every userspace timer rounds up to
+# the 4 ms tick. Most of the app rides that grid without noticing: the 15 ms
+# audio feed and the 20 ms playback tick are both several ticks long, and MIDI
+# is dispatched off the latter into a queue, so it is quantised to 50 ms by the
+# design and not by the kernel.
+#
+# The metronome is the one thing that pays. app/audio_controller.py re-arms a
+# single-shot QTimer for every beat, deriving the delay from an absolute
+# next_beat_expected_time, so accumulated drift is corrected and STAYS
+# corrected -- what the tick costs is the individual beat, which fires at the
+# next 4 ms boundary and so lands up to 4 ms late. The backing track has no
+# equivalent error, because its timing is sample offsets inside the mixer's
+# buffer; the click therefore wobbles against a rock-steady backing, which is
+# precisely the comparison the player on stage is making.
+#
+# Selects TICK_ONESHOT, i.e. the tick becomes programmable instead of periodic.
+# Nothing else in this fragment depends on it.
+CONFIG_HIGH_RES_TIMERS=y
