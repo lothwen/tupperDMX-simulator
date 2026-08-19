@@ -116,6 +116,7 @@ LD_TRACE_LOADED_OBJECTS=1 /lib/ld-linux-x86-64.so.2 \
 | `/usr/lib/python3.14/site-packages/` | every locked dependency (~390 MB), under buildroot's own python3 |
 | `/usr/bin/uv`, `/usr/bin/uvx` | static musl build, for on-box maintenance |
 | `/var/lib/tupperdmx/` | `HOME` and working directory of the service |
+| `/etc/init.d/S49alsa` | restores the mixer (see *The audio path*) |
 | `/etc/init.d/S99tupperdmx` | the init script |
 | `/mnt/tupperdmx/` | the samba share — a bind mount of `/var/lib/tupperdmx` |
 | `/etc/samba/smb.conf` | the share definition |
@@ -186,8 +187,9 @@ unused, so they stay off.
 
 `stop` sends SIGTERM and waits up to 20 s — `run_headless()` catches it and runs
 the same shutdown path as closing the window, which flushes the pending `.mid`
-autosave. Ordering matters: S41dhcpcd (an address to serve the remote on) and
-S50pulseaudio (QtMultimedia's audio backend is libpulse) both run first.
+autosave. Ordering matters: S41dhcpcd (an address to serve the remote on),
+S49alsa (an unmuted card) and S50pulseaudio (QtMultimedia's audio backend is
+libpulse) all run first.
 
 ### When the box comes up "working" but ignores its preferences
 
@@ -210,6 +212,98 @@ nothing at all, so *silence after a truncated boot.log* is itself the diagnosis.
 the console half of the logging system, so on a box that stays up for weeks it
 grows without rotating. Set `"console_output": false` under `logging` in
 `userprefs.json` once the box is known good.
+
+## The audio path
+
+Four things have to be true before a song is audible, and all four fail the
+same silent way: the app runs, the transport advances, the web remote looks
+right, and nothing comes out of the box. Nothing in the app notices either —
+the master clock is `time.time()`, so playback does not depend on the audio
+sink existing.
+
+**1. Qt can only reach the card through PulseAudio.** The PyQt6 wheel's
+`libQt6Multimedia.so.6` carries `libpulse.so.0` as a hard `DT_NEEDED` and does
+not contain one single ALSA symbol — Riverbank built that Qt with PulseAudio
+only, so there is no ALSA path to fall back to, on this image or any other. To
+check a wheel before trusting it:
+
+```bash
+strings .venv/lib/python3.*/site-packages/PyQt6/Qt6/lib/libQt6Multimedia.so.6 | grep -ci alsa
+```
+
+**2. Something has to start the server.** `BR2_PACKAGE_PULSEAUDIO=y` on its own
+installs `libpulse` *and* `/usr/bin/pulseaudio`, so the loader is satisfied and
+the box looks healthy; only `BR2_PACKAGE_PULSEAUDIO_DAEMON=y` creates the
+`pulse` user and installs `S50pulseaudio`. Without it, S99tupperdmx's
+`PULSE_SERVER=unix:/var/run/pulse/native` names a socket nothing ever creates —
+and exporting `PULSE_SERVER` at all switches off libpulse's autospawn, so there
+is no accidental recovery either.
+
+**3. The app has to be allowed to connect.** In system mode the daemon drops to
+the `pulse` user, and `protocol-native.c` authorises a client only when its uid
+is the *daemon's* (`pulse`, not root), or its gid is `pulse-access`, or it is a
+member of `pulse-access`. **There is no exemption for uid 0.** Buildroot's own
+users line — `pulse -1 pulse -1 * /var/run/pulse - audio,pulse-access` — puts
+only the daemon in that group, so the app, which runs as root for the DMX and
+MIDI devices, is refused:
+
+```
+PulseAudioService: Connection failure: "Access denied"
+```
+
+`post-fakeroot.sh` adds root to `pulse-access`, and it needs a hook of its own
+because that group does not exist yet anywhere earlier: mkusers runs from
+`fs/common.mk` **inside** the fakeroot script, after target-finalize. post-build
+would edit an `/etc/group` with no such line, and an overlay copy of
+`/etc/group` would simply be deleted and re-added by mkusers, which owns every
+group it manages. Membership, rather than giving just the daemon the right gid
+(`start-stop-daemon -c root:pulse-access` would do it), because *Pointing the
+box at a show* tells you to run the app by hand from a root shell — that has to
+work too.
+
+**4. The card has to be unmuted.** buildroot's alsa-utils installs
+`alsa-restore.service` and `alsa-state.service` and nothing else — both systemd
+units, on a busybox-init image. So nothing ran `alsactl restore`, and an HDA
+codec comes up exactly as the driver left it: Master muted at zero. `S49alsa`
+in the overlay is the missing half. It restores `/var/lib/alsa/asound.state`
+when there is one and falls back to `alsactl init` when there is not, which
+reads the rules in `/usr/share/alsa/init/` and unmutes every playback switch at
+75% — so a box built on hardware nobody has seen before is audible without
+anyone finding alsamixer first.
+
+| What you see | Which one |
+| --- | --- |
+| `No QtMultimedia backends found` / `Failed to initialize QAudioDecoder` | not this — a missing soname, see *The wheels want manylinux sonames* |
+| `PulseAudioService: pa_context_connect() failed` in `boot.log`, then `No audio output device available` in the log | **2** — no server. `QMediaDevices` offers zero outputs, `defaultAudioOutput()` is null, and `AudioEngine` starts no sink at all |
+| `PulseAudioService: Connection failure: "Access denied"` | **3** — the server is up and was reached; root is not in `pulse-access` |
+| `Audio sink started on '<device>' (float32, buffer …)` and still silence | **4** — the mixer. Or a pulse sink muted on top of it |
+
+### Pinning the levels
+
+`S49alsa`'s defaults (step 4 above) are a floor, not a mix. To set the real ones:
+
+```bash
+alsamixer                     # M unmutes, arrows set the level
+su -c 'alsactl store'         # -> /var/lib/alsa/asound.state, survives reboots
+```
+
+`stop` stores too, but only as a courtesy: a venue box is as likely to be
+unplugged as shut down cleanly and a yanked cord never reaches `rcK`, so
+`alsactl store` by hand is the part to rely on.
+
+That file lives on the box, so a reimage loses it. To make a known-good mixer
+part of the image, copy it into the overlay — it is restored ahead of
+`alsactl init`, so it wins:
+
+```bash
+mkdir -p buildroot/overlay/var/lib/alsa
+scp tupperdmx@tupperdmx:/var/lib/alsa/asound.state \
+    buildroot/overlay/var/lib/alsa/asound.state
+```
+
+It is hardware-specific (the control names come from the codec), which is why
+it is not committed for you and why the `alsactl init` fallback exists at all —
+on a different box `restore` fails and the generic defaults take over.
 
 ## File sharing
 
@@ -327,7 +421,12 @@ QtCore/QtGui/QtMultimedia, which is not obvious from the app's dependency list:
   platform plugin*. Nothing renders through them.
 - **pulseaudio** — `libQt6Multimedia` links `libpulse.so.0`; there is no ALSA
   path in the Qt6 wheels. alsa-lib is still needed underneath it, and its
-  sequencer is what python-rtmidi uses.
+  sequencer is what python-rtmidi uses. **`BR2_PACKAGE_PULSEAUDIO_DAEMON=y` is
+  load-bearing, not a preference** — see *The audio path*. It is a
+  configure-time option on an already-built package, so `make
+  pulseaudio-dirclean` before rebuilding (see the trap above).
+- **alsa-utils** with `ALSACTL` and `ALSAMIXER` — setting the card's levels and
+  saving them. `AMIXER` stays off: `alsamixer` works fine over ssh.
 - **libkrb5** — `libQt6Network` links `libgssapi_krb5.so.2`.
 - **fontconfig, freetype, libxkbcommon, zstd, bzip2** — the rest of the closure.
 
