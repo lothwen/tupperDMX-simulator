@@ -2,8 +2,8 @@
 Characterization test: the Qt-free stereo mixing core (audio/mixer.py).
 
 Covers routing gain matrices, split-mode mono downmix, one-shot clip mixing
-and exhaustion, volume/mute, RMS levels, seek and end-of-backing latching —
-all pure numpy, no Qt, no audio device.
+and exhaustion, volume/mute, RMS levels, seek, end-of-backing latching and
+retuning to another output rate — all pure numpy, no Qt, no audio device.
 
 Run with:
     uv run python tests/test_audio_mixer.py
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 
-from audio.mixer import (Mixer, bus_channel_gains, make_beep,
+from audio.mixer import (Mixer, bus_channel_gains, make_beep, resample,
                          ROUTING_STEREO, ROUTING_SPLIT_BACKING_LEFT,
                          ROUTING_SPLIT_BACKING_RIGHT,
                          BUS_BACKING, BUS_CLICK, BUS_VOICE, SAMPLE_RATE)
@@ -212,6 +212,49 @@ def test_clipping():
     _assert(np.max(out) <= 1.0, "output is hard-clipped to full scale")
 
 
+def test_resample():
+    print("test_resample")
+    mono = np.linspace(0.0, 1.0, 1000, dtype=np.float32)
+    _assert(resample(mono, 44100, 44100) is mono, "matching rates return the input")
+    _assert(len(resample(mono, 44100, 48000)) == 1088,
+            "44.1k -> 48k stretches the clip by the rate ratio")
+    _assert(resample(mono, 44100, 48000).dtype == np.float32,
+            "float32 stays float32")
+
+    stereo = _stereo_backing(frames=44100)
+    up = resample(stereo, 44100, 48000)
+    _assert(up.shape == (48000, 2) and up.dtype == np.int16,
+            "int16 stereo keeps its shape and dtype")
+    _assert(abs(int(up[100, 0]) - int(stereo[100, 0])) <= 1
+            and abs(int(up[100, 1]) - int(stereo[100, 1])) <= 1,
+            "a constant signal survives resampling on both channels")
+
+    _assert(len(resample(mono, 0, 48000)) == len(mono),
+            "a bogus source rate is a no-op, never a crash")
+
+
+def test_retune_to_another_output_rate():
+    """A song loaded at 44.1 kHz keeps its duration and position when the
+    output device turns out to run at 48 kHz (AudioEngine._apply_rate)."""
+    print("test_retune_to_another_output_rate")
+    mixer = Mixer()
+    mixer.set_backing(_stereo_backing(frames=2 * SAMPLE_RATE))   # 2 s
+    mixer.set_position_seconds(1.25)
+    _assert(abs(mixer.duration_seconds() - 2.0) < 1e-6, "2 s at the reference rate")
+
+    pcm = mixer.backing_samples()
+    position = mixer.position_seconds()
+    mixer.set_sample_rate(48000)
+    mixer.set_backing(resample(pcm, SAMPLE_RATE, 48000))
+    mixer.set_position_seconds(position)
+
+    _assert(abs(mixer.duration_seconds() - 2.0) < 1e-3,
+            "the song is still 2 s long after the retune")
+    _assert(abs(mixer.position_seconds() - 1.25) < 1e-3,
+            "playback resumes where it was, in seconds")
+    _assert(len(mixer.render(480)) == 480, "the mixer renders at the new rate")
+
+
 def main():
     test_bus_channel_gains()
     test_make_beep()
@@ -225,6 +268,8 @@ def main():
     test_end_of_backing_latch()
     test_levels()
     test_clipping()
+    test_resample()
+    test_retune_to_another_output_rate()
     print("\nALL TESTS PASSED")
 
 

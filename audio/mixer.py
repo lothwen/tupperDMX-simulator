@@ -6,6 +6,10 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+# Reference rate: what the mixer runs at unless the output device negotiates
+# another one (AudioEngine adopts the device's rate when 44.1 kHz is refused —
+# Windows shared-mode WASAPI is normally locked to its 48 kHz mix format), and
+# the rate the TTS cache is written at.
 SAMPLE_RATE = 44100
 
 # Routing modes: how the three buses land on the stereo output.
@@ -58,6 +62,26 @@ def make_beep(freq_hz: float, duration_sec: float = 0.1,
     return wave
 
 
+def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Linear-resample mono (n,) or interleaved (n, channels) audio, keeping
+    the input dtype. Returns the input untouched when the rates match.
+
+    Linear is good enough here and stays cheap: every caller converts a whole
+    buffer (a decoded song, a TTS clip) off the audio thread, never per block."""
+    if (src_rate == dst_rate or src_rate <= 0 or dst_rate <= 0
+            or samples is None or len(samples) < 2):
+        return samples
+    n_out = max(1, int(round(len(samples) * dst_rate / src_rate)))
+    src_t = np.arange(len(samples))
+    dst_t = np.linspace(0, len(samples) - 1, n_out)
+    if samples.ndim == 1:
+        out = np.interp(dst_t, src_t, samples)
+    else:
+        out = np.stack([np.interp(dst_t, src_t, samples[:, ch])
+                        for ch in range(samples.shape[1])], axis=1)
+    return out.astype(samples.dtype)
+
+
 class _OneShot:
     """A mono clip being played once on a bus."""
     __slots__ = ("samples", "pos")
@@ -70,8 +94,8 @@ class _OneShot:
 class Mixer:
     """Three-bus stereo mixer. `render()` is called from the audio feed
     thread; every mutator takes the same lock, so state changes are safe from
-    the Qt thread. Backing is int16 (n, 2) at SAMPLE_RATE; one-shots are mono
-    float32."""
+    the Qt thread. Backing is int16 (n, 2) at `sample_rate`; one-shots are mono
+    float32 at the same rate."""
 
     def __init__(self, sample_rate: int = SAMPLE_RATE):
         self.sample_rate = sample_rate
@@ -96,6 +120,13 @@ class Mixer:
         with self._lock:
             self._routing = routing
             self._gains = bus_channel_gains(routing)
+
+    def set_sample_rate(self, sample_rate: int) -> None:
+        """Retune to the rate the output device negotiated. Everything already
+        loaded is at the OLD rate, so the caller re-supplies the backing and
+        drops queued one-shots — see AudioEngine._apply_rate()."""
+        with self._lock:
+            self.sample_rate = max(1, int(sample_rate))
 
     def routing(self) -> str:
         with self._lock:
