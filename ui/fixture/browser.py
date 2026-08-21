@@ -36,6 +36,7 @@ from core.fixture_library import (
 )
 from core.channel_families import channel_family as _channel_family
 from ui.widgets.chips import FlowLayout, chip as _chip
+from ui.widgets.sizing import fit_to_screen
 from ui.fixture.scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -326,7 +327,7 @@ class AddFixtureDialog(QDialog):
         self.setWindowTitle("Add fixture")
         self.setObjectName("AddFixtureDialog")
         self.setModal(True)
-        self.resize(1180, 800)
+        fit_to_screen(self, 1180, 800)
         self.setMinimumSize(940, 600)
 
         self._config = stage_controller.config

@@ -13,6 +13,36 @@ from core.config import Config
 from webremote.state import probe_duration
 
 
+class _ResponsiveBar(QWidget):
+    """The toolbar's content widget, which reports the width of its *compact*
+    layout rather than its full one.
+
+    A widget cannot react to being narrower than its own minimum — Qt never
+    lets it get there, so a plain resizeEvent breakpoint would never fire. By
+    advertising the folded minimum the window is free to shrink, the resize
+    arrives, and the manager folds the low-priority sections away for real.
+    """
+
+    def __init__(self, on_resize: Callable[[int], None]):
+        super().__init__()
+        self._on_resize = on_resize
+        self._compact_min = 0
+
+    def set_compact_minimum(self, width: int) -> None:
+        self._compact_min = width
+        self.updateGeometry()
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        if self._compact_min:
+            return QSize(self._compact_min, hint.height())
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._on_resize(event.size().width())
+
+
 class ToolbarManager(QObject):
     """Manages the main application toolbar with media controls and configuration options."""
 
@@ -46,6 +76,10 @@ class ToolbarManager(QObject):
     about_requested = pyqtSignal()
     dock_stage_requested = pyqtSignal()  # bring the undocked stage window back
 
+    # Breathing room over the bar's own minimum before the cards come back, so
+    # the expanded layout is never restored into a width it barely fits.
+    BREAKPOINT_SLACK = 24
+
     def __init__(self, config: Config):
         super().__init__()
         self.config = config
@@ -53,6 +87,16 @@ class ToolbarManager(QObject):
 
         # Toolbar and widgets
         self.toolbar: Optional[QToolBar] = None
+        self.container: Optional[QWidget] = None
+        self.export_midi_menu_action: Optional[QAction] = None
+        # Narrow-window state: the two cards that fold into the ☰ menu, the
+        # width that decides it, and the menu actions that stand in for them.
+        self.show_section: Optional[QFrame] = None
+        self.versions_section: Optional[QFrame] = None
+        self._compact = False
+        self._full_min_width = 0
+        self._compact_actions: list = []
+        self.versions_menu: Optional[QMenu] = None
         self.export_midi_action: Optional[QAction] = None
         # Song-files cards (path wells + empty-state load actions)
         self.audio_file_label: Optional[QLabel] = None
@@ -98,14 +142,14 @@ class ToolbarManager(QObject):
         self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         
         # Create a container widget with horizontal layout to properly manage expansion
-        container = QWidget()
+        container = _ResponsiveBar(self._on_bar_resized)
         container_layout = QHBoxLayout(container)
         container_layout.setContentsMargins(10, 10, 10, 10)
         container_layout.setSpacing(15)
         
         # Show Section (far left - fixed width project controls)
-        show_section = self._create_show_section()
-        container_layout.addWidget(show_section, 0)
+        self.show_section = self._create_show_section()
+        container_layout.addWidget(self.show_section, 0)
 
         # Setlist Section (playlist navigation + song selector)
         setlist_section = self._create_setlist_section()
@@ -116,18 +160,96 @@ class ToolbarManager(QObject):
         container_layout.addWidget(song_files_section, 3)  # widest — long paths
 
         # Versions Section (right of files - snapshot/history controls)
-        versions_section = self._create_versions_section()
-        container_layout.addWidget(versions_section, 0)
+        self.versions_section = self._create_versions_section()
+        container_layout.addWidget(self.versions_section, 0)
 
         # Menu Section (far right - fixed width hamburger button)
         menu_section = self._create_menu_section()
         container_layout.addWidget(menu_section, 0)
+
+        self.container = container
+        self._measure_breakpoint()
 
         # Add the container to the toolbar
         self.toolbar.addWidget(container)
         
         self.logger.info("Main toolbar created")
         return self.toolbar
+
+    # ------------------------------------------------------------------
+    # Narrow windows: SHOW and VERSIONS fold into the ☰ menu
+    # ------------------------------------------------------------------
+    def _measure_breakpoint(self) -> None:
+        """Record what the bar needs with everything shown and with SHOW and
+        VERSIONS folded away. Measured rather than hardcoded so the numbers
+        follow the UI density and any later change to the sections.
+
+        The two widths are derived from whichever state the bar is in plus what
+        the folding sections cost, rather than by hiding and showing them to
+        measure each: `minimumSizeHint()` is valid on a hidden widget, while a
+        section shown and re-measured in one call stack still reports the size
+        it had before Qt laid it out again.
+        """
+        container = self.container
+        container.ensurePolished()
+        layout = container.layout()
+        layout.invalidate()
+        layout.activate()
+
+        # A hidden widget takes neither width nor a spacing gap, so folding
+        # the two sections saves their minimums and their two gaps.
+        folded = sum(section.minimumSizeHint().width() + layout.spacing()
+                     for section in (self.show_section, self.versions_section))
+        current = layout.minimumSize().width()
+        if self._compact:
+            compact_min, self._full_min_width = current, current + folded
+        else:
+            compact_min, self._full_min_width = current - folded, current
+        container.set_compact_minimum(compact_min)
+
+        self.logger.debug("Toolbar widths: full %dpx, compact %dpx",
+                          self._full_min_width, compact_min)
+
+    def remeasure_breakpoint(self) -> None:
+        """Re-measure after a UI density change and re-decide from the width
+        the bar actually has (a resize event may never come).
+
+        Folded, the sections are hidden, and Qt does not restyle a hidden
+        widget — so a density change read here lands a few tens of pixels wide
+        of the truth until the next launch measures it expanded. It errs
+        towards staying folded, which costs nothing.
+        """
+        if self.container is None:
+            return
+        self._measure_breakpoint()
+        self._on_bar_resized(self.container.width())
+
+    def _on_bar_resized(self, width: int) -> None:
+        """Fold the show/versions cards away when the full bar would not fit.
+
+        Hysteresis is implicit: it collapses only when the expanded layout is
+        too wide for `width` and expands only when it would fit again, so the
+        two decisions can never chase each other.
+        """
+        if not self._full_min_width:
+            return
+        if self._compact:
+            if width >= self._full_min_width + self.BREAKPOINT_SLACK:
+                self.set_compact(False)
+        elif width < self._full_min_width + self.BREAKPOINT_SLACK:
+            self.set_compact(True)
+
+    def set_compact(self, compact: bool) -> None:
+        """Show or fold the SHOW and VERSIONS cards. Folded, their actions are
+        reachable from the ☰ menu instead — the same signals either way."""
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.show_section.setVisible(not compact)
+        self.versions_section.setVisible(not compact)
+        for action in self._compact_actions:
+            action.setVisible(compact)
+        self.logger.debug("Toolbar %s", "folded" if compact else "expanded")
     
     def _create_show_section(self) -> QFrame:
         """Create the show-project section: SHOW header,
@@ -357,6 +479,17 @@ class ToolbarManager(QObject):
             self.versions_combo.setCurrentIndex(0)
         if self.restore_button:
             self.restore_button.setEnabled(bool(infos))
+        if self.versions_menu is not None:
+            # Same list, same restore signal — the ☰ submenu is what a folded
+            # bar offers in place of the picker.
+            self.versions_menu.clear()
+            self.versions_menu.setEnabled(bool(infos))
+            for info in infos:
+                action = self.versions_menu.addAction(
+                    self._version_icon(info), self._version_label(info))
+                action.triggered.connect(
+                    lambda _checked=False, version_id=info.version_id:
+                    self.restore_version_requested.emit(version_id))
         if self.versions_stats_label:
             self.versions_stats_label.setText(
                 f"{autosaves} autosave{'s' if autosaves != 1 else ''}"
@@ -460,6 +593,9 @@ class ToolbarManager(QObject):
         self.song_combo.lineEdit().setPlaceholderText("Song title")
         self.song_combo.setToolTip("Select a song, or edit its title and press Enter to rename")
         self.song_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # A title the operator can still read is the point of this control, so
+        # give it a floor of its own rather than letting the row squeeze it.
+        self.song_combo.setMinimumContentsLength(12)
         # Selecting from the dropdown switches song; typing + Enter renames the
         # current one. activated() only fires on user action (not programmatic
         # repopulation), so no guard is needed on the selection path.
@@ -519,7 +655,6 @@ class ToolbarManager(QObject):
         self.key_edit = QLineEdit()
         self.key_edit.setObjectName("SongKeyEdit")
         self.key_edit.setPlaceholderText("key")
-        self.key_edit.setFixedWidth(44)
         self.key_edit.setToolTip(
             "Musical key of the song (e.g. Am) — shown on the web remote")
         self.key_edit.editingFinished.connect(
@@ -686,6 +821,44 @@ class ToolbarManager(QObject):
         if not self._populating_setlist:
             self.song_selected.emit(index)
 
+    def _add_compact_actions(self, menu: QMenu) -> None:
+        """The SHOW and VERSIONS cards as menu entries, hidden until the bar
+        actually folds. They emit the very same signals the cards do, so a
+        narrow window loses the buttons and nothing else."""
+        for icon_name, text, signal in (
+                ("plus", "New show…", self.new_show_requested),
+                ("folder-open", "Open show…", self.open_show_requested),
+                ("save", "Save show", self.save_show_requested),
+                (None, "Save show as…", self.save_show_as_requested),
+                (None, "Import bundle…", self.import_bundle_requested),
+                ("package", "Export bundle…", self.export_bundle_requested)):
+            action = (menu.addAction(icons.icon(icon_name), text) if icon_name
+                      else menu.addAction(text))
+            action.triggered.connect(signal.emit)
+            self._compact_actions.append(action)
+
+        # The MIDI export follows the split button's enabled state, which
+        # set_export_midi_enabled() drives for both.
+        self.export_midi_menu_action = menu.addAction(
+            icons.icon("download"), "Export MIDI…")
+        self.export_midi_menu_action.setEnabled(False)
+        self.export_midi_menu_action.triggered.connect(
+            self.export_midi_requested.emit)
+        self._compact_actions.append(self.export_midi_menu_action)
+
+        snapshot_action = menu.addAction(icons.icon("pin"), "Snapshot")
+        snapshot_action.triggered.connect(self.snapshot_requested.emit)
+        self._compact_actions.append(snapshot_action)
+
+        # Populated alongside the versions combobox by set_versions().
+        self.versions_menu = QMenu("Restore version", menu)
+        self.versions_menu.setEnabled(False)
+        self._compact_actions.append(menu.addMenu(self.versions_menu))
+
+        self._compact_actions.append(menu.addSeparator())
+        for action in self._compact_actions:
+            action.setVisible(False)
+
     def _create_menu_section(self) -> QFrame:
         """Create the hamburger application menu section (far-right)."""
         section = QFrame()
@@ -706,6 +879,7 @@ class ToolbarManager(QObject):
         button.setToolTip("Menu")
 
         menu = QMenu(button)
+        self._add_compact_actions(menu)
         # The stage's own dock button leaves with the stage, so this is the way
         # back when its window ends up on a display that is no longer there.
         self.dock_stage_action = menu.addAction("Dock stage")
@@ -821,10 +995,13 @@ class ToolbarManager(QObject):
             self._populating_setlist = False
 
     def set_export_midi_enabled(self, enabled: bool) -> None:
-        """Enable or disable the export-MIDI menu action."""
+        """Enable or disable the export-MIDI menu action (on the Export split
+        button and on its ☰ twin, which stands in while the bar is folded)."""
         if self.export_midi_action:
             self.export_midi_action.setEnabled(enabled)
             self.logger.debug(f"Export MIDI button {'enabled' if enabled else 'disabled'}")
+        if self.export_midi_menu_action:
+            self.export_midi_menu_action.setEnabled(enabled)
 
     def set_dock_stage_enabled(self, enabled: bool) -> None:
         """Enable the ☰ "Dock stage" action (only while the stage is floating)."""

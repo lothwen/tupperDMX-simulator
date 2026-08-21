@@ -47,6 +47,7 @@ from ui.fixture.affordances import (
     wheel_applies,
 )
 from ui.widgets.chips import chip
+from ui.widgets.sizing import fit_to_screen
 from ui.fixture.console import (
     FaderStrip, OutputCard, default_values, fields_to_values, values_to_fields,
 )
@@ -379,7 +380,7 @@ class ClipEditDialog(QDialog):
         self.color_row.setVisible(wheel_applies(self._fdef))
         self._sync_color_wheel()
         self._rebuild_library_menu()
-        self.resize(880, 760)
+        fit_to_screen(self, 880, 760)
         self._refresh_scene_status()
         self._apply_lock()
 
@@ -392,7 +393,7 @@ class ClipEditDialog(QDialog):
         self.clip_output.set_fixture(self._fdef)
         self._populate_verbs(is_new)
         self._select_verb(_UNSET if is_new else int(note or 0), velocity)
-        self.resize(720, 620)
+        fit_to_screen(self, 720, 620)
         self._apply_lock()
 
     def _populate_verbs(self, is_new: bool) -> None:
@@ -574,7 +575,7 @@ class ClipEditDialog(QDialog):
         self.color_row.setVisible(wheel_applies(self._fdef))
         self._sync_color_wheel()
         self._rebuild_library_menu()
-        self.resize(880, 760)
+        fit_to_screen(self, 880, 760)
         self._refresh_scene_status()
         self.buttons.button(
             QDialogButtonBox.StandardButton.Ok).setEnabled(not self._locked)
