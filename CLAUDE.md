@@ -104,6 +104,12 @@ the engine is slaved with 150 ms drift resync).
   (always BACKING at launch), so headless/web-remote can never inherit it.
   MIDI/DMX/metronome/cues are timeline-driven and identical under either.
 - **Backing and guide are equal citizens**: a song may carry either, both or neither.
+  The timeline spans the **longest** of backing, guide and MIDI — the song's tracks are
+  declared once per load (`Timeline.set_song_tracks`) while the monitor only picks which
+  one is *drawn*, so toggling to a 20 s guide can't trim a 5 min song. The web remote
+  takes the same maximum (`webremote.state.song_duration`); its `/api/waveform` peaks
+  carry the duration of the track they came from, so a short one is drawn over its own
+  share of the canvas rather than stretched across the song.
 - **Metronome sync**: on start/resume, compute the beats elapsed and the remainder to
   the next boundary — play immediately if within `0.001s`, else a single-shot timer to
   the next beat then regular intervals. Always restart on seek-during-playback or BPM

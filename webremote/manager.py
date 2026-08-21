@@ -187,10 +187,20 @@ class WebRemoteManager(QObject):
         return show.cues if show is not None else self.config.webremote.cues
 
     def _current_duration(self) -> Optional[float]:
+        """The current song's length: the longest of its audio tracks and its
+        MIDI sequence — never just the one the editor is monitoring, or a
+        20-second backing would shorten the whole remote.
+
+        The MIDI is measured raw (get_duration) rather than through
+        song_end_time(), whose 240 s floor would stretch every short song's
+        scrubber; song_end_time() stays the fallback for a song with nothing
+        readable at all."""
         song = self.config.get_current_song()
-        audio = song.audio if song else None
-        return (remote_state.probe_duration(audio)
-                or self.core.midi_manager.song_end_time())
+        midi = self.core.midi_manager
+        lengths = [remote_state.song_duration(song) if song else None,
+                   midi.get_duration() if hasattr(midi, "get_duration") else None]
+        longest = max([length for length in lengths if length], default=None)
+        return longest or midi.song_end_time()
 
     def _build_state(self) -> dict:
         w = self.core

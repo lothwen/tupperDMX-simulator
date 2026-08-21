@@ -186,7 +186,10 @@ class WebRemoteWorker(QObject):
         # numpy, which releases the GIL but would still stall the WS traffic.
         bins = await loop.run_in_executor(
             None, compute_peaks, decoded_path, pcm)
-        duration = await loop.run_in_executor(None, probe_duration, path)
+        # The duration of what the BINS cover — the file the engine decoded,
+        # which is the monitored track and may be shorter than the song. The
+        # client scales the peaks by it so they stay under the playhead.
+        duration = await loop.run_in_executor(None, probe_duration, decoded_path)
         return web.json_response({"song": index, "duration": duration, "bins": bins})
 
     async def _await_decoded(self, index: int) -> Optional[Tuple[str, object]]:

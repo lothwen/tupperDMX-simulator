@@ -91,6 +91,7 @@ class PlaylistController:
             w.toolbar_manager.update_song_info("", "")
             w.timeline_toolbar.set_song_precount(False, has_song=False)
             w.timeline_toolbar.set_monitor_state(w.media_controller.monitor, False)
+            w.timeline.set_song_tracks(())
             w.timeline.set_files(None)
             w.timeline.set_voice_cues([])
             w.update_window_title()
@@ -108,6 +109,11 @@ class PlaylistController:
                 f"Missing audio: {song.audio}")
         else:
             w.toolbar_manager.update_audio_file_display(song.audio or "")
+
+        # Timeline extent: the song's tracks, whichever is monitored — the
+        # scene spans the LONGEST of them (and of the MIDI), so a short guide
+        # can't trim a full-length song when the monitor toggles.
+        w.timeline.set_song_tracks((song.audio, song.guide))
 
         # Waveform: the MONITORED track (backing or guide), which the core
         # resolved while loading the song — so a song carrying only a guide

@@ -75,6 +75,11 @@ class Timeline(QWidget):
         # samples live in the audio engine, which this layer does not import.
         self.audio_source = None
 
+        # Every audio track the current song carries (backing AND guide),
+        # declared by set_song_tracks(). The timeline spans the longest of
+        # them, not the one being monitored — see apply_song_extent().
+        self.song_audio_files = []
+
         # Whether the sequencer is running, told by MainWindow. Gates a clip
         # dialog's live output — see set_transport_playing.
         self._transport_playing = False
@@ -746,6 +751,10 @@ class Timeline(QWidget):
 
         # Get current data from MidiManager
         self._cached_events = self.midi_manager.get_events_for_ui()
+
+        # The sequence may now run past the audio (or the audio may have
+        # changed under it): re-span the scene before anything is laid out.
+        self.apply_song_extent()
 
         # Redraw tracks with cached data. Guard selectionChanged while the old
         # (possibly selected) items are torn down — removing a selected item
@@ -1604,8 +1613,71 @@ class Timeline(QWidget):
             self.waveform_track.draw_waveform(audio_file, self._waveform_y())
         else:
             self.waveform_track.clear_waveform()
+        self.apply_song_extent()
 
         QTimer.singleShot(0, self.fit_to_width)
+
+    def set_song_tracks(self, paths) -> None:
+        """Declare every audio track the current song carries — backing AND
+        guide, whichever one is monitored.
+
+        The timeline spans the LONGEST track, so switching the monitor to a
+        20-second guide can't trim a four-minute song down to 20 seconds.
+        Called once per song load; the monitor toggle only changes which of
+        these is drawn (set_files), never the extent."""
+        self.song_audio_files = [p for p in (paths or []) if p]
+        self.apply_song_extent()
+
+    def _song_audio_candidates(self):
+        """The audio paths the extent spans: the song's declared tracks, or —
+        for a bare timeline that never declared any — whatever is drawn."""
+        if self.song_audio_files:
+            return self.song_audio_files
+        return [self.audio_file] if self.audio_file else []
+
+    def _longest_audio(self) -> float:
+        """Duration of the song's longest audio track (0.0 when none is
+        readable). Durations come from the injected audio source, whose header
+        read is cached — the non-monitored track costs a stat, not a decode."""
+        if self.audio_source is None:
+            return 0.0
+        longest = 0.0
+        for path in self._song_audio_candidates():
+            try:
+                duration, _pcm = self.audio_source(path)
+            except Exception:
+                duration = None
+            longest = max(longest, float(duration or 0.0))
+        return longest
+
+    def apply_song_extent(self) -> None:
+        """Size the scene to the song's true length: the longest of the
+        backing, the guide and the MIDI sequence, plus 5% headroom so the last
+        events aren't flush against the edge. A song with nothing loaded falls
+        back to the default window.
+
+        The audio half also becomes MidiDocument's song-duration floor, so
+        clip-edit bounds span the whole song rather than the monitored file."""
+        audio_length = self._longest_audio()
+        midi_length = (self.midi_manager.get_duration()
+                       if self.midi_manager is not None else 0.0)
+        length = max(audio_length, midi_length or 0.0)
+
+        # Only push the floor when this timeline actually knows durations —
+        # without an audio source a 0.0 would clobber a value set elsewhere.
+        if (self.audio_source is not None and self.midi_manager is not None
+                and hasattr(self.midi_manager, "set_song_duration")):
+            self.midi_manager.set_song_duration(audio_length)
+
+        width = (int(length * 1.05 * self.PIXELS_PER_SECOND) if length > 0
+                 else self.PIXELS_PER_SECOND * self.SECONDS_TO_DISPLAY)
+        if width == self.content_width:
+            return
+        self.content_width = width
+        self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
+        self.draw_time_grid()
+        if hasattr(self, 'ruler_track'):
+            self.ruler_track.redraw()
     
     def set_audio_source(self, source) -> None:
         """Install the waveform band's sample source: a callable taking an

@@ -175,22 +175,10 @@ class WaveformTrack(BaseTrack):
                 self.logger.warning(f"No duration for {audio_file}")
                 return
 
-            # Tell the MIDI manager the real song length so its clip-edit
-            # bounds aren't pinned to the (potentially tiny) duration of
-            # whatever MIDI events happen to be present.
-            mm = getattr(self.timeline_manager, "midi_manager", None)
-            if mm is not None and hasattr(mm, "set_song_duration"):
-                mm.set_song_duration(song_length_seconds)
-
-            # Extend content width by 5% beyond song duration to show final MIDI events
-            extended_duration = song_length_seconds * 1.05
-            self.timeline_manager.content_width = int(extended_duration * self.timeline_manager.PIXELS_PER_SECOND)
-            self.content_scene.setSceneRect(0, 0, self.timeline_manager.content_width, self.timeline_manager.scene_height)
-            
-            # Redraw grid and ruler with new width
-            self.timeline_manager.draw_time_grid()
-            if hasattr(self.timeline_manager, 'ruler_track'):
-                self.timeline_manager.ruler_track.redraw()
+            # The scene spans the whole SONG (the longest of its tracks and
+            # its MIDI), which the manager owns — this band only draws the one
+            # file being monitored, and a short guide must not trim the ruler.
+            self.timeline_manager.apply_song_extent()
 
             waveform_height = self.get_track_height()
 
