@@ -54,6 +54,11 @@ class Timeline(QWidget):
     preview_requested = pyqtSignal(list)
 
     # Constants
+    # HEADER_WIDTH is the designed width; __init__ shadows it with the
+    # UI-scaled one, because a lane's name has to fit the strip it is drawn in
+    # and this strip is painted, not styled — the stylesheet's scale rewrite
+    # cannot reach it. Every reader goes through the instance, so shadowing is
+    # all it takes.
     HEADER_WIDTH = 240
     RULER_TRACK_HEIGHT = 25
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
@@ -65,8 +70,12 @@ class Timeline(QWidget):
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
                  initial_audio_volume=0.5, initial_voice_volume=0.8,
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
-                 fixtures=None, parent=None):
+                 fixtures=None, ui_scale=1.0, parent=None):
         super().__init__(parent)
+        # Fixed at construction: the header width is baked into scene rects and
+        # painted items, so changing the UI scale moves it on the next launch.
+        # (`timeline/` never imports `ui/`, hence the injected scale.)
+        self.HEADER_WIDTH = round(self.HEADER_WIDTH * ui_scale)
         self.audio_file = audio_file
         self.midi_manager = midi_manager
 
@@ -188,7 +197,6 @@ class Timeline(QWidget):
 
         self._audio_db_label = QLabel()
         self._audio_db_label.setObjectName("VolumeDbLabel")
-        self._audio_db_label.setFixedWidth(36)
         self._audio_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                           | Qt.AlignmentFlag.AlignVCenter)
 
@@ -209,7 +217,6 @@ class Timeline(QWidget):
 
         self._metro_db_label = QLabel()
         self._metro_db_label.setObjectName("VolumeDbLabel")
-        self._metro_db_label.setFixedWidth(36)
         self._metro_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                           | Qt.AlignmentFlag.AlignVCenter)
 
@@ -229,7 +236,6 @@ class Timeline(QWidget):
 
         self._voice_db_label = QLabel()
         self._voice_db_label.setObjectName("VolumeDbLabel")
-        self._voice_db_label.setFixedWidth(36)
         self._voice_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                           | Qt.AlignmentFlag.AlignVCenter)
 
@@ -275,7 +281,6 @@ class Timeline(QWidget):
         row.setSpacing(4)
         label = QLabel(label_text)
         label.setObjectName("VolumeRowLabel")
-        label.setFixedWidth(46)
         row.addWidget(label)
         row.addWidget(mute_button)
         row.addWidget(slider, 1)

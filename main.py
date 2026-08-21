@@ -75,11 +75,11 @@ def run_gui(argv, show_path=None):
     app.setDesktopFileName("tupperdmx")
     app.setWindowIcon(QIcon(asset_path("icons", "TupperDMX-icon.png")))
 
-    # Load and apply dark theme
-    qss_path = asset_path("styles", "dark-theme.qss")
-    if os.path.exists(qss_path):
-        with open(qss_path, 'r', encoding='utf-8') as f:
-            app.setStyleSheet(f.read())
+    # Load and apply dark theme. At its designed size for now — the config
+    # error dialog below is shown before there IS a config to read a UI scale
+    # from, and it still has to be styled.
+    from ui import theme
+    app.setStyleSheet(theme.load_qss())
 
     try:
         config = Config.load()
@@ -99,6 +99,9 @@ def run_gui(argv, show_path=None):
         else:
             # Use default configuration
             config = Config()
+
+    # Now the preference is readable, re-apply the theme at the user's scale.
+    theme.apply_scale(app, config.window.ui_scale)
 
     _setup_logging(config)
     logger = get_logger("system.startup")

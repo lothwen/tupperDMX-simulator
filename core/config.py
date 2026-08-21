@@ -89,6 +89,16 @@ class StageFogConfig:
     resolution: float = 0.5
 
 
+# How tightly the interface packs: the factor the theme's type and spacing are
+# scaled by, 1.0 being the size everything was designed at. The floor is where
+# the smallest labels bottom out against the 8px minimum in `ui/theme.py` and
+# the type hierarchy starts flattening. The ceiling is simply a sensible top;
+# note that a 1280-wide display runs out at about 1.25 — past that the window's
+# own minimum exceeds it and the desktop gives it a wider window.
+UI_SCALE_MIN = 0.75
+UI_SCALE_MAX = 1.50
+
+
 @dataclass
 class WindowConfig:
     width: int = 1280
@@ -114,6 +124,10 @@ class WindowConfig:
     # Volumetric fog: what `stage_haze` looks like once it is marched through
     # rather than multiplied into a beam's alpha. Needs `stage_gpu`.
     fog: StageFogConfig = field(default_factory=StageFogConfig)
+    # How tightly the interface is packed — see UI_SCALE_MIN/MAX. 1.0 is the
+    # size everything was designed at; below that the app fits a 1280-wide
+    # display with room to spare.
+    ui_scale: float = 1.0
 
 
 @dataclass
@@ -463,6 +477,9 @@ class Config:
                 stage_exposure=cls._validate_float(
                     window_data.get("stage_exposure", 1.0), 0.1, 4.0),
                 fog=cls._parse_fog(window_data.get("fog")),
+                ui_scale=cls._validate_float(
+                    window_data.get("ui_scale", 1.0),
+                    UI_SCALE_MIN, UI_SCALE_MAX),
             )
 
         if "artnet" in data:

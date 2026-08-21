@@ -207,8 +207,8 @@ average. The projection is orthographic — no depth buffer needed; cost follows
 
 - **`config.json`** (shipped, read-only): the *seed* patch for brand-new shows.
 - **`userprefs.json`** (user-writable, **MACHINE-level only** — a usable GL driver is a property of the box): `window`
-  (incl. `stage_haze`, `stage_gpu`, `stage_exposure`, nested `fog`; deliberately no `fog_density`, because that IS
-  `stage_haze`), `artnet`, `volume`, `logging`, `io`, `audio`, `webremote`, `last_show_path`/`recent_shows`. Legacy
+  (incl. `stage_haze`, `stage_gpu`, `stage_exposure`, `ui_scale`, nested `fog`; deliberately no `fog_density`, because
+  that IS `stage_haze`), `artnet`, `volume`, `logging`, `io`, `audio`, `webremote`, `last_show_path`/`recent_shows`. Legacy
   `playlist`/`fixtures` are parsed (the show migration adopts them) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest): the setlist, `current_song_index`, the fixture **patch**,
   `webremote_cues`. A patch entry is type + `dmx_start` + stable MIDI `channel` + optional `mode` (`""` means the type's
@@ -224,6 +224,9 @@ way to change a setting on a headless rack box.
 
 ## UI notes
 
+- **1280×800 is the supported minimum display.** Both toolbars are wider than that with everything shown, so each folds
+  its low-priority half on a narrow window: the top bar's SHOW and VERSIONS cards into the ☰ menu, the timeline row's Rows/zoom/Fit zone into a "View ▾" popup.
+- **`config.window.ui_scale`** (0.75–1.50, Settings ▸ Interface) is applied by `ui/theme.py` rewriting the theme's pixel values on load **A size set in Python is invisible to all of this
 - **MIDI channels are 0-15 everywhere** — the raw MIDI channel, on every surface.
 - The fixture browser's footer is the patch decision; OK stays disabled until the patch is legal, and the inspector
   validates the same two things.

@@ -34,6 +34,7 @@ from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
 from ui.stage_window import StageWindow
 from stage.controller import StageController
+from ui import theme
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.voice_cues_dialog import VoiceCuesDialog
@@ -83,7 +84,11 @@ class MainWindow(QMainWindow):
 
         # Window setup
         self.update_window_title()
-        self.setMinimumSize(1200, 800)
+        # A floor, not the real minimum: Qt takes the larger of this and what
+        # the children need, and both toolbars now fold themselves to fit a
+        # 1280-wide display. Declaring 1200x800 here used to add a height floor
+        # taller than the 1280x800 screens this is meant to run on.
+        self.setMinimumSize(1024, 600)
         self.setGeometry(100, 100, self.config.window.width, self.config.window.height)
 
         # Setup main layout
@@ -250,6 +255,7 @@ class MainWindow(QMainWindow):
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
             fixtures=self.config.fixtures,
+            ui_scale=self.config.window.ui_scale,
         )
         self.timeline.set_audio_source(self._waveform_audio_info)
         # The decode the song change kicked off lands after the band is drawn.
@@ -329,11 +335,15 @@ class MainWindow(QMainWindow):
         else:
             self.timeline_toolbar.set_row_height(self.config.window.midi_events_track_height)
 
-        self.main_content.setSizes([self.width() - 250, 250])
+        # The sidebar's opening width follows the UI scale — its tab labels
+        # are styled, so they grow with it and 250px stops holding them.
+        self._sidebar_width = round(250 * self.config.window.ui_scale)
+        self.main_content.setSizes(
+            [self.width() - self._sidebar_width, self._sidebar_width])
 
         # Floating toggle button for the DMX side panel
         self._dmx_panel_collapsed = False
-        self._last_dmx_width = 250
+        self._last_dmx_width = self._sidebar_width
         self._panel_animation = None
         # Which splitter currently hosts the sidebar — main_content while the
         # stage is docked, timeline_row once it is undocked.
@@ -654,8 +664,13 @@ class MainWindow(QMainWindow):
         old_fog = asdict(self.config.window.fog)
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
+        # The Interface page previews its slider live and puts the old scale
+        # back if the dialog is cancelled, so this is connected either way.
+        dialog.ui_scale_previewed.connect(self.apply_ui_scale)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+
+        self.apply_ui_scale()
 
         # The dialog hands back a NEW fog object, so the light layer is still
         # holding the old one until it is told otherwise.
@@ -676,6 +691,28 @@ class MainWindow(QMainWindow):
         self.save_config()
         self.logger.info("Settings updated")
 
+    def apply_ui_scale(self, scale=None):
+        """Show the interface at `scale`, or at whatever the config says.
+
+        `theme.apply_scale` is the idempotent half — a live prefs reload calls
+        this for any `window` edit, and re-applying the stylesheet re-polishes
+        every widget in the app, which is not something nudging the haze slider
+        should pay for.
+
+        The toolbars cached what their expanded layouts cost at the old scale,
+        so they have to measure themselves again — but only once Qt has
+        delivered the style change, or they would measure the size everything
+        still has. Hence the zero-delay timer rather than a direct call.
+        """
+        if scale is None:
+            scale = self.config.window.ui_scale
+        if theme.apply_scale(QApplication.instance(), scale):
+            QTimer.singleShot(0, self._remeasure_toolbars)
+
+    def _remeasure_toolbars(self):
+        self.toolbar_manager.remeasure_breakpoint()
+        self.timeline_toolbar.remeasure_breakpoint()
+
     def _on_prefs_reloaded(self, adopted):
         """View half of a live userprefs reload — the core has already applied
         its own. Mirrors what show_settings_dialog() re-applies, minus what a
@@ -685,6 +722,7 @@ class MainWindow(QMainWindow):
         if "window" in adopted:
             self.stage_controller.set_haze_baseline(self.config.window.stage_haze)
             self.stage_controller.apply_stage_config()
+            self.apply_ui_scale()
             if self.config.window.stage_gpu != (self.stage_controller.light_layer
                                                 is not None):
                 self.logger.warning(
@@ -836,7 +874,8 @@ class MainWindow(QMainWindow):
         self.main_content.insertWidget(1, self.right_sidebar)
         self._sidebar_splitter = self.main_content
         self.main_content.setSizes(
-            self._docked_content_sizes or [self.width() - 250, 250])
+            self._docked_content_sizes
+            or [self.width() - self._sidebar_width, self._sidebar_width])
 
         self.dmx_toggle_button.show()
         if self._collapsed_before_undock:

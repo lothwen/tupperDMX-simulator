@@ -49,6 +49,10 @@ class TimelineToolbar(QWidget):
     BEAT_DIVISIONS = {"1 beat": 1, "1/4 beat": 4, "1/8 beat": 8}
     BEAT_DIVISION_DEFAULT = "1/4 beat"
 
+    # Breathing room over the row's own minimum before the view controls come
+    # back, so the full row is never restored into a width it barely fits.
+    BREAKPOINT_SLACK = 24
+
     def __init__(self, play_icon: QIcon, pause_icon: QIcon, stop_icon: QIcon, parent=None):
         super().__init__(parent)
         self.setObjectName("TimelineToolbar")
@@ -68,6 +72,12 @@ class TimelineToolbar(QWidget):
         self.monitor_backing_btn: Optional[QPushButton] = None
         self.monitor_guide_btn: Optional[QPushButton] = None
 
+        # Narrow-window state: the view controls fold into a popup below the
+        # width the full row needs.
+        self._compact = False
+        self._full_min_width = 0
+        self._compact_min_width = 0
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(8)
@@ -76,9 +86,115 @@ class TimelineToolbar(QWidget):
         layout.addStretch(1)
         layout.addWidget(self._build_center_zone())
         layout.addStretch(1)
-        layout.addWidget(self._build_right_zone())
+        self._right_zone = self._build_right_zone()
+        layout.addWidget(self._right_zone)
+
+        self._layout = layout
+        self._build_view_popup()
+        self._measure_breakpoint()
 
         self.logger.info("Timeline toolbar created")
+
+    # ------------------------------------------------------------------
+    # Narrow windows: the view controls fold into a "View" popup
+    # ------------------------------------------------------------------
+    def _build_view_popup(self) -> None:
+        """The stand-in for the right zone while the bar is folded. The zone
+        widget itself moves in and out of this popup, so Rows / zoom / Fit are
+        the same widgets holding the same state either way."""
+        self._view_popup = QFrame(self, Qt.WindowType.Popup)
+        self._view_popup.setObjectName("TTViewPopup")
+        popup_layout = QHBoxLayout(self._view_popup)
+        popup_layout.setContentsMargins(8, 6, 8, 6)
+
+        self._view_button = QPushButton("View ▾")
+        self._view_button.setObjectName("TTToolButton")
+        self._view_button.setToolTip("Row height, zoom and Fit")
+        self._view_button.clicked.connect(self._show_view_popup)
+        self._view_button.hide()
+        self._layout.addWidget(self._view_button)
+
+    def _show_view_popup(self) -> None:
+        below = self._view_button.mapToGlobal(
+            self._view_button.rect().bottomRight())
+        self._view_popup.adjustSize()
+        self._view_popup.move(below.x() - self._view_popup.width(), below.y() + 2)
+        self._view_popup.show()
+
+    def _measure_breakpoint(self) -> None:
+        """Record what the row needs with the view controls in place and with
+        them folded, so the breakpoint follows the UI density instead of a
+        hardcoded width.
+
+        Derived from whichever state the row is in rather than measured by
+        folding it both ways — see `ToolbarManager._measure_breakpoint` for why
+        re-measuring a widget in the same call stack that moved it lies.
+        """
+        self.ensurePolished()
+        self._layout.invalidate()
+        self._layout.activate()
+
+        # Folding swaps the view controls for the View button, so the two
+        # widths differ by exactly what that trade costs.
+        traded = (self._right_zone.minimumSizeHint().width()
+                  - self._view_button.minimumSizeHint().width())
+        current = self._layout.minimumSize().width()
+        if self._compact:
+            self._compact_min_width = current
+            self._full_min_width = current + traded
+        else:
+            self._full_min_width = current
+            self._compact_min_width = current - traded
+        self.updateGeometry()
+
+    def remeasure_breakpoint(self) -> None:
+        """Re-measure after a UI density change and re-decide from the width
+        the row actually has (a resize event may never come)."""
+        self._measure_breakpoint()
+        self._apply_breakpoint(self.width())
+
+    def minimumSizeHint(self) -> QSize:
+        """The folded width, always — see `_ResponsiveBar` in
+        `ui/toolbar_manager.py` for why a bar must under-report to be able to
+        fold at all."""
+        hint = super().minimumSizeHint()
+        if self._compact_min_width:
+            return QSize(self._compact_min_width, hint.height())
+        return hint
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_breakpoint(event.size().width())
+
+    def _apply_breakpoint(self, width: int) -> None:
+        """Fold the view controls away when the full row would not fit.
+
+        Hysteresis is implicit: it folds only when the expanded row is too wide
+        for `width` and unfolds only when it would fit again, so the two
+        decisions can never chase each other.
+        """
+        if not self._full_min_width:
+            return
+        if self._compact:
+            if width >= self._full_min_width + self.BREAKPOINT_SLACK:
+                self._set_compact(False)
+        elif width < self._full_min_width + self.BREAKPOINT_SLACK:
+            self._set_compact(True)
+
+    def _set_compact(self, compact: bool) -> None:
+        if compact == self._compact:
+            return
+        self._compact = compact
+        if compact:
+            self._layout.removeWidget(self._right_zone)
+            self._view_popup.layout().addWidget(self._right_zone)
+        else:
+            self._view_popup.hide()
+            self._view_popup.layout().removeWidget(self._right_zone)
+            # Back in front of the View button, which is the last item.
+            self._layout.insertWidget(self._layout.count() - 1, self._right_zone)
+        self._right_zone.setVisible(True)
+        self._view_button.setVisible(compact)
 
     # ------------------------------------------------------------------
     # Construction
@@ -179,20 +295,17 @@ class TimelineToolbar(QWidget):
 
         stop_btn = QPushButton()
         stop_btn.setIcon(self.stop_icon)
-        stop_btn.setFixedSize(35, 35)
         stop_btn.setObjectName("StopButton")
         stop_btn.clicked.connect(self.stop_requested.emit)
         row.addWidget(stop_btn)
 
         self.play_pause_button = QPushButton()
         self.play_pause_button.setIcon(self.play_icon)
-        self.play_pause_button.setFixedSize(35, 35)
         self.play_pause_button.setObjectName("PlayPauseButton")
         self.play_pause_button.clicked.connect(self.play_pause_requested.emit)
         row.addWidget(self.play_pause_button)
 
         self.time_display = QLabel("00:00.000")
-        self.time_display.setFixedSize(120, 35)
         self.time_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.time_display.setObjectName("TimeDisplay")
         row.addWidget(self.time_display)
@@ -203,14 +316,13 @@ class TimelineToolbar(QWidget):
         tempo_glyph = QLabel()
         tempo_glyph.setPixmap(icons.pixmap("note", 18, "#cfcfcf"))
         tempo_glyph.setObjectName("MetronomeButton")
-        tempo_glyph.setFixedSize(32, 32)
         tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(tempo_glyph)
 
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(40, 300)
         self.bpm_spinbox.setValue(120)
-        self.bpm_spinbox.setFixedSize(50, 30)
+        self.bpm_spinbox.setObjectName("TTBpm")
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         row.addWidget(self.bpm_spinbox)
 
@@ -307,7 +419,7 @@ class TimelineToolbar(QWidget):
             elif i == len(labels) - 1:
                 btn.setProperty("seg", "right")
             btn.setCheckable(True)
-            btn.setFixedWidth(28)
+            btn.setProperty("rows", "true")
             if label == "M":
                 btn.setChecked(True)
             if label == "S":
@@ -333,7 +445,6 @@ class TimelineToolbar(QWidget):
         self.zoom_slider.setObjectName("TTZoom")
         self.zoom_slider.setRange(self.ZOOM_MIN, self.ZOOM_MAX)
         self.zoom_slider.setValue(self.ZOOM_DEFAULT)
-        self.zoom_slider.setFixedWidth(120)
         self.zoom_slider.setToolTip("Zoom")
         self.zoom_slider.valueChanged.connect(
             lambda v: self.zoom_changed.emit(v / 100.0))

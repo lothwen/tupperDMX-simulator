@@ -1,7 +1,7 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
 # ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
 # ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Virtual
-# ABOUTME: stage, Logging).
+# ABOUTME: stage, Interface, Logging).
 
 import html
 import threading
@@ -12,14 +12,14 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
                              QSizePolicy, QPushButton, QListWidget,
-                             QListWidgetItem, QStackedWidget)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+                             QListWidgetItem, QStackedWidget, QSlider)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
 from PyQt6.QtMultimedia import QMediaDevices
 
 from audio import tts
 from audio.engine import device_id_str
 from core import buildinfo, io_routing
-from core.config import Config, IOConfig
+from core.config import Config, IOConfig, UI_SCALE_MIN, UI_SCALE_MAX
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
 from ui.widgets import icons
@@ -29,6 +29,11 @@ from webremote.state import lan_ip
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+#: UI-scale slider granularity, in percent, and how long a drag has to settle
+#: before the preview restyles the app.
+SCALE_STEP = 5
+SCALE_PREVIEW_DELAY_MS = 150
 
 
 class SettingsDialog(QDialog):
@@ -41,10 +46,14 @@ class SettingsDialog(QDialog):
     """
 
     _voice_download_done = pyqtSignal(str, str)  # voice, error ("" = ok)
+    #: The UI scale to show right now — emitted while the slider is dragged,
+    #: and once more on reject to put back whatever was showing on open. The
+    #: window applies it; this dialog never touches the stylesheet itself.
+    ui_scale_previewed = pyqtSignal(float)
 
     _PAGES = (("swap", "Input / Output"), ("monitor", "Web Remote"),
               ("volume", "Audio"), ("bolt", "Virtual stage"),
-              ("list-view", "Logging"))
+              ("grid-view", "Interface"), ("list-view", "Logging"))
 
     def __init__(self, config: Config, parent=None, audio_engine=None):
         super().__init__(parent)
@@ -52,7 +61,19 @@ class SettingsDialog(QDialog):
         self.audio_engine = audio_engine
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.setMinimumSize(1000, 640)
+
+        # UI-scale preview: what was showing when the dialog opened, so reject
+        # can put it back, and the timer that keeps a drag from restyling the
+        # whole app on every pixel.
+        self._scale_at_open = config.window.ui_scale
+        self._scale_preview_timer = QTimer(self)
+        self._scale_preview_timer.setSingleShot(True)
+        self._scale_preview_timer.timeout.connect(self._emit_scale_preview)
+        # A floor, not the real minimum — the I/O page's flow diagram needs
+        # more than this and Qt takes the larger. Kept low so the dialog is
+        # sized by what it actually holds rather than by a number chosen for a
+        # bigger screen than the 1280x800 this has to open on.
+        self.setMinimumSize(900, 560)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -68,6 +89,7 @@ class SettingsDialog(QDialog):
         self.pages.addWidget(self._build_webremote_page())
         self.pages.addWidget(self._build_audio_page())
         self.pages.addWidget(self._build_stage_page())
+        self.pages.addWidget(self._build_interface_page())
         self.pages.addWidget(self._build_logging_page())
         right.addWidget(self.pages, 1)
 
@@ -557,6 +579,70 @@ class SettingsDialog(QDialog):
             return
         self.audio_engine.play_voice(samples)
 
+    def _build_interface_page(self) -> QWidget:
+        page, layout = self._make_page("Interface", "scale")
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(QLabel("UI scale:"))
+
+        self.scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.scale_slider.setRange(round(UI_SCALE_MIN * 100),
+                                   round(UI_SCALE_MAX * 100))
+        self.scale_slider.setSingleStep(SCALE_STEP)
+        self.scale_slider.setPageStep(SCALE_STEP * 2)
+        self.scale_slider.setTickInterval(SCALE_STEP * 2)
+        self.scale_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.scale_slider.setValue(round(self.config.window.ui_scale * 100))
+        self.scale_slider.setToolTip(
+            "How big the interface's type and spacing are.\n"
+            "Below 100% the whole app fits a 1280-wide display more "
+            "comfortably; above it suits a large or high-DPI screen.\n"
+            "Past about 125% the window needs more than 1280px of width.")
+        self.scale_slider.valueChanged.connect(self._on_scale_slider)
+        row.addWidget(self.scale_slider, 1)
+
+        self.scale_value_label = QLabel()
+        self.scale_value_label.setObjectName("SettingsValueLabel")
+        self.scale_value_label.setMinimumWidth(48)
+        self.scale_value_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                            | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.scale_value_label)
+
+        reset = QPushButton("Reset")
+        reset.setToolTip("Back to 100%, the size the interface was designed at")
+        reset.clicked.connect(lambda: self.scale_slider.setValue(100))
+        row.addWidget(reset)
+        layout.addLayout(row)
+
+        hint = QLabel(
+            "Previewed as you drag, and kept only if you press OK. The "
+            "timeline's track headers and the side panel's opening width "
+            "follow on the next launch.")
+        hint.setObjectName("SettingsDimLabel")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._update_scale_label()
+        layout.addStretch(1)
+        return page
+
+    def _on_scale_slider(self, value: int) -> None:
+        """Preview the scale the slider is on.
+
+        Debounced because re-applying the stylesheet re-polishes every widget
+        in the app, and a drag emits a value per pixel — without this, dragging
+        the handle across the track would restyle the whole window ~80 times.
+        """
+        self._update_scale_label()
+        self._scale_preview_timer.start(SCALE_PREVIEW_DELAY_MS)
+
+    def _update_scale_label(self) -> None:
+        self.scale_value_label.setText(f"{self.scale_slider.value()}%")
+
+    def _emit_scale_preview(self) -> None:
+        self.ui_scale_previewed.emit(self.scale_slider.value() / 100.0)
+
     def _build_logging_page(self) -> QWidget:
         page, layout = self._make_page("Logging")
 
@@ -872,6 +958,16 @@ class SettingsDialog(QDialog):
         except ValueError:
             return False
 
+    def reject(self) -> None:
+        """Cancel, undoing the UI scale the slider previewed.
+
+        Overriding reject() rather than wiring the Cancel button covers Esc and
+        the window's close button too — QDialog routes all three through here.
+        """
+        self._scale_preview_timer.stop()
+        self.ui_scale_previewed.emit(self._scale_at_open)
+        super().reject()
+
     def _on_accept(self) -> None:
         io = self._io_from_widgets()
 
@@ -895,6 +991,7 @@ class SettingsDialog(QDialog):
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
         self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
+        self.config.window.ui_scale = self.scale_slider.value() / 100.0
         # Through the config's own parser, so the dialog and a hand-edited
         # prefs file agree about what is in range.
         self.config.window.fog = Config._parse_fog({
