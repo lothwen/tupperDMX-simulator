@@ -7,12 +7,13 @@ import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, QUrl
 from PyQt6.QtMultimedia import QAudioDecoder, QAudioFormat
 
-from audio.mixer import SAMPLE_RATE
+from audio.mixer import SAMPLE_RATE, resample
 from tupperlogger import get_logger
 
 
 class AudioFileDecoder(QObject):
-    """Decodes one file at a time to int16 (n, 2) @ SAMPLE_RATE, asynchronously.
+    """Decodes one file at a time to int16 (n, 2) at the target rate,
+    asynchronously.
 
     A conversion format is requested from the decoder, but each delivered
     buffer's actual format is honoured (mono is duplicated, other sample
@@ -26,17 +27,30 @@ class AudioFileDecoder(QObject):
         super().__init__(parent)
         self.logger = get_logger("audio.decode")
         self._decoder = QAudioDecoder(self)
-        requested = QAudioFormat()
-        requested.setSampleRate(SAMPLE_RATE)
-        requested.setChannelCount(2)
-        requested.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-        self._decoder.setAudioFormat(requested)
+        self._rate = SAMPLE_RATE
+        self._request_format()
         self._decoder.bufferReady.connect(self._on_buffer_ready)
         self._decoder.finished.connect(self._on_finished)
         self._decoder.error.connect(self._on_error)
         self._chunks: List[np.ndarray] = []
         self._chunk_rate: Optional[int] = None
         self._path: Optional[str] = None
+
+    def set_target_rate(self, rate: int) -> None:
+        """Decode to `rate` from now on — the rate the sink negotiated. A
+        decode already in flight lands at the new rate too: the conversion is
+        applied when it finishes, not per buffer."""
+        if rate == self._rate or rate <= 0:
+            return
+        self._rate = rate
+        self._request_format()
+
+    def _request_format(self) -> None:
+        requested = QAudioFormat()
+        requested.setSampleRate(self._rate)
+        requested.setChannelCount(2)
+        requested.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        self._decoder.setAudioFormat(requested)
 
     def start(self, path: str) -> None:
         """Begin decoding `path`; emits decoded() or failed() when done.
@@ -97,18 +111,11 @@ class AudioFileDecoder(QObject):
         data = np.concatenate(self._chunks)
         self._chunks = []
 
-        rate = self._chunk_rate or SAMPLE_RATE
-        if rate != SAMPLE_RATE and rate > 0:
-            n_out = int(len(data) * SAMPLE_RATE / rate)
-            src_t = np.arange(len(data))
-            dst_t = np.linspace(0, len(data) - 1, n_out)
-            data = np.stack(
-                [np.interp(dst_t, src_t, data[:, 0]),
-                 np.interp(dst_t, src_t, data[:, 1])], axis=1)
+        data = resample(data, self._chunk_rate or self._rate, self._rate)
 
         pcm = np.clip(data * 32767.0, -32768, 32767).astype(np.int16)
         self.logger.info(
-            f"Decoded {path}: {len(pcm) / SAMPLE_RATE:.1f}s @ {SAMPLE_RATE}Hz")
+            f"Decoded {path}: {len(pcm) / self._rate:.1f}s @ {self._rate}Hz")
         self.decoded.emit(pcm, path)
 
     def _on_error(self, _error) -> None:

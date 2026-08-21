@@ -5,12 +5,13 @@ from typing import Dict, Optional
 
 import numpy as np
 from PyQt6.QtCore import QIODevice, QObject, QTimer, pyqtSignal
-from PyQt6.QtMultimedia import (QAudioDevice, QAudioFormat, QAudioSink,
+from PyQt6.QtMultimedia import (QAudio, QAudioDevice, QAudioFormat, QAudioSink,
                                 QMediaDevices)
 
 from audio.decode import AudioFileDecoder
 from audio.mixer import (BUS_CLICK, BUS_VOICE, METRONOME_HIGH_PITCH_HZ,
-                         METRONOME_LOW_PITCH_HZ, SAMPLE_RATE, Mixer, make_beep)
+                         METRONOME_LOW_PITCH_HZ, SAMPLE_RATE, Mixer, make_beep,
+                         resample)
 from tupperlogger import get_logger
 
 # Target sink buffer: latency shared equally by backing/click/voice, so their
@@ -20,6 +21,50 @@ _BUFFER_SECONDS = 0.12
 # Push-feed cadence: several top-ups fit inside the buffer, so occasional
 # event-loop hiccups don't underrun.
 _FEED_INTERVAL_MS = 15
+
+# Rates to offer a device, after the reference rate and the device's own
+# preferred one: the rates a sound card that refuses both is likely to take.
+_CANDIDATE_RATES = (48000, 44100, 96000, 88200, 32000, 22050, 16000)
+# Float first (the mixer already renders float), Int16 as the universal one.
+_SAMPLE_FORMATS = (QAudioFormat.SampleFormat.Float,
+                   QAudioFormat.SampleFormat.Int16)
+
+
+def stereo_format(rate: int, sample_format) -> QAudioFormat:
+    fmt = QAudioFormat()
+    fmt.setSampleRate(rate)
+    fmt.setChannelCount(2)
+    fmt.setSampleFormat(sample_format)
+    return fmt
+
+
+def candidate_formats(device: QAudioDevice) -> list:
+    """Stereo formats to try on `device`, best first.
+
+    Rate order is the reference rate (source files and the TTS cache are
+    44.1 kHz, so matching it resamples nothing), then whatever the device says
+    it prefers, then common ones — every combination the device confirms,
+    followed by its preferred rate UNCONFIRMED. That tail matters: a device
+    reports one rate range and shared-mode WASAPI reports exactly its 48 kHz
+    mix format, so on Windows every 44.1 kHz format is refused; but a sink that
+    starts and plays beats disabling audio on the device's say-so."""
+    preferred = device.preferredFormat().sampleRate()
+    rates = []
+    for rate in (SAMPLE_RATE, preferred, *_CANDIDATE_RATES):
+        if rate > 0 and rate not in rates:
+            rates.append(rate)
+
+    formats, seen = [], set()
+    for rate in rates:
+        for sample_format in _SAMPLE_FORMATS:
+            if device.isFormatSupported(stereo_format(rate, sample_format)):
+                formats.append(stereo_format(rate, sample_format))
+                seen.add((rate, sample_format))
+    for sample_format in _SAMPLE_FORMATS:
+        key = (preferred or SAMPLE_RATE, sample_format)
+        if key not in seen:
+            formats.append(stereo_format(*key))
+    return formats
 
 
 def device_id_str(device: QAudioDevice) -> str:
@@ -53,6 +98,7 @@ class AudioEngine(QObject):
 
         self._sink: Optional[QAudioSink] = None
         self._sink_device: Optional[QIODevice] = None  # push-mode target
+        self._rate = SAMPLE_RATE   # the whole pipeline's rate; the sink picks it
         self._use_float = True
         self._bytes_per_frame = 8
         self._device_id = ""
@@ -99,6 +145,8 @@ class AudioEngine(QObject):
         return QMediaDevices.defaultAudioOutput()
 
     def _start_sink(self) -> None:
+        """Open the sink on the configured device with the first format that
+        device actually accepts, and retune the pipeline to its rate."""
         self._stop_sink()
         try:
             device = self._resolve_device()
@@ -106,40 +154,80 @@ class AudioEngine(QObject):
                 self.logger.warning("No audio output device available")
                 return
 
-            fmt = QAudioFormat()
-            fmt.setSampleRate(SAMPLE_RATE)
-            fmt.setChannelCount(2)
-            fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
-            use_float = device.isFormatSupported(fmt)
-            if not use_float:
-                fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-                if not device.isFormatSupported(fmt):
-                    self.logger.warning(
-                        f"Device '{device.description()}' supports neither "
-                        "Float nor Int16 stereo @ 44100; audio disabled")
-                    return
-
-            self._use_float = use_float
-            self._bytes_per_frame = 8 if use_float else 4
-            self._sink = QAudioSink(device, fmt, self)
-            self._sink.setBufferSize(
-                int(_BUFFER_SECONDS * SAMPLE_RATE * self._bytes_per_frame))
-            # Push mode: Qt owns the device; _on_feed writes into it.
-            self._sink_device = self._sink.start()
-            if self._sink_device is None:
-                self.logger.error("Audio sink returned no device; audio disabled")
-                self._sink = None
+            for fmt in candidate_formats(device):
+                sink, sink_device = self._open_sink(device, fmt)
+                if sink is None:
+                    continue
+                self._sink = sink
+                self._sink_device = sink_device
+                self._use_float = (
+                    fmt.sampleFormat() == QAudioFormat.SampleFormat.Float)
+                self._bytes_per_frame = 8 if self._use_float else 4
+                self._apply_rate(fmt.sampleRate())
+                self._feed_timer.start()
+                self._on_feed()  # prime the buffer immediately
+                self.logger.info(
+                    f"Audio sink started on '{device.description()}' "
+                    f"({fmt.sampleRate()} Hz, "
+                    f"{'float32' if self._use_float else 'int16'}, "
+                    f"buffer {sink.bufferSize()} bytes)")
                 return
-            self._feed_timer.start()
-            self._on_feed()  # prime the buffer immediately
-            self.logger.info(
-                f"Audio sink started on '{device.description()}' "
-                f"({'float32' if use_float else 'int16'}, "
-                f"buffer {self._sink.bufferSize()} bytes)")
+
+            self.logger.error(
+                f"Device '{device.description()}' started at no stereo format "
+                f"(it reports {device.minimumSampleRate()}-"
+                f"{device.maximumSampleRate()} Hz); audio disabled")
         except Exception as e:
             self.logger.error(f"Failed to start audio sink: {e}")
-            self._sink = None
-            self._sink_device = None
+            self._stop_sink()
+
+    def _open_sink(self, device: QAudioDevice, fmt: QAudioFormat):
+        """Start one QAudioSink, or (None, None). Tried rather than trusted:
+        isFormatSupported() both over- and under-reports depending on the
+        backend, so only start() settles it."""
+        bytes_per_frame = (
+            8 if fmt.sampleFormat() == QAudioFormat.SampleFormat.Float else 4)
+        try:
+            sink = QAudioSink(device, fmt, self)
+            sink.setBufferSize(
+                int(_BUFFER_SECONDS * fmt.sampleRate() * bytes_per_frame))
+            # Push mode: Qt owns the device; _on_feed writes into it.
+            sink_device = sink.start()
+            if sink_device is not None and sink.error() != QAudio.Error.OpenError:
+                return sink, sink_device
+            self.logger.warning(
+                f"'{device.description()}' refused {fmt.sampleRate()} Hz "
+                f"{'float32' if bytes_per_frame == 8 else 'int16'} stereo")
+            sink.stop()
+            sink.deleteLater()
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to open audio sink at {fmt.sampleRate()} Hz: {e}")
+        return None, None
+
+    def _apply_rate(self, rate: int) -> None:
+        """Retune the whole mixing chain to the sink's rate.
+
+        Everything loaded is at the old rate, so the clicks are regenerated,
+        the decoder is re-targeted and a loaded song is resampled where it
+        stands, keeping its position — the transport asks the mixer for
+        seconds, so a rate switch mid-song stays inaudible beyond the sink
+        restart. Called with the sink stopped."""
+        if rate == self._rate or rate <= 0:
+            return
+        previous, self._rate = self._rate, rate
+        self._click_high = make_beep(METRONOME_HIGH_PITCH_HZ, sample_rate=rate)
+        self._click_low = make_beep(METRONOME_LOW_PITCH_HZ, sample_rate=rate)
+        self._decoder.set_target_rate(rate)
+
+        pcm = self.mixer.backing_samples()
+        position = self.mixer.position_seconds()
+        self.mixer.clear_oneshots()   # queued at the old rate
+        self.mixer.set_sample_rate(rate)
+        if pcm is not None:
+            self.mixer.set_backing(resample(pcm, previous, rate))
+            self.mixer.set_position_seconds(position)
+        self.logger.info(f"Audio pipeline retuned {previous} Hz -> {rate} Hz")
 
     def _stop_sink(self) -> None:
         self._feed_timer.stop()
@@ -223,8 +311,13 @@ class AudioEngine(QObject):
         self.mixer.trigger(BUS_CLICK, self._click_high if downbeat else self._click_low)
 
     def play_voice(self, samples: np.ndarray) -> None:
-        """Queue a mono float32 clip on the voice bus (TTS cues, spoken count)."""
-        self.mixer.trigger(BUS_VOICE, samples)
+        """Queue a mono float32 clip on the voice bus (TTS cues, spoken count).
+
+        Clips arrive at the TTS reference rate; conforming them to the sink's
+        rate here keeps tts.py's cache canonical at 44.1 kHz. A cue is a second
+        of mono — orders of magnitude below the synthesis that never runs
+        during playback."""
+        self.mixer.trigger(BUS_VOICE, resample(samples, SAMPLE_RATE, self._rate))
 
     def stop_voices(self) -> None:
         self.mixer.clear_oneshots(BUS_VOICE)
