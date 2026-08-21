@@ -43,6 +43,18 @@ def probe_duration(audio_path: Optional[str]) -> Optional[float]:
     return _cached_probe("duration", audio_path, compute)
 
 
+def song_duration(song) -> Optional[float]:
+    """How long a song is: its LONGEST audio track, backing or guide.
+
+    Which of the two the editor happens to be monitoring is not the song's
+    length — a 20-second backing under a full-length guide would otherwise
+    trim the remote's scrubber to 20 seconds. The desktop timeline spans the
+    same maximum (see Timeline.apply_song_extent)."""
+    lengths = [d for d in (probe_duration(getattr(song, "audio", None)),
+                           probe_duration(getattr(song, "guide", None))) if d]
+    return max(lengths) if lengths else None
+
+
 def probe_bpm(midi_path: Optional[str]) -> Optional[int]:
     """BPM from the first set_tempo meta in the MIDI file; None if absent."""
     def compute(path):
@@ -98,7 +110,7 @@ def build_setlist(songs: list, current_index: int) -> dict:
             {
                 "index": i,
                 "title": _song_title(song),
-                "duration": probe_duration(getattr(song, "audio", None)),
+                "duration": song_duration(song),
                 "bpm": probe_bpm(getattr(song, "midi", None)),
                 "key": getattr(song, "key", "") or None,
                 "precount": bool(getattr(song, "precount", True)),

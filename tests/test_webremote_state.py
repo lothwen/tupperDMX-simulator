@@ -22,7 +22,7 @@ import numpy as np
 from core.paths import default_shows_dir
 from webremote.state import (compute_sections, build_setlist, build_state,
                              build_shows, resolve_show, shows_dir,
-                             probe_duration, probe_bpm)
+                             probe_duration, probe_bpm, song_duration)
 from core.waveform import peak_envelope
 from webremote.peaks import compute_peaks
 
@@ -34,9 +34,21 @@ def _assert(cond, msg):
 
 
 class FakeSong:
-    def __init__(self, audio=None, midi=None):
+    def __init__(self, audio=None, midi=None, guide=None):
         self.audio = audio
         self.midi = midi
+        self.guide = guide
+
+
+def _wav(path, seconds, rate=8000):
+    """A real (silent) WAV so mutagen has a header to read."""
+    import wave
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x00\x00" * int(rate * seconds))
+    return str(path)
 
 
 def test_compute_sections():
@@ -109,6 +121,29 @@ def test_probes_missing_files():
             "duration of a missing file is None")
     _assert(probe_bpm("/no/such.mid") is None,
             "bpm of a missing file is None")
+
+
+def test_song_duration_is_the_longest_track():
+    """A song is as long as its LONGEST track. Monitoring a 2-second backing
+    under a full-length guide must not shorten the remote (the desktop
+    timeline spans the same maximum)."""
+    print("test_song_duration_is_the_longest_track")
+    with tempfile.TemporaryDirectory() as tmp:
+        short = _wav(Path(tmp) / "backing.wav", 2.0)
+        long = _wav(Path(tmp) / "guide.wav", 8.0)
+
+        _assert(round(song_duration(FakeSong(audio=short, guide=long))) == 8,
+                "a long guide over a short backing gives the song its length")
+        _assert(round(song_duration(FakeSong(audio=long, guide=short))) == 8,
+                "and the other way round")
+        _assert(round(song_duration(FakeSong(guide=long))) == 8,
+                "a guide-only song still has a length")
+        _assert(song_duration(FakeSong(audio="/no/such.mp3")) is None,
+                "nothing readable probes to None")
+
+        row = build_setlist([FakeSong(audio=short, guide=long)], 0)["songs"][0]
+        _assert(round(row["duration"]) == 8,
+                "the setlist row carries the same length")
 
 
 def test_build_state_schema():
@@ -235,6 +270,7 @@ def main():
     test_compute_sections()
     test_build_setlist()
     test_probes_missing_files()
+    test_song_duration_is_the_longest_track()
     test_build_state_schema()
     test_build_shows()
     testpeak_envelope()

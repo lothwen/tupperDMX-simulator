@@ -173,6 +173,40 @@ def test_clearing_the_track_clears_the_waveform():
             "loading one back draws it again")
 
 
+def test_timeline_spans_the_longest_track():
+    """The scene spans the whole SONG — the longest of backing, guide and
+    MIDI — so monitoring a 20-second guide can't trim a 5-minute song."""
+    print("test_timeline_spans_the_longest_track")
+    m, tl = _make()
+    durations = {"/tmp/backing.wav": 300.0, "/tmp/guide.wav": 20.0}
+    tl.set_audio_source(lambda path: (durations.get(path), None))
+
+    tl.set_song_tracks(("/tmp/backing.wav", "/tmp/guide.wav"))
+    tl.set_files("/tmp/backing.wav")
+    full = int(300.0 * 1.05 * tl.PIXELS_PER_SECOND)
+    _assert(tl.content_width == full,
+            "the backing (the longest track) sets the length")
+
+    tl.set_files("/tmp/guide.wav")   # monitor -> the short guide
+    _assert(tl.content_width == full,
+            "switching the monitor to a short guide keeps the song's length")
+    _assert(m.song_end_time() >= 300.0,
+            "and clip-edit bounds keep it too")
+
+    # A sequence running past every audio track wins instead.
+    m.get_duration = lambda: 400.0
+    tl.apply_song_extent()
+    _assert(tl.content_width == int(400.0 * 1.05 * tl.PIXELS_PER_SECOND),
+            "MIDI longer than the audio sets the length")
+
+    # Nothing loaded at all -> the default window, not a zero-width scene.
+    m.get_duration = lambda: 0.0
+    tl.set_song_tracks(())
+    tl.set_files(None)
+    _assert(tl.content_width == tl.PIXELS_PER_SECOND * tl.SECONDS_TO_DISPLAY,
+            "a song with no tracks falls back to the default window")
+
+
 def test_blackout_scoped_to_its_fixture():
     print("test_blackout_scoped_to_its_fixture")
     m, tl = _make()
@@ -289,6 +323,7 @@ def main():
     test_add_event_stamps_channel()
     test_song_parts_render_on_waveform_overlay()
     test_clearing_the_track_clears_the_waveform()
+    test_timeline_spans_the_longest_track()
     test_blackout_scoped_to_its_fixture()
     test_display_order_by_dmx_binding_by_channel()
     test_rebuild_for_patch_adds_and_removes_tracks()

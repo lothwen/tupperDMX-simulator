@@ -18,6 +18,7 @@
   var beat = 0;
   var waveBins = null;                 // peaks for the current song
   var waveSong = -1;                   // setlist index the peaks belong to
+  var waveDuration = 0;                // seconds of audio those peaks cover
   var ws = null;
   var reconnectDelay = 500;
   var seeking = false;                 // true while dragging the phone seek bar
@@ -115,6 +116,7 @@
     if (s.setlist.current !== waveSong) {
       waveSong = s.setlist.current;
       waveBins = null;
+      waveDuration = 0;
       drawWaveform();
       fetchWaveform(waveSong);
     } else {
@@ -345,6 +347,7 @@
       .then(function (data) {
         if (data && data.song === waveSong) {
           waveBins = data.bins;
+          waveDuration = data.duration || 0;
           drawWaveform();
         }
       })
@@ -360,13 +363,19 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!waveBins) return;
 
+    // The bins cover the track the engine decoded, which can be shorter than
+    // the song (a 20 s backing under a full-length guide). They get their own
+    // share of the canvas, so the peaks stay under the playhead instead of
+    // being stretched over a song they don't fill.
+    var span = (state && state.duration && waveDuration)
+      ? Math.min(1, waveDuration / state.duration) : 1;
     var n = waveBins.length;
-    var w = canvas.width / n;
+    var w = canvas.width * span / n;
     var mid = canvas.height / 2;
     var playedFrac = state && state.duration ? currentTime() / state.duration : 0;
     for (var i = 0; i < n; i++) {
       var h = Math.max(1, waveBins[i] * mid * 0.95);
-      ctx.fillStyle = (i / n) <= playedFrac ? "#5ac8fa" : "#3a4453";
+      ctx.fillStyle = (i / n) * span <= playedFrac ? "#5ac8fa" : "#3a4453";
       ctx.fillRect(i * w, mid - h, Math.max(1, w * 0.7), h * 2);
     }
   }

@@ -14,7 +14,9 @@ Run with:
 import asyncio
 import sys
 import os
+import tempfile
 import time
+import wave
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -61,6 +63,11 @@ class FakeMidiManager:
 
     def __init__(self):
         self.midi_events = []
+
+    duration = 0.0        # the loaded sequence's own length
+
+    def get_duration(self):
+        return self.duration
 
     def song_end_time(self):
         return 100.0
@@ -128,6 +135,16 @@ class FakeWindow:
         self.calls.append(("countin_bars", bars))
 
 
+def _wav(path, seconds, rate=8000):
+    """A real (silent) WAV so mutagen has a header to read."""
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x00\x00" * int(rate * seconds))
+    return str(path)
+
+
 def _make_manager():
     """Manager over fakes; no worker started, so publishing is a no-op."""
     config = Config()
@@ -161,6 +178,30 @@ def test_seek_clamps_to_duration():
     manager._execute({"action": "seek", "time": 500.0})
     _assert(window.calls == [("seek", 50.0), ("seek", 100.0)],
             "seek passes through in range and clamps to the song duration")
+
+
+def test_duration_spans_the_longest_track():
+    """The remote's length is the song's, not the monitored track's: the
+    longest of backing, guide and MIDI (mirrors the desktop timeline)."""
+    print("test_duration_spans_the_longest_track")
+    manager, config, window = _make_manager()
+    with tempfile.TemporaryDirectory() as tmp:
+        short = _wav(os.path.join(tmp, "backing.wav"), 2.0)
+        long = _wav(os.path.join(tmp, "guide.wav"), 8.0)
+        config.playlist.songs = [SongConfig(audio=short, guide=long)]
+        config.playlist.current_song_index = 0
+
+        _assert(round(manager._current_duration()) == 8,
+                "a 2 s backing under an 8 s guide still gives an 8 s song")
+
+        window.midi_manager.duration = 30.0
+        _assert(round(manager._current_duration()) == 30,
+                "a sequence running past both tracks wins")
+
+        window.midi_manager.duration = 0.0
+        config.playlist.songs = [SongConfig(audio="/no/such.mp3")]
+        _assert(manager._current_duration() == 100.0,
+                "nothing readable still falls back to midi song_end_time")
 
 
 def test_cue_sends_config_messages():
@@ -358,6 +399,7 @@ def main():
     test_transport_actions()
     test_select_song()
     test_seek_clamps_to_duration()
+    test_duration_spans_the_longest_track()
     test_cue_sends_config_messages()
     test_blackout_and_panic()
     test_countin_commands()
