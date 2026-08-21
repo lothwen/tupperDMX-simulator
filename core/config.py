@@ -103,6 +103,10 @@ UI_SCALE_MAX = 1.50
 class WindowConfig:
     width: int = 1280
     height: int = 720
+    # Width of the right sidebar, in pixels. 0 means "never sized by hand": the
+    # opening width is then derived from `ui_scale`, since the sidebar's tab
+    # labels grow with the interface and a fixed 250px stops holding them.
+    sidebar_width: int = 0
     dmx_panel_collapsed: bool = False
     waveform_track_height: int = 100
     midi_events_track_height: int = 50
@@ -466,6 +470,7 @@ class Config:
             config.window = WindowConfig(
                 width=cls._validate_int(window_data.get("width", 1280), 400, 4000),
                 height=cls._validate_int(window_data.get("height", 720), 300, 3000),
+                sidebar_width=cls._validate_int(window_data.get("sidebar_width", 0), 0, 1200),
                 dmx_panel_collapsed=bool(window_data.get("dmx_panel_collapsed", False)),
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),

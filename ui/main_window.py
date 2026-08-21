@@ -335,11 +335,16 @@ class MainWindow(QMainWindow):
         else:
             self.timeline_toolbar.set_row_height(self.config.window.midi_events_track_height)
 
-        # The sidebar's opening width follows the UI scale — its tab labels
-        # are styled, so they grow with it and 250px stops holding them.
-        self._sidebar_width = round(250 * self.config.window.ui_scale)
+        # The width the user left the sidebar at. Never dragged, and its
+        # opening width follows the UI scale instead — its tab labels are
+        # styled, so they grow with it and 250px stops holding them.
+        self._sidebar_width = (self.config.window.sidebar_width
+                               or round(250 * self.config.window.ui_scale))
         self.main_content.setSizes(
             [self.width() - self._sidebar_width, self._sidebar_width])
+        # Either splitter can host the sidebar (see _sidebar_splitter below).
+        self.main_content.splitterMoved.connect(self._on_sidebar_splitter_moved)
+        self.timeline_row.splitterMoved.connect(self._on_sidebar_splitter_moved)
 
         # Floating toggle button for the DMX side panel
         self._dmx_panel_collapsed = False
@@ -1236,6 +1241,29 @@ class MainWindow(QMainWindow):
         if len(sizes) == 2:
             self.config.window.timeline_section_height = int(sizes[1])
 
+
+    def _on_sidebar_splitter_moved(self, _pos, _index):
+        """Track the sidebar's width as its divider is dragged.
+
+        Dragging it shut is the collapse gesture, not a width — what is
+        persisted is the width to reopen at, so a zero is ignored. In-memory
+        only, like the timeline section height above.
+        """
+        sizes = self._sidebar_splitter.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self.config.window.sidebar_width = int(sizes[1])
+
+    def resizeEvent(self, event):
+        """Track the window size so it reopens at the size it was left.
+
+        A maximised or full-screen size is deliberately not recorded: restored
+        as a plain window it gives one that covers the screen without being
+        maximised, and loses the size the user actually chose.
+        """
+        super().resizeEvent(event)
+        if not self.isMaximized() and not self.isFullScreen():
+            self.config.window.width = event.size().width()
+            self.config.window.height = event.size().height()
 
     def on_midi_data_changed_from_manager(self):
         """Handle when MIDI data is modified via MidiManager."""

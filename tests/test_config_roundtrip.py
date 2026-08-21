@@ -93,6 +93,7 @@ def test_userprefs_roundtrip():
         cfg.logging.level = "DEBUG"
         cfg.window.width = 1600
         cfg.window.height = 900
+        cfg.window.sidebar_width = 320
         cfg.io.midi_to_port = True
         cfg.io.midi_port = "Arduino Leonardo"
         cfg.io.dmx_to_artnet = True
@@ -109,6 +110,7 @@ def test_userprefs_roundtrip():
         _assert(cfg2.logging.level == "DEBUG", "log level round-tripped")
         _assert(cfg2.window.width == 1600 and cfg2.window.height == 900,
                 "window size round-tripped")
+        _assert(cfg2.window.sidebar_width == 320, "sidebar width round-tripped")
         _assert(cfg2.io.midi_to_port and cfg2.io.midi_port == "Arduino Leonardo",
                 "io MIDI routing round-tripped")
         _assert(cfg2.io.dmx_to_artnet, "io Art-Net output round-tripped")
@@ -206,7 +208,7 @@ def test_validation_clamps_out_of_range():
             "artnet": {"ip": "999.1.1.1", "port": 99999, "universe": -5},
             "volume": {"audio": 5.0, "metronome": -1.0},
             "logging": {"level": "BOGUS"},
-            "window": {"width": 10, "height": 999999},
+            "window": {"width": 10, "height": 999999, "sidebar_width": 9999},
         }))
         cfg = Config.load()
         _assert(cfg.artnet.ip == "127.0.0.1", "invalid IP falls back to default")
@@ -217,6 +219,7 @@ def test_validation_clamps_out_of_range():
         _assert(cfg.logging.level == "INFO", "invalid log level falls back to INFO")
         _assert(cfg.window.width == 400, "window width clamped to min")
         _assert(cfg.window.height == 3000, "window height clamped to max")
+        _assert(cfg.window.sidebar_width == 1200, "sidebar width clamped to max")
 
 
 def test_corrupted_userprefs_falls_back():
