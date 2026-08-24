@@ -84,7 +84,33 @@ the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing s
 - **Metronome sync**: on start/resume compute beats elapsed and the remainder to the next boundary — play immediately if
   within `0.001s`, else a single-shot timer to the next beat, then regular intervals. Always restart on
   seek-during-playback or BPM change. Alignment is floor-based, so negative count-in positions number correctly toward
-  beat 1 at t=0.
+  beat 1 at t=0. **WHEN a beat falls is the tempo map's answer, not `60/bpm`** — the scheduler stays drift-anchored, but
+  the interval it accumulates comes from `seconds_at_beat(n+1) - seconds_at_beat(n)`, and the downbeat comes from the beat
+  INDEX rather than a free-running counter, so the accent survives a tempo change.
+
+## The marker track (`core/markers.py`, `core/tempo_map.py`, `ui/markers_dialog.py`)
+
+Four things ride a song's timeline that are neither notes nor audio: a spoken **voice cue**, a **tempo change**, a
+**stop-click**, and the **segue** out of the song.
+
+- **Voice cues keep their own `SongConfig.voice_cues` list.** They are the one kind that pre-renders to PCM off-thread,
+  
+- **`BpmState` owns the `TempoMap`**, because base tempo + markers together ARE the song's tempo: a map assembled
+  independently by the metronome and by the ruler is a map that can disagree with itself. `bpm` stays the BASE tempo.
+- **The tempo map is NOT written to the `.mid`.** `midi.codec.apply_tempo` rescales every delta tick to hold each event's
+  wall-clock time and replaces *every* `set_tempo` with one value, so extra tempo metas would drag the whole sequence
+  with them. 
+- **A tempo marker never writes `bpm_state`.** The base BPM is what the `.mid` persists and what the show autosave
+  watches
+- **Beats are counted continuously across a change** — a marker dropped mid-bar shortens the rest of that bar rather than
+  restarting the bar numbering. Negative time extrapolates at the FIRST segment's tempo, which is what lets
+  `count_in_duration()` be `-seconds_at_beat(-bars×4)` and land exactly on beat 1 at t=0.
+- **A stop-click's effect outlives its crossing.** `_reset_marker_pointer` deliberately does not replay markers behind
+  the playhead, so every seek/resume/start re-asks `click_stopped_at()` instead.
+- **The scene's x axis is SECONDS, so a tempo change moves the grid and never a clip.** That is what makes a tempo map
+  safe to add to a song that is already programmed. 
+- **The dialog's `TimeSpin` holds exact seconds**; bar.beat resolves only to the beat, so a value merely *looked at* in
+  bar.beat would come back quantized.
 
 ## I/O routing (`config.io` + `core/io_routing.py`)
 
@@ -213,7 +239,8 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   that IS `stage_haze`), `artnet`, `volume`, `logging`, `io`, `audio`, `webremote`, `last_show_path`/`recent_shows`. Legacy
   `playlist`/`fixtures` are parsed (the show migration adopts them) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest): the setlist, `current_song_index`, the fixture **patch**,
-  `webremote_cues`. A patch entry is type + `dmx_start` + stable MIDI `channel` + optional `mode` (`""` means the type's
+  `webremote_cues`. A song's `voice_cues`, `control_markers` and `segue`/`segue_time` ride the song entry (see The marker
+  track); adding them needed no `format_version` bump, since a manifest without the keys loads with none. A patch entry is type + `dmx_start` + stable MIDI `channel` + optional `mode` (`""` means the type's
   first declared mode, so a renamed mode never strands a patch) + `hanging`, defaulting to **true** so a patch written
   before fixtures declared their rigging keeps throwing light at the floor. Owned `.mid` files live in `midis/`; audio is
   *referenced in place* unless it arrived in a bundle. **The `.mid` stays canonical** — extras plain MIDI can't carry

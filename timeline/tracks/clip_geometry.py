@@ -10,7 +10,7 @@ these functions the zoom-adjusted pixel inputs and apply the results.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, NamedTuple
+from typing import Callable, List, Optional, Tuple, NamedTuple
 
 
 # Drag modes (string-based for readability). Mirrored as class attributes on
@@ -75,6 +75,12 @@ def nearest_beat_x(x: float, beat_px: float) -> float:
     return round(x / beat_px) * beat_px
 
 
+def uniform_grid(beat_px: float) -> Callable[[float], float]:
+    """A ``grid_x`` callable for an evenly spaced grid — Time mode, and Bars
+    mode on a song with no tempo changes."""
+    return lambda x: nearest_beat_x(x, beat_px)
+
+
 def snap_to_targets(x: float, candidates, radius: float) -> float:
     """Return the candidate within ``radius`` of ``x`` nearest to it, else ``x``."""
     nearest = None
@@ -103,27 +109,32 @@ def clamp_to_intervals(proposed: float, intervals):
 
 
 def resolve_move_x(proposed: float, intervals, snap_xs, snap_radius: float,
-                   beat_px: Optional[float] = None) -> Optional[float]:
+                   grid_x: Optional[Callable[[float], float]] = None
+                   ) -> Optional[float]:
     """MOVE resolution → final left-edge x, or None when no interval fits.
 
     Clamp to the nearest valid interval, snap to neighbour edges / the nearest
-    beat, then re-clamp inside that interval so a snap target outside the slot
-    can't push the clip into overlap.
+    grid line, then re-clamp inside that interval so a snap target outside the
+    slot can't push the clip into overlap.
+
+    ``grid_x`` maps an x to the nearest grid line rather than naming a spacing:
+    across a tempo change the spacing differs on either side of the cursor, so
+    there is no single interval to round by.
     """
     best = clamp_to_intervals(proposed, intervals)
     if best is None:
         return None
     clamped, (lo, hi) = best
     candidates = list(snap_xs)
-    if beat_px and beat_px > 0:
-        candidates.append(nearest_beat_x(clamped, beat_px))
+    if grid_x is not None:
+        candidates.append(grid_x(clamped))
     snapped = snap_to_targets(clamped, candidates, snap_radius)
     return max(lo, min(snapped, hi))
 
 
 def resolve_resize_x(proposed: float, min_x: float, max_x: float, snap_xs,
                      snap_radius: float,
-                     beat_px: Optional[float] = None) -> float:
+                     grid_x: Optional[Callable[[float], float]] = None) -> float:
     """RESIZE resolution → final moving-edge x.
 
     Clamp the edge to ``[min_x, max_x]`` then snap. No re-clamp after snap —
@@ -132,8 +143,8 @@ def resolve_resize_x(proposed: float, min_x: float, max_x: float, snap_xs,
     """
     clamped = max(min_x, min(proposed, max_x))
     candidates = list(snap_xs)
-    if beat_px and beat_px > 0:
-        candidates.append(nearest_beat_x(clamped, beat_px))
+    if grid_x is not None:
+        candidates.append(grid_x(clamped))
     return snap_to_targets(clamped, candidates, snap_radius)
 
 

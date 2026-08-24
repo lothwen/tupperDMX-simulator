@@ -17,6 +17,7 @@ from audio import tts
 from audio.engine import AudioEngine
 from audio.mixer import BUS_VOICE
 from core import config as core_config
+from core import markers as core_markers
 from core import note_layout
 from core.config import Config, userprefs_path
 from core.io_routing import midi_routing_from_io
@@ -46,6 +47,9 @@ class AppCore(QObject):
     # can re-apply its own half (the stage, the header sliders).
     prefs_reloaded = pyqtSignal(object)
     precount_changed = pyqtSignal(bool)   # current song's count-in flag
+    # The song's tempo map (base BPM + tempo markers) changed: the timeline
+    # re-grids off this, the metronome is already retimed by the time it fires.
+    tempo_map_changed = pyqtSignal(object)
     # Rendered voice cues arriving from the TTS worker thread (song_id, list of
     # (time_sec, samples)); queued back onto the Qt thread before installing.
     _voice_cues_rendered = pyqtSignal(str, object)
@@ -57,6 +61,9 @@ class AppCore(QObject):
         self.logger = get_logger("app.core")
         self._shutdown_done = False
         self._prefs_watcher = None
+        # The current song's control markers — the state a stop-click leaves
+        # behind, which a seek has to re-resolve rather than replay.
+        self._control_markers = []
         self._voice_cues_rendered.connect(self._on_voice_cues_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
@@ -105,6 +112,9 @@ class AppCore(QObject):
         self.media_controller.playback_state_changed.connect(
             self._on_playback_state_changed)
         self.media_controller.error_occurred.connect(self._on_media_error)
+        self.media_controller.control_marker_fired.connect(
+            self._on_control_marker_fired)
+        self.media_controller.segue_reached.connect(self._on_segue_reached)
 
         self.audio_controller = AudioController(
             self.audio_engine, config.volume.metronome)
@@ -114,6 +124,11 @@ class AppCore(QObject):
         # Core half of a BPM change first, then the autosave arming.
         self.bpm_state.bpm_changed.connect(self._on_bpm_changed)
         self.bpm_state.bpm_changed.connect(self.show_manager.on_bpm_changed)
+        # The map is what the click and the count-in actually read; it is
+        # rebuilt by a base-BPM change AND by a tempo-marker edit, so both
+        # arrive here rather than only the first.
+        self.bpm_state.tempo_map_changed.connect(self._on_tempo_map_changed)
+        self.bpm_state.set_tempo_changes([])  # seed both controllers
 
         self.playlist_controller = PlaylistCore(self)
 
@@ -255,33 +270,53 @@ class AppCore(QObject):
 
         self.media_controller.seek_to_position(time_seconds)
 
-        # Resynchronize metronome if it was running
-        if was_playing and metronome_was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(time_seconds)
+        # Resynchronize the metronome. A stop-click marker outlives its own
+        # crossing, so the seek target decides whether the click runs at all —
+        # landing before the marker brings it back, landing past it does not.
+        if was_playing:
+            stopped = self._click_stopped_at(time_seconds)
+            if metronome_was_running:
+                self.audio_controller.stop_metronome()
+            if not stopped:
+                self.audio_controller.start_metronome(time_seconds)
 
     def _on_playback_state_changed(self, is_playing):
         """Keep the metronome locked to the transport."""
         if is_playing:
-            # Start metronome synchronized to current timeline position
+            # Start metronome synchronized to current timeline position —
+            # unless a stop-click marker already silenced it there.
             current_position = self.media_controller.get_current_position()
-            self.audio_controller.start_metronome(current_position)
+            if self._click_stopped_at(current_position):
+                self.audio_controller.stop_metronome()
+            else:
+                self.audio_controller.start_metronome(current_position)
         else:
             self.audio_controller.stop_metronome()
 
     def _on_bpm_changed(self, value):
-        """Core half of a BPM change: metronome + count-in sizing (widget
-        views subscribe to bpm_state separately)."""
+        """Core half of a base-BPM change. The metronome and the count-in read
+        the MAP, which bpm_state rebuilt before emitting this — so the work
+        lands in _on_tempo_map_changed and this only logs the base value."""
+        self.logger.debug(f"Base BPM now {value}")
+
+    def _on_tempo_map_changed(self, tempo_map):
+        """Install the song's tempo map on everything that keeps time.
+
+        Restarting a running metronome is what re-phases the beat: the map may
+        have changed under the playhead (a tempo marker edited mid-playback),
+        and its beat grid no longer lines up with the one being counted."""
         was_running = self.audio_controller.is_metronome_running()
-        current_position = self.media_controller.get_current_position() if was_running else 0.0
+        position = (self.media_controller.get_current_position()
+                    if was_running else 0.0)
 
-        self.audio_controller.set_bpm(value)
-        self.media_controller.set_bpm(value)
+        self.audio_controller.set_tempo_map(tempo_map)
+        self.media_controller.set_tempo_map(tempo_map)
 
-        # Restart metronome with new BPM if it was running
         if was_running:
             self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(current_position)
+            self.audio_controller.start_metronome(position)
+
+        self.tempo_map_changed.emit(tempo_map)
 
     # ------------------------------------------------------------------
     # Count-in + spoken guide (Fase 4)
@@ -318,8 +353,9 @@ class AppCore(QObject):
             return
         # Which count-in beat is this? Derived from the position, not the beat
         # counter, so timer jitter around t=0 can never speak into the song.
-        beat_len = 60.0 / max(1, self.audio_controller.bpm)
-        beats_remaining = round(-self.media_controller.get_current_position() / beat_len)
+        position = self.media_controller.get_current_position()
+        beat_len = self.audio_controller.tempo_map.beat_seconds_at(position)
+        beats_remaining = round(-position / beat_len)
         if 1 <= beats_remaining <= 4:
             self.audio_engine.play_voice(self._count_words[4 - beats_remaining])
 
@@ -363,6 +399,56 @@ class AppCore(QObject):
             self._voice_cues_rendered.emit(song_id, rendered)
 
         threading.Thread(target=work, daemon=True, name="tts-cues").start()
+
+    def apply_song_markers(self, song):
+        """Install a song's control markers and segue across the core.
+
+        The tempo half goes through bpm_state (which rebuilds the map every
+        consumer reads), the rest straight onto the transport. Called on every
+        song load and after every edit in the markers dialog."""
+        markers = list(getattr(song, "control_markers", []))
+        self._control_markers = markers
+        self.bpm_state.set_tempo_changes(core_markers.tempo_changes(markers))
+        self.media_controller.set_control_markers(
+            [(m.time, m.kind, m.bpm) for m in markers])
+        self.media_controller.set_segue(
+            bool(getattr(song, "segue", False)),
+            float(getattr(song, "segue_time", 0.0)))
+
+    def _click_stopped_at(self, position) -> bool:
+        """Whether a stop-click marker has already silenced the click there."""
+        return core_markers.click_stopped_at(self._control_markers, position)
+
+    def _on_control_marker_fired(self, kind, bpm):
+        """Act on a marker the transport just crossed.
+
+        A tempo marker retimes the CLICK, never bpm_state: the base BPM is what
+        the .mid persists and what the show autosave watches, so writing a
+        mid-song tempo there would rewrite the song's canonical tempo every
+        time it played past the marker."""
+        if kind == core_markers.KIND_CLICK_STOP:
+            self.logger.info("Stop-click marker — click off for the rest of the song")
+            self.audio_controller.stop_metronome()
+        elif kind == core_markers.KIND_TEMPO:
+            # Nothing to DO: the metronome schedules each beat off the tempo
+            # map, which already carries this change, so the interval after the
+            # marker is already the new one. Restarting here would re-play the
+            # beat the marker sits on — and a tempo marker sits on a beat by
+            # construction. Reported for the log only.
+            self.logger.info(f"Tempo marker — click now at {bpm} BPM")
+
+    def _on_segue_reached(self):
+        """Hand the show to the next song and start it with no count-in.
+
+        No next song means the segue is a no-op rather than an error: a setlist
+        gets reordered far more often than its markers do, and the last song
+        silently keeping its own ending is the harmless reading."""
+        songs = self.config.playlist.songs
+        if self.config.playlist.current_song_index >= len(songs) - 1:
+            self.logger.info("Segue reached on the last song — nothing to segue to")
+            return
+        self.playlist_controller.next_song()
+        self.media_controller.start_playback(force_no_count_in=True)
 
     def _on_voice_cues_rendered(self, song_id, rendered):
         """Install rendered cue clips — only if the song is still current."""

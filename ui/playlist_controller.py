@@ -94,6 +94,7 @@ class PlaylistController:
             w.timeline.set_song_tracks(())
             w.timeline.set_files(None)
             w.timeline.set_voice_cues([])
+            w.timeline.set_control_markers([])
             w.update_window_title()
             return
 
@@ -130,8 +131,9 @@ class PlaylistController:
         else:
             w.timeline.set_files(None)
 
-        # Voice cues: ruler markers (the PCM render rides the core)
-        w.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        # Marker track: ruler markers for the cues AND the control markers
+        # (the PCM render and the transport half ride the core)
+        w.refresh_timeline_markers(song)
 
         # MIDI: redraw tracks (BPM detection already ran in the core)
         w.timeline.refresh_from_manager()

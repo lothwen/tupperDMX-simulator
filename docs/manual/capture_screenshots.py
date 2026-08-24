@@ -642,17 +642,27 @@ def build_script(session: Session) -> None:
                 lambda: session.close_dialog(state.pop("start_dlg", None)), wait=0.8)
 
     def open_voice_cues():
-        from core.config import VoiceCueConfig
-        from ui.voice_cues_dialog import VoiceCuesDialog
+        from core.config import ControlMarkerConfig, VoiceCueConfig
+        from ui.markers_dialog import MarkersDialog
         song = w.config.get_current_song()
         cues = list(song.voice_cues) if song is not None else []
-        if not cues:
+        controls = list(song.control_markers) if song is not None else []
+        if not cues and not controls:
             # An empty table photographs as nothing at all; show the shape of
             # a filled one instead. Nothing here is written back to the show.
             cues = [VoiceCueConfig(time=12.0, text="entra batería"),
                     VoiceCueConfig(time=48.5, text="solo de guitarra")]
-        dlg = VoiceCuesDialog(cues, w, audio_engine=w.app_core.audio_engine,
-                              tts_voice=w.config.audio.tts_voice)
+            controls = [ControlMarkerConfig(time=96.0, kind="tempo", bpm=132),
+                        ControlMarkerConfig(time=188.0, kind="click_stop")]
+        songs = w.config.playlist.songs
+        dlg = MarkersDialog(
+            cues, controls, w, audio_engine=w.app_core.audio_engine,
+            tts_voice=w.config.audio.tts_voice,
+            base_bpm=w.bpm_state.get_bpm(),
+            duration=w.midi_manager.get_duration() or 0.0,
+            song_title=song.title if song is not None else "",
+            has_next_song=(w.config.playlist.current_song_index
+                           < len(songs) - 1))
         state["cues_dlg"] = session.open_dialog(dlg)
 
     session.add("_open-cues", open_voice_cues, wait=1.0)

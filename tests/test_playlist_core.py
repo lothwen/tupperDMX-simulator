@@ -28,6 +28,7 @@ import mido
 
 from app.bpm import BpmState
 from app.playlist import PlaylistCore
+from core import markers as core_markers
 from core import note_layout
 from core.config import Config, SongConfig
 from midi import MidiManager
@@ -87,6 +88,12 @@ class FakeMediaController:
     def set_voice_cues(self, cues):
         self.log.append(("set_voice_cues", list(cues)))
 
+    def set_control_markers(self, markers):
+        self.log.append(("set_control_markers", list(markers)))
+
+    def set_segue(self, enabled, time_sec):
+        self.log.append(("set_segue", bool(enabled), time_sec))
+
 
 class FakeCore:
     """The façade surface PlaylistCore consumes (MainWindow / AppCore)."""
@@ -108,6 +115,14 @@ class FakeCore:
 
     def apply_voice_cues(self, song):
         self.log.append(("apply_voice_cues", song.id))
+
+    def apply_song_markers(self, song):
+        self.log.append(("apply_song_markers", song.id))
+        self.bpm_state.set_tempo_changes(
+            core_markers.tempo_changes(song.control_markers))
+        self.media_controller.set_control_markers(
+            [(m.time, m.kind, m.bpm) for m in song.control_markers])
+        self.media_controller.set_segue(song.segue, song.segue_time)
 
 
 def _write_midi(path, bpm=None):

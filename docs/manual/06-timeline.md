@@ -21,7 +21,7 @@ undocked.
 | **Snap** | Snapping on/off. **On by default** |
 | **1 beat / 1/4 beat / 1/8 beat** | How fine the grid is. `1/4 beat` by default |
 | **Bars \| Time** | What the ruler counts. Bars by default |
-| **Cues** | Opens the voice-cue editor — [6.1.4](#614-voice-cues) |
+| **Cues** | Opens the marker-track editor — [6.1.4](#614-voice-cues-and-control-markers) |
 
 ### 6.1.2 Centre — transport
 
@@ -45,20 +45,35 @@ audio, MIDI, lights and metronome all begin together at t = 0. The position
 read-out shows `COUNT-IN −0X.X` while it runs. Pausing during a count-in resets
 to zero; seeking cancels it.
 
-### 6.1.4 Voice cues
+### 6.1.4 Voice cues and control markers
 
-![Voice cues: spoken guide messages for this song, on the voice bus.](images/voice-cues.png)
+![The marker track: voice cues, tempo changes, stop-click and the segue.](images/voice-cues.png)
 
-**Cues** opens a table of spoken messages for the current song — a time in
-seconds and some text. They play on the **VOICE** bus, which in split routing is
-the same side as the click, so they reach the band and not the room. **Preview**
-renders the selected cue and plays it.
+**Cues** opens the current song's *marker track* — everything that happens at a
+point in the song without being a note. The strip along the top shows them laid
+out over the song; drag one to move it. The table lists them in time order, and
+the panel on the right edits whichever is selected.
 
-Cues appear on the ruler as small violet markers.
+Four kinds:
+
+| Marker | What it does |
+| --- | --- |
+| **Voice cue** | Speaks a line on the **VOICE** bus — in split routing the same side as the click, so it reaches the band and not the room. **Preview** renders the selected cue and plays it. |
+| **Tempo change** | Retimes the click from that point on, and re-draws the bar grid to match. The song's *base* tempo — what the `.mid` stores — is not touched. |
+| **Stop click** | The click stops there and stays off for the rest of the song. Seeking back before the marker brings it back. |
+| **Segue** | At the given time the show hands over to the next song in the setlist and starts it **with no count-in**. One per song, set with the tick box along the bottom. |
+
+The **Time / Bar.beat** switch changes the units every time in the dialog is
+shown and entered in. Bar.beat is read through the song's tempo map, so a
+position after a tempo change converts differently from one before it.
+
+Markers appear on the ruler, coloured by kind: teal for a voice cue, violet for
+a tempo change, red for the stop-click, amber for the segue.
 
 Voice cues need a TTS voice installed (**Settings ▸ Audio**). Without one the
-dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — cues stay silent."* and
-nothing is spoken.
+dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — voice cues stay
+silent."* and nothing is spoken. The other three kinds do not use TTS and work
+regardless.
 
 ### 6.1.5 BACKING | GUIDE
 

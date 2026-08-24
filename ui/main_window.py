@@ -37,8 +37,9 @@ from stage.controller import StageController
 from ui import theme
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
-from ui.voice_cues_dialog import VoiceCuesDialog
-from webremote.state import probe_duration
+from ui.markers_dialog import MarkersDialog
+from core import markers as core_markers
+from webremote.state import probe_duration, song_duration
 
 
 class MainWindow(QMainWindow):
@@ -110,6 +111,9 @@ class MainWindow(QMainWindow):
         # rides bpm_state inside the core). Connected before the initial song
         # load, which is gated by begin/end_song_load like any other load.
         self.bpm_state.bpm_changed.connect(self._on_bpm_state_changed)
+        # The ruler/grid re-grid off the MAP (base tempo + tempo markers), not
+        # off the base BPM alone — a tempo marker changes one without the other.
+        self.app_core.tempo_map_changed.connect(self.timeline.set_tempo_map)
 
         # Bring the core up: current song (or empty state), persisted I/O
         # routing, web remote.
@@ -288,7 +292,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.ruler_mode_changed.connect(self.timeline.set_ruler_mode)
         self.timeline_toolbar.beat_division_changed.connect(self.timeline.set_beat_division)
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
-        self.timeline_toolbar.voice_cues_requested.connect(self.show_voice_cues_dialog)
+        self.timeline_toolbar.markers_requested.connect(self.show_markers_dialog)
         self.timeline_toolbar.add_track_requested.connect(self.add_fixture_from_timeline)
 
         # Bundle the timeline toolbar + tracks into one resizable section. The
@@ -1091,21 +1095,39 @@ class MainWindow(QMainWindow):
         if webremote is not None:
             webremote._publish_full()
 
-    def show_voice_cues_dialog(self):
-        """Open the per-song voice-cue editor (timeline toolbar 🗣 Cues)."""
+    def show_markers_dialog(self):
+        """Open the per-song marker editor (timeline toolbar 🗣 Cues)."""
         song = self.config.get_current_song()
         if song is None:
             return
-        dialog = VoiceCuesDialog(song.voice_cues, self,
-                                 audio_engine=self.audio_engine,
-                                 tts_voice=self.config.audio.tts_voice)
+        songs = self.config.playlist.songs
+        dialog = MarkersDialog(
+            song.voice_cues, song.control_markers, self,
+            audio_engine=self.audio_engine,
+            tts_voice=self.config.audio.tts_voice,
+            segue=song.segue, segue_time=song.segue_time,
+            base_bpm=self.bpm_state.get_bpm(),
+            duration=song_duration(song) or self.midi_manager.get_duration() or 0.0,
+            song_title=song.title,
+            has_next_song=(self.config.playlist.current_song_index
+                           < len(songs) - 1))
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        song.voice_cues = dialog.cues()
+        song.voice_cues = dialog.voice_cues()
+        song.control_markers = dialog.control_markers()
+        song.segue = dialog.segue_enabled()
+        song.segue_time = dialog.segue_time()
         self.save_config()
-        # Ruler markers are the window's half; the PCM render rides the core.
-        self.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        # Ruler markers are the window's half; the PCM render and the transport
+        # half (tempo map, marker firing, segue) ride the core.
+        self.refresh_timeline_markers(song)
         self.app_core.apply_voice_cues(song)
+        self.app_core.apply_song_markers(song)
+
+    def refresh_timeline_markers(self, song):
+        """Redraw the ruler's marker track for `song` (also used on load)."""
+        self.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        self.timeline.set_control_markers(core_markers.ruler_rows(song))
 
     def on_song_key_edited(self, key: str):
         """Persist the current song's musical key (TONO chip / web remote)."""

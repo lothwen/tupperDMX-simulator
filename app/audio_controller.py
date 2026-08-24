@@ -4,6 +4,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 from audio.engine import AudioEngine
 from audio.mixer import BUS_CLICK
+from core.tempo_map import BEATS_PER_BAR, TempoMap
 from tupperlogger import get_logger
 
 
@@ -14,7 +15,14 @@ class AudioController(QObject):
 
     Supports negative timeline positions (the Fase-4 count-in): beat math uses
     floor(), so a metronome started at -N beats runs seamlessly through t=0
-    into the song."""
+    into the song.
+
+    WHEN a beat falls is asked of the song's TempoMap rather than computed from
+    one BPM, so a tempo-change marker retimes the click from that marker on. The
+    drift anchoring is unchanged — each beat still schedules the next off an
+    accumulated wall-clock target — only the interval added to that target now
+    comes from the map, and the beat INDEX (not a free-running counter) decides
+    the downbeat, so the accent stays on beat 1 across a change."""
 
     # Signals
     metronome_volume_changed = pyqtSignal(float)  # volume 0.0-1.0
@@ -28,8 +36,11 @@ class AudioController(QObject):
         self.engine = engine
 
         # Metronome state
-        self.bpm = 120
+        self.tempo_map = TempoMap(120)
         self.beat_count = 0
+        # Continuous beat index of the beat scheduled next (negative through a
+        # count-in). The map turns it into both a wall-clock time and a downbeat.
+        self._beat_index = 0
         self.is_metronome_enabled = False
         self.metronome_last_volume = initial_volume
         self.metronome_is_muted = False
@@ -43,59 +54,71 @@ class AudioController(QObject):
 
         self.logger.info("Audio controller initialized")
 
+    @property
+    def bpm(self) -> int:
+        """The tempo the click starts a song at (the map's first segment)."""
+        return self.tempo_map.bpm_at(0.0)
+
     def set_bpm(self, bpm: int) -> None:
-        """Set metronome BPM."""
-        self.bpm = max(40, min(300, bpm))  # Clamp between 40-300 BPM
-        self.logger.debug(f"BPM set to {self.bpm}")
+        """Set a single metronome BPM (a map with no tempo changes)."""
+        self.set_tempo_map(TempoMap(bpm))
+
+    def set_tempo_map(self, tempo_map: TempoMap) -> None:
+        """Install the song's tempo map. Restarting the click is the caller's
+        call — AppCore restarts it at the current position when it is running,
+        which is also what re-phases the beat after a mid-song tempo change."""
+        self.tempo_map = tempo_map
+        self.logger.debug(
+            f"Tempo map set: base {tempo_map.bpm_at(0.0)} BPM, "
+            f"{len(tempo_map.changes())} change(s)")
 
     def start_metronome(self, timeline_position_sec: float = 0.0) -> None:
         """Start the metronome synchronized to a specific timeline position
         (which may be negative during a count-in)."""
         self.is_metronome_enabled = True
 
-        # Calculate beat position based on timeline
-        beat_duration_sec = 60.0 / self.bpm
-        # Calculate which beat we're approaching or just passed. floor() (not
-        # int()) so negative positions truncate toward the earlier beat.
-        beats_from_start = timeline_position_sec / beat_duration_sec
-        current_beat_index = math.floor(beats_from_start)
-        time_since_beat_boundary = (beats_from_start - current_beat_index) * beat_duration_sec
-
-        if time_since_beat_boundary < 0.001:
-            # We're exactly on a beat boundary, play that beat
-            self.beat_count = (current_beat_index % 4) + 1
-            time_since_last_beat = 0.0
-        else:
-            # We're past a beat boundary, that beat already happened
-            # Prepare the next beat to be played
-            next_beat_index = current_beat_index + 1
-            self.beat_count = (next_beat_index % 4) + 1
-            time_since_last_beat = time_since_beat_boundary
-
-        # Time until next beat
-        time_to_next_beat = beat_duration_sec - time_since_last_beat
+        # Which beat are we approaching or just past? floor() (not int()) so
+        # negative count-in positions truncate toward the EARLIER beat, which
+        # is what makes them number correctly toward beat 1 at t=0.
+        beat_index = math.floor(self.tempo_map.beat_at(timeline_position_sec))
+        time_since_beat_boundary = (timeline_position_sec
+                                    - self.tempo_map.seconds_at_beat(beat_index))
 
         current_time = time.time()
+        bpm_here = self.tempo_map.bpm_at(timeline_position_sec)
 
         # Play beat immediately if we're on or very close to a beat boundary
         if time_since_beat_boundary < 0.001:  # Very close to beat boundary (within 1ms)
             # We're right on a beat, play it immediately
+            self._set_beat_index(beat_index)
             self.next_beat_expected_time = current_time
             self._play_metronome_beep()
-            self.logger.info(f"Metronome started at {self.bpm} BPM, position {timeline_position_sec:.2f}s, playing beat {self.beat_count} immediately")
+            self.logger.info(f"Metronome started at {bpm_here} BPM, position {timeline_position_sec:.2f}s, playing beat {self.beat_count} immediately")
         else:
-            # Start timer to fire at the next beat
+            # That beat already happened; prepare the next one.
+            self._set_beat_index(beat_index + 1)
+            time_to_next_beat = (self.tempo_map.seconds_at_beat(self._beat_index)
+                                 - timeline_position_sec)
             self.next_beat_expected_time = current_time + time_to_next_beat
             initial_delay_ms = int(time_to_next_beat * 1000)
             self.metronome_timer.setSingleShot(True)
             self.metronome_timer.start(initial_delay_ms)
-            self.logger.info(f"Metronome started at {self.bpm} BPM, position {timeline_position_sec:.2f}s, will play beat {self.beat_count} in {time_to_next_beat:.3f}s")
+            self.logger.info(f"Metronome started at {bpm_here} BPM, position {timeline_position_sec:.2f}s, will play beat {self.beat_count} in {time_to_next_beat:.3f}s")
+
+    def _set_beat_index(self, index: int) -> None:
+        """Move to a continuous beat index, deriving the 1-4 count from it.
+
+        Python's % is floor-based, so a count-in's negative indices land on the
+        same 1-4 cycle the song continues with — no separate count-in casing."""
+        self._beat_index = int(index)
+        self.beat_count = (self._beat_index % BEATS_PER_BAR) + 1
 
     def stop_metronome(self) -> None:
         """Stop the metronome."""
         self.is_metronome_enabled = False
         self.metronome_timer.stop()
         self.beat_count = 0
+        self._beat_index = 0
         self.logger.info("Metronome stopped")
 
     def _play_metronome_beep(self) -> None:
@@ -109,12 +132,14 @@ class AudioController(QObject):
         self.beat_occurred.emit(self.beat_count)
         self.logger.debug(f"Metronome beat {self.beat_count}")
 
-        # Advance to next beat
-        self.beat_count = (self.beat_count % 4) + 1
+        # Advance to next beat. The interval is the map's — across a tempo
+        # marker the two beats it spans are different lengths.
+        interval = (self.tempo_map.seconds_at_beat(self._beat_index + 1)
+                    - self.tempo_map.seconds_at_beat(self._beat_index))
+        self._set_beat_index(self._beat_index + 1)
 
         # Calculate next beat time to prevent drift
-        beat_duration_sec = 60.0 / self.bpm
-        self.next_beat_expected_time += beat_duration_sec
+        self.next_beat_expected_time += interval
 
         # Schedule next beat
         current_time = time.time()
@@ -162,6 +187,10 @@ class AudioController(QObject):
         """Get current BPM setting."""
         return self.bpm
 
+    def bpm_at(self, timeline_position_sec: float) -> int:
+        """The tempo sounding at a timeline position (tempo markers applied)."""
+        return self.tempo_map.bpm_at(timeline_position_sec)
+
     def get_beat_count(self) -> int:
         """Get current beat count."""
         return self.beat_count
@@ -169,6 +198,7 @@ class AudioController(QObject):
     def reset_beat_count(self) -> None:
         """Reset beat count to 0."""
         self.beat_count = 0
+        self._beat_index = 0
         self.logger.debug("Beat count reset")
 
     def cleanup(self) -> None:
