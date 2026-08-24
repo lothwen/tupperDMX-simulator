@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGraphicsItem
 
 from .base import BaseTrack
+from core import markers as core_markers
 from tupperlogger import get_logger
 from ui.widgets import icons
 
@@ -70,7 +71,7 @@ class RulerTrack(BaseTrack):
         else:
             self._draw_bar_ticks()
 
-        self._draw_voice_cue_markers()
+        self._draw_markers()
 
         self.update_ruler_labels()
 
@@ -80,42 +81,39 @@ class RulerTrack(BaseTrack):
         Each bar is split into ``beat_division`` parts (1 = bar lines only,
         4 = beats, 8 = half-beats), matching the toolbar's beat-division combo.
         """
-        seconds_per_beat = 60.0 / self.timeline_manager.bpm
-        seconds_per_bar = seconds_per_beat * 4
+        pps = self.timeline_manager.PIXELS_PER_SECOND
         divisions = self.timeline_manager.beat_division
+        tempo_map = self.timeline_manager.tempo_map
+        until = self.content_scene.width() / pps
 
-        if seconds_per_bar == 0:
-            return
-        num_bars = int(self.content_scene.width() / (seconds_per_bar * self.timeline_manager.PIXELS_PER_SECOND))
+        # The walk is the tempo map's, so a bar after a tempo marker is drawn
+        # at its real width rather than at the base tempo's.
+        for seconds, bar_num, is_bar in tempo_map.grid_lines(until, divisions):
+            x = seconds * pps
+            if not is_bar:
+                div_tick = QGraphicsLineItem(x, self.get_track_height() * 0.5, x, self.get_track_height())
+                div_pen = QPen(QColor(150, 150, 150))
+                div_pen.setCosmetic(True)
+                div_tick.setPen(div_pen)
+                self.content_scene.addItem(div_tick)
+                self.items.append(div_tick)
+                continue
 
-        for bar_num in range(num_bars + 1):
-            bar_x = bar_num * seconds_per_bar * self.timeline_manager.PIXELS_PER_SECOND
-
-            bar_tick = QGraphicsLineItem(bar_x, 0, bar_x, self.get_track_height())
+            bar_tick = QGraphicsLineItem(x, 0, x, self.get_track_height())
             bar_pen = QPen(QColor(200, 200, 200))
             bar_pen.setCosmetic(True)
             bar_tick.setPen(bar_pen)
             self.content_scene.addItem(bar_tick)
             self.items.append(bar_tick)
 
-            bar_text = QGraphicsTextItem(str(bar_num + 1))
+            bar_text = QGraphicsTextItem(str(bar_num))
             bar_text.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
             bar_text.setDefaultTextColor(QColor(200, 200, 200))
             text_y = (self.get_track_height() - bar_text.boundingRect().height()) / 2
-            bar_text.setPos(bar_x + 2, text_y)
+            bar_text.setPos(x + 2, text_y)
             self.content_scene.addItem(bar_text)
             self.items.append(bar_text)
-            self.bar_text_items.append((bar_num + 1, bar_text))
-
-            seconds_per_div = seconds_per_bar / divisions
-            for div_num in range(1, divisions):
-                div_x = bar_x + (div_num * seconds_per_div * self.timeline_manager.PIXELS_PER_SECOND)
-                div_tick = QGraphicsLineItem(div_x, self.get_track_height() * 0.5, div_x, self.get_track_height())
-                div_pen = QPen(QColor(150, 150, 150))
-                div_pen.setCosmetic(True)
-                div_tick.setPen(div_pen)
-                self.content_scene.addItem(div_tick)
-                self.items.append(div_tick)
+            self.bar_text_items.append((bar_num, bar_text))
 
     def _draw_time_ticks(self):
         """Draw clock-time ticks and m:ss labels (Time mode), BPM-independent."""
@@ -147,29 +145,39 @@ class RulerTrack(BaseTrack):
                 self.items.append(label)
                 self.time_text_items.append((sec, label))
 
-    def _draw_voice_cue_markers(self):
-        """Draw the song's voice cues (Fase 4 TTS guide) as speech-bubble
-        markers on the ruler. Display-only markers — editing lives in the
-        toolbar's Cues dialog; the tooltip carries the spoken text."""
-        cues = getattr(self.timeline_manager, "voice_cues", [])
-        pps = self.timeline_manager.PIXELS_PER_SECOND
-        for cue_time, cue_text in cues:
-            cue_x = cue_time * pps
+    def _draw_markers(self):
+        """Draw the song's marker track on the ruler: voice cues plus the
+        control markers (tempo change, stop click, segue).
 
-            tick = QGraphicsLineItem(cue_x, 0, cue_x, self.get_track_height())
-            pen = QPen(QColor(186, 130, 240))  # violet, like the MIDI accents
+        Display-only — editing lives in the toolbar's Cues dialog. Kind decides
+        the colour and glyph, read from core.markers so a marker looks the same
+        here as it does in that dialog."""
+        pps = self.timeline_manager.PIXELS_PER_SECOND
+        rows = [(t, core_markers.KIND_VOICE, text)
+                for t, text in getattr(self.timeline_manager, "voice_cues", [])]
+        rows += list(getattr(self.timeline_manager, "control_markers", []))
+
+        for marker_time, kind, label in sorted(rows, key=lambda r: r[0]):
+            x = marker_time * pps
+            color = QColor(core_markers.kind_color(kind))
+            tip = f"{core_markers.kind_label(kind)}: {label}" if label \
+                else core_markers.kind_label(kind)
+
+            tick = QGraphicsLineItem(x, 0, x, self.get_track_height())
+            pen = QPen(color)
             pen.setCosmetic(True)
             pen.setWidth(2)
             tick.setPen(pen)
-            tick.setToolTip(f"Voice cue: {cue_text}")
+            tick.setToolTip(tip)
             self.content_scene.addItem(tick)
             self.items.append(tick)
 
-            glyph = QGraphicsPixmapItem(
-                icons.pixmap("speech", 13, "#ba82f0"))
+            glyph = QGraphicsPixmapItem(icons.pixmap(
+                core_markers.KIND_ICONS.get(kind, "speech"), 13,
+                core_markers.kind_color(kind)))
             glyph.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-            glyph.setPos(cue_x + 2, 2)
-            glyph.setToolTip(f"Voice cue: {cue_text}")
+            glyph.setPos(x + 2, 2)
+            glyph.setToolTip(tip)
             self.content_scene.addItem(glyph)
             self.items.append(glyph)
 
@@ -192,7 +200,9 @@ class RulerTrack(BaseTrack):
         if not self.bar_text_items:
             return
 
-        seconds_per_bar = (60.0 / self.timeline_manager.bpm) * 4
+        # The NARROWEST bar decides: one fast section is enough to collide the
+        # numbers, and hiding some labels but not others reads as a glitch.
+        seconds_per_bar = self.timeline_manager.tempo_map.shortest_bar_seconds()
         bar_width_pixels = seconds_per_bar * self.timeline_manager.PIXELS_PER_SECOND * scale
 
         MIN_PIXEL_SPACING = 40

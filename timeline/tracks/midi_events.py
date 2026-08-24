@@ -529,10 +529,7 @@ class DraggableMidiEvent(QGraphicsObject):
         time = self.event_data.get('time', 0.0)
         note = self.event_data.get('note', 0)
 
-        seconds_per_beat = 60.0 / self.timeline.bpm
-        beat_number = time / seconds_per_beat
-        bar_number = int(beat_number / 4) + 1
-        beat_in_bar = int(beat_number % 4) + 1
+        bar_number, beat_in_bar = self.timeline.tempo_map.bar_beat_at(time)
         tooltip_text = (f"{part_name}\n"
                         f"MIDI Note: {note}\n"
                         f"Time: {time:.3f}s\n"
@@ -726,8 +723,8 @@ class DraggableMidiEvent(QGraphicsObject):
     # Each preview computes the proposed new position/width, clamps to bounds,
     # snaps to nearby targets, and updates the visual state. No data mutation.
 
-    def _snap_px(self) -> Optional[float]:
-        """Scene-px spacing of the grid clips snap to, or None.
+    def _grid_x(self):
+        """The nearest-grid-line callable clips snap to, or None.
 
         Delegates to the timeline so snapping follows the visible grid: the
         per-second lines in Time mode, or the bar/beat-division lines in Bars
@@ -735,7 +732,7 @@ class DraggableMidiEvent(QGraphicsObject):
         """
         if self.timeline is None:
             return None
-        return self.timeline.snap_interval_px()
+        return self.timeline.snap_grid_x()
 
     def _snap_targets(self):
         """Neighbour-edge snap targets, or empty when snapping is disabled."""
@@ -749,7 +746,7 @@ class DraggableMidiEvent(QGraphicsObject):
         proposed = self._press_self_pos.x() + delta_x
         new_x = resolve_move_x(proposed, self.bounds.move_intervals,
                                self._snap_targets(), SNAP_PX / self._zoom_x(),
-                               self._snap_px())
+                               self._grid_x())
         if new_x is None:
             return  # no slot fits; nothing to preview
         self.setPos(new_x, self.pos().y())
@@ -762,7 +759,7 @@ class DraggableMidiEvent(QGraphicsObject):
                                  self.bounds.resize_left_min_x,
                                  self.bounds.resize_left_max_x,
                                  self._snap_targets(), SNAP_PX / self._zoom_x(),
-                                 self._snap_px())
+                                 self._grid_x())
         new_width = max(MIN_HIT_WIDTH_PX, original_right - new_x)
         self.setPos(new_x, self.pos().y())
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
@@ -777,7 +774,7 @@ class DraggableMidiEvent(QGraphicsObject):
                                      self.bounds.resize_right_min_x,
                                      self.bounds.resize_right_max_x,
                                      self._snap_targets(), SNAP_PX / self._zoom_x(),
-                                     self._snap_px())
+                                     self._grid_x())
         new_width = max(MIN_HIT_WIDTH_PX, new_right - original_left)
         self.setRect(QRectF(0, 0, new_width, self.rect.height()))
         self._refresh_text_truncation(new_width)

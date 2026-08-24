@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from timeline.tracks.clip_geometry import (
     Occupant, ClipBounds,
     MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT,
-    zone_at, nearest_beat_x, snap_to_targets, clamp_to_intervals,
+    zone_at, nearest_beat_x, uniform_grid, snap_to_targets, clamp_to_intervals,
     resolve_move_x, resolve_resize_x, compute_bounds,
 )
 
@@ -90,7 +90,7 @@ def test_resolve_move_x():
             "a snap target outside the slot is re-clamped into it")
     _assert(resolve_move_x(50, [], [], 6) is None,
             "no interval fits -> None")
-    _assert(_close(resolve_move_x(22, [(0, 100)], [], 6, beat_px=10), 20),
+    _assert(_close(resolve_move_x(22, [(0, 100)], [], 6, grid_x=uniform_grid(10)), 20),
             "snaps to the nearest beat grid line")
 
 

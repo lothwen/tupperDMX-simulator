@@ -7,7 +7,7 @@ Coordinates multiple timeline tracks and provides the main timeline interface.
 import os
 import math
 import copy
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
                              QGraphicsScene, QSlider, QPushButton, QLabel,
@@ -20,7 +20,9 @@ from .widgets import (ContentView, StartEventEditDialog, TrackResizeHandle,
                       CustomTooltip)
 from .widgets.clip_edit import ClipEditDialog
 from core import note_layout
-from core.fixture_library import load_fixture_defs, resolve_fixture
+from core.fixture_library import resolve_fixture
+from core.tempo_map import TempoMap
+from .tracks.clip_geometry import uniform_grid
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
@@ -101,8 +103,14 @@ class Timeline(QWidget):
         # placeholder until fixture groups are implemented.
         self._group_count = 0
 
-        self.bpm = 120
+        self.bpm = 120  # the song's BASE tempo (the .mid's single set_tempo)
+        # Where the bar lines actually fall: the base tempo plus the song's
+        # tempo markers. The scene's x axis stays SECONDS, so a tempo change
+        # moves the grid under the clips and never the clips themselves.
+        self.tempo_map = TempoMap(self.bpm)
         self.voice_cues = []  # current song's [(time_sec, text)] for the ruler
+        # Control markers for the ruler: [(time_sec, kind, label)]
+        self.control_markers = []
         self.ruler_mode = "bars"  # "bars" | "time"
         self.beat_division = 4  # ruler/grid lines per bar in Bars mode (1, 4 or 8)
         self.snap_enabled = True  # snap clip drags to the grid + neighbour edges
@@ -703,22 +711,24 @@ class Timeline(QWidget):
             self.content_scene.removeItem(item)
         self.time_grid_items.clear()
 
+        # (x, is_major) for every line to draw. Time mode is an even walk;
+        # Bars mode asks the tempo map, whose spacing changes at every marker.
         if self.ruler_mode == "time":
             step_px = self.PIXELS_PER_SECOND
+            if step_px == 0:
+                return
             major_every = self.ruler_track.TIME_MAJOR_INTERVAL
+            lines = [(i * step_px, i % major_every == 0)
+                     for i in range(int(self.content_width / step_px))]
         else:
-            seconds_per_bar = (60.0 / self.bpm) * 4
-            step_px = (seconds_per_bar / self.beat_division) * self.PIXELS_PER_SECOND
-            major_every = self.beat_division
+            until = self.content_width / self.PIXELS_PER_SECOND
+            lines = [(seconds * self.PIXELS_PER_SECOND, is_bar)
+                     for seconds, _bar, is_bar
+                     in self.tempo_map.grid_lines(until, self.beat_division)]
 
-        if step_px == 0:
-            return
-        count = int(self.content_width / step_px)
-
-        for i in range(count):
-            x_pos = i * step_px
+        for x_pos, is_major in lines:
             line = QGraphicsLineItem(x_pos, self.RULER_TRACK_HEIGHT, x_pos, self.scene_height)
-            if i % major_every == 0:
+            if is_major:
                 grid_pen = QPen(QColor(80, 80, 80), 1.5)
             else:
                 grid_pen = QPen(QColor(60, 60, 60), 0.8)
@@ -938,8 +948,7 @@ class Timeline(QWidget):
         """Update BPM and redraw ruler and time grid to match new tempo."""
         if self.bpm != bpm:
             self.bpm = bpm
-            self.ruler_track.redraw()
-            self.draw_time_grid()
+            self.set_tempo_map(TempoMap(bpm, self.tempo_map.changes()))
             self.logger.info(f"Timeline BPM updated to {bpm}")
 
     def set_voice_cues(self, cues):
@@ -947,6 +956,22 @@ class Timeline(QWidget):
         their markers on the ruler."""
         self.voice_cues = list(cues or [])
         self.ruler_track.redraw()
+
+    def set_control_markers(self, markers):
+        """Install the current song's control markers for the ruler, as
+        [(time_sec, kind, label)] — the tempo/stop-click/segue flags drawn
+        beside the voice cues. Does NOT re-grid: the tempo map is the grid's
+        source and arrives separately, already built from the same markers."""
+        self.control_markers = list(markers or [])
+        self.ruler_track.redraw()
+
+    def set_tempo_map(self, tempo_map):
+        """Install the song's tempo map and re-grid everything drawn from it:
+        the ruler's bars, the scene grid lines and what clip drags snap to."""
+        self.tempo_map = tempo_map
+        self.bpm = tempo_map.bpm_at(0.0)
+        self.ruler_track.redraw()
+        self.draw_time_grid()
 
     def set_ruler_mode(self, mode):
         """Switch the ruler between musical bars and mm:ss clock time."""
@@ -971,13 +996,15 @@ class Timeline(QWidget):
         self.snap_enabled = bool(enabled)
         self.logger.info(f"Timeline snap {'enabled' if self.snap_enabled else 'disabled'}")
 
-    def snap_interval_px(self):
-        """Scene-px spacing of the finest visible grid line, for clip snapping.
+    def snap_grid_x(self):
+        """A callable mapping a scene x to the nearest visible grid line, or
+        None when snapping is off or unavailable (callers then skip it).
 
         Mirrors what the ruler/grid draw so snapping lands on visible lines:
         one-second lines in Time mode, or bar/`beat_division` lines in Bars
-        mode. Returns None when snapping is off or unavailable (callers then
-        skip grid snapping).
+        mode. A callable rather than a spacing because Bars mode is no longer
+        an even grid — across a tempo marker the lines on either side of the
+        cursor are different distances apart.
         """
         if not self.snap_enabled:
             return None
@@ -985,14 +1012,11 @@ class Timeline(QWidget):
         if pps <= 0:
             return None
         if self.ruler_mode == "time":
-            spacing_sec = self.ruler_track.TIME_MINOR_INTERVAL
-        else:
-            if self.bpm <= 0:
-                return None
-            seconds_per_bar = (60.0 / self.bpm) * 4
-            spacing_sec = seconds_per_bar / self.beat_division
-        px = spacing_sec * pps
-        return px if px > 0 else None
+            spacing_px = self.ruler_track.TIME_MINOR_INTERVAL * pps
+            return uniform_grid(spacing_px) if spacing_px > 0 else None
+        divisions = self.beat_division
+        tempo_map = self.tempo_map
+        return lambda x: tempo_map.nearest_grid_seconds(x / pps, divisions) * pps
 
     def update_ruler_labels(self):
         """Update ruler labels based on zoom level."""

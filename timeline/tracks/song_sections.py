@@ -95,10 +95,10 @@ class SongSectionItem(QGraphicsObject):
         x = max(0.0, x)
         if self.timeline is None:
             return x
-        snap_px = self.timeline.snap_interval_px()
-        if not snap_px:
+        grid_x = self.timeline.snap_grid_x()
+        if grid_x is None:
             return x
-        nearest = round(x / snap_px) * snap_px
+        nearest = grid_x(x)
         if abs(nearest - x) <= SNAP_PX / self._zoom_x():
             return max(0.0, nearest)
         return x

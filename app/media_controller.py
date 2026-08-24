@@ -9,6 +9,7 @@ from audio.engine import AudioEngine
 from audio.mixer import BUS_BACKING
 from tupperlogger import get_logger
 from core.io_routing import MidiRouting
+from core.tempo_map import BEATS_PER_BAR, TempoMap
 from midi import MidiManager
 
 # Editor monitor: which track feeds the engine's backing bus. Session-only
@@ -36,6 +37,11 @@ class MediaController(QObject):
     media_loaded = pyqtSignal()
     error_occurred = pyqtSignal(str, str)  # error message, file_path
     monitor_changed = pyqtSignal(str)  # MONITOR_BACKING | MONITOR_GUIDE
+    # A control marker the timeline just crossed: (kind, bpm). The transport
+    # only reports the crossing — AppCore owns what each kind DOES, because
+    # acting on one means reaching the metronome and the setlist.
+    control_marker_fired = pyqtSignal(str, int)
+    segue_reached = pyqtSignal()  # hand the show to the next song, no count-in
 
     def __init__(self, midi_manager: MidiManager, engine: AudioEngine,
                  audio_volume: float = 0.5):
@@ -55,12 +61,25 @@ class MediaController(QObject):
         # Count-in state (fed from the song's precount + config.audio)
         self.count_in_enabled = False
         self.count_in_bars = 2
-        self.bpm = 120
+        # The song's tempo, markers included — it sizes the count-in (whose
+        # negative beats extrapolate backwards from the first segment).
+        self.tempo_map = TempoMap(120)
 
         # Voice cues: sorted [(time_sec, mono float32 samples)], fired when the
         # timeline crosses their time; pointer reset on stop/seek.
         self._voice_cues: List[Tuple[float, np.ndarray]] = []
         self._next_cue_index = 0
+
+        # Control markers: sorted [(time_sec, kind, bpm)], reported when the
+        # timeline crosses them. Same pointer discipline as the voice cues.
+        self._control_markers: List[Tuple[float, str, int]] = []
+        self._next_marker_index = 0
+
+        # Segue: hand off to the next song at this timeline time. Armed once
+        # per pass — re-armed by the same seek/stop resets as the pointers.
+        self._segue_enabled = False
+        self._segue_time = 0.0
+        self._segue_fired = False
 
         # Current files. The guide is the song's optional full-mix reference;
         # the monitor picks which of the two the engine decodes and plays.
@@ -195,9 +214,18 @@ class MediaController(QObject):
         self.audio_offset_sec = offset_sec
         self.logger.debug(f"Audio offset set to {offset_sec:.3f}s")
 
+    @property
+    def bpm(self) -> int:
+        """The song's base tempo (what the count-in counts at)."""
+        return self.tempo_map.bpm_at(0.0)
+
     def set_bpm(self, bpm: int) -> None:
         """Track the song BPM (needed to size the count-in)."""
-        self.bpm = max(40, min(300, bpm))
+        self.set_tempo_map(TempoMap(bpm))
+
+    def set_tempo_map(self, tempo_map: TempoMap) -> None:
+        """Install the song's tempo map (base tempo + tempo markers)."""
+        self.tempo_map = tempo_map
 
     def set_count_in(self, enabled: bool, bars: int) -> None:
         """Configure the count-in for the current song (per-song precount
@@ -206,8 +234,13 @@ class MediaController(QObject):
         self.count_in_bars = max(1, min(8, int(bars)))
 
     def count_in_duration(self) -> float:
-        """Length of the configured count-in in seconds (bars of 4 beats)."""
-        return self.count_in_bars * 4 * 60.0 / self.bpm
+        """Length of the configured count-in in seconds (bars of 4 beats).
+
+        Asked of the tempo map rather than of one BPM, so a tempo marker sitting
+        at t=0 (a song that simply starts at another tempo) counts in at the
+        tempo the song will actually begin with."""
+        return -self.tempo_map.seconds_at_beat(
+            -self.count_in_bars * BEATS_PER_BAR)
 
     def set_voice_cues(self, cues: List[Tuple[float, np.ndarray]]) -> None:
         """Install the song's rendered voice cues [(time_sec, samples)]."""
@@ -228,12 +261,62 @@ class MediaController(QObject):
             self.engine.play_voice(samples)
             self._next_cue_index += 1
 
-    def start_playback(self) -> bool:
+    def set_control_markers(self, markers: List[Tuple[float, str, int]]) -> None:
+        """Install the song's control markers as [(time_sec, kind, bpm)]."""
+        self._control_markers = sorted(markers, key=lambda m: m[0])
+        self._reset_marker_pointer(self.current_timeline_time)
+
+    def _reset_marker_pointer(self, position: float) -> None:
+        """Point at the first marker at/after `position`.
+
+        A marker BEHIND the playhead must not fire on a seek — but its EFFECT
+        is still in force (a click stopped at 3:08 is still stopped at 3:20).
+        Re-applying that state is AppCore's job, which reads the marker list
+        directly rather than waiting for a crossing."""
+        self._next_marker_index = 0
+        while (self._next_marker_index < len(self._control_markers)
+               and self._control_markers[self._next_marker_index][0] < position):
+            self._next_marker_index += 1
+
+    def _fire_control_markers(self) -> None:
+        while (self._next_marker_index < len(self._control_markers)
+               and self._control_markers[self._next_marker_index][0] <= self.current_timeline_time):
+            _, kind, bpm = self._control_markers[self._next_marker_index]
+            self._next_marker_index += 1
+            self.control_marker_fired.emit(kind, bpm)
+
+    def set_segue(self, enabled: bool, time_sec: float) -> None:
+        """Arm (or disarm) this song's hand-off to the next one."""
+        self._segue_enabled = bool(enabled)
+        self._segue_time = max(0.0, float(time_sec))
+        self._segue_fired = self._segue_enabled and self.current_timeline_time > self._segue_time
+
+    def _fire_segue(self) -> bool:
+        """Emit segue_reached once the timeline crosses the segue time.
+
+        Returns True when it fired, so the tick can stop touching a transport
+        that is already playing the NEXT song."""
+        # A segue at t=0 would mean "never play this song", which is never what
+        # is meant — a song whose length is not known yet defaults there.
+        if (not self._segue_enabled or self._segue_fired
+                or self._segue_time <= 0.0
+                or self.current_timeline_time < self._segue_time):
+            return False
+        self._segue_fired = True
+        self.logger.info(f"Segue at {self._segue_time:.2f}s — next song")
+        self.segue_reached.emit()
+        return True
+
+    def start_playback(self, force_no_count_in: bool = False) -> bool:
         """Start media playback from the beginning (through the count-in when
         the song has one).
 
         A song with no monitored track still plays: the click, the MIDI and
-        the lights run on their own, bounded by the sequence."""
+        the lights run on their own, bounded by the sequence.
+
+        `force_no_count_in` is the segue arrival: the previous song counted this
+        one in by simply not stopping, so a count-in here would be a gap. It is
+        a per-start override, never a write to the song's precount flag."""
         self.logger.info("Starting fresh media playback")
 
         # Stop any current playback
@@ -242,7 +325,7 @@ class MediaController(QObject):
             self.engine.pause()
 
         # Reset timeline position — negative when counting in
-        if self.count_in_enabled:
+        if self.count_in_enabled and not force_no_count_in:
             self.current_timeline_time = -self.count_in_duration()
         else:
             self.current_timeline_time = 0
@@ -262,6 +345,8 @@ class MediaController(QObject):
                 self.engine.load_backing(active)
             self.engine.set_backing_position(0)
         self._reset_cue_pointer(self.current_timeline_time)
+        self._reset_marker_pointer(self.current_timeline_time)
+        self._segue_fired = False
 
         # Start playback immediately
         self.is_playing = True
@@ -346,6 +431,7 @@ class MediaController(QObject):
         audio_time_sec = max(0, self.current_timeline_time - self.active_offset())
         self.engine.set_backing_position(audio_time_sec)
         self._reset_cue_pointer(self.current_timeline_time)
+        self._reset_marker_pointer(self.current_timeline_time)
 
         # Reset pause state and start timers
         self.last_pause_time = 0
@@ -377,6 +463,8 @@ class MediaController(QObject):
         # Reset backing position
         self.engine.set_backing_position(0)
         self._reset_cue_pointer(0)
+        self._reset_marker_pointer(0)
+        self._segue_fired = False
 
         self.playback_state_changed.emit(False)
         self.position_changed.emit(0)
@@ -390,6 +478,9 @@ class MediaController(QObject):
         # Seek MIDI
         self.midi_manager.seek(time_seconds)
         self._reset_cue_pointer(time_seconds)
+        self._reset_marker_pointer(time_seconds)
+        # Seeking back before the segue re-arms it; seeking past it disarms.
+        self._segue_fired = self._segue_enabled and time_seconds > self._segue_time
 
         # Update immediately
         self._on_playback_tick()
@@ -436,8 +527,14 @@ class MediaController(QObject):
         if self.midi_manager.midi_data and self.midi_manager.is_running():
             self.midi_manager.play_until(self.current_timeline_time)
 
-        # Fire voice cues the timeline just crossed
+        # Fire voice cues and control markers the timeline just crossed
         self._fire_voice_cues()
+        self._fire_control_markers()
+
+        # The segue leaves this transport playing a DIFFERENT song, so nothing
+        # below may touch it — the handler already restarted playback.
+        if self._fire_segue():
+            return
 
         # A click-only song has no backing to run out, so the sequence is what
         # ends it (the engine's `finished` does it for every other song).

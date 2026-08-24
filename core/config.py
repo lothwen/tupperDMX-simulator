@@ -171,6 +171,19 @@ class VoiceCueConfig:
 
 
 @dataclass
+class ControlMarkerConfig:
+    """One control marker: something the transport DOES at a timeline position
+    rather than something it says.
+
+    `kind` is one of core.markers.CONTROL_KINDS. `bpm` carries the tempo for a
+    KIND_TEMPO marker and is ignored by every other kind — a marker's payload is
+    small enough that one typed field beats a generic value bag."""
+    time: float = 0.0
+    kind: str = ""
+    bpm: int = 0
+
+
+@dataclass
 class SongConfig:
     """Configuration for a single song in the playlist."""
     midi: Optional[str] = None
@@ -189,6 +202,14 @@ class SongConfig:
     key: str = ""                                       # musical key, e.g. "Am"
     precount: bool = True                               # count-in click; off = segue from previous song
     voice_cues: List[VoiceCueConfig] = field(default_factory=list)
+    # Control markers (tempo change, stop click) — the transport's half of the
+    # marker track that voice_cues is the spoken half of.
+    control_markers: List[ControlMarkerConfig] = field(default_factory=list)
+    # Segue: at segue_time this song hands the show to the next one in the
+    # setlist and starts it with no count-in. Kept as two fields rather than an
+    # Optional so unticking the box does not throw away the time already dialled.
+    segue: bool = False
+    segue_time: float = 0.0
     cache: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -508,6 +529,11 @@ class Config:
                     key=str(song_data.get("key", "")),
                     precount=bool(song_data.get("precount", True)),
                     voice_cues=cls._parse_voice_cues(song_data.get("voice_cues")),
+                    control_markers=cls._parse_control_markers(
+                        song_data.get("control_markers")),
+                    segue=bool(song_data.get("segue", False)),
+                    segue_time=cls._validate_float(
+                        song_data.get("segue_time", 0.0), 0.0, 36000.0),
                     cache=(song_data["cache"]
                            if isinstance(song_data.get("cache"), dict) else {}),
                 ))
@@ -673,6 +699,32 @@ class Config:
             ))
         cues.sort(key=lambda c: c.time)
         return cues
+
+    @staticmethod
+    def _parse_control_markers(data: Any) -> List[ControlMarkerConfig]:
+        """Parse a song's control markers. Unknown kinds and tempo markers
+        without a usable BPM are dropped; times clamp to the timeline range."""
+        from core.markers import CONTROL_KINDS, KIND_TEMPO
+
+        markers: List[ControlMarkerConfig] = []
+        if not isinstance(data, list):
+            return markers
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            kind = entry.get("kind")
+            if kind not in CONTROL_KINDS:
+                continue
+            bpm = Config._validate_int(entry.get("bpm", 0), 0, 300)
+            if kind == KIND_TEMPO and bpm < 40:
+                continue
+            markers.append(ControlMarkerConfig(
+                time=Config._validate_float(entry.get("time", 0.0), 0.0, 36000.0),
+                kind=kind,
+                bpm=bpm,
+            ))
+        markers.sort(key=lambda m: m.time)
+        return markers
 
     @staticmethod
     def _validate_optional_str(value: Any) -> Optional[str]:

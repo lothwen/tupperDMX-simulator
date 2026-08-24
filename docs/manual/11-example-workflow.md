@@ -111,7 +111,7 @@ segue. Set how many bars — and whether the last one is counted aloud — once,
 Add spoken cues with the **Cues** button for anything the band needs warning
 about (*"entra batería"*, *"solo"*). They play on the voice bus, which in split
 routing goes to the in-ears and not to the room.
-→ [6.1.3](#613-count-in), [6.1.4](#614-voice-cues)
+→ [6.1.3](#613-count-in), [6.1.4](#614-voice-cues-and-control-markers)
 
 ## Step 8 — Set up the audio for the stage
 

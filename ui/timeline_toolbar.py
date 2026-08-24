@@ -33,7 +33,7 @@ class TimelineToolbar(QWidget):
     ruler_mode_changed = pyqtSignal(str)  # "bars" | "time"
     beat_division_changed = pyqtSignal(int)  # ruler grid lines per bar
     snap_toggled = pyqtSignal(bool)  # snap-to-grid enabled
-    voice_cues_requested = pyqtSignal()  # open the per-song voice-cue editor
+    markers_requested = pyqtSignal()  # open the per-song marker editor
     add_track_requested = pyqtSignal()  # enter stage edit mode + patch a fixture
     monitor_changed = pyqtSignal(str)  # editor monitor: MONITOR_BACKING | MONITOR_GUIDE
 
@@ -277,9 +277,10 @@ class TimelineToolbar(QWidget):
         cues_btn.setIcon(icons.icon("speech", "#e0e0e0"))
         cues_btn.setIconSize(QSize(14, 14))
         cues_btn.setObjectName("TTToolButton")
-        cues_btn.setToolTip("Voice cues: spoken guide messages for this song "
-                            "(played on the click/voice channel)")
-        cues_btn.clicked.connect(self.voice_cues_requested.emit)
+        cues_btn.setToolTip("Voice cues & control markers: spoken guide "
+                            "messages, tempo changes, stop-click and the segue "
+                            "out of this song")
+        cues_btn.clicked.connect(self.markers_requested.emit)
         row.addWidget(cues_btn)
 
         return zone

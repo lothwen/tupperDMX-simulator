@@ -51,6 +51,9 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "key": song.key,
             "precount": song.precount,
             "voice_cues": [asdict(c) for c in song.voice_cues],
+            "control_markers": [asdict(m) for m in song.control_markers],
+            "segue": song.segue,
+            "segue_time": song.segue_time,
             "cache": dict(song.cache),
         })
     return {
@@ -94,6 +97,11 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             key=str(entry.get("key", "")),
             precount=bool(entry.get("precount", True)),
             voice_cues=Config._parse_voice_cues(entry.get("voice_cues")),
+            control_markers=Config._parse_control_markers(
+                entry.get("control_markers")),
+            segue=bool(entry.get("segue", False)),
+            segue_time=Config._validate_float(
+                entry.get("segue_time", 0.0), 0.0, 36000.0),
             cache=entry["cache"] if isinstance(entry.get("cache"), dict) else {},
         ))
 

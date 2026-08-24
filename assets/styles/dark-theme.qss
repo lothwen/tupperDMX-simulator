@@ -2577,3 +2577,118 @@ QWidget#TimelineToolbar QSpinBox#TTBpm {
     max-height: 30px;
 }
 
+
+/* ============================================================
+   MARKERS DIALOG (ui/markers_dialog.py)
+   The per-song marker track: voice cues, tempo changes, stop-click
+   and the segue. Sizes live here rather than in Python so
+   ui/theme.py's ui_scale rewrite reaches them.
+   ============================================================ */
+QDialog#MarkersDialog {
+    background-color: #1e1e1e;
+    min-width: 720px;
+    min-height: 520px;
+}
+
+QLabel#MarkersSongTitle {
+    color: #e0e0e0;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+/* The mini timeline. Its marker size is derived from this height in code,
+   so scaling the height scales the markers with it. */
+QWidget#MarkerStrip {
+    min-height: 46px;
+    max-height: 46px;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+}
+
+QTableWidget#MarkersTable {
+    background-color: #232323;
+    alternate-background-color: #262626;
+    gridline-color: #333333;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    min-width: 340px;
+}
+
+QTableWidget#MarkersTable::item {
+    padding: 5px 6px;
+}
+
+QFrame#MarkersInspector {
+    background-color: #242424;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    min-width: 210px;
+    max-width: 260px;
+}
+
+QLabel#MarkersInspectorTitle {
+    background: transparent;
+    color: #e0e0e0;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding-bottom: 2px;
+}
+
+QFrame#MarkersSegueBar {
+    background-color: #242424;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    padding: 2px;
+}
+
+QToolButton#MarkersAddButton {
+    background-color: #3a3a3a;
+    color: #e0e0e0;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 5px 10px;
+}
+
+QToolButton#MarkersAddButton:hover {
+    background-color: #454545;
+}
+
+QToolButton#MarkersAddButton::menu-button {
+    border-left: 1px solid #4a4a4a;
+    width: 16px;
+}
+
+/* Time / Bar.beat segmented toggle — square inner edges so the pair reads
+   as one control (same treatment as the timeline toolbar's Bars/Time). */
+QPushButton#MarkersUnitButton {
+    background-color: #2f2f2f;
+    color: #b0b0b0;
+    border: 1px solid #4a4a4a;
+    padding: 4px 10px;
+    min-width: 58px;
+}
+
+QPushButton#MarkersUnitButton:checked {
+    background-color: #3a5a67;
+    color: #ffffff;
+}
+
+QSpinBox#MarkersBpmSpin, QDoubleSpinBox#MarkersTimeSpin,
+QDoubleSpinBox#MarkersSegueSpin, QLineEdit#MarkersTextEdit {
+    background-color: #2b2b2b;
+    color: #e0e0e0;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-height: 18px;
+}
+
+QDoubleSpinBox#MarkersSegueSpin {
+    min-width: 90px;
+}
+
+QSpinBox#MarkersBpmSpin:focus, QDoubleSpinBox#MarkersTimeSpin:focus,
+QDoubleSpinBox#MarkersSegueSpin:focus, QLineEdit#MarkersTextEdit:focus {
+    border: 1px solid #79cdf0;
+}
