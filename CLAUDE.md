@@ -67,7 +67,8 @@ autosave, forced on song switch/close/Save; opening snapshot + at most one autom
 volume/mute/RMS and the L/R modes `stereo` | `split_backing_left` | `split_backing_right`. The engine is a **push-mode**
 sink, a 15 ms timer topping up a ~120 ms buffer — push on purpose, since a Python pull-QIODevice deadlocks inside
 `QAudioSink.stop()` on the GIL. `load_backing` dedupes an in-flight decode of the same path (restarting QAudioDecoder
-mid-decode aborts). **The pipeline rate is the device's, not ours**: `SAMPLE_RATE` (44.1 kHz) is only the *reference* — what the
+mid-decode aborts). **Decoding runs on its own QThread and must**: it costs one `bufferReady` slot call per buffer —
+thousands per song **The pipeline rate is the device's, not ours**: `SAMPLE_RATE` (44.1 kHz) is only the *reference* — what the
 TTS cache is written at and what the pipeline starts at. Stereo formats are offered to the device best-first and
 the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing synthesizes during playback — cache-first always**.
 `app/media_controller.py` owns the timeline position (`time.time()` master clock, engine slaved with 150 ms drift resync).

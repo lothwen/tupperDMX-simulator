@@ -8,7 +8,7 @@ from PyQt6.QtCore import QIODevice, QObject, QTimer, pyqtSignal
 from PyQt6.QtMultimedia import (QAudio, QAudioDevice, QAudioFormat, QAudioSink,
                                 QMediaDevices)
 
-from audio.decode import AudioFileDecoder
+from audio.decode import ThreadedAudioDecoder
 from audio.mixer import (BUS_CLICK, BUS_VOICE, METRONOME_HIGH_PITCH_HZ,
                          METRONOME_LOW_PITCH_HZ, SAMPLE_RATE, Mixer, make_beep,
                          resample)
@@ -92,7 +92,7 @@ class AudioEngine(QObject):
         self.logger = get_logger("audio.engine")
         self.mixer = Mixer()
 
-        self._decoder = AudioFileDecoder(self)
+        self._decoder = ThreadedAudioDecoder(self)
         self._decoder.decoded.connect(self._on_decoded)
         self._decoder.failed.connect(self._on_decode_failed)
 
@@ -353,5 +353,5 @@ class AudioEngine(QObject):
     def cleanup(self) -> None:
         self.logger.info("Cleaning up audio engine")
         self._watchdog.stop()
-        self._decoder.cancel()
+        self._decoder.shutdown()
         self._stop_sink()
