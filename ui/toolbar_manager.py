@@ -43,6 +43,26 @@ class _ResponsiveBar(QWidget):
         self._on_resize(event.size().width())
 
 
+class _StatusChip(QLabel):
+    """A status label that takes no width at all until it has something to say.
+
+    Qt sizes an empty QLabel to `fontMetrics().averageCharWidth()`, which is a
+    sane ~7px for the theme's "Noto Sans" and pure nonsense for whatever a box
+    without it substitutes — on CI that came back as 2550px. Five empty chips
+    then put the bar 10000px over its folded minimum, and a minimum that large
+    is one no window can satisfy, so the bar could never fold.
+    """
+
+    def _blank(self, hint: QSize) -> QSize:
+        return QSize(0, hint.height()) if not self.text() else hint
+
+    def sizeHint(self) -> QSize:
+        return self._blank(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        return self._blank(super().minimumSizeHint())
+
+
 class ToolbarManager(QObject):
     """Manages the main application toolbar with media controls and configuration options."""
 
@@ -349,7 +369,7 @@ class ToolbarManager(QObject):
         self.show_name_label.setObjectName("ShowNameLabel")
         info_layout.addWidget(self.show_name_label)
         info_layout.addStretch(1)
-        self.show_stats_label = QLabel("")
+        self.show_stats_label = _StatusChip("")
         self.show_stats_label.setObjectName("ShowStatsLabel")
         self.show_stats_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -410,7 +430,7 @@ class ToolbarManager(QObject):
         snapshot_button.setToolTip("Take a named, never-pruned snapshot")
         snapshot_button.clicked.connect(self.snapshot_requested.emit)
         footer_layout.addWidget(snapshot_button)
-        self.versions_stats_label = QLabel("")
+        self.versions_stats_label = _StatusChip("")
         self.versions_stats_label.setObjectName("ShowStatsLabel")
         footer_layout.addWidget(self.versions_stats_label)
         footer_layout.addStretch(1)
@@ -640,13 +660,13 @@ class ToolbarManager(QObject):
 
         footer_layout = QHBoxLayout()
         footer_layout.setSpacing(10)
-        self.bpm_label = QLabel("")
+        self.bpm_label = _StatusChip("")
         self.bpm_label.setObjectName("BpmLabel")
         footer_layout.addWidget(self.bpm_label)
-        self.offset_label = QLabel("")
+        self.offset_label = _StatusChip("")
         self.offset_label.setObjectName("OffsetLabel")
         footer_layout.addWidget(self.offset_label)
-        self.linked_chip = QLabel("")
+        self.linked_chip = _StatusChip("")
         self.linked_chip.setObjectName("LinkedChip")
         footer_layout.addWidget(self.linked_chip)
         footer_layout.addStretch(1)
@@ -688,7 +708,7 @@ class ToolbarManager(QObject):
         title_label.setFont(font)
         header_layout.addWidget(title_label)
         header_layout.addStretch(1)
-        self.autosave_status_label = QLabel("")
+        self.autosave_status_label = _StatusChip("")
         self.autosave_status_label.setObjectName("AutosaveStatus")
         header_layout.addWidget(self.autosave_status_label)
         layout.addLayout(header_layout)
