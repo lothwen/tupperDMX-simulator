@@ -7,6 +7,22 @@ from datetime import datetime
 
 from .handlers import ColoredConsoleHandler, FileRotatingHandler, ComponentFilter, DefaultComponentFilter, PerformanceFilter
 
+#: Where log files go when no folder is configured — `logs/` beside the running
+#: app, which is where they have always gone.
+DEFAULT_LOG_DIR = Path("logs")
+
+
+def resolve_log_dir(configured: Optional[str] = None) -> Path:
+    """The folder log files are actually written to.
+
+    An unset or blank preference is not a folder named "" — it means "wherever
+    the app has always put them", so it resolves to DEFAULT_LOG_DIR. That is
+    what lets a userprefs.json written before the folder was settable, or one
+    the operator cleared the field in, keep working unchanged.
+    """
+    text = (configured or "").strip()
+    return Path(text).expanduser() if text else DEFAULT_LOG_DIR
+
 
 class TupperDMXLogger:
     """Centralized logging configuration for TupperDMX simulator."""
@@ -21,7 +37,8 @@ class TupperDMXLogger:
     
     def __init__(self):
         if not self._initialized:
-            self.log_dir = Path("logs")
+            self.log_dir = DEFAULT_LOG_DIR
+            self.log_file: Optional[Path] = None
             self.loggers: Dict[str, logging.Logger] = {}
             self._initialized = True
     
@@ -39,16 +56,18 @@ class TupperDMXLogger:
             level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             console_output: Enable console logging
             file_output: Enable file logging
-            log_dir: Directory for log files (default: ./logs)
+            log_dir: Directory for log files (blank/None: ./logs)
             max_file_size: Maximum size of log files before rotation
             backup_count: Number of backup files to keep
         """
-        if log_dir:
-            self.log_dir = Path(log_dir)
-        
-        # Create log directory if needed
+        self.log_dir = resolve_log_dir(log_dir)
+        self.log_file = None
+
+        # Create log directory if needed. parents=True because the folder is a
+        # preference now: an operator may point it anywhere, including a path
+        # whose parent doesn't exist yet.
         if file_output:
-            self.log_dir.mkdir(exist_ok=True)
+            self.log_dir.mkdir(parents=True, exist_ok=True)
         
         # Configure root logger
         root_logger = logging.getLogger()
@@ -83,9 +102,9 @@ class TupperDMXLogger:
         
         # File handler
         if file_output:
-            log_file = self.log_dir / f"tupperDMX_{datetime.now().strftime('%Y%m%d')}.log"
+            self.log_file = self.log_dir / f"tupperDMX_{datetime.now().strftime('%Y%m%d')}.log"
             file_handler = FileRotatingHandler(
-                filename=str(log_file),
+                filename=str(self.log_file),
                 max_bytes=max_file_size,
                 backup_count=backup_count
             )
@@ -249,3 +268,13 @@ def set_log_level(level: str, component: Optional[str] = None) -> None:
 def get_log_stats() -> Dict[str, Any]:
     """Get logging statistics."""
     return _logger_instance.get_log_stats()
+
+
+def current_log_dir() -> Path:
+    """The folder the file handler is writing into right now."""
+    return _logger_instance.log_dir
+
+
+def current_log_path() -> Optional[Path]:
+    """The log file being written right now, or None if file logging is off."""
+    return _logger_instance.log_file

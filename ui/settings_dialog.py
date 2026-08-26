@@ -1,19 +1,24 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
-# ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
-# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Virtual
-# ABOUTME: stage, Interface, Logging).
+# ABOUTME: userprefs.json (I/O routing, Art-Net target, log level and folder).
+# ABOUTME: Opened from the menu; sidebar-navigated pages (I/O, Web Remote,
+# ABOUTME: Audio, Virtual stage, Interface, Logging).
 
 import html
+import os
 import threading
 from dataclasses import asdict
+from pathlib import Path
 
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
                              QSizePolicy, QPushButton, QListWidget,
-                             QListWidgetItem, QStackedWidget, QSlider)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
+                             QListWidgetItem, QStackedWidget, QSlider,
+                             QGridLayout, QToolButton, QFileDialog,
+                             QSpacerItem, QApplication)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtMultimedia import QMediaDevices
 
 from audio import tts
@@ -22,13 +27,45 @@ from core import buildinfo, io_routing
 from core.config import Config, IOConfig, UI_SCALE_MIN, UI_SCALE_MAX
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
+from tupperlogger import DEFAULT_LOG_DIR, current_log_path, resolve_log_dir
 from ui.widgets import icons
 from ui.io_flow_widget import IOFlowWidget
+from ui.widgets.log_tail import LogTailView
 from ui.widgets.toggle_switch import ToggleSwitch
 from webremote.state import lan_ip
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+#: How long "Copy path" stays reading "Copied" before it goes back.
+COPIED_FLASH_MS = 1200
+
+
+def human_bytes(count: float) -> str:
+    """A byte count as "38.4 MB" — one decimal, because the log folder is the
+    kind of number you glance at rather than audit."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if count < 1024 or unit == "GB":
+            return f"{count:.0f} {unit}" if unit == "B" else f"{count:.1f} {unit}"
+        count /= 1024
+
+
+def folder_summary(path) -> str:
+    """"38.4 MB · 12 files" for `path`, or why there is no such number.
+
+    Files only and one level deep: this describes a log folder, and a rotating
+    handler never makes subdirectories.
+    """
+    try:
+        with os.scandir(path) as entries:
+            files = [entry for entry in entries if entry.is_file()]
+    except OSError:
+        return "not created yet"
+    if not files:
+        return "empty"
+    total = sum(entry.stat().st_size for entry in files)
+    return f"{human_bytes(total)} · {len(files)} file{'s' if len(files) != 1 else ''}"
+
 
 #: UI-scale slider granularity, in percent, and how long a drag has to settle
 #: before the preview restyles the app.
@@ -644,24 +681,150 @@ class SettingsDialog(QDialog):
         self.ui_scale_previewed.emit(self.scale_slider.value() / 100.0)
 
     def _build_logging_page(self) -> QWidget:
+        """Level, where the files go, and what is being written right now.
+
+        Both settings take effect as soon as the dialog is accepted, which is
+        what makes the pane below them worth watching: turn DEBUG on and the
+        detail starts arriving in it.
+
+        The pane tails the file the app is *actually* writing, which is not
+        necessarily the folder in the field above it: a folder typed here is
+        where logging moves to when the dialog is accepted.
+        """
         page, layout = self._make_page("Logging")
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Level:"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
+
+        grid.addWidget(QLabel("Level:"), 0, 0)
         self.log_level_combo = QComboBox()
         self.log_level_combo.addItems(LOG_LEVELS)
         current = (self.config.logging.level
                    if self.config.logging.level in LOG_LEVELS else "INFO")
         self.log_level_combo.setCurrentText(current)
-        row.addWidget(self.log_level_combo, 1)
-        layout.addLayout(row)
+        self.log_level_combo.setToolTip(
+            "How much detail is logged. Applies as soon as you press OK.\n"
+            "DEBUG is worth turning on to reproduce a problem, and worth "
+            "turning off again afterwards.")
+        grid.addWidget(self.log_level_combo, 0, 1)
 
-        hint = QLabel("Level changes apply on the next launch.")
-        hint.setObjectName("SettingsDimLabel")
-        layout.addWidget(hint)
+        grid.addItem(QSpacerItem(0, 10), 1, 0)
 
-        layout.addStretch(1)
+        grid.addWidget(QLabel("Folder:"), 2, 0)
+        grid.addLayout(self._build_log_folder_row(), 2, 1)
+
+        self.log_file_hint = QLabel()
+        self.log_file_hint.setObjectName("SettingsDimLabel")
+        grid.addWidget(self.log_file_hint, 3, 1)
+
+        grid.addItem(QSpacerItem(0, 10), 4, 0)
+
+        live_label = QLabel("Live log")
+        grid.addWidget(live_label, 5, 0, Qt.AlignmentFlag.AlignTop)
+        self.log_tail = LogTailView()
+        self.log_tail.set_path(current_log_path())
+        grid.addWidget(self.log_tail, 5, 1)
+        grid.setRowStretch(5, 1)
+
+        layout.addLayout(grid, 1)
+        self._update_log_folder_info()
         return page
+
+    def _build_log_folder_row(self) -> QHBoxLayout:
+        """The path field (folder icon · path · size) and its two buttons."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        field = QFrame()
+        field.setObjectName("SettingsPathField")
+        inner = QHBoxLayout(field)
+        inner.setContentsMargins(8, 3, 8, 3)
+        inner.setSpacing(6)
+
+        browse = QToolButton()
+        browse.setObjectName("SettingsPathIcon")
+        browse.setAutoRaise(True)
+        browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse.setIcon(icons.icon("folder-open", "#8a8a8a"))
+        browse.setIconSize(QSize(14, 14))
+        browse.setToolTip("Choose a folder…")
+        browse.clicked.connect(self._on_browse_log_dir)
+        inner.addWidget(browse)
+
+        self.log_dir_edit = QLineEdit(self.config.logging.log_dir)
+        self.log_dir_edit.setObjectName("SettingsPathEdit")
+        self.log_dir_edit.setFrame(False)
+        # Empty is a real setting, not a missing one: it means "wherever the
+        # app puts them by default", so the placeholder spells that folder out
+        # instead of leaving the field looking unconfigured.
+        self.log_dir_edit.setPlaceholderText(str(DEFAULT_LOG_DIR.resolve()))
+        self.log_dir_edit.setToolTip(
+            "Where the rotating log files are written.\n"
+            "Leave it empty to keep them in the app's own logs/ folder.\n"
+            "Applies as soon as you press OK; files already written stay "
+            "where they are.")
+        self.log_dir_edit.textChanged.connect(self._update_log_folder_info)
+        inner.addWidget(self.log_dir_edit, 1)
+
+        self.log_dir_stats = QLabel()
+        self.log_dir_stats.setObjectName("SettingsDimLabel")
+        inner.addWidget(self.log_dir_stats)
+        row.addWidget(field, 1)
+
+        open_button = QPushButton(icons.icon("external-link", "#cfcfcf"),
+                                  " Open folder")
+        open_button.setToolTip("Show the folder in the system file manager")
+        open_button.clicked.connect(self._on_open_log_dir)
+        row.addWidget(open_button)
+
+        self.log_copy_button = QPushButton("Copy path")
+        self.log_copy_button.setToolTip("Copy the folder's full path to the clipboard")
+        self.log_copy_button.clicked.connect(self._on_copy_log_dir)
+        row.addWidget(self.log_copy_button)
+        return row
+
+    def _chosen_log_dir(self) -> Path:
+        """The folder the field currently names, blank resolved to the
+        default, as an absolute path."""
+        return resolve_log_dir(self.log_dir_edit.text()).expanduser().absolute()
+
+    def _update_log_folder_info(self, *_args) -> None:
+        """Re-read what the named folder holds, and which file it will grow."""
+        self.log_dir_stats.setText(folder_summary(self._chosen_log_dir()))
+
+        if not self.config.logging.file_output:
+            self.log_file_hint.setText("File logging is off.")
+            return
+        active = current_log_path()
+        name = active.name if active else "one file per day"
+        rotation = human_bytes(self.config.logging.max_file_size)
+        self.log_file_hint.setText(
+            f"{name} · rotates at {rotation}, keeps "
+            f"{self.config.logging.backup_count}")
+
+    def _on_browse_log_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Log folder", str(self._chosen_log_dir()))
+        if chosen:
+            self.log_dir_edit.setText(chosen)
+
+    def _on_open_log_dir(self) -> None:
+        folder = self._chosen_log_dir()
+        if not folder.is_dir():
+            QMessageBox.information(
+                self, "Log folder",
+                f"{folder} doesn't exist yet.\n\n"
+                "It is created the first time the app logs to it.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _on_copy_log_dir(self) -> None:
+        QApplication.clipboard().setText(str(self._chosen_log_dir()))
+        self.log_copy_button.setText("Copied")
+        QTimer.singleShot(COPIED_FLASH_MS,
+                          lambda: self.log_copy_button.setText("Copy path"))
 
     def _build_stage_page(self) -> QWidget:
         page, layout = self._make_page("Virtual stage", "renderer · fog")
@@ -968,6 +1131,30 @@ class SettingsDialog(QDialog):
         self.ui_scale_previewed.emit(self._scale_at_open)
         super().reject()
 
+    def _log_dir_is_usable(self, log_dir: str) -> bool:
+        """Can we actually log into `log_dir`? Creates it to find out.
+
+        Blank needs no check — it is the default folder, which the logging
+        system creates for itself. Anything else is somewhere the operator
+        pointed us, and a folder that turns out to be unwritable at the next
+        launch loses the log silently, which is exactly when it is wanted.
+        """
+        if not log_dir:
+            return True
+        folder = Path(log_dir).expanduser()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            usable = os.access(folder, os.W_OK)
+            reason = "" if usable else "it is not writable"
+        except OSError as error:
+            usable, reason = False, str(error)
+        if not usable:
+            QMessageBox.warning(
+                self, "Invalid log folder",
+                f"Logs can't be written to '{log_dir}' — {reason}.\n\n"
+                "Pick another folder, or clear the field to use the default.")
+        return usable
+
     def _on_accept(self) -> None:
         io = self._io_from_widgets()
 
@@ -984,12 +1171,17 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Invalid I/O routing", "\n".join(errors))
             return
 
+        log_dir = self.log_dir_edit.text().strip()
+        if not self._log_dir_is_usable(log_dir):
+            return
+
         if self._is_valid_ipv4(ip):
             self.config.artnet.ip = ip
         self.config.artnet.port = self.port_spin.value()
         self.config.artnet.universe = self.universe_spin.value()
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
+        self.config.logging.log_dir = log_dir
         self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
         self.config.window.ui_scale = self.scale_slider.value() / 100.0
         # Through the config's own parser, so the dialog and a hand-edited

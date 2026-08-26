@@ -692,7 +692,7 @@ def build_script(session: Session) -> None:
     settings_page(1, "webremote")
     settings_page(2, "audio")
     settings_page(3, "stage")
-    settings_page(4, "logging")
+    settings_page(5, "logging")
     session.add("_close-settings",
                 lambda: session.close_dialog(state.pop("settings", None)), wait=1.0)
 
@@ -815,7 +815,7 @@ def main() -> int:
         from core.config import Config
         from core.paths import asset_path
         from core.show.migrate import open_or_create_startup_show
-        from main import _stage_gpu_requested
+        from main import _setup_logging, _stage_gpu_requested
 
         if _stage_gpu_requested():
             from stage.gpu.layer import configure_surface_format
@@ -832,6 +832,9 @@ def main() -> int:
             app.setStyleSheet(qss.read_text(encoding="utf-8"))
 
         config = Config.load()
+        # Like run_gui, and not only for tidiness: the Logging figure shows a
+        # live tail of the file this sets up, and without it the pane is empty.
+        _setup_logging(config)
         show = open_or_create_startup_show(config)
         print(f"·  show open    {show.root}")
 

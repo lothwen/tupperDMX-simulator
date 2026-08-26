@@ -671,6 +671,7 @@ class MainWindow(QMainWindow):
         old_webremote = asdict(self.config.webremote)
         old_audio = asdict(self.config.audio)
         old_fog = asdict(self.config.window.fog)
+        old_logging = asdict(self.config.logging)
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         # The Interface page previews its slider live and puts the old scale
@@ -696,6 +697,13 @@ class MainWindow(QMainWindow):
 
         if asdict(self.config.audio) != old_audio:
             self.app_core.apply_audio_config()
+
+        # Level and folder both take effect now rather than at the next
+        # launch: turning DEBUG on to chase something has to help with the
+        # thing happening in front of you, and the page's own live pane would
+        # otherwise sit tailing a file nothing writes to.
+        if asdict(self.config.logging) != old_logging:
+            self.app_core.apply_logging_config()
 
         self.save_config()
         self.logger.info("Settings updated")

@@ -312,7 +312,7 @@ with a shutter it selects a strobe, so use `_lit_frame()`.
 ## Common Debugging
 
 ```bash
-# Tail today's log
+# Tail today's log (in `logs/` unless userprefs' logging.log_dir names another folder)
 tail -f logs/tupperDMX_$(date +%Y%m%d).log
 
 # Enumerate MIDI outputs

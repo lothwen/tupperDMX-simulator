@@ -1780,6 +1780,49 @@ QLabel#SettingsLinkLabel {
     font-size: 12px;
 }
 
+/* ------------------------------------------------------------
+   Settings dialog — Logging page
+   A path field that carries its own icon and size readout, over
+   the live `tail -f` pane (ui/widgets/log_tail.py). Line colours
+   inside the pane are painted per line, in code.
+   ------------------------------------------------------------ */
+
+/* Reads as one line edit; it is a frame so the folder icon and the
+   "38.4 MB · 12 files" readout can sit inside the same box. */
+QFrame#SettingsPathField {
+    background-color: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 3px;
+}
+
+QFrame#SettingsPathField QLineEdit#SettingsPathEdit {
+    background: transparent;
+    border: none;
+    padding: 4px 0px;
+}
+
+QToolButton#SettingsPathIcon {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QLabel#LogTailStatus {
+    color: #8a8a8a;
+    font-size: 11px;
+}
+
+QPlainTextEdit#LogTailPane {
+    background-color: #161616;
+    color: #d6d6d6;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    min-height: 150px;
+}
+
 /* ============================================================
    About dialog (ui/about_dialog.py)
    Hero (icon + title + version pill) over a BUILD metadata

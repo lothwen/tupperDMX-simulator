@@ -4,8 +4,8 @@
 **this machine**, never the show — so a laptop and the rack box can be routed
 completely differently while running the same project.
 
-Changes take effect on **OK**. Two of them explicitly wait for the next launch,
-and say so.
+Changes take effect on **OK**. One of them explicitly waits for the next launch,
+and says so.
 
 ## 9.1 Input / Output
 
@@ -136,14 +136,46 @@ Its cost controls live here because they are a property of the machine:
 
 ## 9.5 Logging
 
-![The Logging page: one setting, and it waits for the next launch.](images/settings-logging.png)
+![The Logging page: the level, where the files go, and what is being written right now.](images/settings-logging.png)
 
-The log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). **It applies on the next
-launch.** Logs are written to a dated file in the `logs/` folder next to the
-application — the first place to look when the autosave chip goes red.
+| Setting | What it does |
+|---|---|
+| **Level** | DEBUG, INFO, WARNING, ERROR, CRITICAL |
+| **Folder** | Where the dated log files are written. The readout on the right is what that folder holds today |
 
-Leave it on INFO for normal use. DEBUG is worth turning on before reproducing a
-problem you intend to report, and worth turning off again afterwards.
+**Both take effect the moment you press OK** — no restart. Leave the level on
+INFO for normal use, and switch to DEBUG when something is misbehaving *right
+now*: the detail starts arriving in the live pane below without losing the state
+you were trying to reproduce. Turn it off again afterwards, or the log fills
+with note-by-note traffic.
+
+**Leave the folder empty** and logs go where they always have: a `logs/` folder
+next to the application. That is the right answer on a laptop. Set it when the
+application lives somewhere you would rather not write to — a read-only install,
+or a rack box whose logs you want on the share you can reach from the desk. Type
+a path or pick one with the folder button inside the field; **Open folder** shows
+it in the file manager and **Copy path** puts it on the clipboard for an email.
+A folder change takes effect as soon as you press OK too — files already written
+stay where they are.
+
+The line under the field names the file being written and when it rotates: once
+the current file reaches the size shown it is renamed and a fresh one started,
+and the oldest is dropped past the kept count.
+
+### The live log
+
+The pane at the bottom is `tail -f` for the file the application is writing
+**right now** — the first place to look when the autosave chip goes red, without
+leaving the application to find it.
+
+| Control | What it does |
+|---|---|
+| **Follow tail** | Keeps the newest line in view. Turn it off to read back through what has scrolled past |
+| **Pause** | Stops reading. The log keeps being written — press Resume and the pane catches up |
+| **Clear view** | Empties the pane only. **The file is never touched** |
+
+Levels are coloured, so a WARNING or an ERROR is visible in a wall of DEBUG.
+Nothing here can delete a log or lose a line: the pane only ever reads.
 
 ## 9.6 Resetting
 

@@ -166,6 +166,22 @@ class AppCore(QObject):
             song.precount if song else False, self.config.audio.count_in_bars)
         self._refresh_count_words()
 
+    def apply_logging_config(self):
+        """(Re-)install the log handlers from config.logging: level, console,
+        and the file in config.logging.log_dir.
+
+        Both halves take effect immediately — a level change starts filtering
+        the very next record, and a folder change starts a file in the new
+        place. Files already written stay where they are.
+        """
+        setup_logging(
+            level=self.config.logging.level,
+            console_output=self.config.logging.console_output,
+            file_output=self.config.logging.file_output,
+            log_dir=self.config.logging.log_dir,
+            max_file_size=self.config.logging.max_file_size,
+            backup_count=self.config.logging.backup_count)
+
     def apply_volume_config(self):
         """Apply config.volume to the three live buses."""
         self.media_controller.set_audio_volume(self.config.volume.audio)
@@ -218,13 +234,7 @@ class AppCore(QObject):
             f"userprefs.json edited outside the app — adopting: {', '.join(adopted)}")
 
         if "logging" in adopted:
-            setup_logging(
-                level=self.config.logging.level,
-                console_output=self.config.logging.console_output,
-                file_output=self.config.logging.file_output,
-                log_dir=self.config.logging.log_dir,
-                max_file_size=self.config.logging.max_file_size,
-                backup_count=self.config.logging.backup_count)
+            self.apply_logging_config()
         if "volume" in adopted:
             self.apply_volume_config()
         if "audio" in adopted:

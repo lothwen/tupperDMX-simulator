@@ -292,7 +292,11 @@ class LoggingConfig:
     level: str = "INFO"
     console_output: bool = True
     file_output: bool = True
-    log_dir: str = "logs"
+    #: Folder for the rotating log files. Blank means "wherever the app has
+    #: always put them" — tupperlogger.resolve_log_dir turns it into ./logs —
+    #: so a prefs file written before the folder was settable, or one whose
+    #: field the operator cleared, keeps logging exactly where it did.
+    log_dir: str = ""
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     backup_count: int = 5
 
@@ -573,7 +577,7 @@ class Config:
                 level=cls._validate_log_level(logging_data.get("level", "INFO")),
                 console_output=bool(logging_data.get("console_output", True)),
                 file_output=bool(logging_data.get("file_output", True)),
-                log_dir=str(logging_data.get("log_dir", "logs")),
+                log_dir=str(logging_data.get("log_dir", "")),
                 max_file_size=cls._validate_int(logging_data.get("max_file_size", 10 * 1024 * 1024), 1024, 100 * 1024 * 1024),
                 backup_count=cls._validate_int(logging_data.get("backup_count", 5), 1, 20)
             )
