@@ -412,6 +412,40 @@ class StageController(QObject):
         gpu_layer.STAGE_GPU_ACTIVE = True
         return True
 
+    def _disable_gpu_light(self) -> None:
+        """Tear the GPU light down and put the raster path back."""
+        if self.light_layer is None:
+            return
+        self.light_layer = None
+        for obj in self.render_objs:
+            obj.set_light_on_gpu(False)
+            obj._light_sink = None
+        self.stage_view.detach_light_layer()
+        # Write-once no longer: the scene preview gates its own GL on this, and
+        # while the stage has no context the honest answer is False.
+        from stage.gpu import layer as gpu_layer
+        gpu_layer.STAGE_GPU_ACTIVE = False
+
+    def set_gpu_light(self, enabled: bool) -> bool:
+        """Turn the GPU light path on or off on a running stage.
+
+        Returns whether it is on afterwards, which is not always what was
+        asked: a machine with no usable GL fails soft to raster, here exactly
+        as it does at startup.
+
+        A *decision*, unlike `suspend_gpu_light` below, which is a pause — so
+        it clears the suspend flag rather than setting it. Otherwise turning
+        the renderer off while the stage happened to be undocked would leave a
+        pending resume to bring it back.
+        """
+        self._gpu_suspended = False
+        if enabled == (self.light_layer is not None):
+            return self.light_layer is not None
+        if not enabled:
+            self._disable_gpu_light()
+            return False
+        return self._enable_gpu_light()
+
     def suspend_gpu_light(self) -> None:
         """Give up the GPU light so the view can be reparented.
 
@@ -429,15 +463,7 @@ class StageController(QObject):
         if self.light_layer is None:
             return
         self._gpu_suspended = True
-        self.light_layer = None
-        for obj in self.render_objs:
-            obj.set_light_on_gpu(False)
-            obj._light_sink = None
-        self.stage_view.detach_light_layer()
-        # Write-once no longer: the scene preview gates its own GL on this, and
-        # while the stage has no context the honest answer is False.
-        from stage.gpu import layer as gpu_layer
-        gpu_layer.STAGE_GPU_ACTIVE = False
+        self._disable_gpu_light()
 
     def resume_gpu_light(self) -> None:
         """Rebuild the GPU light after a reparent. Fails soft to raster."""
@@ -843,8 +869,9 @@ class StageController(QObject):
         editing the one that is there, so the light layer went on holding the
         old one: ticking "Volumetric fog" did nothing at all until the app was
         restarted, which is not what the dialog says and not what anyone
-        expects of a switch. `stage_gpu` genuinely does need a relaunch — there
-        is a GL context to build — and the dialog says so.
+        expects of a switch. `stage_gpu` is not read here at all — building or
+        dropping a GL context is `set_gpu_light`'s job, and the settings dialog
+        calls it directly.
         """
         if self.light_layer is None:
             return

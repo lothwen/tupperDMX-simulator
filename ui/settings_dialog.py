@@ -16,8 +16,9 @@ from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QSizePolicy, QPushButton, QListWidget,
                              QListWidgetItem, QStackedWidget, QSlider,
                              QGridLayout, QToolButton, QFileDialog,
-                             QSpacerItem, QApplication)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl
+                             QSpacerItem, QApplication, QStyle,
+                             QStyleOptionSlider)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl, QEvent
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtMultimedia import QMediaDevices
 
@@ -71,6 +72,120 @@ def folder_summary(path) -> str:
 #: before the preview restyles the app.
 SCALE_STEP = 5
 SCALE_PREVIEW_DELAY_MS = 150
+
+
+#: Virtual-stage graphics presets, in slider order: one handle over the whole
+#: renderer, the way a game's quality preset works.
+#:
+#: Each names only the values it governs, and what a preset governs is what it
+#: COSTS. The fog's ambient direction, its extent, the stage haze and the
+#: exposure are all left alone: they decide what the stage looks like, and a
+#: quality tier that quietly moved them would be changing the look rather than
+#: the fidelity of it. (`max_distance` in particular reads like a cost and is
+#: not one — the march is normalised to a fixed optical depth over the slab, so
+#: a deeper slab is fog that reaches further back at the same price.)
+#:
+#: The two that do cost are step count and resolution, and they are not
+#: symmetric: the fog buffer scales with resolution SQUARED, while one march
+#: step is two octaves of value noise — sixteen hash lookups — plus a medium
+#: fetch and a phase function. So the cheap tiers give up resolution first,
+#: which is also the one fog can most afford to lose: it is soft and
+#: low-frequency, and the temporal pass averages the dither away regardless.
+#: Relative march cost is `resolution² × steps`, which puts the ladder at
+#: roughly 1 : 5 : 30 — each stop a real step rather than a nudge.
+QUALITY_PRESETS = (
+    ("Off", dict(gpu=False, fog=False)),
+    ("Low", dict(gpu=True, fog=False)),
+    # Quarter resolution is a 16x saving and buys the step count that keeps
+    # shafts smooth: this is the tier meant to run on integrated graphics.
+    ("Mid", dict(gpu=True, fog=True, march_steps=24, resolution=0.25,
+                 jitter=0.8)),
+    ("High", dict(gpu=True, fog=True, march_steps=32, resolution=0.5,
+                  jitter=0.8)),
+    ("Ultra", dict(gpu=True, fog=True, march_steps=48, resolution=1.0,
+                   jitter=0.8)),
+)
+#: The two presets that are defined by a switch rather than by numbers, and the
+#: slider's last stop, which is a readout: Custom is where the handle sits when
+#: the controls below spell out no preset at all.
+QUALITY_OFF = 0
+QUALITY_LOW = 1
+QUALITY_CUSTOM = len(QUALITY_PRESETS)
+
+
+class SliderTickLabels(QWidget):
+    """The names of a slider's stops, written under the ticks they name.
+
+    Positioned against the slider's own geometry rather than by even stretch:
+    a groove is inset by half a handle at each end, so equal spacing would put
+    the first and last names a few pixels off the ticks they belong to. The
+    names at the ends are clamped into the strip so they stay readable rather
+    than being clipped by it.
+    """
+
+    def __init__(self, slider: QSlider, names, parent=None):
+        super().__init__(parent)
+        self._slider = slider
+        self._labels = []
+        for name in names:
+            label = QLabel(name, self)
+            label.setObjectName("SliderTickLabel")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._labels.append(label)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        self.set_active(slider.value())
+
+    def set_active(self, index: int) -> None:
+        """Light up the name the handle is sitting on."""
+        for position, label in enumerate(self._labels):
+            active = "true" if position == index else "false"
+            if label.property("active") != active:
+                label.setProperty("active", active)
+                label.style().unpolish(label)
+                label.style().polish(label)
+
+    def active_name(self) -> str:
+        """The name currently lit — the readout, as it is on screen."""
+        return next((label.text() for label in self._labels
+                     if label.property("active") == "true"), "")
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._slider.sizeHint().width(),
+                     max(label.sizeHint().height() for label in self._labels))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._place()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        # The Interface page previews a new UI scale while this dialog is open,
+        # and a restyle changes what these names measure.
+        if event.type() in (QEvent.Type.StyleChange, QEvent.Type.FontChange):
+            self.updateGeometry()
+            self._place()
+
+    def _place(self) -> None:
+        slider = self._slider
+        option = QStyleOptionSlider()
+        slider.initStyleOption(option)
+        groove = slider.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, option,
+            QStyle.SubControl.SC_SliderGroove, slider)
+        handle = slider.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, option,
+            QStyle.SubControl.SC_SliderHandle, slider)
+        span = groove.width() - handle.width()
+
+        for value, label in enumerate(self._labels):
+            offset = slider.style().sliderPositionFromValue(
+                slider.minimum(), slider.maximum(), value, span)
+            centre = groove.x() + offset + handle.width() / 2
+            width = label.sizeHint().width()
+            left = min(max(0, round(centre - width / 2)),
+                       max(0, self.width() - width))
+            label.setGeometry(left, 0, width, self.height())
 
 
 class SettingsDialog(QDialog):
@@ -652,10 +767,7 @@ class SettingsDialog(QDialog):
         row.addWidget(reset)
         layout.addLayout(row)
 
-        hint = QLabel(
-            "Previewed as you drag, and kept only if you press OK. The "
-            "timeline's track headers and the side panel's opening width "
-            "follow on the next launch.")
+        hint = QLabel("Previewed as you drag, and kept only if you press OK.")
         hint.setObjectName("SettingsDimLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -827,7 +939,14 @@ class SettingsDialog(QDialog):
                           lambda: self.log_copy_button.setText("Copy path"))
 
     def _build_stage_page(self) -> QWidget:
-        page, layout = self._make_page("Virtual stage", "renderer · fog")
+        page, layout = self._make_page("Virtual stage",
+                                       "quality · renderer · fog")
+
+        # Set before anything the presets govern is built: applying a preset
+        # writes those controls, and their change signals come straight back
+        # here asking which preset is showing.
+        self._applying_preset = False
+        self._build_quality_slider(layout)
 
         self.stage_gpu_check = QCheckBox("Render the stage light on the GPU")
         self.stage_gpu_check.setChecked(self.config.window.stage_gpu)
@@ -840,14 +959,122 @@ class SettingsDialog(QDialog):
             "if there isn't one.")
         layout.addWidget(self.stage_gpu_check)
 
-        gpu_hint = QLabel("Applies on the next launch.")
-        gpu_hint.setObjectName("SettingsDimLabel")
-        layout.addWidget(gpu_hint)
-
         self._build_fog_controls(layout)
+
+        # Wired last: the preset both reads and writes every control above, so
+        # all of them have to exist before the first sync.
+        self.quality_slider.valueChanged.connect(self._on_quality_slider)
+        for signal in (self.stage_gpu_check.toggled, self.fog_check.toggled,
+                       self.fog_steps_spin.valueChanged,
+                       self.fog_resolution_combo.currentIndexChanged,
+                       self.fog_jitter_spin.valueChanged):
+            signal.connect(self._sync_quality_slider)
+        self._sync_quality_slider()
 
         layout.addStretch(1)
         return page
+
+    def _build_quality_slider(self, layout: QVBoxLayout) -> None:
+        """One handle over everything below it.
+
+        As much a readout as a control: the handle is *derived* from the values
+        it governs, so reaching past it and changing one of them by hand lands
+        on Custom rather than leaving the slider lying about the rig.
+        """
+        row = QGridLayout()
+        row.setHorizontalSpacing(10)
+        row.setVerticalSpacing(2)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Quality:"), 0, 0)
+
+        self.quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.quality_slider.setRange(0, QUALITY_CUSTOM)
+        self.quality_slider.setSingleStep(1)
+        self.quality_slider.setPageStep(1)
+        self.quality_slider.setTickInterval(1)
+        self.quality_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.quality_slider.setToolTip(
+            "How much the virtual stage's renderer is asked to do.\n"
+            "Off is the raster path, the one that draws on any machine; every "
+            "other stop turns the GPU renderer on and spends the rest on "
+            "fog.\n"
+            "Custom is what the slider reads when the controls below match no "
+            "preset — it is not something you pick.")
+        row.addWidget(self.quality_slider, 0, 1)
+
+        # The names live under the ticks, so the strip has to share the
+        # slider's column to share its width.
+        self.quality_ticks = SliderTickLabels(
+            self.quality_slider,
+            [name for name, _ in QUALITY_PRESETS] + ["Custom"])
+        row.addWidget(self.quality_ticks, 1, 1)
+        row.setColumnStretch(1, 1)
+        layout.addLayout(row)
+
+    def _on_quality_slider(self, index: int) -> None:
+        """Write the preset the handle landed on into the controls below.
+
+        Custom has nothing to apply, so landing on it by hand puts the handle
+        straight back where the current values say it belongs.
+        """
+        if index == QUALITY_CUSTOM:
+            self._sync_quality_slider()
+            return
+
+        values = QUALITY_PRESETS[index][1]
+        self._applying_preset = True
+        try:
+            self.stage_gpu_check.setChecked(values["gpu"])
+            self.fog_check.setChecked(values["fog"])
+            if values["fog"]:
+                self.fog_steps_spin.setValue(values["march_steps"])
+                self._select_fog_resolution(values["resolution"])
+                self.fog_jitter_spin.setValue(
+                    int(round(values["jitter"] * 100)))
+        finally:
+            self._applying_preset = False
+        self._show_quality(index)
+
+    def _sync_quality_slider(self, *_) -> None:
+        """Put the handle where the controls below say it belongs."""
+        if self._applying_preset:
+            return
+        index = self._current_quality_index()
+        self.quality_slider.blockSignals(True)
+        self.quality_slider.setValue(index)
+        self.quality_slider.blockSignals(False)
+        self._show_quality(index)
+
+    def _current_quality_index(self) -> int:
+        """Which preset the controls currently spell out, or Custom.
+
+        Only what is actually in effect counts. With the GPU renderer off
+        nothing below it draws at all, and with fog off its quality numbers are
+        greyed out — matching on values nobody can see would read Custom for a
+        stage that looks exactly like the preset.
+        """
+        if not self.stage_gpu_check.isChecked():
+            return QUALITY_OFF
+        if not self.fog_check.isChecked():
+            return QUALITY_LOW
+        for index in range(QUALITY_LOW + 1, QUALITY_CUSTOM):
+            values = QUALITY_PRESETS[index][1]
+            if (self.fog_steps_spin.value() == values["march_steps"]
+                    and abs(self.fog_resolution_combo.currentData()
+                            - values["resolution"]) < 1e-6
+                    and self.fog_jitter_spin.value()
+                        == int(round(values["jitter"] * 100))):
+                return index
+        return QUALITY_CUSTOM
+
+    def _show_quality(self, index: int) -> None:
+        # Driven from here rather than from the slider's valueChanged: a sync
+        # sets the handle with the signal blocked, and the strip still has to
+        # follow.
+        self.quality_ticks.set_active(index)
+        # Off IS the GPU renderer being off, so the checkbox has nothing left
+        # to say; the slider is the way back on.
+        self.stage_gpu_check.setEnabled(index != QUALITY_OFF)
 
     def _build_fog_controls(self, layout: QVBoxLayout) -> None:
         """Volumetric fog: the switch, and what the march costs.

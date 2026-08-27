@@ -74,8 +74,9 @@ class Timeline(QWidget):
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
                  fixtures=None, ui_scale=1.0, parent=None):
         super().__init__(parent)
-        # Fixed at construction: the header width is baked into scene rects and
-        # painted items, so changing the UI scale moves it on the next launch.
+        # The header width is baked into scene rects and painted items, so it
+        # is measured here rather than styled; `set_ui_scale` re-measures it
+        # when the scale changes under a running window.
         # (`timeline/` never imports `ui/`, hence the injected scale.)
         self.HEADER_WIDTH = round(self.HEADER_WIDTH * ui_scale)
         self.audio_file = audio_file
@@ -583,6 +584,23 @@ class Timeline(QWidget):
         # Reposition headers/content, redraw clips onto the new lanes (by
         # channel), refresh grid/playhead, and place the handles.
         self._reflow_layout(redraw_waveform=False)
+
+    def set_ui_scale(self, scale: float) -> None:
+        """Re-measure the track headers at a new UI scale.
+
+        The header width is *painted*, not styled — it is baked into scene
+        rects and into items the theme's pixel rewrite cannot reach — so a
+        restyle alone leaves the lane names in a strip sized for the old scale.
+        Everything but the ruler's band redraws itself from `HEADER_WIDTH` on
+        the reflow; that one is created once, so it is resized in place.
+        """
+        width = round(Timeline.HEADER_WIDTH * scale)
+        if width == self.HEADER_WIDTH:
+            return
+        self.HEADER_WIDTH = width
+        self.header_view.setFixedWidth(width)
+        self.ruler_track.resize_header(width)
+        self._reflow_layout(redraw_waveform=bool(self.audio_file))
 
     def _reposition_resize_handles(self):
         """Place each resize handle at the bottom border of its track header."""

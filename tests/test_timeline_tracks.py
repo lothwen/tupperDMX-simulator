@@ -316,6 +316,31 @@ def test_empty_patch_no_tracks():
     _assert(True, "refresh with empty patch is a no-op")
 
 
+def test_ui_scale_remeasures_the_headers():
+    print("test_ui_scale_remeasures_the_headers")
+    _, tl = _make()
+    designed = Timeline.HEADER_WIDTH
+    _assert(tl.HEADER_WIDTH == designed, "opens at the designed width")
+
+    tl.set_ui_scale(1.5)
+    _assert(tl.HEADER_WIDTH == round(designed * 1.5), "the strip follows the scale")
+    _assert(tl.header_view.width() == tl.HEADER_WIDTH, "so does the header view")
+    _assert(tl.header_scene.sceneRect().width() == tl.HEADER_WIDTH,
+            "and the scene it draws into")
+    # The ruler's band is created once and kept, so it is the one that has to be
+    # resized in place rather than redrawn.
+    ruler_bg = tl.ruler_track.permanent_header_items[0]
+    _assert(ruler_bg.rect().width() == tl.HEADER_WIDTH, "the ruler band too")
+    for track in tl.midi_events_tracks:
+        _assert(track._header_widget.width() == tl.HEADER_WIDTH,
+                f"lane '{track.label}' redrew at the new width")
+
+    tl.set_ui_scale(0.75)
+    _assert(tl.HEADER_WIDTH == round(designed * 0.75), "and back down again")
+    _assert(tl.ruler_track.permanent_header_items[0].rect().width()
+            == tl.HEADER_WIDTH, "the ruler band shrinks with it")
+
+
 def main():
     _ensure_app()
     test_one_track_per_fixture()
@@ -331,6 +356,7 @@ def main():
     test_rebuild_to_empty_patch()
     test_manager_update_fixtures_reflects_new_patch()
     test_empty_patch_no_tracks()
+    test_ui_scale_remeasures_the_headers()
     print("\nALL TESTS PASSED")
 
 

@@ -1698,6 +1698,17 @@ QLabel#SettingsValueLabel {
     font-size: 12px;
 }
 
+/* Names written under a slider's ticks: dim, except the stop the handle is on. */
+QLabel#SliderTickLabel {
+    background: transparent;
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+QLabel#SliderTickLabel[active="true"] {
+    color: #e0e0e0;
+}
+
 QLabel#SettingsToggleLabel {
     background: transparent;
     color: #cfcfcf;

@@ -4,8 +4,8 @@ Characterization test: the redesigned SettingsDialog Input/Output page.
 Covers the IOConfig round-trip through the rebuilt controls (incl. the
 persisted-but-absent device "(not connected)" path), the internal-controller
 power toggle greying its body, the two universe spinboxes staying in lockstep,
-the live validation strip / flow-graph state, and that a hard routing error
-blocks accept.
+the live validation strip / flow-graph state, that a hard routing error blocks
+accept, and the Virtual stage page's quality-preset slider.
 
 Offscreen Qt + a shared QApplication come from conftest.py (the `qapp` fixture).
 
@@ -118,6 +118,61 @@ def test_accept_blocked_on_hard_error(qapp, monkeypatch=None):
     _assert(dlg.result() == 0, "dialog is not accepted on a hard error")
 
 
+def test_quality_preset_slider(qapp):
+    print("test_quality_preset_slider")
+    from ui.settings_dialog import (QUALITY_PRESETS, QUALITY_OFF, QUALITY_LOW,
+                                    QUALITY_CUSTOM)
+    dlg = _dialog()
+
+    # Every stop writes its values and reads back as itself, and Off is the one
+    # that has nothing left for the GPU checkbox to say.
+    for index, (name, values) in enumerate(QUALITY_PRESETS):
+        dlg.quality_slider.setValue(index)
+        _assert(dlg.quality_ticks.active_name() == name,
+                f"slider stop {index} lights up {name}")
+        _assert(dlg.stage_gpu_check.isChecked() == values["gpu"],
+                f"{name} sets the GPU renderer {values['gpu']}")
+        _assert(dlg.fog_check.isChecked() == values["fog"],
+                f"{name} sets fog {values['fog']}")
+        _assert(dlg.stage_gpu_check.isEnabled() == (index != QUALITY_OFF),
+                f"{name} leaves the GPU checkbox enabled={index != QUALITY_OFF}")
+        _assert(dlg._current_quality_index() == index, f"{name} round-trips")
+
+    # A governed value moved by hand is Custom; a value no preset names is not.
+    high = next(i for i, (name, _) in enumerate(QUALITY_PRESETS)
+                if name == "High")
+    dlg.quality_slider.setValue(high)
+    dlg.fog_steps_spin.setValue(37)
+    _assert(dlg.quality_slider.value() == QUALITY_CUSTOM,
+            "editing a preset value lands on Custom")
+    dlg.fog_steps_spin.setValue(QUALITY_PRESETS[high][1]["march_steps"])
+    _assert(dlg.quality_ticks.active_name() == "High", "putting it back reads High again")
+    for spin, value in ((dlg.fog_light_dir_spin, 123),
+                        (dlg.fog_distance_spin, 999)):
+        spin.setValue(value)
+        _assert(dlg.quality_ticks.active_name() == "High",
+                f"{spin.toolTip().split(chr(10))[0][:34]}... is a look, not a cost")
+
+    # Custom is a readout: dragging onto it snaps back to what is showing.
+    dlg.quality_slider.setValue(QUALITY_CUSTOM)
+    _assert(dlg.quality_slider.value() == high, "dragging onto Custom snaps back")
+
+    # Unchecking the GPU renderer by hand IS Off.
+    dlg.stage_gpu_check.setChecked(False)
+    _assert(dlg.quality_slider.value() == QUALITY_OFF, "GPU off lands on Off")
+    _assert(not dlg.stage_gpu_check.isEnabled(), "and greys the checkbox")
+
+    # Values nothing can see don't force Custom: prefs may hold anything behind
+    # a switch that is off.
+    cfg = Config()
+    cfg.window.stage_gpu = True
+    cfg.window.fog.enabled = False
+    cfg.window.fog.march_steps = 99
+    from ui.settings_dialog import SettingsDialog
+    _assert(SettingsDialog(cfg)._current_quality_index() == QUALITY_LOW,
+            "fog off reads Low whatever its quality values hold")
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -127,6 +182,7 @@ def main():
     test_flow_and_validation_strip(app)
     test_usb_conflict_is_error(app)
     test_accept_blocked_on_hard_error(app)
+    test_quality_preset_slider(app)
     print("\nALL TESTS PASSED")
 
 

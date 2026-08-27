@@ -50,6 +50,16 @@ class RulerTrack(BaseTrack):
             self.header_scene.addItem(ruler_header_bg)
             self.permanent_header_items.append(ruler_header_bg)
 
+    def resize_header(self, width: int) -> None:
+        """Re-measure the background at a new header width.
+
+        The band is created once and kept (see `draw_header`), so a UI-scale
+        change has to reach it here — every other header redraws itself from
+        `HEADER_WIDTH` on the next reflow.
+        """
+        for item in self.permanent_header_items:
+            item.setRect(0, 0, width, self.get_track_height())
+
     def draw_ruler(self):
         """Draw the ruler with bar or clock-time markers based on the mode."""
         # Clear existing ruler items (content only, not header)

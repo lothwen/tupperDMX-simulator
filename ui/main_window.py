@@ -714,6 +714,7 @@ class MainWindow(QMainWindow):
         old_webremote = asdict(self.config.webremote)
         old_audio = asdict(self.config.audio)
         old_fog = asdict(self.config.window.fog)
+        old_gpu = self.config.window.stage_gpu
         old_logging = asdict(self.config.logging)
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
@@ -724,6 +725,11 @@ class MainWindow(QMainWindow):
             return
 
         self.apply_ui_scale()
+
+        # Build or drop the GL context first: the light layer that fog is then
+        # handed to is the one this call decides the existence of.
+        if self.config.window.stage_gpu != old_gpu:
+            self._apply_stage_gpu()
 
         # The dialog hands back a NEW fog object, so the light layer is still
         # holding the old one until it is told otherwise.
@@ -751,6 +757,22 @@ class MainWindow(QMainWindow):
         self.save_config()
         self.logger.info("Settings updated")
 
+    def _apply_stage_gpu(self):
+        """Turn the stage's GPU renderer on or off, now rather than on the next
+        launch. Says so when the box cannot honour it — the fallback is silent
+        at startup, but here it is the answer to something just asked for."""
+        wanted = self.config.window.stage_gpu
+        if self.stage_controller.set_gpu_light(wanted) == wanted:
+            return
+        self.logger.warning("Could not turn the GPU renderer %s",
+                            "on" if wanted else "off")
+        if wanted:
+            QMessageBox.warning(
+                self, "GPU renderer unavailable",
+                "The stage's light could not be moved onto the GPU on this "
+                "machine.\n\nIt is still being drawn by the normal renderer. "
+                "This usually means there is no usable OpenGL driver.")
+
     def apply_ui_scale(self, scale=None):
         """Show the interface at `scale`, or at whatever the config says.
 
@@ -767,7 +789,27 @@ class MainWindow(QMainWindow):
         if scale is None:
             scale = self.config.window.ui_scale
         if theme.apply_scale(QApplication.instance(), scale):
+            # Neither of these is styled, so neither follows a restyle: a
+            # painted header strip, and a width the config only holds once the
+            # divider has been dragged.
+            self.timeline.set_ui_scale(scale)
+            self._apply_sidebar_scale(scale)
             QTimer.singleShot(0, self._remeasure_toolbars)
+
+    def _apply_sidebar_scale(self, scale):
+        """Re-derive the sidebar's width from the UI scale.
+
+        Only while it is still the derived width: once the divider has been
+        dragged, `config.window.sidebar_width` holds a size the user chose and
+        the scale has no business overruling it.
+        """
+        if self.config.window.sidebar_width:
+            return
+        self._sidebar_width = round(250 * scale)
+        sizes = self._sidebar_splitter.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._sidebar_splitter.setSizes(
+                [sum(sizes) - self._sidebar_width, self._sidebar_width])
 
     def _remeasure_toolbars(self):
         self.toolbar_manager.remeasure_breakpoint()
@@ -775,19 +817,15 @@ class MainWindow(QMainWindow):
 
     def _on_prefs_reloaded(self, adopted):
         """View half of a live userprefs reload — the core has already applied
-        its own. Mirrors what show_settings_dialog() re-applies, minus what a
-        running window cannot change: `stage_gpu` needs a GL context built
-        before the stage exists (the dialog says so too), and the window
-        geometry belongs to the window, not to the file."""
+        its own. Mirrors what show_settings_dialog() re-applies, minus the
+        window geometry, which belongs to the window rather than to the file."""
         if "window" in adopted:
             self.stage_controller.set_haze_baseline(self.config.window.stage_haze)
-            self.stage_controller.apply_stage_config()
-            self.apply_ui_scale()
             if self.config.window.stage_gpu != (self.stage_controller.light_layer
                                                 is not None):
-                self.logger.warning(
-                    "userprefs stage_gpu changed — it only takes effect on the "
-                    "next launch")
+                self.stage_controller.set_gpu_light(self.config.window.stage_gpu)
+            self.stage_controller.apply_stage_config()
+            self.apply_ui_scale()
         if "volume" in adopted:
             self.timeline.set_volumes(
                 audio=self.config.volume.audio,
