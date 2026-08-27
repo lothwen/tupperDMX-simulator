@@ -53,6 +53,24 @@ ARROW_SEEK_MAX_STEP = 5.0
 ARROW_SEEK_RAMP = 3.0
 ARROW_SEEK_INTERVAL = 0.08
 
+# The audio formats the app loads. One list behind the load-time check and the
+# drop target's accept test, so the window never accepts a drag it will then
+# refuse to load.
+AUDIO_SUFFIXES = ('.mp3', '.wav')
+
+
+def is_audio_path(path):
+    """True for a path this app can load as a backing or guide track."""
+    return path.lower().endswith(AUDIO_SUFFIXES)
+
+
+def audio_paths_from_mime(mime):
+    """Local audio files carried by a drag, in the order they were dropped."""
+    if not mime.hasUrls():
+        return []
+    return [url.toLocalFile() for url in mime.urls()
+            if url.isLocalFile() and is_audio_path(url.toLocalFile())]
+
 
 class MainWindow(QMainWindow):
     def __init__(self, config: Config, show=None):
@@ -102,6 +120,8 @@ class MainWindow(QMainWindow):
         # 1280-wide display. Declaring 1200x800 here used to add a height floor
         # taller than the 1280x800 screens this is meant to run on.
         self.setMinimumSize(1024, 600)
+        # Audio files can be dropped anywhere on the window (see dropEvent).
+        self.setAcceptDrops(True)
         self.setGeometry(100, 100, self.config.window.width, self.config.window.height)
 
         # Setup main layout
@@ -1350,94 +1370,149 @@ class MainWindow(QMainWindow):
             filt = "All files (*)"
         path, _ = QFileDialog.getOpenFileName(self, title, "", filt)
         if path:
-            try:
-                # Validate file exists and is accessible
-                if not os.path.exists(path):
-                    ErrorDialogManager.show_media_file_error(self, path, "File not found")
+            self.load_media_file(file_type, path)
+
+    def load_media_file(self, file_type, path):
+        """Load `path` as the current song's backing ('audio'), 'guide' or 'midi'.
+
+        The picker's other half: everything the file dialog does once a path is
+        in hand, so a dropped file takes exactly the same route."""
+        try:
+            # Validate file exists and is accessible
+            if not os.path.exists(path):
+                ErrorDialogManager.show_media_file_error(self, path, "File not found")
+                return
+            
+            if file_type == 'audio':
+                # Validate file extension
+                if not is_audio_path(path):
+                    ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
                     return
                 
-                if file_type == 'audio':
-                    # Validate file extension
-                    file_ext = path.lower().split('.')[-1]
-                    if file_ext not in ['mp3', 'wav']:
-                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
-                        return
-                    
-                    # Backing track: sets it on the CURRENT song, replacing
-                    # whatever it had — exactly like the guide. Growing the
-                    # setlist is SETLIST ▸ + alone, so picking a file never
-                    # silently spawns a song beside the one being edited.
-                    self.stop_playback()
+                # Backing track: sets it on the CURRENT song, replacing
+                # whatever it had — exactly like the guide. Growing the
+                # setlist is SETLIST ▸ + alone, so picking a file never
+                # silently spawns a song beside the one being edited.
+                self.stop_playback()
+                song = self.config.get_current_song()
+                if song is None:
+                    new_index = self.config.add_song(audio=path)
+                    self.config.set_current_song_index(new_index)
                     song = self.config.get_current_song()
-                    if song is None:
-                        new_index = self.config.add_song(audio=path)
-                        self.config.set_current_song_index(new_index)
-                        song = self.config.get_current_song()
-                        self.logger.info(
-                            f"Added first song to the setlist at index {new_index}")
-                    else:
-                        self.config.update_current_song(audio=path, offset=0.0)
-                    self.playlist_controller.apply_song_config(song)
-                    self.playlist_controller.update_song_counter()
-                    self.save_config()
-                    self.logger.info(f"Backing track set: {path}")
-                    
-                elif file_type == 'guide':
-                    # Guide track: attaches to the CURRENT song — or starts one
-                    # of its own when the setlist is empty (a guide is as good
-                    # a reason for a song to exist as a backing).
-                    file_ext = path.lower().split('.')[-1]
-                    if file_ext not in ['mp3', 'wav']:
-                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
-                        return
-                    song = self.config.get_current_song()
-                    if song is None:
-                        self.stop_playback()
-                        new_index = self.config.add_song(guide=path)
-                        self.config.set_current_song_index(new_index)
-                        song = self.config.get_current_song()
-                        self.logger.info(
-                            f"Added guide-only song to playlist at index {new_index}")
-                    else:
-                        # A different file: its sync offset is not this one's.
-                        self.config.update_current_song(guide=path,
-                                                        guide_offset=0.0)
-                    # Full reload keeps engine/waveform/toolbar consistent
-                    self.playlist_controller.apply_song_config(song)
-                    self.playlist_controller.update_song_counter()
-                    self.save_config()
-                    self.logger.info(f"Guide track set: {path}")
-
-                elif file_type == 'midi':
-                    # Save pending edits of the current MIDI, then copy the
-                    # picked file into the show's midis/ — the show owns its
-                    # sequences; the user's original stays untouched.
-                    self.show_manager.flush("load-midi")
-                    owned = self.show_manager.import_midi_copy(path)
-                    load_path = owned or path
-                    self.config.update_current_song(midi=load_path)
-                    self.save_config()
-
-                    # Load MIDI file via MidiManager and update display
-                    self.show_manager.begin_song_load()
-                    try:
-                        loaded = self.midi_manager.load_from_file(load_path)
-                    finally:
-                        self.show_manager.end_song_load()
-                    if loaded:
-                        self.timeline.refresh_from_manager(detect_bpm=True)
-                        self.toolbar_manager.update_midi_file_display(load_path)
-                        self.toolbar_manager.set_export_midi_enabled(True)
-                    else:
-                        ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
-                        return
+                    self.logger.info(
+                        f"Added first song to the setlist at index {new_index}")
+                else:
+                    self.config.update_current_song(audio=path, offset=0.0)
+                self.playlist_controller.apply_song_config(song)
+                self.playlist_controller.update_song_counter()
+                self.save_config()
+                self.logger.info(f"Backing track set: {path}")
                 
-                self.update_window_title()
-                    
-            except PermissionError:
-                ErrorDialogManager.show_file_permission_error(self, path, "read")
-            except Exception as e:
-                ErrorDialogManager.show_media_file_error(self, path, str(e))
+            elif file_type == 'guide':
+                # Guide track: attaches to the CURRENT song — or starts one
+                # of its own when the setlist is empty (a guide is as good
+                # a reason for a song to exist as a backing).
+                if not is_audio_path(path):
+                    ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
+                    return
+                song = self.config.get_current_song()
+                if song is None:
+                    self.stop_playback()
+                    new_index = self.config.add_song(guide=path)
+                    self.config.set_current_song_index(new_index)
+                    song = self.config.get_current_song()
+                    self.logger.info(
+                        f"Added guide-only song to playlist at index {new_index}")
+                else:
+                    # A different file: its sync offset is not this one's.
+                    self.config.update_current_song(guide=path,
+                                                    guide_offset=0.0)
+                # Full reload keeps engine/waveform/toolbar consistent
+                self.playlist_controller.apply_song_config(song)
+                self.playlist_controller.update_song_counter()
+                self.save_config()
+                self.logger.info(f"Guide track set: {path}")
+
+            elif file_type == 'midi':
+                # Save pending edits of the current MIDI, then copy the
+                # picked file into the show's midis/ — the show owns its
+                # sequences; the user's original stays untouched.
+                self.show_manager.flush("load-midi")
+                owned = self.show_manager.import_midi_copy(path)
+                load_path = owned or path
+                self.config.update_current_song(midi=load_path)
+                self.save_config()
+
+                # Load MIDI file via MidiManager and update display
+                self.show_manager.begin_song_load()
+                try:
+                    loaded = self.midi_manager.load_from_file(load_path)
+                finally:
+                    self.show_manager.end_song_load()
+                if loaded:
+                    self.timeline.refresh_from_manager(detect_bpm=True)
+                    self.toolbar_manager.update_midi_file_display(load_path)
+                    self.toolbar_manager.set_export_midi_enabled(True)
+                else:
+                    ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
+                    return
+            
+            self.update_window_title()
+                
+        except PermissionError:
+            ErrorDialogManager.show_file_permission_error(self, path, "read")
+        except Exception as e:
+            ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def dragEnterEvent(self, event):
+        if audio_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        # Same answer as the enter: a child that refuses the drag (the timeline
+        # takes clips and scenes, not files) propagates its moves up here too.
+        if audio_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """Take a dropped audio file as the current song's backing or guide."""
+        paths = audio_paths_from_mime(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if len(paths) > 1:
+            self.logger.info(
+                f"Dropped {len(paths)} audio files, loading the first one: "
+                f"{paths[0]}")
+        # Ask AFTER the drop returns: a modal dialog opened while the drag
+        # session is still unwinding keeps the pointer grabbed.
+        QTimer.singleShot(0, lambda path=paths[0]: self._load_dropped_audio(path))
+
+    def _load_dropped_audio(self, path):
+        """Which of the two audio slots did the user mean? Only they know."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Load audio file")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"Load “{os.path.basename(path)}” as:")
+        box.setInformativeText(
+            "The backing track is what plays live; the guide track is a "
+            "full-mix reference for designing to.")
+        backing = box.addButton("Backing track",
+                                QMessageBox.ButtonRole.AcceptRole)
+        guide = box.addButton("Guide track", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(backing)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is backing:
+            self.load_media_file('audio', path)
+        elif clicked is guide:
+            self.load_media_file('guide', path)
 
     def clear_backing_track(self):
         """Remove the current song's backing track (the file stays on disk).
