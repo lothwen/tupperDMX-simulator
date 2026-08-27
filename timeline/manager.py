@@ -151,6 +151,16 @@ class Timeline(QWidget):
         self._selected_event_ids = set()
         self._applying_selection = False
 
+        # Repeat-paste chain: (playhead time the chain was started from, time
+        # the next paste goes to). Pasting again without touching the playhead
+        # stacks the block after the previous one, so a copied section can be
+        # looped by hitting Ctrl+V repeatedly. A playhead move, a fresh copy or
+        # a clip delete breaks the chain and the next paste lands at the
+        # playhead — a delete because the freed slot is where the operator
+        # means to paste next, not one block further on.
+        self._paste_chain_from = None
+        self._paste_chain_next = 0.0
+
         # Single shared clip tooltip. Created lazily, reused by every clip.
         # A per-clip tooltip would be orphaned on screen when a redraw
         # destroys the hovered clip before its hoverLeaveEvent fires; one
@@ -890,25 +900,16 @@ class Timeline(QWidget):
             self._schedule_refresh()
 
     def delete_selected(self):
-        """Delete every selected clip behind a single confirmation dialog."""
+        """Delete every selected clip outright — Ctrl+Z undoes it."""
         if not self.midi_manager:
             return
         clips = self.selected_clip_items()
         if not clips:
             return
         ids = [c.event_id for c in clips]
-        count = len(clips)
-        noun = "event" if count == 1 else "events"
-        reply = QMessageBox.question(
-            None, "Delete Events",
-            f"Replace {count} selected {noun} with blackouts?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
         self._selected_event_ids = set()
         if self.midi_manager.delete_selection(ids):
+            self._paste_chain_from = None
             self._schedule_refresh()
 
     def copy_selected(self):
@@ -919,15 +920,30 @@ class Timeline(QWidget):
         if not ids:
             return
         self.midi_manager.copy_selection(ids)
+        self._paste_chain_from = None
 
     def paste_at_playhead(self):
-        """Paste clipboard clips starting at the current playhead time."""
+        """Paste clipboard clips at the playhead — or after the previous paste.
+
+        Consecutive pastes with the playhead left alone chain: each block lands
+        one block-length after the last, which is how a copied section is
+        looped. Moving the playhead, copying again or deleting a clip breaks
+        the chain, so the next paste starts over at the playhead. A block with
+        no measurable length (every clip running to the song end) cannot chain,
+        so it keeps pasting at the playhead.
+        """
         if not self.midi_manager or not self.midi_manager.has_clipboard():
             return
         if not hasattr(self, 'playhead') or self.playhead is None:
             return
         time_seconds = max(0.0, self.playhead.x() / self.PIXELS_PER_SECOND)
-        if self.midi_manager.paste(time_seconds):
+        chained = (self._paste_chain_from is not None
+                   and abs(time_seconds - self._paste_chain_from) < 1e-4)
+        target = self._paste_chain_next if chained else time_seconds
+        if self.midi_manager.paste(target):
+            span = self.midi_manager.clipboard_span()
+            self._paste_chain_from = time_seconds
+            self._paste_chain_next = target + span if span > 0 else target
             self._schedule_refresh()
 
     def _seek_to_scene_x(self, scene_x: float):
@@ -1388,6 +1404,8 @@ class Timeline(QWidget):
         Regular clips are converted into a fixture-matching BLACKOUT instead
         of being deleted, so the time slot remains accounted for and adjacent
         clips don't visually expand into the freed space.
+
+        Not confirmed — Ctrl+Z undoes it.
         """
         if not self.midi_manager or not event_id:
             return
@@ -1397,42 +1415,13 @@ class Timeline(QWidget):
 
         group_id = event_data.get('group_id')
         if group_id:
-            scene_label = (event_data.get('scene_name')
-                           or f"scene at {event_data['time']:.2f}s")
-            title = "Delete Scene"
-            prompt = (f"Replace the scene '{scene_label}' "
-                      f"with a blackout? (All 7 channel events removed.)")
-        else:
-            info = event_data.get('info', None)
-            if info and hasattr(info, 'part'):
-                event_name = info.part
-            else:
-                event_name = f"Note {event_data['note']}"
-            is_blackout = self.midi_manager.is_blackout(event_data)
-            if is_blackout:
-                title = "Remove Blackout"
-                prompt = (f"Remove the blackout '{event_name}' "
-                          f"at {event_data['time']:.2f}s?")
-            else:
-                title = "Delete MIDI Event"
-                prompt = (f"Replace the MIDI event '{event_name}' at "
-                          f"{event_data['time']:.2f}s with a blackout?")
-
-        reply = QMessageBox.question(
-            None, title, prompt,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        if group_id:
             ok = self.midi_manager.delete_scene(group_id)
         elif self.midi_manager.is_blackout(event_data):
             ok = self.midi_manager.delete_event(event_id)
         else:
             ok = self.midi_manager.replace_with_blackout(event_id)
         if ok:
+            self._paste_chain_from = None
             self._schedule_refresh()
 
     def fixture_at_y(self, scene_y: float):

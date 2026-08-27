@@ -637,6 +637,21 @@ class MidiManager(QObject):
         self.logger.info(f"Copied {len(units)} clip unit(s) to clipboard")
         return len(units)
 
+    def clipboard_span(self) -> float:
+        """Length of the clipboard block: first unit's start to last unit's end.
+
+        This is what a repeat-paste steps by, so a copied section repeats as a
+        loop. A unit whose clip runs to the song end has no end to measure
+        (`width` is None) and contributes only its start; a block made purely
+        of those spans 0.0, and the caller then has nothing to step by.
+        """
+        span = 0.0
+        for unit in self._clipboard:
+            width = unit.get('width')
+            end = float(unit['rel_time']) + (0.0 if width is None else float(width))
+            span = max(span, end)
+        return span
+
     def paste(self, at_time: float) -> bool:
         """Recreate clipboard units starting at at_time, as one undo step.
 
