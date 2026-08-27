@@ -2,14 +2,16 @@
 # ABOUTME: widget tree and wires the widget halves of the core's signals. The
 # ABOUTME: thin entry point lives in main.py.
 import os
+import time
 from copy import deepcopy
 from dataclasses import asdict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
                              QStyle, QTabWidget, QDialog, QInputDialog,
+                             QAbstractItemView, QAbstractSlider,
                              QAbstractSpinBox, QComboBox, QLineEdit,
-                             QPlainTextEdit, QTextEdit)
+                             QPlainTextEdit, QTabBar, QTextEdit)
 from PyQt6.QtGui import QGuiApplication, QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QSize, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
@@ -40,6 +42,16 @@ from ui.toolbar_manager import ToolbarManager
 from ui.markers_dialog import MarkersDialog
 from core import markers as core_markers
 from webremote.state import probe_duration, song_duration
+
+# ←/→ scrub the playhead. A tap nudges by ARROW_SEEK_STEP; holding ramps the
+# step up to ARROW_SEEK_MAX_STEP over ARROW_SEEK_RAMP seconds of hold. The
+# OS key-repeat rate is not ours to pick, so ARROW_SEEK_INTERVAL sets the pace
+# instead: every step is a real seek, repositioning MIDI, audio and the
+# metronome, and none of that wants to run at a 30 Hz repeat rate.
+ARROW_SEEK_STEP = 0.5
+ARROW_SEEK_MAX_STEP = 5.0
+ARROW_SEEK_RAMP = 3.0
+ARROW_SEEK_INTERVAL = 0.08
 
 
 class MainWindow(QMainWindow):
@@ -122,8 +134,19 @@ class MainWindow(QMainWindow):
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
 
-        # Install global event filter for spacebar handling
+        # Install global event filter for spacebar / Esc / arrow handling
         QApplication.instance().installEventFilter(self)
+
+        # Arrow-key scrub: when the current hold began and when its last step
+        # landed (see _arrow_seek).
+        self._arrow_held_since = 0.0
+        self._arrow_last_step = 0.0
+
+        # Start with the timeline holding focus. Left to itself the focus chain
+        # opens on the setlist combo, which is an editable rename field — so
+        # ←/→ (and Space) would go to its caret and the transport would look
+        # dead until the operator clicked somewhere else.
+        self.timeline.content_view.setFocus()
 
         # Undo / redo shortcuts (Ctrl+Z / Ctrl+Shift+Z)
         self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
@@ -1552,6 +1575,67 @@ class MainWindow(QMainWindow):
             return False
         return not (isinstance(focus, QComboBox) and focus.isEditable())
 
+    def _arrow_seeks_playhead(self):
+        """True when ←/→ mean "move the playhead" instead of a keystroke for a
+        widget.
+
+        More widgets steer with the arrows than with Space, and this filter is
+        installed on the QApplication, so it sees every key press in the
+        process: on top of Space's text fields and spin boxes, a slider moves
+        its value, an item view its current row, a tab bar its page. The line
+        is whether the widget has another way to do the same thing — it does
+        not, so it keeps the key, while a closed combo box (the setlist among
+        them, and it holds focus at launch) steers with Up/Down just as well
+        and hands ←/→ to the transport. An open menu and a dialog own the key
+        outright, which the popup and active-window checks answer.
+        """
+        active = QApplication.activeWindow()
+        if active is not None and active is not self:
+            return False
+        if QApplication.activePopupWidget() is not None:
+            return False
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
+                              QAbstractSpinBox, QAbstractSlider,
+                              QAbstractItemView, QTabBar)):
+            return False
+        return not (isinstance(focus, QComboBox) and focus.isEditable())
+
+    def _arrow_seek(self, direction, new_hold):
+        """Move the playhead one step: `direction` -1 for ←, +1 for →.
+
+        The step grows with how long the key has been held, so a tap nudges and
+        a hold sweeps. Auto-repeat drives the hold, but ARROW_SEEK_INTERVAL
+        paces it — and a fresh press skips that throttle, so a tap always
+        lands. Pressing the other key is a fresh press, which is what restarts
+        the ramp on a direction change.
+
+        The upper bound is the song's own length (its longest audio track, else
+        its sequence), the same one the web remote's scrubber takes; a song
+        with neither is unbounded, since nothing measures it.
+        """
+        now = time.monotonic()
+        if new_hold:
+            self._arrow_held_since = now
+        elif now - self._arrow_last_step < ARROW_SEEK_INTERVAL:
+            return
+        self._arrow_last_step = now
+
+        ramp = min((now - self._arrow_held_since) / ARROW_SEEK_RAMP, 1.0)
+        step = ARROW_SEEK_STEP + (ARROW_SEEK_MAX_STEP - ARROW_SEEK_STEP) * ramp
+        target = max(0.0, self.media_controller.get_current_position()
+                     + direction * step)
+        end = (song_duration(self.config.get_current_song())
+               or self.midi_manager.get_duration() or 0.0)
+        if end:
+            target = min(target, end)
+
+        self.seek_playback(target)
+        # A seek while paused emits no position_changed (the tick returns early
+        # when the transport is stopped), so move the playhead and the clock
+        # here — watching them move is the whole point of the key.
+        self._on_position_changed(target)
+
     def _escape_leaves_edit_mode(self):
         """True when Esc means "back out of the stage designer".
 
@@ -1588,7 +1672,7 @@ class MainWindow(QMainWindow):
         self.exit_edit_mode()
 
     def eventFilter(self, source, event):
-        """Global event filter to capture spacebar / Esc from any widget."""
+        """Global event filter to capture spacebar / Esc / ←→ from any widget."""
         if (event.type() == QEvent.Type.KeyPress and
             event.key() == Qt.Key.Key_Space and
             self._spacebar_toggles_playback()):
@@ -1599,6 +1683,12 @@ class MainWindow(QMainWindow):
                 event.key() == Qt.Key.Key_Escape and
                 self._escape_leaves_edit_mode()):
             self._leave_edit_level()
+            return True
+        if (event.type() == QEvent.Type.KeyPress and
+                event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and
+                self._arrow_seeks_playhead()):
+            self._arrow_seek(1 if event.key() == Qt.Key.Key_Right else -1,
+                             new_hold=not event.isAutoRepeat())
             return True
         return super().eventFilter(source, event)
 
