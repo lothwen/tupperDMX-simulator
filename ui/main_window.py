@@ -1552,14 +1552,54 @@ class MainWindow(QMainWindow):
             return False
         return not (isinstance(focus, QComboBox) and focus.isEditable())
 
+    def _escape_leaves_edit_mode(self):
+        """True when Esc means "back out of the stage designer".
+
+        Every dialog cancels on Esc for free (QDialog routes it to reject()), and
+        so do combo/menu popups — so this filter, which sees every key press in
+        the process, must stand down while one of those is up and answer only for
+        the designer, which is a mode rather than a window. Modality is asked
+        about directly and not left to `activeWindow`, because the Add-fixture
+        dialog opens FROM the designer's own toolbar: its Esc arrives with edit
+        mode still on, and eating it would strand the dialog.
+
+        The stage window counts as ours — the stage is designable undocked too,
+        and the toolbar rides the view into it. `isHidden` rather than
+        `isVisible` because the toolbar is an overlay whose ancestors may not be
+        up yet.
+        """
+        if self.edit_toolbar.isHidden():
+            return False
+        if (QApplication.activePopupWidget() is not None
+                or QApplication.activeModalWidget() is not None):
+            return False
+        active = QApplication.activeWindow()
+        return active is None or active is self or active is self._stage_window
+
+    def _leave_edit_level(self):
+        """Esc backs out ONE level: the inspector first, then edit mode itself.
+
+        Clearing the selection is what the inspector's own ✕ does — the card
+        hides in response to `fixture_selected(None)`, never on its own.
+        """
+        if not self.fixture_inspector.isHidden():
+            self.stage_controller.scene.clearSelection()
+            return
+        self.exit_edit_mode()
+
     def eventFilter(self, source, event):
-        """Global event filter to capture spacebar from any widget."""
+        """Global event filter to capture spacebar / Esc from any widget."""
         if (event.type() == QEvent.Type.KeyPress and
             event.key() == Qt.Key.Key_Space and
             self._spacebar_toggles_playback()):
             # Toggle play/pause when spacebar is pressed anywhere
             self.play_pause_playback()
             return True  # Event handled, don't pass to widget
+        if (event.type() == QEvent.Type.KeyPress and
+                event.key() == Qt.Key.Key_Escape and
+                self._escape_leaves_edit_mode()):
+            self._leave_edit_level()
+            return True
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
