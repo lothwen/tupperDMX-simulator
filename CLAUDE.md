@@ -94,7 +94,7 @@ the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing s
 Four things ride a song's timeline that are neither notes nor audio: a spoken **voice cue**, a **tempo change**, a
 **stop-click**, and the **segue** out of the song.
 
-- **Voice cues keep their own `SongConfig.voice_cues` list.** They are the one kind that pre-renders to PCM off-thread,
+- **Voice TTS keeps its own `SongConfig.voice_tts` list.** It is the one kind that pre-renders to PCM off-thread,
   
 - **`BpmState` owns the `TempoMap`**, because base tempo + markers together ARE the song's tempo: a map assembled
   independently by the metronome and by the ruler is a map that can disagree with itself. `bpm` stays the BASE tempo.
@@ -240,7 +240,7 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   that IS `stage_haze`), `artnet`, `volume`, `logging`, `io`, `audio`, `webremote`, `last_show_path`/`recent_shows`. Legacy
   `playlist`/`fixtures` are parsed (the show migration adopts them) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest): the setlist, `current_song_index`, the fixture **patch**,
-  `webremote_cues`. A song's `voice_cues`, `control_markers` and `segue`/`segue_time` ride the song entry (see The marker
+  `webremote_cues`. A song's `voice_tts`, `control_markers` and `segue`/`segue_time` ride the song entry (see The marker
   track); adding them needed no `format_version` bump, since a manifest without the keys loads with none. A patch entry is type + `dmx_start` + stable MIDI `channel` + optional `mode` (`""` means the type's
   first declared mode, so a renamed mode never strands a patch) + `hanging`, defaulting to **true** so a patch written
   before fixtures declared their rigging keeps throwing light at the floor. Owned `.mid` files live in `midis/`; audio is

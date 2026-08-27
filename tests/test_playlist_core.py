@@ -85,8 +85,8 @@ class FakeMediaController:
     def set_count_in(self, enabled, bars):
         self.log.append(("set_count_in", bool(enabled), bars))
 
-    def set_voice_cues(self, cues):
-        self.log.append(("set_voice_cues", list(cues)))
+    def set_voice_tts(self, cues):
+        self.log.append(("set_voice_tts", list(cues)))
 
     def set_control_markers(self, markers):
         self.log.append(("set_control_markers", list(markers)))
@@ -113,8 +113,8 @@ class FakeCore:
     def save_config(self):
         self.log.append("save_config")
 
-    def apply_voice_cues(self, song):
-        self.log.append(("apply_voice_cues", song.id))
+    def apply_voice_tts(self, song):
+        self.log.append(("apply_voice_tts", song.id))
 
     def apply_song_markers(self, song):
         self.log.append(("apply_song_markers", song.id))
@@ -182,7 +182,7 @@ def test_load_song_full():
         _assert(core.bpm_state.get_bpm() == 142, "BPM detected from set_tempo")
         _assert(("set_count_in", True, core.config.audio.count_in_bars)
                 in core.log, "count-in fed from song.precount + global bars")
-        _assert(("apply_voice_cues", "uno") in core.log,
+        _assert(("apply_voice_tts", "uno") in core.log,
                 "voice cues (re)rendered on load")
         _assert(loaded == [(song, True)], "song_loaded(song, midi_ok=True)")
         _assert(missing == [], "no missing-audio emission")
@@ -249,7 +249,7 @@ def test_empty_state():
         playlist.load_current_song()
 
         _assert(loaded == [(None, False)], "song_loaded(None) for the empty state")
-        _assert(("set_voice_cues", []) in core.log, "stale voice cues dropped")
+        _assert(("set_voice_tts", []) in core.log, "stale voice cues dropped")
         _assert(core.midi_manager.midi_data is not None, "empty track created")
         _assert("begin_song_load" in core.log and "end_song_load" in core.log,
                 "empty-state creation is autosave-gated too")

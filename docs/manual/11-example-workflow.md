@@ -102,16 +102,16 @@ blend time, a chase, an exact channel value. → [6.9](#69-the-clip-editor)
 > finished so a stray drag cannot disturb them, and remember that **deleting a
 > clip leaves a blackout** in its place, which is usually what you want.
 
-## Step 7 — Count-ins and cues for the band
+## Step 7 — Count-ins and spoken markers for the band
 
 Turn the **Count-in** switch on for songs that start cold, and off for songs that
 segue. Set how many bars — and whether the last one is counted aloud — once, in
 **Settings ▸ Audio**.
 
-Add spoken cues with the **Cues** button for anything the band needs warning
+Add spoken voice-TTS markers with the **Markers** button for anything the band needs warning
 about (*"entra batería"*, *"solo"*). They play on the voice bus, which in split
 routing goes to the in-ears and not to the room.
-→ [6.1.3](#613-count-in), [6.1.4](#614-voice-cues-and-control-markers)
+→ [6.1.3](#613-count-in), [6.1.4](#614-voice-tts-and-control-markers)
 
 ## Step 8 — Set up the audio for the stage
 

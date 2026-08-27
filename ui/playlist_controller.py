@@ -93,7 +93,7 @@ class PlaylistController:
             w.timeline_toolbar.set_monitor_state(w.media_controller.monitor, False)
             w.timeline.set_song_tracks(())
             w.timeline.set_files(None)
-            w.timeline.set_voice_cues([])
+            w.timeline.set_voice_tts([])
             w.timeline.set_control_markers([])
             w.update_window_title()
             return

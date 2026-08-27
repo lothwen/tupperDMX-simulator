@@ -50,9 +50,9 @@ class AppCore(QObject):
     # The song's tempo map (base BPM + tempo markers) changed: the timeline
     # re-grids off this, the metronome is already retimed by the time it fires.
     tempo_map_changed = pyqtSignal(object)
-    # Rendered voice cues arriving from the TTS worker thread (song_id, list of
+    # Rendered voice-TTS lines arriving from the worker thread (song_id, list of
     # (time_sec, samples)); queued back onto the Qt thread before installing.
-    _voice_cues_rendered = pyqtSignal(str, object)
+    _voice_tts_rendered = pyqtSignal(str, object)
 
     def __init__(self, config: Config, show=None, force_webremote=False,
                  snapshot_on_open=True):
@@ -64,7 +64,7 @@ class AppCore(QObject):
         # The current song's control markers — the state a stop-click leaves
         # behind, which a seek has to re-resolve rather than replay.
         self._control_markers = []
-        self._voice_cues_rendered.connect(self._on_voice_cues_rendered)
+        self._voice_tts_rendered.connect(self._on_voice_tts_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
         # config.fixtures onto the show's objects, and the managers below
@@ -387,28 +387,28 @@ class AppCore(QObject):
         threading.Thread(target=work, daemon=True, name="tts-count-words").start()
 
     # ------------------------------------------------------------------
-    # Voice cues (Fase 4)
+    # Voice TTS (Fase 4)
     # ------------------------------------------------------------------
-    def apply_voice_cues(self, song):
-        """(Re-)render the song's cues to PCM in the background; the rendered
-        clips install via _voice_cues_rendered. Ruler markers are the UI
-        layer's half (PlaylistController / the Cues dialog)."""
-        cues = list(song.voice_cues)
-        self.media_controller.set_voice_cues([])  # drop stale clips meanwhile
-        if not cues:
+    def apply_voice_tts(self, song):
+        """(Re-)render the song's spoken lines to PCM in the background; the
+        rendered clips install via _voice_tts_rendered. Ruler markers are the
+        UI layer's half (PlaylistController / the Markers dialog)."""
+        lines = list(song.voice_tts)
+        self.media_controller.set_voice_tts([])  # drop stale clips meanwhile
+        if not lines:
             return
         voice = self.config.audio.tts_voice
         song_id = song.id
 
         def work():
             rendered = []
-            for cue in cues:
-                samples = tts.render(cue.text, voice)
+            for line in lines:
+                samples = tts.render(line.text, voice)
                 if samples is not None:
-                    rendered.append((cue.time, samples))
-            self._voice_cues_rendered.emit(song_id, rendered)
+                    rendered.append((line.time, samples))
+            self._voice_tts_rendered.emit(song_id, rendered)
 
-        threading.Thread(target=work, daemon=True, name="tts-cues").start()
+        threading.Thread(target=work, daemon=True, name="tts-voice").start()
 
     def apply_song_markers(self, song):
         """Install a song's control markers and segue across the core.
@@ -460,15 +460,15 @@ class AppCore(QObject):
         self.playlist_controller.next_song()
         self.media_controller.start_playback(force_no_count_in=True)
 
-    def _on_voice_cues_rendered(self, song_id, rendered):
-        """Install rendered cue clips — only if the song is still current."""
+    def _on_voice_tts_rendered(self, song_id, rendered):
+        """Install the rendered clips — only if the song is still current."""
         song = self.config.get_current_song()
         if song is not None and song.id == song_id:
-            self.media_controller.set_voice_cues(rendered)
-            if len(rendered) < len(song.voice_cues):
+            self.media_controller.set_voice_tts(rendered)
+            if len(rendered) < len(song.voice_tts):
                 self.logger.info(
-                    f"{len(song.voice_cues) - len(rendered)} voice cue(s) not "
-                    "rendered (TTS voice not ready)")
+                    f"{len(song.voice_tts) - len(rendered)} voice-TTS line(s) "
+                    "not rendered (TTS voice not ready)")
 
     # ------------------------------------------------------------------
     # MIDI/DMX routing

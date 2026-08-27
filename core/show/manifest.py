@@ -50,7 +50,7 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "guide_offset": song.guide_offset,
             "key": song.key,
             "precount": song.precount,
-            "voice_cues": [asdict(c) for c in song.voice_cues],
+            "voice_tts": [asdict(c) for c in song.voice_tts],
             "control_markers": [asdict(m) for m in song.control_markers],
             "segue": song.segue,
             "segue_time": song.segue_time,
@@ -96,7 +96,11 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             title=str(entry.get("title", "")),
             key=str(entry.get("key", "")),
             precount=bool(entry.get("precount", True)),
-            voice_cues=Config._parse_voice_cues(entry.get("voice_cues")),
+            # `voice_cues` is what shows written before the rename call it —
+            # read only, so a versions/ snapshot or a .showpack from then still
+            # opens with its spoken markers. Every write is the new key.
+            voice_tts=Config._parse_voice_tts(
+                entry.get("voice_tts", entry.get("voice_cues"))),
             control_markers=Config._parse_control_markers(
                 entry.get("control_markers")),
             segue=bool(entry.get("segue", False)),

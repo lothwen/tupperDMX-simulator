@@ -19,7 +19,7 @@ class PlaylistCore(QObject):
 
     `core` is the façade the web remote also consumes (MainWindow today,
     AppCore headless): config, show_manager, media_controller, midi_manager,
-    bpm_state, stop_playback(), save_config(), apply_voice_cues(song),
+    bpm_state, stop_playback(), save_config(), apply_voice_tts(song),
     apply_song_markers(song).
     """
 
@@ -48,7 +48,7 @@ class PlaylistCore(QObject):
             core.midi_manager.create_empty_track()
         finally:
             core.show_manager.end_song_load()
-        core.media_controller.set_voice_cues([])
+        core.media_controller.set_voice_tts([])
         core.apply_song_markers(SongConfig())  # clear the previous song's
         self.song_loaded.emit(None, False)
 
@@ -126,8 +126,8 @@ class PlaylistCore(QObject):
             song.precount, core.config.audio.count_in_bars)
 
         # Voice cues: rendered PCM installs asynchronously (ruler markers are
-        # the UI layer's half of apply_voice_cues' listeners)
-        core.apply_voice_cues(song)
+        # the UI layer's half of apply_voice_tts' listeners)
+        core.apply_voice_tts(song)
 
         # Control markers + segue. AFTER the BPM detection above: the tempo map
         # is built from the base tempo plus these, so a stale base would put the

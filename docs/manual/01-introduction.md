@@ -77,7 +77,7 @@ show that uses that type shares them.
 | MIDI hardware | **none required** — optional MIDI output port |
 | Graphics | any; the HDR stage renderer additionally wants a working OpenGL driver |
 
-The spoken count-in and voice cues need a text-to-speech voice, downloaded on
+The spoken count-in and voice TTS need a text-to-speech voice, downloaded on
 demand (about 60 MB, once) from **Settings ▸ Audio**. Everything else works
 without it.
 

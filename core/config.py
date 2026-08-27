@@ -162,8 +162,8 @@ class IOConfig:
 
 
 @dataclass
-class VoiceCueConfig:
-    """One spoken guide cue (Fase 4): TTS text fired at a timeline position,
+class VoiceTTSConfig:
+    """One spoken guide line (Fase 4): TTS text fired at a timeline position,
     routed to the voice bus (the musician's click side). Rides the show
     manifest — guide audio is not sequence data, so it stays out of the .mid."""
     time: float = 0.0
@@ -201,9 +201,9 @@ class SongConfig:
     title: str = ""
     key: str = ""                                       # musical key, e.g. "Am"
     precount: bool = True                               # count-in click; off = segue from previous song
-    voice_cues: List[VoiceCueConfig] = field(default_factory=list)
+    voice_tts: List[VoiceTTSConfig] = field(default_factory=list)
     # Control markers (tempo change, stop click) — the transport's half of the
-    # marker track that voice_cues is the spoken half of.
+    # marker track that voice_tts is the spoken half of.
     control_markers: List[ControlMarkerConfig] = field(default_factory=list)
     # Segue: at segue_time this song hands the show to the next one in the
     # setlist and starts it with no count-in. Kept as two fields rather than an
@@ -267,7 +267,7 @@ class FixtureInstance:
 class VolumeConfig:
     metronome: float = 0.5
     audio: float = 0.5
-    voice: float = 0.8                                  # TTS guide bus (cues + spoken count-in)
+    voice: float = 0.8                                  # TTS guide bus (voice TTS + count-in)
 
 
 # Valid AudioConfig.routing values (mirrors audio/mixer.py ROUTING_MODES;
@@ -532,7 +532,9 @@ class Config:
                     title=str(song_data.get("title", "")),
                     key=str(song_data.get("key", "")),
                     precount=bool(song_data.get("precount", True)),
-                    voice_cues=cls._parse_voice_cues(song_data.get("voice_cues")),
+                    voice_tts=cls._parse_voice_tts(
+                        song_data.get("voice_tts",
+                                      song_data.get("voice_cues"))),
                     control_markers=cls._parse_control_markers(
                         song_data.get("control_markers")),
                     segue=bool(song_data.get("segue", False)),
@@ -685,24 +687,24 @@ class Config:
         return cues
 
     @staticmethod
-    def _parse_voice_cues(cues_data: Any) -> List[VoiceCueConfig]:
-        """Parse a song's voice-cue list. Entries without text are dropped;
+    def _parse_voice_tts(data: Any) -> List[VoiceTTSConfig]:
+        """Parse a song's voice-TTS list. Entries without text are dropped;
         times clamp to the valid timeline range."""
-        cues: List[VoiceCueConfig] = []
-        if not isinstance(cues_data, list):
-            return cues
-        for entry in cues_data:
+        lines: List[VoiceTTSConfig] = []
+        if not isinstance(data, list):
+            return lines
+        for entry in data:
             if not isinstance(entry, dict):
                 continue
             text = entry.get("text")
             if not isinstance(text, str) or not text.strip():
                 continue
-            cues.append(VoiceCueConfig(
+            lines.append(VoiceTTSConfig(
                 time=Config._validate_float(entry.get("time", 0.0), 0.0, 36000.0),
                 text=text.strip(),
             ))
-        cues.sort(key=lambda c: c.time)
-        return cues
+        lines.sort(key=lambda line: line.time)
+        return lines
 
     @staticmethod
     def _parse_control_markers(data: Any) -> List[ControlMarkerConfig]:

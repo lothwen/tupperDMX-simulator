@@ -324,6 +324,8 @@ class MainWindow(QMainWindow):
         # Auditioning a clip from the editor takes the same route as the clip
         # library's click-to-preview, so config.io routing applies.
         self.timeline.preview_requested.connect(self.app_core.preview_clip)
+        self.timeline.marker_move_committed.connect(self.on_marker_moved)
+        self.timeline.marker_edit_requested.connect(self.on_marker_edit_requested)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
         # mirror live zoom (Fit / Ctrl+wheel) back onto the toolbar slider.
@@ -1184,14 +1186,21 @@ class MainWindow(QMainWindow):
         if webremote is not None:
             webremote._publish_full()
 
-    def show_markers_dialog(self):
-        """Open the per-song marker editor (timeline toolbar 🗣 Cues)."""
+    def on_marker_edit_requested(self, kind: str, time_sec: float):
+        """A ruler flag was double-clicked: its editor, opened on it."""
+        self.show_markers_dialog(select=(kind, time_sec))
+
+    def show_markers_dialog(self, select=None):
+        """Open the per-song marker editor (timeline toolbar ▸ Markers).
+
+        `select` is the (kind, time) of the marker to open on, as a ruler flag
+        names it; the toolbar button passes none and lands on the first."""
         song = self.config.get_current_song()
         if song is None:
             return
         songs = self.config.playlist.songs
         dialog = MarkersDialog(
-            song.voice_cues, song.control_markers, self,
+            song.voice_tts, song.control_markers, self,
             audio_engine=self.audio_engine,
             tts_voice=self.config.audio.tts_voice,
             segue=song.segue, segue_time=song.segue_time,
@@ -1199,23 +1208,52 @@ class MainWindow(QMainWindow):
             duration=song_duration(song) or self.midi_manager.get_duration() or 0.0,
             song_title=song.title,
             has_next_song=(self.config.playlist.current_song_index
-                           < len(songs) - 1))
+                           < len(songs) - 1),
+            select=select)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        song.voice_cues = dialog.voice_cues()
+        song.voice_tts = dialog.voice_tts()
         song.control_markers = dialog.control_markers()
         song.segue = dialog.segue_enabled()
         song.segue_time = dialog.segue_time()
+        self.apply_marker_edits(song)
+
+    def on_marker_moved(self, kind: str, old_time: float, new_time: float):
+        """A ruler marker was dragged: retime it on the song and re-apply.
+
+        The ruler hands back the kind and the time the flag sat at, which is
+        what identifies the marker — the flags are drawn from tuples, and the
+        segue is not in any list at all."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        if kind == core_markers.KIND_SEGUE:
+            song.segue_time = new_time
+        elif kind == core_markers.KIND_VOICE:
+            cue = core_markers.marker_at(song.voice_tts, old_time)
+            if cue is None:
+                return
+            cue.time = new_time
+        else:
+            marker = core_markers.marker_at(song.control_markers, old_time, kind)
+            if marker is None:
+                return
+            marker.time = new_time
+        self.apply_marker_edits(song)
+
+    def apply_marker_edits(self, song):
+        """Persist and re-apply a song's marker track after an edit — the Cues
+        dialog's OK and a ruler drag both land here. Ruler markers are the
+        window's half; the PCM render and the transport half (tempo map, marker
+        firing, segue) ride the core."""
         self.save_config()
-        # Ruler markers are the window's half; the PCM render and the transport
-        # half (tempo map, marker firing, segue) ride the core.
         self.refresh_timeline_markers(song)
-        self.app_core.apply_voice_cues(song)
+        self.app_core.apply_voice_tts(song)
         self.app_core.apply_song_markers(song)
 
     def refresh_timeline_markers(self, song):
         """Redraw the ruler's marker track for `song` (also used on load)."""
-        self.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        self.timeline.set_voice_tts([(c.time, c.text) for c in song.voice_tts])
         self.timeline.set_control_markers(core_markers.ruler_rows(song))
 
     def on_song_key_edited(self, key: str):

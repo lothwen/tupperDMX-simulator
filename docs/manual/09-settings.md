@@ -98,7 +98,7 @@ aloud**. Whether a *particular song* gets a count-in at all is a per-song switch
 on the timeline toolbar — the hint beside the checkbox says so.
 
 **Voice** picks the text-to-speech voice used for the spoken count-in and for
-voice cues. Voices are about 60 MB and are **downloaded on demand** — they are
+voice-TTS markers. Voices are about 60 MB and are **downloaded on demand** — they are
 never bundled with the application. **Download** fetches the selected one;
 **Test** speaks a phrase through the voice bus. The status line below says where
 you stand: *"Voice installed."*, *"Voice not downloaded yet (~60 MB, one

@@ -3,15 +3,17 @@
 """What a song's timeline carries besides notes.
 
 Four things ride a song's timeline that are neither audio nor DMX: a spoken
-voice cue, a tempo change, a stop-click, and the segue that hands the show to
-the next song. They are edited together in one dialog and drawn together on the
+voice-TTS line, a tempo change, a stop-click, and the segue that hands the show
+to the next song. They are edited together in one dialog and drawn together on the
 ruler, so their identity — label, colour, glyph — is declared once, here, where
 both `ui/` and `timeline/` can read it (a `timeline/` track must not import
 `ui/`, so the shared half cannot live in either).
 
-Voice cues stay in their own `SongConfig.voice_cues` list: they are the one
-kind that pre-renders to PCM off-thread, and shows written before control
-markers existed already persist them under that key.
+The voice kind keeps its own `SongConfig.voice_tts` list: it is the one kind
+that pre-renders to PCM off-thread, and shows written before control markers
+existed already persist it under that key. **That key is persistence, not the
+name** — the marker is called Voice TTS everywhere a user can read it, while
+every show on disk still says `voice_tts`.
 """
 
 from typing import List, Optional, Sequence, Tuple
@@ -20,7 +22,7 @@ KIND_VOICE = "voice"
 KIND_TEMPO = "tempo"
 KIND_CLICK_STOP = "click_stop"
 
-#: The kinds `SongConfig.control_markers` may hold (voice cues have their own
+#: The kinds `SongConfig.control_markers` may hold (the voice kind has its own
 #: list, and the segue is one per song rather than a marker in a list).
 CONTROL_KINDS = (KIND_TEMPO, KIND_CLICK_STOP)
 
@@ -29,7 +31,7 @@ CONTROL_KINDS = (KIND_TEMPO, KIND_CLICK_STOP)
 KIND_SEGUE = "segue"
 
 KIND_LABELS = {
-    KIND_VOICE: "Voice cue",
+    KIND_VOICE: "Voice TTS",
     KIND_TEMPO: "Tempo change",
     KIND_CLICK_STOP: "Stop click",
     KIND_SEGUE: "Segue",
@@ -81,6 +83,20 @@ def click_stopped_at(markers: Sequence, position: float) -> bool:
     resume and song load asks, since the marker's effect outlives its crossing."""
     stop = click_stop_time(markers)
     return stop is not None and position >= stop
+
+
+def marker_at(markers: Sequence, time_sec: float, kind: Optional[str] = None):
+    """The marker nearest `time_sec`, optionally restricted to one kind.
+
+    A ruler drag reports what it moved as (kind, the time it sat at): the ruler
+    draws tuples, not the song's marker objects, so this is how the edit finds
+    the object to retime. Ties are harmless — two markers of one kind at the
+    same instant are indistinguishable anyway."""
+    candidates = [m for m in markers
+                  if kind is None or getattr(m, "kind", None) == kind]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda m: abs(float(m.time) - float(time_sec)))
 
 
 def ruler_rows(song) -> List[Tuple[float, str, str]]:

@@ -65,13 +65,13 @@ class MediaController(QObject):
         # negative beats extrapolate backwards from the first segment).
         self.tempo_map = TempoMap(120)
 
-        # Voice cues: sorted [(time_sec, mono float32 samples)], fired when the
+        # Voice TTS: sorted [(time_sec, mono float32 samples)], fired when the
         # timeline crosses their time; pointer reset on stop/seek.
-        self._voice_cues: List[Tuple[float, np.ndarray]] = []
-        self._next_cue_index = 0
+        self._voice_tts: List[Tuple[float, np.ndarray]] = []
+        self._next_voice_index = 0
 
         # Control markers: sorted [(time_sec, kind, bpm)], reported when the
-        # timeline crosses them. Same pointer discipline as the voice cues.
+        # timeline crosses them. Same pointer discipline as the voice lines.
         self._control_markers: List[Tuple[float, str, int]] = []
         self._next_marker_index = 0
 
@@ -242,24 +242,24 @@ class MediaController(QObject):
         return -self.tempo_map.seconds_at_beat(
             -self.count_in_bars * BEATS_PER_BAR)
 
-    def set_voice_cues(self, cues: List[Tuple[float, np.ndarray]]) -> None:
-        """Install the song's rendered voice cues [(time_sec, samples)]."""
-        self._voice_cues = sorted(cues, key=lambda c: c[0])
-        self._reset_cue_pointer(self.current_timeline_time)
+    def set_voice_tts(self, lines: List[Tuple[float, np.ndarray]]) -> None:
+        """Install the song's rendered voice-TTS lines [(time_sec, samples)]."""
+        self._voice_tts = sorted(lines, key=lambda line: line[0])
+        self._reset_voice_pointer(self.current_timeline_time)
 
-    def _reset_cue_pointer(self, position: float) -> None:
-        """Point at the first cue at/after `position` (cues behind us never fire)."""
-        self._next_cue_index = 0
-        while (self._next_cue_index < len(self._voice_cues)
-               and self._voice_cues[self._next_cue_index][0] < position):
-            self._next_cue_index += 1
+    def _reset_voice_pointer(self, position: float) -> None:
+        """Point at the first line at/after `position` (those behind never fire)."""
+        self._next_voice_index = 0
+        while (self._next_voice_index < len(self._voice_tts)
+               and self._voice_tts[self._next_voice_index][0] < position):
+            self._next_voice_index += 1
 
-    def _fire_voice_cues(self) -> None:
-        while (self._next_cue_index < len(self._voice_cues)
-               and self._voice_cues[self._next_cue_index][0] <= self.current_timeline_time):
-            _, samples = self._voice_cues[self._next_cue_index]
+    def _fire_voice_tts(self) -> None:
+        while (self._next_voice_index < len(self._voice_tts)
+               and self._voice_tts[self._next_voice_index][0] <= self.current_timeline_time):
+            _, samples = self._voice_tts[self._next_voice_index]
             self.engine.play_voice(samples)
-            self._next_cue_index += 1
+            self._next_voice_index += 1
 
     def set_control_markers(self, markers: List[Tuple[float, str, int]]) -> None:
         """Install the song's control markers as [(time_sec, kind, bpm)]."""
@@ -344,7 +344,7 @@ class MediaController(QObject):
             if not self.engine.is_backing_loaded():
                 self.engine.load_backing(active)
             self.engine.set_backing_position(0)
-        self._reset_cue_pointer(self.current_timeline_time)
+        self._reset_voice_pointer(self.current_timeline_time)
         self._reset_marker_pointer(self.current_timeline_time)
         self._segue_fired = False
 
@@ -430,7 +430,7 @@ class MediaController(QObject):
         # Set backing position
         audio_time_sec = max(0, self.current_timeline_time - self.active_offset())
         self.engine.set_backing_position(audio_time_sec)
-        self._reset_cue_pointer(self.current_timeline_time)
+        self._reset_voice_pointer(self.current_timeline_time)
         self._reset_marker_pointer(self.current_timeline_time)
 
         # Reset pause state and start timers
@@ -462,7 +462,7 @@ class MediaController(QObject):
 
         # Reset backing position
         self.engine.set_backing_position(0)
-        self._reset_cue_pointer(0)
+        self._reset_voice_pointer(0)
         self._reset_marker_pointer(0)
         self._segue_fired = False
 
@@ -477,7 +477,7 @@ class MediaController(QObject):
 
         # Seek MIDI
         self.midi_manager.seek(time_seconds)
-        self._reset_cue_pointer(time_seconds)
+        self._reset_voice_pointer(time_seconds)
         self._reset_marker_pointer(time_seconds)
         # Seeking back before the segue re-arms it; seeking past it disarms.
         self._segue_fired = self._segue_enabled and time_seconds > self._segue_time
@@ -527,8 +527,8 @@ class MediaController(QObject):
         if self.midi_manager.midi_data and self.midi_manager.is_running():
             self.midi_manager.play_until(self.current_timeline_time)
 
-        # Fire voice cues and control markers the timeline just crossed
-        self._fire_voice_cues()
+        # Fire voice TTS and control markers the timeline just crossed
+        self._fire_voice_tts()
         self._fire_control_markers()
 
         # The segue leaves this transport playing a DIFFERENT song, so nothing

@@ -641,17 +641,17 @@ def build_script(session: Session) -> None:
     session.add("_close-start-editor",
                 lambda: session.close_dialog(state.pop("start_dlg", None)), wait=0.8)
 
-    def open_voice_cues():
-        from core.config import ControlMarkerConfig, VoiceCueConfig
+    def open_voice_tts():
+        from core.config import ControlMarkerConfig, VoiceTTSConfig
         from ui.markers_dialog import MarkersDialog
         song = w.config.get_current_song()
-        cues = list(song.voice_cues) if song is not None else []
+        cues = list(song.voice_tts) if song is not None else []
         controls = list(song.control_markers) if song is not None else []
         if not cues and not controls:
             # An empty table photographs as nothing at all; show the shape of
             # a filled one instead. Nothing here is written back to the show.
-            cues = [VoiceCueConfig(time=12.0, text="entra batería"),
-                    VoiceCueConfig(time=48.5, text="solo de guitarra")]
+            cues = [VoiceTTSConfig(time=12.0, text="entra batería"),
+                    VoiceTTSConfig(time=48.5, text="solo de guitarra")]
             controls = [ControlMarkerConfig(time=96.0, kind="tempo", bpm=132),
                         ControlMarkerConfig(time=188.0, kind="click_stop")]
         songs = w.config.playlist.songs
@@ -665,7 +665,7 @@ def build_script(session: Session) -> None:
                            < len(songs) - 1))
         state["cues_dlg"] = session.open_dialog(dlg)
 
-    session.add("_open-cues", open_voice_cues, wait=1.0)
+    session.add("_open-cues", open_voice_tts, wait=1.0)
     session.add("voice-cues",
                 lambda: shot.shoot("voice-cues", window=state.get("cues_dlg")))
     session.add("_close-cues",

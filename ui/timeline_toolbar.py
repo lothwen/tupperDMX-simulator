@@ -273,15 +273,15 @@ class TimelineToolbar(QWidget):
 
         row.addWidget(self._separator())
 
-        cues_btn = QPushButton("Cues")
-        cues_btn.setIcon(icons.icon("speech", "#e0e0e0"))
-        cues_btn.setIconSize(QSize(14, 14))
-        cues_btn.setObjectName("TTToolButton")
-        cues_btn.setToolTip("Voice cues & control markers: spoken guide "
-                            "messages, tempo changes, stop-click and the segue "
-                            "out of this song")
-        cues_btn.clicked.connect(self.markers_requested.emit)
-        row.addWidget(cues_btn)
+        markers_btn = QPushButton("Markers")
+        markers_btn.setIcon(icons.icon("speech", "#e0e0e0"))
+        markers_btn.setIconSize(QSize(14, 14))
+        markers_btn.setObjectName("TTToolButton")
+        markers_btn.setToolTip("The song's marker track: spoken voice-TTS "
+                               "lines, tempo changes, stop-click and the segue "
+                               "out of this song")
+        markers_btn.clicked.connect(self.markers_requested.emit)
+        row.addWidget(markers_btn)
 
         return zone
 

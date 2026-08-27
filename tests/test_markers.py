@@ -22,7 +22,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 
 from core import markers as core_markers
-from core.config import Config, ControlMarkerConfig, PlaylistConfig, SongConfig
+from core.config import (Config, ControlMarkerConfig, PlaylistConfig,
+                         SongConfig, VoiceTTSConfig)
 from core.show.manifest import show_from_manifest, show_to_manifest
 from core.show.model import Show
 from core.tempo_map import TempoMap
@@ -192,6 +193,50 @@ def test_marker_helpers():
     _assert((210.5, "segue", "next song, no count-in") in rows,
             "and carry the segue, which has no other way onto the ruler")
 
+    # What a ruler drag reports is (kind, the time the flag sat at) — the flags
+    # are drawn from those tuples, so this is how the edit finds the object.
+    found = core_markers.marker_at(markers, 188.0, "click_stop")
+    _assert(found is not None and found.time == 188.0,
+            "marker_at finds the marker a drag started from")
+    _assert(core_markers.marker_at(markers, 96.4, "tempo").time == 96.0,
+            "nearest wins, so float noise in the reported time is harmless")
+    _assert(core_markers.marker_at(markers, 96.0, "click_stop").time == 188.0,
+            "the kind filter never crosses into another kind")
+    _assert(core_markers.marker_at([], 1.0) is None, "and none is None")
+    cues = [VoiceTTSConfig(30.0, "aquí"), VoiceTTSConfig(80.0, "y aquí")]
+    _assert(core_markers.marker_at(cues, 79.0).text == "y aquí",
+            "voice cues carry no kind, and are looked up without one")
+
+
+def test_dialog_opens_on_a_marker():
+    print("test_dialog_opens_on_a_marker")
+    from ui.markers_dialog import MarkersDialog
+
+    cues = [VoiceTTSConfig(12.0, "entra bateria"), VoiceTTSConfig(48.5, "solo")]
+    controls = [ControlMarkerConfig(96.0, "tempo", 132),
+                ControlMarkerConfig(188.0, "click_stop")]
+
+    def _dialog(**kwargs):
+        return MarkersDialog(list(cues), list(controls), base_bpm=120,
+                             duration=240.0, **kwargs)
+
+    _assert(_dialog()._selected_row()["text"] == "entra bateria",
+            "with nothing named, the dialog opens on the first marker")
+    _assert(_dialog(select=("voice", 48.5))._selected_row()["text"] == "solo",
+            "a double-clicked flag opens it on its own marker instead")
+    picked = _dialog(select=("click_stop", 188.2))._selected_row()
+    _assert(picked["kind"] == "click_stop",
+            "nearest of that kind wins, so a rounded time still lands right")
+    _assert(_dialog(select=("tempo", 0.0))._selected_row()["kind"] == "tempo",
+            "and the kind is never crossed, however far the time is off")
+
+    # The segue is no row at all — the field it does have takes the caret.
+    seguing = _dialog(segue=True, segue_time=210.0, select=("segue", 210.0))
+    _assert(seguing.focusWidget() is seguing.segue_spin,
+            "opening on the segue puts the caret in the segue's own field")
+    _assert(seguing._selected_row()["text"] == "entra bateria",
+            "while the table still selects something rather than nothing")
+
 
 # ----------------------------------------------------------------------
 # Runtime
@@ -336,6 +381,7 @@ def main():
     test_parse_control_markers()
     test_manifest_roundtrip()
     test_marker_helpers()
+    test_dialog_opens_on_a_marker()
     test_marker_firing()
     test_segue_arming()
     test_count_in_uses_the_tempo_map()

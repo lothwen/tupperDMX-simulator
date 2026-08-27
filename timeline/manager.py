@@ -54,6 +54,12 @@ class Timeline(QWidget):
     # Audition a clip on the real rig: [(channel, note, velocity), ...], the
     # same payload the clip library previews with.
     preview_requested = pyqtSignal(list)
+    # A ruler marker was dragged to a new time: (kind, old_time, new_time).
+    # The ruler draws tuples, not the song's marker objects, so the old time is
+    # how the window finds the one to retime (core.markers.marker_at).
+    marker_move_committed = pyqtSignal(str, float, float)
+    # A ruler marker was double-clicked: (kind, time) — open its editor on it.
+    marker_edit_requested = pyqtSignal(str, float)
 
     # Constants
     # HEADER_WIDTH is the designed width; __init__ shadows it with the
@@ -62,7 +68,12 @@ class Timeline(QWidget):
     # cannot reach it. Every reader goes through the instance, so shadowing is
     # all it takes.
     HEADER_WIDTH = 240
-    RULER_TRACK_HEIGHT = 25
+    # Two lanes, not one: a marker's flag and name ride the top strip
+    # (RulerTrack.MARKER_LANE_H), the ticks and bar/time numbers the rest. A
+    # bar number's ink is 16px tall and a marker's name chip 14 — they cannot
+    # share a 25px band whatever order they are drawn in, and the ruler's
+    # numbering is not the half that gives way.
+    RULER_TRACK_HEIGHT = 40
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
     DEFAULT_MIDI_EVENTS_TRACK_HEIGHT = 50
     MIN_TRACK_HEIGHT = 30
@@ -112,7 +123,7 @@ class Timeline(QWidget):
         # tempo markers. The scene's x axis stays SECONDS, so a tempo change
         # moves the grid under the clips and never the clips themselves.
         self.tempo_map = TempoMap(self.bpm)
-        self.voice_cues = []  # current song's [(time_sec, text)] for the ruler
+        self.voice_tts = []  # current song's [(time_sec, text)] for the ruler
         # Control markers for the ruler: [(time_sec, kind, label)]
         self.control_markers = []
         self.ruler_mode = "bars"  # "bars" | "time"
@@ -1088,10 +1099,10 @@ class Timeline(QWidget):
             self.set_tempo_map(TempoMap(bpm, self.tempo_map.changes()))
             self.logger.info(f"Timeline BPM updated to {bpm}")
 
-    def set_voice_cues(self, cues):
+    def set_voice_tts(self, cues):
         """Install the current song's voice cues [(time_sec, text)] and redraw
         their markers on the ruler."""
-        self.voice_cues = list(cues or [])
+        self.voice_tts = list(cues or [])
         self.ruler_track.redraw()
 
     def set_control_markers(self, markers):

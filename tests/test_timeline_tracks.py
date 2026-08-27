@@ -7,7 +7,8 @@ Locks the Phase-1 subtask-5 behavior:
     (= the fixture's patch position), incl. its own BLACKOUT end-marker;
   * global song-part notes (61-69) are excluded from every fixture lane and
     render as an arrangement overlay on the waveform track instead;
-  * new clips can be routed to an exact fixture instance by channel.
+  * new clips can be routed to an exact fixture instance by channel;
+  * the song's markers ride the ruler as draggable flags, committing on release.
 
 Run with:
     uv run python tests/test_timeline_tracks.py
@@ -341,6 +342,182 @@ def test_ui_scale_remeasures_the_headers():
             == tl.HEADER_WIDTH, "the ruler band shrinks with it")
 
 
+class _FakeMouse:
+    """A stand-in for QGraphicsSceneMouseEvent, which PyQt6 refuses to build.
+
+    The flag's handlers only ever ask for the scene position and accept the
+    event, so this is the whole contract."""
+
+    def __init__(self, scene_x: float):
+        self._x = float(scene_x)
+
+    def scenePos(self):
+        from PyQt6.QtCore import QPointF
+        return QPointF(self._x, 5.0)
+
+    def accept(self):
+        pass
+
+
+def _drag_flag(flag, from_x, to_x):
+    """Press, move, release — the flag commits on the release, like the clips."""
+    flag.mousePressEvent(_FakeMouse(from_x))
+    flag.mouseMoveEvent(_FakeMouse(to_x))
+    flag.mouseReleaseEvent(_FakeMouse(to_x))
+
+
+def test_ruler_numbers_keep_clear_of_the_marker_lane():
+    print("test_ruler_numbers_keep_clear_of_the_marker_lane")
+    from timeline.tracks import ruler as ruler_mod
+    lane = ruler_mod.MARKER_LANE_H
+
+    _assert(ruler_mod.MARKER_FLAG_TOP + ruler_mod.MARKER_FLAG_H <= lane,
+            "a flag and its chip fit inside the lane that is theirs")
+
+    _m, tl = _make()
+    tl.set_voice_tts([(12.0, "aqui viene el coro")])
+    for mode, items in (("time", "time_text_items"), ("bars", "bar_text_items")):
+        tl.set_ruler_mode(mode)
+        labels = getattr(tl.ruler_track, items)
+        _assert(len(labels) > 0, f"{mode} mode numbers the ruler")
+        for _value, item in labels:
+            # A QGraphicsTextItem pads its ink by the document margin.
+            ink_top = item.pos().y() + item.document().documentMargin()
+            _assert(ink_top >= lane,
+                    f"and every {mode} number is drawn below the marker lane")
+            break  # one per mode is the invariant; they share a y
+
+
+def test_ruler_markers_draw_as_flags():
+    print("test_ruler_markers_draw_as_flags")
+    _m, tl = _make()
+    tl.set_voice_tts([(12.0, "aqui viene el coro")])
+    tl.set_control_markers([(30.0, "tempo", "132 BPM"),
+                            (60.0, "click_stop", ""),
+                            (90.0, "segue", "next song, no count-in")])
+
+    flags = tl.ruler_track.marker_items
+    _assert([f.kind for f in flags] == ["voice", "tempo", "click_stop", "segue"],
+            "every marker kind gets a flag, in time order")
+    _assert(all(f.pos().x() == f.marker_time * tl.PIXELS_PER_SECOND
+                for f in flags),
+            "each flag stands at its own time")
+    _assert(flags[0].chip_text == "aqui viene el coro"
+            and flags[1].chip_text == "132 BPM",
+            "a voice cue's chip says what it says, a tempo's says its BPM")
+    _assert(flags[2].chip_text == "Stop click" and flags[3].chip_text == "Segue",
+            "and a kind with no payload names itself")
+
+    tl.set_voice_tts([])
+    tl.set_control_markers([])
+    _assert(tl.ruler_track.marker_items == [], "clearing the song clears them")
+
+
+def test_ruler_marker_chips_yield_when_crowded():
+    print("test_ruler_marker_chips_yield_when_crowded")
+    _m, tl = _make()
+    tl.set_voice_tts([(12.0, "aqui viene el coro"), (13.0, "y esto tambien")])
+    tl.set_zoom(1.0)
+
+    first, second = tl.ruler_track.marker_items
+    _assert(not first.chip_shown,
+            "a cue a second ahead of the next drops its name chip")
+    _assert(second.chip_shown, "the last flag always keeps its own")
+    _assert(first.boundingRect().width() < second.boundingRect().width(),
+            "and the hidden chip is out of the flag's hit area too")
+
+    tl.set_zoom(8.0)
+    _assert(first.chip_shown, "zooming in gives the chip its room back")
+
+
+def test_ruler_marker_drops_a_line_only_under_the_cursor():
+    print("test_ruler_marker_drops_a_line_only_under_the_cursor")
+    _m, tl = _make()
+    tl.set_control_markers([(30.0, "tempo", "132 BPM")])
+    flag = tl.ruler_track.marker_items[0]
+    band = tl.RULER_TRACK_HEIGHT
+
+    _assert(flag.boundingRect().height() == band,
+            "at rest a flag is just the ruler band")
+
+    flag.set_hovered(True)
+    _assert(flag.boundingRect().height() == tl.scene_height,
+            "pointed at, it reaches down the whole arrangement")
+    _assert(flag.shape().boundingRect().height() == band,
+            "but the line is never part of the shape, so the lanes under it "
+            "still take their own clicks")
+
+    flag.set_hovered(False)
+    _assert(flag.boundingRect().height() == band, "and it goes away again")
+
+    # The height is measured as the line appears, never held: the scene grows
+    # and shrinks under a marker with every lane collapse.
+    tall = tl.scene_height
+    tl.set_all_tracks_collapsed(True)
+    _assert(tl.scene_height < tall, "collapsing the lanes shortens the scene")
+    flag = tl.ruler_track.marker_items[0]
+    flag.set_hovered(True)
+    _assert(flag.boundingRect().height() == tl.scene_height,
+            "so the next hover measures the scene it actually has now")
+
+
+def test_ruler_marker_drag_commits_on_release():
+    print("test_ruler_marker_drag_commits_on_release")
+    _m, tl = _make()
+    tl.set_snap_enabled(False)
+    tl.set_voice_tts([(12.0, "cue")])
+    tl.set_control_markers([(30.0, "tempo", "132 BPM")])
+
+    moved = []
+    tl.marker_move_committed.connect(lambda *args: moved.append(args))
+    pps = tl.PIXELS_PER_SECOND
+    voice, tempo = tl.ruler_track.marker_items
+
+    _drag_flag(voice, 12.0 * pps, 25.0 * pps)
+    _assert(moved == [("voice", 12.0, 25.0)],
+            "a drag reports the kind, where it was and where it landed")
+
+    moved.clear()
+    tempo.mousePressEvent(_FakeMouse(30.0 * pps))
+    tempo.mouseReleaseEvent(_FakeMouse(30.0 * pps))
+    _assert(moved == [], "a click that never moved is not an edit")
+
+    moved.clear()
+    _drag_flag(tempo, 30.0 * pps, -400.0)
+    _assert(moved == [("tempo", 30.0, 0.0)], "and a drag off the left clamps at 0")
+
+
+def test_ruler_marker_double_click_asks_for_the_editor():
+    print("test_ruler_marker_double_click_asks_for_the_editor")
+    _m, tl = _make()
+    tl.set_voice_tts([(12.0, "aqui viene el coro")])
+    tl.set_control_markers([(64.0, "click_stop", "")])
+
+    asked = []
+    tl.marker_edit_requested.connect(lambda *args: asked.append(args))
+    for flag in tl.ruler_track.marker_items:
+        flag.mouseDoubleClickEvent(_FakeMouse(flag.marker_time))
+    _assert(asked == [("voice", 12.0), ("click_stop", 64.0)],
+            "a double-click names the marker the editor should open on")
+
+
+def test_ruler_marker_drag_snaps_to_the_grid():
+    print("test_ruler_marker_drag_snaps_to_the_grid")
+    _m, tl = _make()
+    tl.set_snap_enabled(True)
+    tl.set_beat_division(4)
+    tl.set_control_markers([(60.0, "click_stop", "")])
+
+    moved = []
+    tl.marker_move_committed.connect(lambda *args: moved.append(args))
+    pps = tl.PIXELS_PER_SECOND
+    beat = tl.tempo_map.seconds_at_beat(10)
+
+    _drag_flag(tl.ruler_track.marker_items[0], 60.0 * pps, (beat + 0.02) * pps)
+    _assert(moved == [("click_stop", 60.0, beat)],
+            "dropped near a beat, a marker lands ON it (same grid as the clips)")
+
+
 def main():
     _ensure_app()
     test_one_track_per_fixture()
@@ -357,6 +534,13 @@ def main():
     test_manager_update_fixtures_reflects_new_patch()
     test_empty_patch_no_tracks()
     test_ui_scale_remeasures_the_headers()
+    test_ruler_numbers_keep_clear_of_the_marker_lane()
+    test_ruler_markers_draw_as_flags()
+    test_ruler_marker_chips_yield_when_crowded()
+    test_ruler_marker_drops_a_line_only_under_the_cursor()
+    test_ruler_marker_drag_commits_on_release()
+    test_ruler_marker_double_click_asks_for_the_editor()
+    test_ruler_marker_drag_snaps_to_the_grid()
     print("\nALL TESTS PASSED")
 
 

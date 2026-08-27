@@ -21,7 +21,7 @@ undocked.
 | **Snap** | Snapping on/off. **On by default** |
 | **1 beat / 1/4 beat / 1/8 beat** | How fine the grid is. `1/4 beat` by default |
 | **Bars \| Time** | What the ruler counts. Bars by default |
-| **Cues** | Opens the marker-track editor — [6.1.4](#614-voice-cues-and-control-markers) |
+| **Markers** | Opens the marker-track editor — [6.1.4](#614-voice-tts-and-control-markers) |
 
 ### 6.1.2 Centre — transport
 
@@ -45,11 +45,11 @@ audio, MIDI, lights and metronome all begin together at t = 0. The position
 read-out shows `COUNT-IN −0X.X` while it runs. Pausing during a count-in resets
 to zero; seeking cancels it.
 
-### 6.1.4 Voice cues and control markers
+### 6.1.4 Voice TTS and control markers
 
-![The marker track: voice cues, tempo changes, stop-click and the segue.](images/voice-cues.png)
+![The marker track: voice TTS, tempo changes, stop-click and the segue.](images/voice-cues.png)
 
-**Cues** opens the current song's *marker track* — everything that happens at a
+**Markers** opens the current song's *marker track* — everything that happens at a
 point in the song without being a note. The strip along the top shows them laid
 out over the song; drag one to move it. The table lists them in time order, and
 the panel on the right edits whichever is selected.
@@ -58,7 +58,7 @@ Four kinds:
 
 | Marker | What it does |
 | --- | --- |
-| **Voice cue** | Speaks a line on the **VOICE** bus — in split routing the same side as the click, so it reaches the band and not the room. **Preview** renders the selected cue and plays it. |
+| **Voice TTS** | Speaks a line on the **VOICE** bus — in split routing the same side as the click, so it reaches the band and not the room. **Preview** renders the selected line and plays it. |
 | **Tempo change** | Retimes the click from that point on, and re-draws the bar grid to match. The song's *base* tempo — what the `.mid` stores — is not touched. |
 | **Stop click** | The click stops there and stays off for the rest of the song. Seeking back before the marker brings it back. |
 | **Segue** | At the given time the show hands over to the next song in the setlist and starts it **with no count-in**. One per song, set with the tick box along the bottom. |
@@ -67,11 +67,15 @@ The **Time / Bar.beat** switch changes the units every time in the dialog is
 shown and entered in. Bar.beat is read through the song's tempo map, so a
 position after a tempo change converts differently from one before it.
 
-Markers appear on the ruler, coloured by kind: teal for a voice cue, violet for
-a tempo change, red for the stop-click, amber for the segue.
+Markers appear on the ruler in their own lane above the bar numbers, each a
+flag coloured by kind — teal for voice TTS, violet for a tempo change, red for
+the stop-click, amber for the segue — carrying its own name. **Drag a flag to
+move the marker**; while you drag it, a dashed line runs down the arrangement
+so you can see what you are landing on. **Double-click one** to open this
+dialog on that marker.
 
-Voice cues need a TTS voice installed (**Settings ▸ Audio**). Without one the
-dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — voice cues stay
+Voice TTS needs a TTS voice installed (**Settings ▸ Audio**). Without one the
+dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — voice TTS stays
 silent."* and nothing is spoken. The other three kinds do not use TTS and work
 regardless.
 
@@ -82,7 +86,7 @@ switch chooses which of the two you are monitoring and which waveform is drawn.
 
 > The monitor is **session-only**. It is never saved, always starts on BACKING,
 > and **never affects what a live surface plays**. MIDI, DMX, the metronome and
-> the cues are driven by the timeline and are identical under either.
+> the markers are driven by the timeline and are identical under either.
 
 The **GUIDE** button stays disabled until the current song actually has a guide
 file.
@@ -140,7 +144,7 @@ full, `-∞` at zero):
 
 - **MASTER** — the backing track
 - **CLICK** — the metronome
-- **VOICE** — the spoken count-in and voice cues
+- **VOICE** — the spoken count-in and voice TTS
 
 Below them, one header per fixture:
 
