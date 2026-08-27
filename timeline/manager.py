@@ -11,9 +11,9 @@ from typing import Optional, List, Dict
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
                              QGraphicsScene, QSlider, QPushButton, QLabel,
-                             QSizePolicy, QGraphicsLineItem, QGraphicsProxyWidget,
-                             QDialog, QMessageBox)
-from PyQt6.QtGui import QColor, QPen
+                             QSizePolicy, QGraphicsLineItem, QGraphicsRectItem,
+                             QGraphicsProxyWidget, QDialog, QMessageBox)
+from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import (ContentView, StartEventEditDialog, TrackResizeHandle,
@@ -66,6 +66,9 @@ class Timeline(QWidget):
     DEFAULT_WAVEFORM_TRACK_HEIGHT = 100
     DEFAULT_MIDI_EVENTS_TRACK_HEIGHT = 50
     MIN_TRACK_HEIGHT = 30
+    # How much of a fixture's type colour reaches its lane background. Low on
+    # purpose: the tint names the row, it does not compete with the clips on it.
+    LANE_TINT_STRENGTH = 0.16
     SECONDS_TO_DISPLAY = 240
     PIXELS_PER_SECOND = 20
 
@@ -170,6 +173,9 @@ class Timeline(QWidget):
 
         # Time grid items (managed centrally)
         self.time_grid_items = []
+
+        # Fixture-lane zebra bands + separators (managed centrally)
+        self.lane_band_items = []
 
         # Deferred-refresh guard: coalesces multiple refresh requests
         # (e.g. data_changed + explicit call) into a single repaint on
@@ -404,7 +410,7 @@ class Timeline(QWidget):
         layout.addWidget(self.content_view)
 
         # Sync scrollbars
-        self.content_view.verticalScrollBar().valueChanged.connect(self.header_view.verticalScrollBar().setValue)
+        self.content_view.verticalScrollBar().valueChanged.connect(self._on_content_scrolled)
         self.header_view.verticalScrollBar().valueChanged.connect(self.content_view.verticalScrollBar().setValue)
 
     def setup_scenes(self):
@@ -417,9 +423,53 @@ class Timeline(QWidget):
         self._recompute_scene_height()
         self.header_scene.setSceneRect(0, 0, self.HEADER_WIDTH, self.scene_height)
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
+        self._sync_header_scroll_range()
 
         self.draw_playhead()
         self.draw_time_grid()
+        self.draw_lane_bands()
+
+    def _sync_header_scroll_range(self) -> None:
+        """Size the header scene so the header view scrolls exactly as far as
+        the content view.
+
+        The content view carries a horizontal scrollbar and the header view has
+        none, so the content viewport is that scrollbar shorter — and a view's
+        scroll maximum is (scene - viewport). Left alone the header's maximum is
+        short by exactly that strip, and once the header pins there it stops
+        emitting valueChanged: the content then scrolls the last few pixels on
+        its own and every lane separator drifts off the header border beside it.
+        Topping the header scene up by the surplus keeps the two ranges equal
+        (and makes the bottom of the last lane reachable).
+        """
+        current = self.header_scene.sceneRect().height()
+        # Measured off the scrollbars themselves rather than off the viewport
+        # heights: the content view carries a horizontal zoom, and its mapped
+        # scene rect rounds a pixel or two differently from the header's.
+        surplus = (self.content_view.verticalScrollBar().maximum()
+                   - self.header_view.verticalScrollBar().maximum())
+        height = max(self.scene_height, current + surplus)
+        if abs(height - current) < 0.5:
+            return
+        self.header_scene.setSceneRect(0, 0, self.HEADER_WIDTH, height)
+
+    def _on_content_scrolled(self, value: int) -> None:
+        """Mirror the content view's vertical scroll onto the headers.
+
+        The range is re-matched first: the viewports only take their final
+        geometry once the widget is on screen and the horizontal scrollbar has
+        settled, and a stale range is exactly what lets the two views drift.
+        """
+        bar = self.header_view.verticalScrollBar()
+        self._sync_header_scroll_range()
+        bar.setValue(value)
+        if bar.value() != value:
+            # The range was still stale (a view recomputes its scroll range
+            # lazily after a scene resize, so the first scroll following a
+            # reflow can read the old one). Now that the shortfall is visible
+            # in the scrollbars, the top-up measures it exactly.
+            self._sync_header_scroll_range()
+            bar.setValue(value)
 
     def _waveform_y(self) -> int:
         """Y offset of the waveform track (flush under the ruler)."""
@@ -677,6 +727,7 @@ class Timeline(QWidget):
         self._recompute_scene_height()
         self.header_scene.setSceneRect(0, 0, self.HEADER_WIDTH, self.scene_height)
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
+        self._sync_header_scroll_range()
 
         # Headers
         self.waveform_track.draw_header(self._waveform_y())
@@ -710,6 +761,7 @@ class Timeline(QWidget):
         if hasattr(self, 'playhead') and self.playhead is not None:
             self.playhead.setLine(0, 0, 0, self.scene_height)
         self.draw_time_grid()
+        self.draw_lane_bands()
 
         # Move resize handles to their new positions
         self._reposition_resize_handles()
@@ -727,6 +779,57 @@ class Timeline(QWidget):
         """Update playhead position."""
         x_pos = time_seconds * self.PIXELS_PER_SECOND
         self.playhead.setX(x_pos)
+
+    def _lane_tint(self, accent: str) -> QColor:
+        """A fixture's accent colour mixed LANE_TINT_STRENGTH of the way into
+        the scene background — so a lane keeps the timeline's darkness and only
+        its hue says which fixture the row belongs to."""
+        c = QColor(accent)
+        bg = self.content_scene.backgroundBrush().color()
+        return QColor(*[round(b + (a - b) * self.LANE_TINT_STRENGTH)
+                        for a, b in ((c.red(), bg.red()),
+                                     (c.green(), bg.green()),
+                                     (c.blue(), bg.blue()))])
+
+    def draw_lane_bands(self):
+        """Draw the fixture lanes' backdrop: each lane tinted towards its
+        fixture's type colour (the swatch on its header) plus a 1px separator at
+        each lane boundary, so a clip's row is readable across the full width of
+        the scene.
+
+        Rebuilt from the current layout (heights are per-track and a collapsed
+        lane is shorter), and drawn below the grid lines so the bars still read
+        over the tint. The separator colour is the one each track header paints
+        as its bottom border, so the line continues across the header/content
+        seam.
+        """
+        for item in self.lane_band_items:
+            self.content_scene.removeItem(item)
+        self.lane_band_items.clear()
+
+        no_pen = QPen(Qt.PenStyle.NoPen)
+        sep_pen = QPen(QColor(68, 68, 68), 1)
+        sep_pen.setCosmetic(True)
+
+        for i, track in enumerate(self.midi_events_tracks):
+            y = self._midi_track_y(i)
+            band = QGraphicsRectItem(0, y, self.content_width,
+                                     track.get_track_height())
+            band.setBrush(QBrush(self._lane_tint(track._header_accent())))
+            band.setPen(no_pen)
+            band.setZValue(-3)  # under the grid lines (z=-1)
+            self.content_scene.addItem(band)
+            self.lane_band_items.append(band)
+            # The separator sits on the lane boundary's LAST row (y - 0.5),
+            # which is the row the header above it paints its own bottom border
+            # on — so the line runs unbroken across the header/content seam.
+            # The half-pixel lands the cosmetic 1px pen on a single device row
+            # instead of antialiasing it across two.
+            sep = QGraphicsLineItem(0, y - 0.5, self.content_width, y - 0.5)
+            sep.setPen(sep_pen)
+            sep.setZValue(-2)
+            self.content_scene.addItem(sep)
+            self.lane_band_items.append(sep)
 
     def draw_time_grid(self):
         """Draw the background grid lines, following the active ruler mode.
@@ -1712,6 +1815,7 @@ class Timeline(QWidget):
         self.content_width = width
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
         self.draw_time_grid()
+        self.draw_lane_bands()
         if hasattr(self, 'ruler_track'):
             self.ruler_track.redraw()
     
