@@ -265,6 +265,10 @@ class FixtureInstance:
     # because a beam that points down is what every stage drew before a fixture
     # could say which way up it was.
     hanging: bool = True
+    # Row this fixture occupies in the timeline's track strip, as dragged by the
+    # header grip. -1 = never reordered, which sorts to the end and leaves the
+    # lane in DMX order — what every patch written before this showed.
+    order: int = -1
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
 
 
@@ -855,6 +859,9 @@ class Config:
                 # A patch saved before fixtures could be rigged either way is
                 # read as flown, which is where its beams already pointed.
                 hanging=bool(entry.get("hanging", True)),
+                # Upper bound is generous: a row index only has to outlast the
+                # patch it orders (at most 16 MIDI channels' worth of lanes).
+                order=Config._validate_int(entry.get("order", -1), -1, 63),
                 bars=bars,
             ))
 

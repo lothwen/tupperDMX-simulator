@@ -319,6 +319,7 @@ class MainWindow(QMainWindow):
         self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         self.timeline.header_width_changed.connect(self.on_header_width_changed)
+        self.timeline.track_order_changed.connect(self.on_track_order_changed)
         # The clip editor can write a fixture's scene banks, which the library
         # panel has already read — rebuild it rather than wait for a restart.
         self.timeline.library_changed.connect(
@@ -1348,6 +1349,20 @@ class MainWindow(QMainWindow):
         """Persist the timeline's track-header width when the user finishes
         dragging its divider."""
         self.config.window.timeline_header_width = int(width)
+        self.save_config()
+
+    def on_track_order_changed(self, channels):
+        """Persist the track strip's order after a lane was dragged to a new row.
+
+        The row rides the patch entry (show data, like the fixture's address and
+        its rigging), so every fixture is stamped rather than only the moved
+        one — a half-filled order would leave the untouched lanes falling back
+        to DMX address and reshuffling behind the one that moved."""
+        by_channel = {f.channel: f for f in self.config.fixtures}
+        for row, channel in enumerate(channels):
+            instance = by_channel.get(channel)
+            if instance is not None:
+                instance.order = row
         self.save_config()
 
     def _on_row_height_preset(self, height):

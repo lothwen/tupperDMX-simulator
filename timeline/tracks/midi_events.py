@@ -964,9 +964,13 @@ class AutoSceneClip(QGraphicsObject):
 # background. The chevron points down when expanded and right when collapsed.
 def _header_button(object_name: str, tooltip: str, *, text: str = "",
                    icon: Optional[QIcon] = None,
-                   checkable: bool = False) -> QPushButton:
-    """A 22px header button showing an icon (or short text), styled by QSS."""
-    btn = QPushButton(text)
+                   checkable: bool = False,
+                   cls=QPushButton) -> QPushButton:
+    """A 22px header button showing an icon (or short text), styled by QSS.
+
+    `cls` swaps in a QPushButton subclass (the reorder grip) so every button in
+    the bar is measured and styled the same way whatever it does."""
+    btn = cls(text)
     if icon is not None:
         btn.setIcon(icon)
         btn.setIconSize(QSize(13, 13))
@@ -977,10 +981,66 @@ def _header_button(object_name: str, tooltip: str, *, text: str = "",
     return btn
 
 
+class _TrackGrip(QPushButton):
+    """The reorder handle at the head of a track header.
+
+    Press-drag-release is the whole gesture — it never emits a click. The press
+    is all this reports: the timeline then follows the cursor through the header
+    VIEW's own mouse events, in viewport coordinates.
+
+    It cannot use the ones it is handed here. A widget inside a
+    QGraphicsProxyWidget is given a global (screen) position, and under Wayland
+    a client is never told where its window is: mapToGlobal/mapFromGlobal work
+    off a believed origin that can be stale, so round-tripping a screen y back
+    into the scene is not the identity. When that origin shifted mid-drag the
+    lane jumped the height of the whole strip and thrashed through rows.
+    """
+
+    drag_started = pyqtSignal()
+    drag_finished = pyqtSignal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        # A handle is not a tab stop, and more to the point a focused widget
+        # inside a proxy makes the view scroll to keep its ITEM visible — and
+        # this item is moved on every mouse event of the drag, which pulled the
+        # whole strip along under the cursor.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._dragging = False
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._dragging = True
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self.drag_started.emit()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if not self._dragging:
+            super().mouseReleaseEvent(event)
+            return
+        self._finish_drag()
+        event.accept()
+
+    def _finish_drag(self):
+        self.reset_drag_state()
+        self.drag_finished.emit()
+
+    def reset_drag_state(self):
+        """Forget a drag without announcing it — for a gesture that ended
+        somewhere this grip never saw (a release outside the window), which
+        would otherwise leave it holding a closed hand until the next press."""
+        self._dragging = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+
 class TrackHeaderWidget(QWidget):
     """The per-fixture timeline track header.
 
-    Left to right: a reorder grip (visual placeholder for now) and a collapse
+    Left to right: a reorder grip and a collapse
     chevron, a type-coloured swatch that matches the fixture's clip-library
     section, the fixture name over its MIDI/DMX address, and the eye (mute) /
     lock / A (auto) toggle bar. Each toggle emits a signal; the owning
@@ -992,6 +1052,10 @@ class TrackHeaderWidget(QWidget):
     lock_toggled = pyqtSignal(bool)     # True == locked
     auto_toggled = pyqtSignal(bool)     # True == auto
     collapse_toggled = pyqtSignal(bool)  # True == collapsed
+    # Reorder drag, forwarded from the grip: the press and the release. The
+    # carry in between rides the header view's own events (see _TrackGrip).
+    reorder_started = pyqtSignal()
+    reorder_finished = pyqtSignal()
 
     def __init__(self, label: str, channel: int, dmx_start: int, dmx_end: int,
                  accent: str, parent=None):
@@ -1011,9 +1075,11 @@ class TrackHeaderWidget(QWidget):
         root.setSpacing(4)
 
         self.grip = _header_button("TrackGrip",
-                                   "Drag to reorder (coming soon)",
-                                   icon=icons.icon("drag", "#8a8a8a"))
-        self.grip.setEnabled(False)
+                                   "Drag to reorder this track",
+                                   icon=icons.icon("drag", "#8a8a8a"),
+                                   cls=_TrackGrip)
+        self.grip.drag_started.connect(self.reorder_started.emit)
+        self.grip.drag_finished.connect(self.reorder_finished.emit)
         # Checked (collapsed) swaps the icon to the right-pointing chevron.
         self.chevron = _header_button("TrackChevron",
                                       "Collapse track", checkable=True,
@@ -1120,14 +1186,17 @@ class MidiEventsTrack(BaseTrack):
         super().__init__(timeline_manager, content_scene, header_scene)
         # This track owns one patched fixture, identified by its stable MIDI
         # channel (the binding key — independent of the track's display row,
-        # which is ordered by DMX address). label is the header text shown for
-        # the fixture.
+        # which is the row it was dragged to, else DMX order). label is the
+        # header text shown for the fixture.
         self.fixture_index = fixture_index
         self.label = label
         # View-only collapse state (not persisted): when True the lane shrinks
         # to a single header row (MIN_TRACK_HEIGHT), hiding the MIDI/DMX address.
         self.collapsed = False
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
+        # Where this lane's content currently sits, so a reorder drag can
+        # translate it rather than rebuild it (see move_content_to).
+        self._content_y = None
         # Persistent header proxy — the whole TrackHeaderWidget lives on one
         # QGraphicsProxyWidget that survives per-reflow header redraws (like the
         # waveform's audio-controls proxy) so its QWidget isn't destroyed.
@@ -1188,6 +1257,51 @@ class MidiEventsTrack(BaseTrack):
         # its address row and flipped the chevron glyph.
         self.collapsed = collapsed
         self.timeline_manager.reflow_tracks()
+
+    def _on_reorder_started(self):
+        self.timeline_manager.begin_track_reorder(self)
+
+    def _on_reorder_finished(self):
+        self.timeline_manager.end_track_reorder()
+
+    def set_header_lifted(self, lifted: bool):
+        """Raise (or settle) the header proxy for a reorder drag, so the lane
+        being carried draws over the ones sliding past it.
+
+        Settling also clears the grip: the drag it belongs to is often ended
+        for it, by a release the grip itself never received."""
+        if not lifted and self._header_widget is not None:
+            self._header_widget.grip.reset_drag_state()
+        if self._header_proxy is None:
+            return
+        # Above the other headers (z=1), below the height-resize grip (z=6).
+        self._header_proxy.setZValue(5 if lifted else 1)
+        self._header_proxy.setOpacity(0.85 if lifted else 1.0)
+
+    def move_content_to(self, y: int):
+        """Restack this lane at `y` WITHOUT rebuilding a single clip.
+
+        A reorder drag crosses rows under a moving cursor, and redrawing every
+        lane's clips costs tens of milliseconds — enough to swallow whole
+        batches of mouse events, so the lane lurches to wherever the cursor got
+        to instead of following it. Translating the items already on the scene
+        is a transform update; the release then does one honest redraw."""
+        if self._header_proxy is not None:
+            self._header_proxy.setPos(0, y)
+        if self._content_y is None:
+            return
+        dy = y - self._content_y
+        if not dy:
+            return
+        for item in self.items:
+            item.moveBy(0, dy)
+        self._content_y = y
+
+    def float_header_to(self, y: float):
+        """Park the header proxy at an arbitrary y, off the row grid that
+        draw_header puts it on — it follows the cursor mid-reorder."""
+        if self._header_proxy is not None:
+            self._header_proxy.setPos(0, y)
 
     def set_collapsed(self, collapsed: bool):
         """Set collapse state and sync the header, WITHOUT reflowing — the caller
@@ -1264,6 +1378,8 @@ class MidiEventsTrack(BaseTrack):
             self._header_widget.lock_toggled.connect(self._on_lock_toggled)
             self._header_widget.auto_toggled.connect(self._on_auto_toggled)
             self._header_widget.collapse_toggled.connect(self._on_collapse_toggled)
+            self._header_widget.reorder_started.connect(self._on_reorder_started)
+            self._header_widget.reorder_finished.connect(self._on_reorder_finished)
             self._header_proxy = QGraphicsProxyWidget()
             self._header_proxy.setWidget(self._header_widget)
             self._header_proxy.setZValue(1)
@@ -1434,6 +1550,7 @@ class MidiEventsTrack(BaseTrack):
         # tooltip would be left orphaned on screen.
         if self.timeline_manager:
             self.timeline_manager.hide_clip_tooltip()
+        self._content_y = y_offset
 
         # Safely dispose of old scene items.  The scene's BSP spatial index
         # and internal dirty-item bookkeeping can retain pointers to items

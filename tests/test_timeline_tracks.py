@@ -38,6 +38,12 @@ class FakeFixture:
     name: str = ""
 
 
+@dataclass
+class OrderedFixture(FakeFixture):
+    """A patched fixture that has been dragged to a row of its own."""
+    order: int = -1
+
+
 # ledbar@1 ch0, blinder@33 ch1, blinder@65 ch2 — two blinders so the per-instance
 # (not per-type) split is exercised. The stable channel selects each fixture;
 # clips are stamped with that channel (as the clip library does). Tracks display
@@ -249,6 +255,250 @@ def test_display_order_by_dmx_binding_by_channel():
     _assert(top.matches_filter(e) and not mid.matches_filter(e)
             and not bot.matches_filter(e),
             "channel-2 clip binds to the top (ledbar) lane regardless of order")
+
+
+def _ordered(patch):
+    _ensure_app()
+    m = MidiManager(note_layout.build_note_map(), fixtures=patch)
+    m.create_empty_track()
+    m.set_song_duration(240.0)
+    return Timeline(midi_manager=m, fixtures=patch)
+
+
+def test_saved_row_outranks_the_dmx_address():
+    """A lane dragged to a row keeps it across a reload: `order` wins over the
+    DMX address, and a fixture that has never been dragged (-1 — every fixture
+    in a show saved before the strip could be reordered) falls to the bottom in
+    DMX order rather than jumping the placed ones."""
+    print("test_saved_row_outranks_the_dmx_address")
+    tl = _ordered([OrderedFixture("ledbar", 1, 0, order=2),
+                   OrderedFixture("blinder", 33, 1, order=0),
+                   OrderedFixture("blinder", 65, 2, order=1)])
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 2, 0],
+            "lanes lay out by their saved row, not by DMX address")
+
+    tl = _ordered([OrderedFixture("ledbar", 1, 0, order=1),
+                   OrderedFixture("blinder", 33, 1),            # never dragged
+                   OrderedFixture("blinder", 65, 2, order=0)])
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [2, 0, 1],
+            "an unplaced fixture sorts below the placed ones")
+
+
+def test_grip_drag_restacks_the_lanes_and_commits_on_release():
+    """The reorder gesture: carrying a header past a neighbour's centre restacks
+    the lanes underneath it (leaving the gap it will drop into), the carried
+    header floats off the row grid meanwhile, and the release settles it and
+    announces the new order by MIDI channel."""
+    print("test_grip_drag_restacks_the_lanes_and_commits_on_release")
+    _, tl = _make()
+    committed = []
+    tl.track_order_changed.connect(committed.append)
+
+    top = tl.midi_events_tracks[0]
+    height = top.get_track_height()
+    row0 = tl._midi_track_y(0)
+
+    tl.begin_track_reorder(top)
+    tl.update_track_reorder(500.0)                       # anchors the gesture
+    tl.update_track_reorder(500.0 + 1.8 * height)
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 2, 0],
+            "carried past two lanes, the lane restacks to the bottom row")
+    _assert(abs(top._header_proxy.pos().y() - (row0 + 1.8 * height)) < 0.5,
+            "the carried header floats with the cursor, off the row grid")
+    _assert(committed == [], "nothing is committed mid-drag")
+
+    tl.end_track_reorder()
+    _assert(committed == [[1, 2, 0]], "release commits the order, by channel")
+    _assert(abs(top._header_proxy.pos().y() - tl._midi_track_y(2)) < 0.5,
+            "the header settles onto its new row")
+
+
+def test_a_lane_holds_its_row_until_it_has_passed_half_a_neighbour():
+    """Grabbing a lane must not move anything, and a lane restacks only once it
+    has been carried over half of the neighbour it is passing — the same going
+    back up as coming down.
+
+    The threshold is measured against the slot the lane would drop into. Judging
+    it by the carried lane's centre against the closed-up neighbours instead
+    lands a resting lane exactly on the next slot's tie point, so it swapped
+    rows on the first pixel of the drag (and every later swap fired half a lane
+    early, the header running a row ahead of the gap)."""
+    print("test_a_lane_holds_its_row_until_it_has_passed_half_a_neighbour")
+    _, tl = _make()
+    top = tl.midi_events_tracks[0]
+    height = top.get_track_height()
+    rows = lambda: [t.fixture_index for t in tl.midi_events_tracks]
+
+    tl.begin_track_reorder(top)
+    tl.update_track_reorder(500.0)
+    _assert(rows() == [0, 1, 2], "grabbing a lane leaves the order alone")
+    # A pixel of travel is not a reorder, and neither is a third of a lane.
+    tl.update_track_reorder(501.0)
+    _assert(rows() == [0, 1, 2], "a pixel of travel restacks nothing")
+    tl.update_track_reorder(500.0 + 0.4 * height)
+    _assert(rows() == [0, 1, 2], "carried less than half a lane, it holds its row")
+    tl.update_track_reorder(500.0 + 0.6 * height)
+    _assert(rows() == [1, 0, 2], "carried past half a lane, it takes the next row")
+    tl.update_track_reorder(500.0 + 0.4 * height)
+    _assert(rows() == [0, 1, 2], "carried back over the same half, it returns")
+    tl.end_track_reorder()
+
+
+def test_passing_a_collapsed_lane_only_costs_half_of_ITS_height():
+    """The swap threshold is half the height of the lane being passed, not half
+    a nominal row — so a collapsed neighbour is passed in half of its own short
+    height."""
+    print("test_passing_a_collapsed_lane_only_costs_half_of_ITS_height")
+    _, tl = _make()
+    top, middle = tl.midi_events_tracks[0], tl.midi_events_tracks[1]
+    middle.set_collapsed(True)
+    tl.reflow_tracks()
+    short = middle.get_track_height()
+    _assert(short < top.get_track_height(), "the middle lane is collapsed")
+
+    tl.begin_track_reorder(top)
+    tl.update_track_reorder(500.0)
+    tl.update_track_reorder(500.0 + 0.4 * short)
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [0, 1, 2],
+            "under half the collapsed lane, the order holds")
+    tl.update_track_reorder(500.0 + 0.6 * short)
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 0, 2],
+            "over half of it, the lanes swap — no full row of travel needed")
+    tl.end_track_reorder()
+
+
+def test_a_crossing_moves_the_clips_rather_than_rebuilding_them():
+    """Crossing a row must translate the lanes' existing clips, not redraw them.
+
+    Redrawing every lane on every crossing cost ~65ms on a 240-clip song and
+    ~300ms at 1000 — several mouse events' worth each time. Qt compresses the
+    moves it could not deliver, so the lane lurched to wherever the cursor had
+    got to by then rather than following it. The release does the one honest
+    redraw."""
+    print("test_a_crossing_moves_the_clips_rather_than_rebuilding_them")
+    m, tl = _make()
+    m.add_event(LEDBAR_CLIP, 1.0, 100, channel=LEDBAR_CH)
+    m.add_event(LEDBAR_CLIP, 5.0, 100, channel=LEDBAR_CH)
+    tl.refresh_from_manager()
+
+    top = tl.midi_events_tracks[0]
+    height = top.get_track_height()
+    before = [id(item) for item in top.items]
+    ys = [item.y() for item in top.items]
+    _assert(before, "the top lane has clips to move")
+
+    tl.begin_track_reorder(top)
+    tl.update_track_reorder(500.0)
+    tl.update_track_reorder(500.0 + 0.6 * height)
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 0, 2],
+            "the lane crossed a row")
+    _assert([id(item) for item in top.items] == before,
+            "the crossing kept the very same clip items — no rebuild")
+    _assert(all(abs((new - old) - height) < 0.5
+                for new, old in zip([i.y() for i in top.items], ys)),
+            "and translated them down by exactly one lane")
+    tl.end_track_reorder()
+
+
+def test_the_carry_ignores_screen_coordinates():
+    """The carry must ride the header VIEWPORT's own coordinates.
+
+    A widget inside a QGraphicsProxyWidget is handed a GLOBAL position, and
+    mapping one back into the scene has to go through the window's origin —
+    which under Wayland is a guess the compositor never confirms. That round
+    trip was not the identity: mid-drag the origin shifted and the lane jumped
+    the height of the entire strip (-416px in one event, 47 crossings in a
+    single gesture). The events below carry a global position of (0, 0), a
+    deliberate lie: nothing may read it."""
+    print("test_the_carry_ignores_screen_coordinates")
+    from PyQt6.QtCore import QEvent, QPointF, QPoint, Qt
+    from PyQt6.QtGui import QMouseEvent
+    _, tl = _make()
+    viewport = tl.header_view.viewport()
+
+    _assert(abs(tl._header_scene_y(40.0)
+                - tl.header_view.mapToScene(QPoint(0, 40)).y()) < 0.001,
+            "a viewport y resolves through the view, with no global round trip")
+
+    def move_at(view_y):
+        return QMouseEvent(QEvent.Type.MouseMove, QPointF(5.0, float(view_y)),
+                           QPointF(0.0, 0.0),          # the lie
+                           Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                           Qt.KeyboardModifier.NoModifier)
+
+    track = tl.midi_events_tracks[0]
+    height = track.get_track_height()
+    anchor = tl.header_view.mapFromScene(QPointF(0.0, tl._midi_track_y(0))).y()
+
+    tl.begin_track_reorder(track)
+    tl.eventFilter(viewport, move_at(anchor))
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [0, 1, 2],
+            "the anchor move leaves the order alone")
+    tl.eventFilter(viewport, move_at(anchor + 1.6 * height))
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 2, 0],
+            "the viewport position alone carries the lane to the bottom row")
+    tl.end_track_reorder()
+
+
+def test_a_drag_cannot_outlive_its_gesture():
+    """A carried lane must be dropped as soon as the button is no longer held,
+    even when the grip never sees the release.
+
+    The scene hands the mouse grab back the instant a move arrives unpressed —
+    it is dispatched as a hover, and the grip is not told. Without this the
+    drag outlived the gesture: every later movement of an unpressed mouse went
+    on carrying the lane, restacking the whole strip at random."""
+    print("test_a_drag_cannot_outlive_its_gesture")
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+    _, tl = _make()
+    track = tl.midi_events_tracks[0]
+
+    def move(buttons):
+        return QMouseEvent(QEvent.Type.MouseMove, QPointF(0, 0), QPointF(0, 0),
+                           Qt.MouseButton.NoButton, buttons,
+                           Qt.KeyboardModifier.NoModifier)
+
+    tl.begin_track_reorder(track)
+    tl.update_track_reorder(500.0)
+    tl.eventFilter(tl, move(Qt.MouseButton.LeftButton))
+    _assert(tl._reorder_drag is not None,
+            "a move with the button held keeps the drag alive")
+
+    tl.eventFilter(tl, move(Qt.MouseButton.NoButton))
+    _assert(tl._reorder_drag is None,
+            "a move with no button held ends the drag")
+
+    # And the release, wherever it lands in the app.
+    tl.begin_track_reorder(track)
+    tl.update_track_reorder(500.0)
+    tl.eventFilter(tl, QMouseEvent(
+        QEvent.Type.MouseButtonRelease, QPointF(0, 0), QPointF(0, 0),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier))
+    _assert(tl._reorder_drag is None, "a release anywhere in the app ends it")
+
+
+def test_grip_drag_stays_inside_the_strip():
+    print("test_grip_drag_stays_inside_the_strip")
+    _, tl = _make()
+    committed = []
+    tl.track_order_changed.connect(committed.append)
+
+    bottom = tl.midi_events_tracks[-1]
+    tl.begin_track_reorder(bottom)
+    tl.update_track_reorder(500.0)
+    tl.update_track_reorder(-4000.0)  # yanked far above the strip
+    _assert([t.fixture_index for t in tl.midi_events_tracks] == [2, 0, 1],
+            "dragged past the top, the lane stops at the first row")
+    _assert(bottom._header_proxy.pos().y() >= tl._midi_tracks_top() - 0.5,
+            "the carried header is clamped to the top of the strip")
+    tl.end_track_reorder()
+
+    # Press and release without moving: the lane never left its row.
+    tl.begin_track_reorder(tl.midi_events_tracks[0])
+    tl.end_track_reorder()
+    _assert(committed == [[2, 0, 1]], "a press with no movement commits nothing")
 
 
 def test_rebuild_for_patch_adds_and_removes_tracks():
@@ -576,6 +826,14 @@ def main():
     test_timeline_spans_the_longest_track()
     test_blackout_scoped_to_its_fixture()
     test_display_order_by_dmx_binding_by_channel()
+    test_saved_row_outranks_the_dmx_address()
+    test_grip_drag_restacks_the_lanes_and_commits_on_release()
+    test_a_lane_holds_its_row_until_it_has_passed_half_a_neighbour()
+    test_passing_a_collapsed_lane_only_costs_half_of_ITS_height()
+    test_a_crossing_moves_the_clips_rather_than_rebuilding_them()
+    test_the_carry_ignores_screen_coordinates()
+    test_a_drag_cannot_outlive_its_gesture()
+    test_grip_drag_stays_inside_the_strip()
     test_rebuild_for_patch_adds_and_removes_tracks()
     test_rebuild_for_patch_keeps_clip_binding()
     test_rebuild_to_empty_patch()

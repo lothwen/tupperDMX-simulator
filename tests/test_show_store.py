@@ -75,7 +75,8 @@ def test_save_load_roundtrip():
         external_audio.write_bytes(b"a")
 
         show = create_show(tmp, "Gira",
-                           fixtures=[FixtureInstance(type="ledbar", dmx_start=1, channel=0)],
+                           fixtures=[FixtureInstance(type="ledbar", dmx_start=1,
+                                                     channel=0, order=2)],
                            cues=[WebCueConfig("Warm", "#ffb86b", [[0, 73, 127]])])
         midi_path = allocate_midi_path(show, "El Acantilado")
         Path(midi_path).write_bytes(b"m")
@@ -101,6 +102,8 @@ def test_save_load_roundtrip():
                 "song metadata roundtrips")
         _assert(loaded.fixtures[0].type == "ledbar" and loaded.cues[0].label == "Warm",
                 "fixtures and cues roundtrip")
+        # The timeline row a lane was dragged to is show data, like the address.
+        _assert(loaded.fixtures[0].order == 2, "the fixture's track row roundtrips")
 
 
 def test_load_errors():
