@@ -117,7 +117,7 @@ class WindowConfig:
     # How hazy the virtual stage's air is before any hazer runs, 0..1. Beams are
     # only visible because there is something for them to scatter off, so this
     # is what a rig with no hazer patched still gets to see.
-    stage_haze: float = 0.15
+    stage_haze: float = 0.50
     # Draw the stage's light on the GPU: one HDR buffer everything adds into,
     # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
     # Off by default — it needs a working OpenGL context, and the raster path
@@ -502,7 +502,7 @@ class Config:
                 timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
                 tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
                 stage_haze=cls._validate_float(
-                    window_data.get("stage_haze", 0.15), 0.0, 1.0),
+                    window_data.get("stage_haze", 0.5), 0.0, 1.0),
                 stage_gpu=bool(window_data.get("stage_gpu", False)),
                 stage_exposure=cls._validate_float(
                     window_data.get("stage_exposure", 1.0), 0.1, 4.0),
