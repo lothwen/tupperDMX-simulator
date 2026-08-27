@@ -342,6 +342,54 @@ def test_ui_scale_remeasures_the_headers():
             == tl.HEADER_WIDTH, "the ruler band shrinks with it")
 
 
+def test_header_width_is_dragged_and_outranks_the_scale():
+    print("test_header_width_is_dragged_and_outranks_the_scale")
+    _, tl = _make()
+    committed = []
+    tl.header_width_changed.connect(committed.append)
+
+    # What the divider's drag emits: a preview per move, one commit on release.
+    tl.header_resize_handle.width_preview.emit(320)
+    _assert(tl.HEADER_WIDTH == 320, "the strip follows the drag")
+    _assert(tl.header_view.width() == 320, "so does the header view")
+    _assert(tl.header_scene.sceneRect().width() == 320, "and the scene it draws into")
+    _assert(tl.ruler_track.permanent_header_items[0].rect().width() == 320,
+            "and the ruler's kept band")
+    _assert(committed == [], "mid-drag is visual — nothing is persisted yet")
+
+    tl.header_resize_handle.width_committed.emit(320)
+    _assert(committed == [320], "the release is what asks for persistence")
+
+    # A width chosen by hand is the user's, not the scale's (same rule the
+    # right sidebar's width follows) — but never below what its rows need.
+    tl.set_ui_scale(1.0)
+    _assert(tl.HEADER_WIDTH == 320, "a UI-scale change leaves a hand-sized strip alone")
+    tl.set_ui_scale(1.5)
+    _assert(tl.HEADER_WIDTH == 320, "even a bigger one, while the width still fits")
+
+    tl.header_resize_handle.width_preview.emit(10)
+    _assert(tl.HEADER_WIDTH == round(Timeline.MIN_HEADER_WIDTH * 1.5),
+            "the floor scales with the interface (the rows it protects do)")
+    tl.header_resize_handle.width_preview.emit(9999)
+    _assert(tl.HEADER_WIDTH == Timeline.MAX_HEADER_WIDTH,
+            "and the ceiling caps it, whatever the scale")
+
+
+def test_persisted_header_width_reopens_the_strip():
+    print("test_persisted_header_width_reopens_the_strip")
+    m = MidiManager(note_layout.build_note_map(), fixtures=PATCH)
+    m.create_empty_track()
+    tl = Timeline(midi_manager=m, fixtures=PATCH, initial_header_width=310, ui_scale=1.5)
+    _assert(tl.HEADER_WIDTH == 310,
+            "a saved width opens the strip, in place of the scaled design width")
+    tl.set_ui_scale(1.25)
+    _assert(tl.HEADER_WIDTH == 310, "and survives a scale change")
+
+    fresh = Timeline(midi_manager=m, fixtures=PATCH, initial_header_width=0, ui_scale=1.5)
+    _assert(fresh.HEADER_WIDTH == round(Timeline.HEADER_WIDTH * 1.5),
+            "0 means never sized by hand — the scale decides")
+
+
 class _FakeMouse:
     """A stand-in for QGraphicsSceneMouseEvent, which PyQt6 refuses to build.
 
@@ -534,6 +582,8 @@ def main():
     test_manager_update_fixtures_reflects_new_patch()
     test_empty_patch_no_tracks()
     test_ui_scale_remeasures_the_headers()
+    test_header_width_is_dragged_and_outranks_the_scale()
+    test_persisted_header_width_reopens_the_strip()
     test_ruler_numbers_keep_clear_of_the_marker_lane()
     test_ruler_markers_draw_as_flags()
     test_ruler_marker_chips_yield_when_crowded()

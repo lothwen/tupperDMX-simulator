@@ -17,7 +17,7 @@ from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import (ContentView, StartEventEditDialog, TrackResizeHandle,
-                      CustomTooltip)
+                      HeaderResizeHandle, CustomTooltip)
 from .widgets.clip_edit import ClipEditDialog
 from core import note_layout
 from core.fixture_library import resolve_fixture
@@ -60,6 +60,8 @@ class Timeline(QWidget):
     marker_move_committed = pyqtSignal(str, float, float)
     # A ruler marker was double-clicked: (kind, time) — open its editor on it.
     marker_edit_requested = pyqtSignal(str, float)
+    # The header/content divider was released at a new header width, in pixels.
+    header_width_changed = pyqtSignal(int)
 
     # Constants
     # HEADER_WIDTH is the designed width; __init__ shadows it with the
@@ -68,6 +70,13 @@ class Timeline(QWidget):
     # cannot reach it. Every reader goes through the instance, so shadowing is
     # all it takes.
     HEADER_WIDTH = 240
+    # Bounds the divider drag clamps to. The floor is scaled like the designed
+    # width above, because what it protects — the header's TRACKS/volume rows —
+    # is styled and so grows with the interface (at 1.5 those rows already need
+    # ~184px). The ceiling is a plain cap: past it the strip eats the clips it
+    # exists to label, whatever the scale.
+    MIN_HEADER_WIDTH = 170
+    MAX_HEADER_WIDTH = 600
     # Two lanes, not one: a marker's flag and name ride the top strip
     # (RulerTrack.MARKER_LANE_H), the ticks and bar/time numbers the rest. A
     # bar number's ink is 16px tall and a marker's name chip 14 — they cannot
@@ -86,13 +95,20 @@ class Timeline(QWidget):
     def __init__(self, midi_manager=None, audio_file=None, initial_metronome_volume=0.5,
                  initial_audio_volume=0.5, initial_voice_volume=0.8,
                  initial_waveform_track_height=None, initial_midi_events_track_height=None,
+                 initial_header_width=None,
                  fixtures=None, ui_scale=1.0, parent=None):
         super().__init__(parent)
         # The header width is baked into scene rects and painted items, so it
         # is measured here rather than styled; `set_ui_scale` re-measures it
         # when the scale changes under a running window.
         # (`timeline/` never imports `ui/`, hence the injected scale.)
-        self.HEADER_WIDTH = round(self.HEADER_WIDTH * ui_scale)
+        # A width dragged by hand is passed in instead and outranks the scale
+        # from then on — see `set_header_width`.
+        self._ui_scale = ui_scale
+        self._header_width_user_set = bool(initial_header_width)
+        self.HEADER_WIDTH = (self._clamp_header_width(initial_header_width)
+                             if self._header_width_user_set
+                             else round(self.HEADER_WIDTH * ui_scale))
         self.audio_file = audio_file
         self.midi_manager = midi_manager
 
@@ -417,7 +433,13 @@ class Timeline(QWidget):
         # persisted id set stay in sync as clips are (de)selected.
         self.content_scene.selectionChanged.connect(self._on_selection_changed)
 
+        # The divider between the two: drag it to re-measure the header strip.
+        self.header_resize_handle = HeaderResizeHandle(lambda: self.HEADER_WIDTH, self)
+        self.header_resize_handle.width_preview.connect(self._on_header_width_preview)
+        self.header_resize_handle.width_committed.connect(self._on_header_width_committed)
+
         layout.addWidget(self.header_view)
+        layout.addWidget(self.header_resize_handle)
         layout.addWidget(self.content_view)
 
         # Sync scrollbars
@@ -654,14 +676,55 @@ class Timeline(QWidget):
         restyle alone leaves the lane names in a strip sized for the old scale.
         Everything but the ruler's band redraws itself from `HEADER_WIDTH` on
         the reflow; that one is created once, so it is resized in place.
+
+        A strip the user has dragged to a width of their own is left alone: the
+        scale has no business overruling a size chosen by hand (the same rule
+        the right sidebar's width follows). It is still re-clamped, since the
+        rows it has to hold grew with the scale.
         """
-        width = round(Timeline.HEADER_WIDTH * scale)
+        self._ui_scale = scale
+        width = (self._clamp_header_width(self.HEADER_WIDTH)
+                 if self._header_width_user_set
+                 else round(Timeline.HEADER_WIDTH * scale))
+        self._apply_header_width(width, redraw_waveform=bool(self.audio_file))
+
+    def _clamp_header_width(self, width) -> int:
+        """Hold a header width inside the bounds the divider drags between."""
+        floor = round(self.MIN_HEADER_WIDTH * self._ui_scale)
+        return max(floor, min(self.MAX_HEADER_WIDTH, int(width)))
+
+    def set_header_width(self, width: int) -> None:
+        """Re-measure the track headers at a width chosen by hand.
+
+        Marks the strip as hand-sized, so a later UI-scale change leaves it be.
+        """
+        self._header_width_user_set = True
+        self._apply_header_width(self._clamp_header_width(width),
+                                 redraw_waveform=False)
+
+    def _apply_header_width(self, width: int, redraw_waveform: bool) -> None:
+        """Set the header strip's width and re-lay everything measured from it."""
         if width == self.HEADER_WIDTH:
             return
         self.HEADER_WIDTH = width
         self.header_view.setFixedWidth(width)
         self.ruler_track.resize_header(width)
-        self._reflow_layout(redraw_waveform=bool(self.audio_file))
+        # The track-height grips span the strip and are created once, so they
+        # are re-measured in place like the ruler's band.
+        for handle in (self.waveform_resize_handle, self.midi_events_resize_handle):
+            if handle is not None:
+                handle.set_width(width)
+        self._reflow_layout(redraw_waveform=redraw_waveform)
+
+    def _on_header_width_preview(self, width: int) -> None:
+        """Live update while the header divider is dragged (visual only)."""
+        self.set_header_width(width)
+
+    def _on_header_width_committed(self, width: int) -> None:
+        """Drag finished — apply the final width and persist it."""
+        self.set_header_width(width)
+        self.logger.info(f"Timeline header width set to {self.HEADER_WIDTH}px")
+        self.header_width_changed.emit(self.HEADER_WIDTH)
 
     def _reposition_resize_handles(self):
         """Place each resize handle at the bottom border of its track header."""

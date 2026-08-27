@@ -111,6 +111,11 @@ class WindowConfig:
     waveform_track_height: int = 100
     midi_events_track_height: int = 50
     timeline_section_height: int = 230
+    # Width of the timeline's track-header strip, in pixels. 0 means "never
+    # sized by hand", exactly as `sidebar_width` above: the opening width is
+    # then derived from `ui_scale`, since the lane names are painted into the
+    # strip and grow with the interface.
+    timeline_header_width: int = 0
     # Rows "S" mode: every fixture lane collapsed to one row. Persisted so the
     # section height (fitted to collapsed lanes) stays consistent on reload.
     tracks_collapsed: bool = False
@@ -500,6 +505,9 @@ class Config:
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
                 timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
+                # Upper bound matches Timeline.MAX_HEADER_WIDTH (the timeline
+                # clamps to its own bounds anyway; core stays Qt-free).
+                timeline_header_width=cls._validate_int(window_data.get("timeline_header_width", 0), 0, 600),
                 tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
                 stage_haze=cls._validate_float(
                     window_data.get("stage_haze", 0.5), 0.0, 1.0),

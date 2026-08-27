@@ -301,6 +301,7 @@ class MainWindow(QMainWindow):
             initial_voice_volume=self.config.volume.voice,
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
+            initial_header_width=self.config.window.timeline_header_width,
             fixtures=self.config.fixtures,
             ui_scale=self.config.window.ui_scale,
         )
@@ -317,6 +318,7 @@ class MainWindow(QMainWindow):
         self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
         self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
+        self.timeline.header_width_changed.connect(self.on_header_width_changed)
         # The clip editor can write a fixture's scene banks, which the library
         # panel has already read — rebuild it rather than wait for a restart.
         self.timeline.library_changed.connect(
@@ -1340,6 +1342,12 @@ class MainWindow(QMainWindow):
         """Persist track heights when the user finishes resizing."""
         self.config.window.waveform_track_height = int(waveform_height)
         self.config.window.midi_events_track_height = int(midi_events_height)
+        self.save_config()
+
+    def on_header_width_changed(self, width):
+        """Persist the timeline's track-header width when the user finishes
+        dragging its divider."""
+        self.config.window.timeline_header_width = int(width)
         self.save_config()
 
     def _on_row_height_preset(self, height):
