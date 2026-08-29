@@ -42,6 +42,26 @@ LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 COPIED_FLASH_MS = 1200
 
 
+def platform_neutral(form: QFormLayout) -> QFormLayout:
+    """`form` laid out the same on every OS.
+
+    QFormLayout takes its alignment and growth from three style hints, and no
+    two styles answer them alike: QMacStyle centres the whole form and freezes
+    the fields at their size hint, Fusion left-aligns and stretches every field
+    to the full row. Setting the properties is what stops the style being asked
+    at all.
+
+    `ExpandingFieldsGrow` is the growth policy, not `AllNonFixedFieldsGrow`: a
+    spin box holding "24" has no business being 700px wide, and only a field
+    that asks for the room — a size policy of Expanding — gets it.
+    """
+    form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+    form.setFieldGrowthPolicy(
+        QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    return form
+
+
 def human_bytes(count: float) -> str:
     """A byte count as "38.4 MB" — one decimal, because the log folder is the
     kind of number you glance at rather than audit."""
@@ -607,7 +627,7 @@ class SettingsDialog(QDialog):
         routing, count-in length and the TTS voice."""
         page, layout = self._make_page("Audio", "output · click & voice")
 
-        form = QFormLayout()
+        form = platform_neutral(QFormLayout())
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(10)
 
@@ -1104,7 +1124,7 @@ class SettingsDialog(QDialog):
 
         quality = QFrame()
         quality.setObjectName("SettingsSubCard")
-        form = QFormLayout(quality)
+        form = platform_neutral(QFormLayout(quality))
         form.setContentsMargins(18, 6, 0, 0)
         form.setSpacing(6)
 

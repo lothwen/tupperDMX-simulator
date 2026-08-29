@@ -1,5 +1,13 @@
 /* TupperDMX Simulator Dark Theme */
 
+/* Tab bars — QMacStyle answers SH_TabBar_Alignment with AlignCenter, so every
+   QTabWidget's tabs sit in the middle of the bar on macOS and hug the left
+   everywhere else. The hint is read by QCommonStyle when it places the bar, and
+   this rule is the only thing that overrides it. */
+QTabWidget::tab-bar {
+    alignment: left;
+}
+
 /* Main Splitter */
 QSplitter {
     border: none;
