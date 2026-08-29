@@ -100,11 +100,15 @@ class ScenePreview(QGraphicsView):
         a preview must not be the thing that discovers the driver is broken.
         """
         try:
-            from stage.gpu.layer import LightLayer, stage_gpu_active
+            from stage.gpu.layer import (
+                LightLayer, apply_surface_format, stage_gpu_active,
+            )
             if not stage_gpu_active():
                 return None
             from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-            self.setViewport(QOpenGLWidget())
+            viewport = QOpenGLWidget()
+            apply_surface_format(viewport)
+            self.setViewport(viewport)
             return LightLayer(lambda: self._bodies)
         except Exception:
             return None

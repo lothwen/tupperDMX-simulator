@@ -11,9 +11,11 @@ settled by measurement rather than by reading the docs:
   viewport renders opaque and hides the scene, whatever combination of
   `WA_TranslucentBackground` / `WA_NoSystemBackground` / `WA_OpaquePaintEvent` /
   `WA_AlwaysStackOnTop` it is given. There is no way through that route.
-* **The surface format must force desktop GL and must not ask for a version.**
-  See `configure_surface_format`.
-* **The draw calls come from `QOpenGLFunctions_4_1_Core`.** PyQt6 exposes the
+* **The surface format must force desktop GL, and whether it may ask for a
+  version is platform-specific** — X11/Wayland must not, macOS must. See
+  `surface_format`.
+* **The draw calls come from `QOpenGLFunctions_4_1_Core`** (or `_3_3_Core`,
+  which is the floor everything here is written against). PyQt6 exposes the
   shader program, the buffers, the FBO and the VAO, but no `glDrawArrays`;
   those live on the version-functions object. PyOpenGL is not a substitute — it
   works on GL ES and errors with "no valid context" on desktop GL.
@@ -25,6 +27,7 @@ drawing exactly as it did before.
 """
 
 import ctypes
+import sys
 from dataclasses import astuple
 from typing import Callable, Iterable, Optional
 
@@ -48,6 +51,14 @@ _TEXTURE0 = 0x84C0
 _TEXTURE1 = 0x84C1
 _COLOR_BUFFER_BIT = 0x00004000
 _SCISSOR_TEST = 0x0C11
+
+#: Version-functions objects to try, best first. 4.1 is what a current desktop
+#: driver gives and exactly what macOS caps at; 3.3 is the floor, and a real
+#: one — every GL call in here and in `fog.py` is core in 3.3, and so is the
+#: `#version 330` the shaders are written against. Asking only for 4.1 turned
+#: a driver one version short into no light at all, which is the wrong trade
+#: for a layer that already fails soft.
+_GL_VERSIONS = ((4, 1), (3, 3))
 
 #: A ceiling on the glow radius in scene units, whatever `GLOW_REACH` multiplies
 #: a lamp by. Without it a big fixture's halo is a screen-filling disc that
@@ -85,23 +96,63 @@ def _px_per_scene(scene_to_clip: QMatrix4x4, width: int) -> float:
     return abs(scene_to_clip.column(0).x()) * width / 2.0
 
 
-def configure_surface_format() -> None:
-    """Ask for the context the layer needs. Must run before `QApplication`.
+def surface_format() -> QSurfaceFormat:
+    """The context the layer needs, which two platforms describe oppositely.
 
-    Two lines, and what is *missing* matters as much as what is here:
-
-    * `setRenderableType(OpenGL)` is mandatory. Without it a Wayland/EGL
-      session hands out **OpenGL ES**, where `QOpenGLVersionFunctionsFactory`
-      returns nothing and none of the shaders compile.
-    * `setVersion` / `setProfile` must NOT be called. Requesting 3.3 Core fails
-      outright there (`EGL_BAD_MATCH`) and takes Qt's own backing store down
-      with it — the window comes up blank, with no obvious connection to the
-      request that caused it.
+    * `setRenderableType(OpenGL)` is mandatory everywhere. Without it a
+      Wayland/EGL session hands out **OpenGL ES**, where
+      `QOpenGLVersionFunctionsFactory` returns nothing and none of the shaders
+      compile.
+    * On X11/Wayland `setVersion` / `setProfile` must NOT be called.
+      Requesting 3.3 Core fails outright there (`EGL_BAD_MATCH`) and takes
+      Qt's own backing store down with it — the window comes up blank, with no
+      obvious connection to the request that caused it. Nothing is lost by not
+      asking: the compatibility context the driver hands out instead is
+      already 4.x, so the core version functions resolve out of it anyway.
+    * **On macOS the version must be asked for**, and this is the one platform
+      where staying silent is the bug. Cocoa offers exactly two profiles —
+      legacy 2.1 and Core — and gives out the legacy one unless a core version
+      is requested: no instancing, no `#version 330`, no version-functions
+      object, which is the "no OpenGL 4.1 core functions on this context" the
+      layer used to refuse every Mac with. 4.1 is exact rather than a floor
+      because it is simultaneously what this needs and the highest macOS has
+      ever offered (Apple froze OpenGL there and deprecated it in 10.14).
     """
     fmt = QSurfaceFormat()
     fmt.setAlphaBufferSize(8)
     fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
-    QSurfaceFormat.setDefaultFormat(fmt)
+    if sys.platform == "darwin":
+        fmt.setVersion(4, 1)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    return fmt
+
+
+def configure_surface_format() -> None:
+    """Make `surface_format()` the default. Must run before `QApplication`."""
+    QSurfaceFormat.setDefaultFormat(surface_format())
+
+
+def apply_surface_format(widget) -> None:
+    """Ask ONE `QOpenGLWidget` for that context, before it has built one.
+
+    The default format is set at startup and only when the preference was
+    already on, so a stage switched to the GPU from Settings builds its GL
+    viewport in an application whose default is still Qt's own. On macOS that
+    default is the legacy 2.1 context, so the layer would turn down the very
+    context the user had just asked for and nothing but a restart would help.
+    Setting it per widget costs nothing on the platforms that did not need it:
+    it is the same format the default would have been.
+
+    The application default is moved too, and not merely as a belt: Qt 6 gives
+    every `QOpenGLWidget` in a window one shared context, and whichever of them
+    builds it first decides its format. Only the widget's own format would
+    leave that to the order the stage and the scene preview happen to open in.
+    Safe to do here rather than before `QApplication` because nothing sets
+    `AA_ShareOpenGLContexts` — with no global share context to have missed it,
+    the default reaches every surface made from here on.
+    """
+    configure_surface_format()
+    widget.setFormat(surface_format())
 
 
 class LightLayer:
@@ -160,12 +211,19 @@ class LightLayer:
                 "got an OpenGL ES context; the surface format must force "
                 "desktop GL (see configure_surface_format)")
 
-        profile = QOpenGLVersionProfile()
-        profile.setVersion(4, 1)
-        profile.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-        self._fns = QOpenGLVersionFunctionsFactory.get(profile, context)
-        if self._fns is None:
-            return self._give_up("no OpenGL 4.1 core functions on this context")
+        for major, minor in _GL_VERSIONS:
+            profile = QOpenGLVersionProfile()
+            profile.setVersion(major, minor)
+            profile.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+            self._fns = QOpenGLVersionFunctionsFactory.get(profile, context)
+            if self._fns is not None:
+                break
+        else:
+            got = context.format()
+            return self._give_up(
+                "no OpenGL 3.3+ core functions on this context (it reports "
+                f"OpenGL {got.majorVersion()}.{got.minorVersion()}, "
+                f"{got.profile().name})")
         self._fns.initializeOpenGLFunctions()
 
         self._light_program = self._build(

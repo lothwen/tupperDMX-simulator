@@ -174,7 +174,8 @@ accumulate into an RGBA16F FBO with `glBlendFunc(GL_ONE, GL_ONE)` — light **ad
 additive composite. `_restore()` puts blend/scissor/viewport back. In GPU mode raster stops drawing **spill** while faces
 stay lit; everything fails soft to raster. Four constraints, in `gpu/layer.py`: a `QOpenGLWidget` *parented into* the
 viewport renders opaque and hides the scene; the format must `setRenderableType(OpenGL)` or Wayland/EGL hands out GL ES;
-it must NOT set a version/profile or EGL fails; draw calls come from `QOpenGLFunctions_4_1_Core`. **`QWidget.grab()`
+it must NOT set a version/profile on X11/Wayland (EGL fails) but MUST on macOS, where Cocoa otherwise hands out
+legacy 2.1; draw calls come from `QOpenGLFunctions_4_1_Core`, with 3.3 core as the floor. **`QWidget.grab()`
 cannot read back a GL viewport** — screenshots need raster.
 
 **`gpu/fog.py` — volumetric fog** (`config.window.fog.enabled`, off by default, needs `stage_gpu`; after the Settings

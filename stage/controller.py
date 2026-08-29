@@ -143,8 +143,14 @@ class StageView(QGraphicsView):
         released = None
         try:
             from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            from stage.gpu.layer import apply_surface_format
             released = self._release_overlays()
-            self.setViewport(QOpenGLWidget())
+            viewport = QOpenGLWidget()
+            # Before it is given a parent, which is when it builds its context:
+            # the application default only carries the layer's format when the
+            # preference was already on at startup.
+            apply_surface_format(viewport)
+            self.setViewport(viewport)
         except Exception as exc:
             if released is not None:
                 self._readopt_overlays(released)   # back onto the raster viewport
