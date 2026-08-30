@@ -722,7 +722,10 @@ def test_ruler_marker_chips_yield_when_crowded():
             "a cue a second ahead of the next drops its name chip")
     _assert(second.chip_shown, "the last flag always keeps its own")
     _assert(first.boundingRect().width() < second.boundingRect().width(),
-            "and the hidden chip is out of the flag's hit area too")
+            "and the hidden chip stops being drawn")
+    _assert(first.shape().boundingRect() == second.shape().boundingRect(),
+            "the chip is never the handle either way: only the stem and the "
+            "flag take clicks, the rest of the ruler still seeks")
 
     tl.set_zoom(8.0)
     _assert(first.chip_shown, "zooming in gives the chip its room back")

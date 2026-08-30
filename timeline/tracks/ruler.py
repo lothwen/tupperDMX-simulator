@@ -139,11 +139,17 @@ class MarkerFlag(QGraphicsObject):
         return QRectF(-1, 0, width + 2, height)
 
     def shape(self):
-        """The flag alone, never the drop line: the line is an overlay across
-        the lanes, and a shape that included it would swallow every click meant
-        for the clips underneath — and end the hover the moment it appeared."""
+        """The stem and the flag alone — never the name chip, and never the
+        drop line.
+
+        The chip is a label, not a handle: at 130px it would cover seconds of
+        ruler with a drag target, and a click on the ruler is a seek. The line
+        is an overlay across the lanes, and a shape that included it would
+        swallow every click meant for the clips underneath — and end the hover
+        the moment it appeared."""
         path = QPainterPath()
-        path.addRect(QRectF(-1, 0, self.boundingRect().width(), self._height))
+        path.addRect(QRectF(-1, 0, MARKER_STEM_W + MARKER_FLAG_W + 2,
+                            self._height))
         return path
 
     def _flag_path(self) -> QPainterPath:
