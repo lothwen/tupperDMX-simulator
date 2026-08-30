@@ -17,7 +17,8 @@
             "warm2": 255,
             "strobe": 0,
             "mode": 0,
-            "speed": 0
+            "speed": 0,
+            "name": "LOW WARM"
           },
           {
             "brightness": 75,
@@ -28,6 +29,7 @@
             "strobe": 0,
             "mode": 0,
             "speed": 0,
+            "name": "HIGH WARM",
             "song_parts": [
               "BREAK"
             ]
@@ -40,7 +42,8 @@
             "warm2": 255,
             "strobe": 0,
             "mode": 0,
-            "speed": 0
+            "speed": 0,
+            "name": "FULL POWER"
           },
           {
             "brightness": 75,
@@ -51,6 +54,7 @@
             "strobe": 200,
             "mode": 0,
             "speed": 0,
+            "name": "STROBE WARM",
             "song_parts": [
               "OUTRO"
             ]
@@ -63,7 +67,8 @@
             "warm2": 255,
             "strobe": 0,
             "mode": 250,
-            "speed": 0
+            "speed": 0,
+            "name": "UNKNOWN"
           },
           {
             "brightness": 1,
@@ -73,7 +78,8 @@
             "warm2": 255,
             "strobe": 0,
             "mode": 0,
-            "speed": 0
+            "speed": 0,
+            "name": "MINIMAL"
           },
           {
             "brightness": 255,
@@ -83,7 +89,8 @@
             "warm2": 255,
             "strobe": 0,
             "mode": 0,
-            "speed": 0
+            "speed": 0,
+            "name": "FULL POWER"
           },
           {
             "brightness": 0,
@@ -93,7 +100,8 @@
             "warm2": 0,
             "strobe": 0,
             "mode": 0,
-            "speed": 0
+            "speed": 0,
+            "name": "BLACKOUT"
           }
         ]
       },
