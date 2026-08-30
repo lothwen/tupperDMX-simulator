@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core import clips
 from core.config import Config, PlaylistConfig, SongConfig
 from core.show.model import FORMAT_VERSION, SHOW_DIR_SUFFIX, Show, ShowError
 
@@ -62,7 +63,7 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
         "songs": songs,
         "current_song_index": show.playlist.current_song_index,
         "fixtures": [asdict(f) for f in show.fixtures],
-        "webremote_cues": [asdict(c) for c in show.cues],
+        "favorites": [dict(ref) for ref in show.favorites],
     }
 
 
@@ -124,6 +125,6 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
                 data.get("current_song_index", 0), 0, max(0, len(songs) - 1)),
         ),
         fixtures=Config._parse_fixtures(data.get("fixtures", [])),
-        cues=Config._parse_web_cues(data.get("webremote_cues", [])),
+        favorites=clips.parse_favorites(data.get("favorites", [])),
         format_version=version,
     )

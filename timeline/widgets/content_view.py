@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import QGraphicsView, QMenu, QRubberBand
 from PyQt6.QtGui import QPainter, QKeySequence
 from PyQt6.QtCore import Qt, QRect
 
-from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
-                             SCENE_MIME_TYPE)
+from core.clips import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
+                        SCENE_MIME_TYPE)
 
 # Drag distance (viewport pixels) before an empty-space press becomes a
 # rubber-band selection instead of a plain click (which seeks).

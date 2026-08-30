@@ -31,6 +31,11 @@ CHANNEL_OFFSET_RANGE = (1, 23)   # set the n-th DMX channel = velocity*2
 SCENE_LOAD_RANGE = (24, 35)      # load scene (n-24) in the current bank
 BANK_SELECT_RANGE = (36, 47)     # select bank (n-36)
 TAKE_MANUAL = 48                 # take manual control of the fixture
+# Velocity for the take-manual verb folded into each scene group. The runtime
+# ignores it (take_manual_control reads no parameter), but it must be non-zero
+# so the codec doesn't treat the note_on as a note_off. Matches the value the
+# v2 MIDI migration injects.
+TAKE_MANUAL_VELOCITY = 64
 MANUAL = 49                      # drop to manual (hold current frame)
 BLACKOUT_FIXTURE = 50            # blackout this fixture (per-fixture verb)
 BLACKOUT_ALL = 51                # blackout everything (global verb)

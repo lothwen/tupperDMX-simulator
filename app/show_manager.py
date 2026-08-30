@@ -6,11 +6,11 @@ import os
 import shutil
 import time
 import uuid
-from typing import Optional
+from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from core import fixture_library
+from core import clips, fixture_library
 from core.config import SongConfig
 from core.show import store, versions
 from core.show.manifest import show_to_manifest
@@ -42,6 +42,7 @@ class ShowManager(QObject):
     versions_changed = pyqtSignal()           # the snapshot list gained/lost an entry
     midi_path_allocated = pyqtSignal(str)     # a song got its owned .mid on first save
     setlist_changed = pyqtSignal()            # flush created an untitled song
+    favorites_changed = pyqtSignal()          # a library clip was starred/unstarred
 
     def __init__(self, config, core=None, snapshot_on_open=True):
         super().__init__()
@@ -282,12 +283,37 @@ class ShowManager(QObject):
         return dest
 
     # ------------------------------------------------------------------
+    # Favourites (the starred library clips — see core/clips.py)
+    # ------------------------------------------------------------------
+    def favorites(self) -> List[Dict]:
+        """The show's starred clip refs, in grid order. Empty without a show:
+        favourites are show content, so there is no machine-level fallback."""
+        return self.show.favorites if self.show is not None else []
+
+    def is_favorite(self, ref: Dict) -> bool:
+        key = clips.ref_key(ref)
+        return any(clips.ref_key(f) == key for f in self.favorites())
+
+    def toggle_favorite(self, ref: Dict) -> bool:
+        """Star/unstar one clip; returns the new state. Starring appends, so
+        the grid order is the order they were starred in."""
+        if self.show is None:
+            return False
+        key = clips.ref_key(ref)
+        existing = [f for f in self.show.favorites if clips.ref_key(f) == key]
+        if existing:
+            self.show.favorites = [f for f in self.show.favorites
+                                   if clips.ref_key(f) != key]
+            starred = False
+        else:
+            self.show.favorites.append(dict(ref))
+            starred = True
+        self.favorites_changed.emit()
+        self.notify_changed()
+        return starred
+
+    # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
-    def cues(self) -> list:
-        """The active cue set: the show's own (config.webremote.cues only
-        seeds new shows, and serves windows opened without a show)."""
-        return self.show.cues if self.show is not None else self.config.webremote.cues
-
     def _serialized(self) -> str:
         return json.dumps(show_to_manifest(self.show), sort_keys=True)

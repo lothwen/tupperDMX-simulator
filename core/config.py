@@ -311,36 +311,11 @@ class LoggingConfig:
 
 
 @dataclass
-class WebCueConfig:
-    """One web-remote lighting cue: a labelled button that fires MIDI messages
-    through the configured MIDI outputs (same path as clip-library preview)."""
-    label: str
-    color: str = "#888888"                # hex swatch shown on the web button
-    messages: List[List[int]] = field(default_factory=list)  # [channel, note, velocity]
-
-
-def default_webremote_cues() -> List["WebCueConfig"]:
-    """Shipped cue set, built from existing controller verbs (color macros
-    72-75, ledbar bank-select 36+n / scene-load 24+n, blackout-all 51) against
-    the default patch channels (0 = ledbar, 1/2 = blinders)."""
-    all_fx = [0, 1, 2]
-    return [
-        WebCueConfig("Warm", "#ffb86b", [[c, 73, 127] for c in all_fx]),       # ORANGE macro
-        WebCueConfig("Cool Blue", "#7cc4ff", [[c, 74, 127] for c in all_fx]),  # CYAN macro
-        WebCueConfig("Strobe", "#e6e6e6", [[0, 40, 0], [0, 24, 100]]),         # STROBES bank + scene 0
-        WebCueConfig("Full flash", "#ffffff", [[c, 72, 127] for c in all_fx]), # WHITE macro
-        WebCueConfig("Magenta", "#ff5bd1", [[c, 75, 127] for c in all_fx]),    # PINK macro
-        WebCueConfig("Blackout", "#666666", [[0, 51, 0]]),                     # global toggle
-    ]
-
-
-@dataclass
 class WebRemoteConfig:
     """Embedded web-remote server (tablet UI). Off by default; the page is
     served on the LAN without auth, so enabling is an explicit choice."""
     enabled: bool = False
     port: int = 8765
-    cues: List[WebCueConfig] = field(default_factory=default_webremote_cues)
 
 
 @dataclass
@@ -627,11 +602,12 @@ class Config:
 
         if "webremote" in data:
             web_data = data["webremote"]
+            # A legacy `cues` key is read by nobody and not written back: the
+            # remote's buttons are the open show's starred clips (see
+            # core/clips.py), which is show content, not a machine setting.
             config.webremote = WebRemoteConfig(
                 enabled=bool(web_data.get("enabled", False)),
                 port=cls._validate_int(web_data.get("port", 8765), 1024, 65535),
-                cues=(cls._parse_web_cues(web_data["cues"])
-                      if "cues" in web_data else default_webremote_cues()),
             )
 
     @staticmethod
@@ -660,43 +636,6 @@ class Config:
             # Art-Net + localhost == the old loopback simulation == defaults.
 
         return io
-
-    @staticmethod
-    def _parse_web_cues(cues_data: Any) -> List[WebCueConfig]:
-        """Parse the webremote cue list. Entries without a label and malformed
-        messages are dropped; channel/note/velocity are clamped to MIDI ranges."""
-        cues: List[WebCueConfig] = []
-
-        if not isinstance(cues_data, list):
-            return cues
-
-        for entry in cues_data:
-            if not isinstance(entry, dict):
-                continue
-            label = entry.get("label")
-            if not isinstance(label, str) or not label:
-                continue
-
-            messages: List[List[int]] = []
-            raw_messages = entry.get("messages", [])
-            if isinstance(raw_messages, list):
-                for msg in raw_messages:
-                    if not isinstance(msg, (list, tuple)) or len(msg) != 3:
-                        continue
-                    messages.append([
-                        Config._validate_int(msg[0], 0, 15),
-                        Config._validate_int(msg[1], 0, 127),
-                        Config._validate_int(msg[2], 0, 127),
-                    ])
-
-            color = entry.get("color")
-            cues.append(WebCueConfig(
-                label=label,
-                color=color if isinstance(color, str) and color else "#888888",
-                messages=messages,
-            ))
-
-        return cues
 
     @staticmethod
     def _parse_voice_tts(data: Any) -> List[VoiceTTSConfig]:

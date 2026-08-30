@@ -1098,6 +1098,24 @@ QFrame#ClipCard:hover {
     border-color: #4a7d92;
 }
 
+/* A favourite whose clip no longer resolves: its fixture was unpatched or its
+   scene renamed. It stays on the Favorites page — dimmed, undraggable — until
+   the operator unstars it. */
+QFrame#ClipCard[available="false"] {
+    background-color: #202020;
+    border-style: dashed;
+    border-color: #3a3a3a;
+}
+
+QFrame#ClipCard[available="false"]:hover {
+    background-color: #202020;
+    border-color: #4a4a4a;
+}
+
+QFrame#ClipCard[available="false"] QLabel#ClipCardTitle {
+    color: #7d7d7d;
+}
+
 QLabel#ClipCardTitle {
     color: #eee;
     font-size: 11px;

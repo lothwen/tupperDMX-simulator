@@ -286,8 +286,13 @@
     var grid = $("cue-grid");
     grid.innerHTML = "";
     (cues || []).forEach(function (cue) {
+      // available === false: the starred clip no longer resolves (its fixture
+      // was unpatched, its scene renamed). The button stays, so the grid keeps
+      // its numbering and the operator sees what is missing.
+      var available = cue.available !== false;
       var btn = document.createElement("button");
-      btn.className = "cue-btn";
+      btn.className = available ? "cue-btn" : "cue-btn unavailable";
+      btn.disabled = !available;
       btn.style.borderColor = cue.color;
       btn.style.background =
         "linear-gradient(160deg, " + cue.color + "22, var(--card) 60%)";
@@ -306,9 +311,11 @@
       label.textContent = cue.label;
       btn.appendChild(label);
 
-      btn.addEventListener("click", function () {
-        send({ action: "cue", index: cue.index });
-      });
+      if (available) {
+        btn.addEventListener("click", function () {
+          send({ action: "cue", index: cue.index });
+        });
+      }
       grid.appendChild(btn);
     });
   }

@@ -301,6 +301,8 @@ body.counting-in .clock { color: var(--amber); }
   text-align: left;
 }
 .cue-btn:active { filter: brightness(1.5); }
+.cue-btn.unavailable { opacity: 0.35; filter: grayscale(1); }
+.cue-btn.unavailable:active { filter: grayscale(1); }
 .cue-btn .cue-dot { width: 14px; height: 14px; border-radius: 50%; }
 .cue-btn .cue-id {
   position: absolute; top: 8px; right: 10px;

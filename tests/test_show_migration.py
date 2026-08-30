@@ -5,7 +5,7 @@ Characterization test: startup show resolution + one-time legacy migration
 Covers the happy migration of a legacy userprefs playlist/patch/cue set into a
 default show (owned .mid copies, referenced audio, slimmed prefs), idempotence
 via last_show_path (second launch reopens the same show), the clean-start path
-(empty default show with the seed patch + default cues), fallback through
+(empty default show with the seed patch, no favourites), fallback through
 recent_shows when last_show_path is stale, default-name collision handling, and
 the two ways a hand-edited userprefs.json used to cost the operator the show it
 names (a UTF-8 BOM, and an overwrite-on-parse-failure).
@@ -120,10 +120,11 @@ def test_migrates_legacy_playlist_and_patch():
         _assert(len(show.fixtures) == 1 and show.fixtures[0].name == "Solo"
                 and show.fixtures[0].channel == 3,
                 "the prefs-owned patch moved into the show")
-        _assert(len(show.cues) == 6, "the cue set moved into the show")
-        show.cues[0].label = "EDITED"
-        _assert(cfg.webremote.cues[0].label != "EDITED",
-                "show cues are a deep copy (prefs keep the new-show defaults)")
+        # The legacy prefs cue set does NOT come across: a cue that fired
+        # several fixtures at once has no single-clip equivalent, and the
+        # remote's buttons are now the show's starred library clips.
+        _assert(show.favorites == [],
+                "a migrated show starts with no favourites")
 
         _assert(cfg.last_show_path == str(show.root), "last_show_path recorded")
         _assert(cfg.recent_shows[0] == str(show.root), "recent_shows updated")
@@ -171,7 +172,7 @@ def test_clean_start_creates_empty_default_show():
         _assert(show.playlist.songs == [], "clean start: empty setlist")
         _assert(len(show.fixtures) == 2 and show.fixtures[0].type == "ledbar",
                 "clean start: show seeded with the shipped patch")
-        _assert(len(show.cues) == 6, "clean start: show seeded with default cues")
+        _assert(show.favorites == [], "clean start: no favourites to seed")
 
 
 def test_stale_pointers_fall_back():

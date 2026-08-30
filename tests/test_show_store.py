@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.config import FixtureInstance, SongConfig, WebCueConfig
+from core import clips
+from core.config import FixtureInstance, SongConfig
 from core.show import model
 from core.show.model import ShowError
 from core.show.store import (
@@ -76,8 +77,8 @@ def test_save_load_roundtrip():
 
         show = create_show(tmp, "Gira",
                            fixtures=[FixtureInstance(type="ledbar", dmx_start=1,
-                                                     channel=0, order=2)],
-                           cues=[WebCueConfig("Warm", "#ffb86b", [[0, 73, 127]])])
+                                                     channel=0, order=2)])
+        show.favorites.append(clips.note_ref("ledbar", "", 73, 127))
         midi_path = allocate_midi_path(show, "El Acantilado")
         Path(midi_path).write_bytes(b"m")
         show.playlist.songs.append(SongConfig(
@@ -100,8 +101,9 @@ def test_save_load_roundtrip():
                 and song.precount is False and song.cache["bpm"] == 142
                 and abs(song.offset - 0.32) < 1e-9,
                 "song metadata roundtrips")
-        _assert(loaded.fixtures[0].type == "ledbar" and loaded.cues[0].label == "Warm",
-                "fixtures and cues roundtrip")
+        _assert(loaded.fixtures[0].type == "ledbar"
+                and loaded.favorites == show.favorites,
+                "fixtures and favourites roundtrip")
         # The timeline row a lane was dragged to is show data, like the address.
         _assert(loaded.fixtures[0].order == 2, "the fixture's track row roundtrips")
 

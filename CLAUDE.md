@@ -26,7 +26,7 @@ same stack. TTS voice models (~60 MB) download on demand into `userprefs_dir()/t
 
 - `main.py` — the only root source file: parses `--headless` **before any Qt import** (sets `QT_QPA_PLATFORM=offscreen`).
 - `core/` — the **Qt-free** domain layer (config, show/, paths, OFL parsing, fixture library and state model, note layout,
-  I/O routing).
+  clip model, I/O routing).
 - `app/` — the shared core: QtCore/QtMultimedia only, **never** QtWidgets or `ui/`.
 - `audio/`, `dmx/`, `midi/`, `software_controller/`, `webremote/` — widget-free subsystems (`webremote`'s
   `state`/`commands`/`peaks` are Qt-free too).
@@ -241,7 +241,7 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   that IS `stage_haze`), `artnet`, `volume`, `logging`, `io`, `audio`, `webremote`, `last_show_path`/`recent_shows`. Legacy
   `playlist`/`fixtures` are parsed (the show migration adopts them) but never written again.
 - **`<Name>.show/show.json`** (the SHOW manifest): the setlist, `current_song_index`, the fixture **patch**,
-  `webremote_cues`. A song's `voice_tts`, `control_markers` and `segue`/`segue_time` ride the song entry (see The marker
+  `favorites`. A song's `voice_tts`, `control_markers` and `segue`/`segue_time` ride the song entry (see The marker
   track); adding them needed no `format_version` bump, since a manifest without the keys loads with none. A patch entry is type + `dmx_start` + stable MIDI `channel` + optional `mode` (`""` means the type's
   first declared mode, so a renamed mode never strands a patch) + `hanging`, defaulting to **true** so a patch written
   before fixtures declared their rigging keeps throwing light at the floor. Owned `.mid` files live in `midis/`; audio is
@@ -268,6 +268,19 @@ way to change a setting on a headless rack box.
 - `ScenePreview` (`ui/fixture/console.py`) **is** the stage engine, fed raw DMX, so a look previews exactly as on stage;
   **`clear()` it before it goes away** — the bodies own timers on the shared clock.
 - `ui/fixture/affordances.py` — controls chosen from a fixture's capabilities and **never from its name**.
+
+## The clip model and favourites (`core/clips.py`)
+
+**A clip is derived, never stored**: `build_groups(config)` regenerates every descriptor from the patch plus the fixture
+library, so a repatch or a sidecar edit shows up on the next rebuild. It is **Qt-free because three widget-free consumers
+need the same answer** — the library panel renders cards, the timeline decodes drop payloads (`CLIP_MIME_TYPE` lives here,
+which is what stops `timeline/` importing `ui/`), and the web remote resolves the show's favourites.
+
+- **A favourite stores a symbolic `ref`, never resolved MIDI.** 
+- **A scene keys on `(bank, name)` with its index as a TIEBREAKER ONLY.** Reorder is a data operation. The index earns its place because names repeat (the shipped ledbar pads FILLS2 with four identical rows).
+- **Resolution failure is a display state, never a delete.** 
+- Favourites are **show content** (`show.json`'s `favorites`), so there is no machine-level fallback and no prefs seed — a
+  new show simply starts with none.
 
 ## Timeline and clip editing
 

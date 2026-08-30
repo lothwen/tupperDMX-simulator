@@ -3,7 +3,6 @@
 # ABOUTME: thin entry point lives in main.py.
 import os
 import time
-from copy import deepcopy
 from dataclasses import asdict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -203,7 +202,7 @@ class MainWindow(QMainWindow):
 
         self.dmx_display = DMXDisplayWidget(self.config)
         self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
-        self.clip_library = ClipLibraryWidget(self.config)
+        self.clip_library = ClipLibraryWidget(self.config, self.show_manager)
         self.clip_library.preview_requested.connect(self.app_core.preview_clip)
 
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
@@ -1071,8 +1070,8 @@ class MainWindow(QMainWindow):
         self.update_window_title()
 
     def new_show_dialog(self):
-        """Create a new show project (seeded with the default patch and this
-        machine's default cues) and open it."""
+        """Create a new show project (seeded with the default patch) and open
+        it. Favourites start empty — they are starred per show."""
         name, ok = QInputDialog.getText(self, "New show", "Show name:")
         if not ok or not name.strip():
             return
@@ -1083,9 +1082,7 @@ class MainWindow(QMainWindow):
         self.stop_playback()
         try:
             show = show_store.create_show(
-                parent, name.strip(),
-                fixtures=shipped_fixtures(),
-                cues=deepcopy(self.config.webremote.cues))
+                parent, name.strip(), fixtures=shipped_fixtures())
             self.show_manager.open_show(show.root)
         except ShowError as e:
             ErrorDialogManager.show_validation_error(

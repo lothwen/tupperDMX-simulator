@@ -4,7 +4,6 @@
 import os
 import shutil
 import uuid
-from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
@@ -51,19 +50,21 @@ def _song_title(song) -> str:
 
 
 def migrate_config_to_show(config, shows_dir) -> Show:
-    """Turn the current Config contents (the legacy userprefs playlist +
-    patch + cue set — or just the shipped defaults on a clean install) into a
-    new default show.
+    """Turn the current Config contents (the legacy userprefs playlist + patch
+    — or just the shipped defaults on a clean install) into a new default show.
 
     .mid files are COPIED into midis/ (the user's originals stay untouched);
-    audio stays referenced in place; the patch and the cues move into the
-    manifest. The caller persists the userprefs pointers."""
+    audio stays referenced in place; the patch moves into the manifest. The
+    caller persists the userprefs pointers.
+
+    The legacy `webremote.cues` set is deliberately NOT carried over: the
+    remote's buttons are now the show's starred library clips, and a cue that
+    fired several fixtures at once has no single-clip equivalent. A new show
+    starts with no favourites."""
     shows_dir = Path(shows_dir)
     shows_dir.mkdir(parents=True, exist_ok=True)
     name = _unique_show_name(shows_dir, DEFAULT_SHOW_NAME)
-    show = store.create_show(shows_dir, name,
-                             fixtures=config.fixtures,
-                             cues=deepcopy(config.webremote.cues))
+    show = store.create_show(shows_dir, name, fixtures=config.fixtures)
     show.playlist = config.playlist  # adopt the parsed songs as-is
     for i, song in enumerate(show.playlist.songs):
         if not song.id:

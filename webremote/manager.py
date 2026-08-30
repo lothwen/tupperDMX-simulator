@@ -5,9 +5,15 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer
 
+from core import clips
 from tupperlogger import get_logger
 from webremote import state as remote_state
 from webremote.server import WebRemoteWorker
+
+# Swatch for a favourite that no longer resolves — its fixture was unpatched or
+# its scene renamed. The button stays on the page, dimmed and unfireable, so the
+# operator sees WHY it is gone instead of watching the grid silently renumber.
+_UNAVAILABLE_COLOR = "#4a4a4a"
 
 
 class WebRemoteManager(QObject):
@@ -43,6 +49,9 @@ class WebRemoteManager(QObject):
         w.midi_manager.data_changed.connect(self._publish_full)
         w.bpm_state.bpm_changed.connect(self._publish_full)
         w.audio_controller.beat_occurred.connect(self._on_beat)
+        show_manager = getattr(w, "show_manager", None)
+        if show_manager is not None:
+            show_manager.favorites_changed.connect(self._publish_full)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -127,10 +136,14 @@ class WebRemoteManager(QObject):
                 target = min(target, duration)
             w.seek_playback(target)
         elif action == "cue":
-            cues = self._cues()
+            favorites = self._favorites()
             index = cmd.get("index", -1)
-            if 0 <= index < len(cues):
-                w.preview_clip([tuple(m) for m in cues[index].messages])
+            clip = favorites[index] if 0 <= index < len(favorites) else None
+            # An unresolvable favourite publishes as available:false and its
+            # button is dead on the page; refuse it here too, since a stale
+            # page can still send the index.
+            if clip is not None:
+                w.preview_clip([tuple(m) for m in clip["preview"]])
         elif action == "blackout":
             w.preview_clip([(0, 51, 0)])  # blackout-all verb (a toggle)
         elif action == "panic":
@@ -180,11 +193,16 @@ class WebRemoteManager(QObject):
         self.core.stop_playback()
         manager.open_show(root)
 
-    def _cues(self) -> list:
-        """Active cue set: the open show's; config only serves showless
-        windows (the cues in userprefs just seed new shows)."""
+    def _favorites(self) -> list:
+        """The open show's starred library clips, resolved against the current
+        patch — one entry per favourite, None where it no longer resolves (its
+        fixture was unpatched, its scene renamed). Positional on purpose: the
+        page addresses a button by index, so dropping the dead ones would
+        renumber the live ones between snapshots."""
         show = self._open_show()
-        return show.cues if show is not None else self.config.webremote.cues
+        if show is None:
+            return []
+        return clips.resolve_all(self.config, show.favorites)
 
     def _current_duration(self) -> Optional[float]:
         """The current song's length: the longest of its audio tracks and its
@@ -224,8 +242,13 @@ class WebRemoteManager(QObject):
                 self.config.playlist.songs,
                 self.config.playlist.current_song_index),
             sections=remote_state.compute_sections(markers, duration or 0.0),
-            cues=[{"index": i, "label": c.label, "color": c.color}
-                  for i, c in enumerate(self._cues())],
+            # Wire name kept as "cues": on the page these are still the cue
+            # buttons — "favourite" is how they are authored, not what they do.
+            cues=[{"index": i,
+                   "label": c["title"] if c else "Unavailable",
+                   "color": c["accent"] if c else _UNAVAILABLE_COLOR,
+                   "available": c is not None}
+                  for i, c in enumerate(self._favorites())],
             show_name=show.name if show is not None else None,
             shows=remote_state.build_shows(
                 show.root if show is not None else None),

@@ -5,7 +5,7 @@ coordinator of the open show.
 Covers attach() aliasing (config.playlist/config.fixtures ARE the show's
 objects), the compare-based manifest dirty tracking (in-place mutations reach
 show.json; prefs-only saves don't rewrite it), autosave_state_changed
-emissions, and the cues() accessor.
+emissions, and the favourites toggle.
 
 Run with:
     uv run python tests/test_show_manager.py
@@ -27,7 +27,8 @@ app = QApplication.instance() or QApplication([])
 import pytest
 
 from core import config as config_module, fixture_library
-from core.config import Config, FixtureInstance, SongConfig, WebCueConfig
+from core import clips
+from core.config import Config, FixtureInstance, SongConfig
 from core.show import store
 from core.show.model import ShowError
 from app.show_manager import ShowManager
@@ -145,17 +146,36 @@ def test_open_show_switches_and_reloads():
                 "a failed open keeps the current show attached")
 
 
-def test_cues_accessor():
-    print("test_cues_accessor")
+def test_favorites_toggle():
+    print("test_favorites_toggle")
     with tempfile.TemporaryDirectory() as tmp:
-        show = store.create_show(tmp, "Gira",
-                                 cues=[WebCueConfig("Solo", "#fff", [[1, 24, 100]])])
+        show = store.create_show(tmp, "Gira")
         config = Config()
-        manager = ShowManager(config)
-        _assert(manager.cues() is config.webremote.cues,
-                "without a show, cues() falls back to config")
+        manager = ShowManager(config, snapshot_on_open=False)
+        ref = clips.note_ref("ledbar", "", 73, 127)
+
+        _assert(manager.favorites() == [] and manager.toggle_favorite(ref) is False,
+                "without a show there is nothing to star — favourites are "
+                "show content, so there is no machine-level fallback")
+
         manager.attach(show)
-        _assert(manager.cues() is show.cues, "with a show, cues() is the show's set")
+        emitted = []
+        manager.favorites_changed.connect(lambda: emitted.append(True))
+
+        _assert(manager.toggle_favorite(ref) is True and manager.is_favorite(ref),
+                "starring a clip adds it to the show's set")
+        _assert(json.loads(show.manifest_path.read_text())["favorites"] == [ref],
+                "and reaches show.json through the normal save funnel")
+
+        manager.toggle_favorite(clips.show_ref(51))
+        _assert([f["kind"] for f in manager.favorites()] == ["note", "show"],
+                "starring appends, so the grid keeps the order they were "
+                "starred in")
+
+        _assert(manager.toggle_favorite(ref) is False
+                and not manager.is_favorite(ref),
+                "starring again unstars")
+        _assert(len(emitted) == 3, "every toggle announces itself")
 
 
 def main():
@@ -164,7 +184,7 @@ def main():
         test_attach_aliases_config()
         test_manifest_saved_only_on_change()
         test_open_show_switches_and_reloads()
-        test_cues_accessor()
+        test_favorites_toggle()
     finally:
         config_module.userprefs_path = orig_prefs
         fixture_library.set_show_fixtures_dir(None)

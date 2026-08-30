@@ -4,8 +4,9 @@ Characterization test: WebRemoteManager command execution + state building.
 Drives _execute() and _build_state() directly against a FakeWindow (recording
 fakes for the transport API, playlist controller, midi manager, timeline
 toolbar and software controller) — no server thread, no sockets, no timers
-running. Covers the action → window-call mapping, seek clamping, cue message
-pass-through, blackout-toggle semantics of panic, and snapshot shape.
+running. Covers the action → window-call mapping, seek clamping, the cue grid
+(the open show's starred library clips, resolved against the patch), the
+blackout-toggle semantics of panic, and snapshot shape.
 
 Run with:
     uv run python tests/test_webremote_manager.py
@@ -25,7 +26,8 @@ from PyQt6.QtWidgets import QApplication
 
 app = QApplication.instance() or QApplication([])
 
-from core.config import Config, SongConfig
+from core import clips
+from core.config import Config, SongConfig, shipped_fixtures
 from core.note_layout import NoteInfo
 from midi.constants import SONG_PART_NOTES
 from webremote.manager import WebRemoteManager
@@ -145,6 +147,19 @@ def _wav(path, seconds, rate=8000):
     return str(path)
 
 
+def _attach_show(window, config, favorites, name="Gira"):
+    """Give the fake window an open show holding `favorites`, over the shipped
+    patch (which is what the refs resolve against)."""
+    import types
+    from pathlib import Path
+
+    config.fixtures = shipped_fixtures()
+    show = types.SimpleNamespace(name=name, favorites=list(favorites),
+                                 root=Path(f"/no/such/dir/{name}.show"))
+    window.show_manager = types.SimpleNamespace(show=show)
+    return show
+
+
 def _make_manager():
     """Manager over fakes; no worker started, so publishing is a no-op."""
     config = Config()
@@ -204,13 +219,19 @@ def test_duration_spans_the_longest_track():
                 "nothing readable still falls back to midi song_end_time")
 
 
-def test_cue_sends_config_messages():
-    print("test_cue_sends_config_messages")
+def test_cue_fires_the_resolved_favorite():
+    print("test_cue_fires_the_resolved_favorite")
     manager, config, window = _make_manager()
+
     manager._execute({"action": "cue", "index": 0})
-    expected = [tuple(m) for m in config.webremote.cues[0].messages]
-    _assert(window.calls == [("preview", expected)],
-            "cue fires its config messages through preview_clip")
+    _assert(window.calls == [],
+            "no show, no cues — favourites are show content, and prefs no "
+            "longer carry a set to fall back on")
+
+    _attach_show(window, config, [clips.note_ref("ledbar", "", 73, 127)])
+    manager._execute({"action": "cue", "index": 0})
+    _assert(window.calls == [("preview", [(0, 73, 127)])],
+            "cue fires the favourite resolved against the current patch")
 
     window.calls.clear()
     manager._execute({"action": "cue", "index": 99})
@@ -270,10 +291,8 @@ def test_build_state_snapshot():
             "last section extends to the song end")
     _assert(state["setlist"]["songs"][0]["title"] == "Marea",
             "setlist is built from the playlist")
-    _assert(len(state["cues"]) == 6 and state["cues"][0]["label"] == "Warm",
-            "cues expose index/label/color from config")
-    _assert("messages" not in state["cues"][0],
-            "cue MIDI payloads never leave the server")
+    _assert(state["cues"] == [],
+            "a window with no show publishes no cues")
     _assert(state["blackout"] is False, "blackout state read from controller")
     _assert(state["countin"] == {"enabled": True, "bars": 2},
             "countin reflects the current song's precount + global bars")
@@ -289,35 +308,48 @@ def test_build_state_snapshot():
 
 
 def test_show_provides_cues_and_name():
-    """With an open show (window.show_manager.show), the cue set and the
-    show_name come from the show; config cues only serve showless windows."""
+    """With an open show (window.show_manager.show), the cue grid IS the show's
+    starred library clips and the show_name comes from the show."""
     print("test_show_provides_cues_and_name")
     import types
     from pathlib import Path
 
-    from core.config import WebCueConfig
-
     manager, config, window = _make_manager()
-    show = types.SimpleNamespace(
-        name="Directo Billares 2026",
-        root=Path("/no/such/dir/Directo Billares 2026.show"),
-        cues=[WebCueConfig("Solo", "#ffffff", [[1, 24, 100]])])
-    window.show_manager = types.SimpleNamespace(show=show)
+    scene = clips.scene_ref("ledbar", "", "FILLS", "Fuego", 3)
+    unpatched = clips.note_ref("no-such-fixture", "", 73, 127)
+    _attach_show(window, config, [scene, unpatched],
+                 name="Directo Billares 2026")
 
     state = manager._build_state()
     _assert(state["show_name"] == "Directo Billares 2026",
             "show_name comes from the open show")
-    _assert(len(state["cues"]) == 1 and state["cues"][0]["label"] == "Solo",
-            "cues come from the open show, not config")
+    _assert([c["label"] for c in state["cues"]] == ["Fuego", "Unavailable"],
+            "the grid is the show's favourites, labelled from the live clip")
+    _assert("messages" not in state["cues"][0] and "preview" not in state["cues"][0],
+            "cue MIDI payloads never leave the server")
+
+    _assert(state["cues"][0]["available"] is True
+            and state["cues"][1]["available"] is False,
+            "a favourite whose fixture is unpatched publishes as unavailable")
+    _assert(state["cues"][1]["index"] == 1,
+            "dead favourites keep their slot — dropping them would renumber "
+            "the live buttons under the operator between snapshots")
 
     manager._execute({"action": "cue", "index": 0})
-    _assert(window.calls[-1] == ("preview", [(1, 24, 100)]),
-            "cue actions fire the show's cue messages")
+    _assert(window.calls[-1][0] == "preview" and len(window.calls[-1][1]) > 1,
+            "a scene favourite fires its full expansion, re-read from the "
+            "fixture library rather than frozen when it was starred")
+
+    window.calls.clear()
+    manager._execute({"action": "cue", "index": 1})
+    _assert(window.calls == [],
+            "and an unavailable one is refused server-side, since a stale "
+            "page can still send its index")
 
     window.show_manager = types.SimpleNamespace(show=None)
     state = manager._build_state()
-    _assert(state["show_name"] is None and len(state["cues"]) == 6,
-            "no open show -> config cues and null show_name")
+    _assert(state["show_name"] is None and state["cues"] == [],
+            "no open show -> no cues and a null show_name")
 
 
 def test_open_show_by_name():
@@ -337,7 +369,8 @@ def test_open_show_by_name():
             (parent / name / "show.json").write_text("{}")
 
         show = types.SimpleNamespace(name="Gira 2026",
-                                     root=parent / "Gira 2026.show", cues=[])
+                                     root=parent / "Gira 2026.show",
+                                     favorites=[])
         opened = []
         window.show_manager = types.SimpleNamespace(
             show=show, open_show=lambda path: opened.append(path))
@@ -400,7 +433,7 @@ def main():
     test_select_song()
     test_seek_clamps_to_duration()
     test_duration_spans_the_longest_track()
-    test_cue_sends_config_messages()
+    test_cue_fires_the_resolved_favorite()
     test_blackout_and_panic()
     test_countin_commands()
     test_build_state_snapshot()

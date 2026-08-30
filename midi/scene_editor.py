@@ -16,7 +16,7 @@ import uuid
 
 from tupperlogger import get_logger
 from core.fixture_library import cache_generation
-from core.note_layout import TAKE_MANUAL
+from core.note_layout import TAKE_MANUAL, TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
     MIN_EVENT_DURATION,
@@ -25,12 +25,6 @@ from .constants import (
     DEFAULT_FIXTURE_TYPE,
     _channel_to_velocity,
 )
-
-# Velocity for the take-manual verb folded into each scene group. The runtime
-# ignores it (take_manual_control reads no parameter), but it must be non-zero
-# so the codec doesn't treat the note_on as a note_off. Matches the value the
-# v2 MIDI migration injects.
-TAKE_MANUAL_VELOCITY = 64
 
 
 class SceneEditor:

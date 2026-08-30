@@ -57,7 +57,7 @@ def is_show_dir(path) -> bool:
     return p.is_dir() and (p / MANIFEST_NAME).is_file()
 
 
-def create_show(parent, name: str, *, fixtures: Iterable = (), cues: Iterable = ()) -> Show:
+def create_show(parent, name: str, *, fixtures: Iterable = ()) -> Show:
     """Create Name.show/ (with its subfolders) under parent and write its
     manifest. Refuses to overwrite an existing folder. Activates the new
     show's (empty) show-local fixture-defs layer."""
@@ -68,7 +68,7 @@ def create_show(parent, name: str, *, fixtures: Iterable = (), cues: Iterable = 
     for sub in _SUBDIRS:
         (root / sub).mkdir(parents=True)
     fixture_library.set_show_fixtures_dir(root / FIXTURES_DIR)
-    show = Show(root=root, name=display, fixtures=list(fixtures), cues=list(cues))
+    show = Show(root=root, name=display, fixtures=list(fixtures))
     save_manifest(show)
     return show
 

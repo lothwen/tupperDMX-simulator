@@ -179,8 +179,8 @@ def test_show_name_fallback():
             "missing name falls back to the folder name without .show")
 
 
-def test_fixtures_and_cues_reuse_config_parsers():
-    print("test_fixtures_and_cues_reuse_config_parsers")
+def test_fixtures_and_favorites_reuse_the_shared_parsers():
+    print("test_fixtures_and_favorites_reuse_the_shared_parsers")
     root = Path("/tmp/x.show")
     data = {
         "format_version": 1,
@@ -189,25 +189,40 @@ def test_fixtures_and_cues_reuse_config_parsers():
             {"type": "bogus", "dmx_start": 5},
             {"type": "par-rgbw", "dmx_start": 9, "hanging": False},
         ],
+        "favorites": [
+            {"kind": "note", "fixture": "ledbar", "note": 73, "velocity": 127},
+            {"kind": "scene", "fixture": "ledbar", "bank": "FILLS",
+             "name": "Fuego", "index": 3},
+            {"kind": "bogus"},                       # unknown kind -> dropped
+            {"kind": "note", "fixture": "ledbar"},   # incomplete -> dropped
+        ],
+        # What every show written before favourites still carries. It is read
+        # by nobody: a cue that fired several fixtures at once has no
+        # single-clip equivalent, so nothing is migrated.
         "webremote_cues": [
-            {"label": "Warm", "color": "#ffb86b", "messages": [[0, 200, 300]]},
-            {"messages": []},  # no label -> dropped
+            {"label": "Warm", "color": "#ffb86b", "messages": [[0, 73, 127]]},
         ],
     }
     show = show_from_manifest(root, data)
     _assert(len(show.fixtures) == 2 and show.fixtures[0].type == "ledbar",
             "fixtures parse via Config._parse_fixtures (unknown types skipped)")
     _assert(show.fixtures[0].channel == 0, "stable channel auto-assignment applies")
-    _assert(len(show.cues) == 1 and show.cues[0].messages == [[0, 127, 127]],
-            "cues parse via Config._parse_web_cues (clamped, unlabeled dropped)")
+    _assert(len(show.favorites) == 2,
+            "favourites parse via clips.parse_favorites (malformed dropped)")
+    _assert(show.favorites[0]["mode"] == "",
+            "a ref without a mode gets the patch's empty default")
     # A patch written before fixtures could say which way up they are rigged
     # keeps throwing its light at the floor, which is where it already was.
     _assert(show.fixtures[0].hanging and not show.fixtures[1].hanging,
             "how a fixture is rigged is read, and defaults to flown")
 
-    roundtrip = show_from_manifest(root, show_to_manifest(show))
-    _assert(roundtrip.fixtures[0].dmx_start == 1 and roundtrip.cues[0].label == "Warm",
-            "fixtures and cues roundtrip")
+    written = show_to_manifest(show)
+    _assert("webremote_cues" not in written,
+            "the legacy cue set is not written back")
+    roundtrip = show_from_manifest(root, written)
+    _assert(roundtrip.fixtures[0].dmx_start == 1
+            and roundtrip.favorites == show.favorites,
+            "fixtures and favourites roundtrip")
     _assert(not roundtrip.fixtures[1].hanging, "and so does the rigging")
 
 
@@ -237,7 +252,7 @@ def main():
     test_song_metadata_defaults_and_id()
     test_guide_track_roundtrip()
     test_show_name_fallback()
-    test_fixtures_and_cues_reuse_config_parsers()
+    test_fixtures_and_favorites_reuse_the_shared_parsers()
     test_song_status_matrix()
     print("\nALL TESTS PASSED")
 
