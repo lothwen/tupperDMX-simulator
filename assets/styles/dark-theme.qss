@@ -94,8 +94,15 @@ QMenu {
 
 QMenu::item {
     background-color: transparent;
-    padding: 8px 16px;
+    /* Item padding moves the LABEL only — the icon sits at the item's left
+       edge — so QMenu::icon repeats the same 10px and the whole row (icon
+       included) breathes away from the menu border. */
+    padding: 8px 16px 8px 16px;
     border-radius: 3px;
+}
+
+QMenu::icon {
+    left: 10px;
 }
 
 QMenu::item:selected {

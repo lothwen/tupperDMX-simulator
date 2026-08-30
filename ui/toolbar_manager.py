@@ -4,12 +4,13 @@ from typing import Callable, Optional
 from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
                              QFrame, QHBoxLayout, QPushButton, QLineEdit,
                              QVBoxLayout, QToolButton, QMenu, QComboBox)
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtGui import QAction, QFont, QIcon
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
 from ui.widgets import icons
 from tupperlogger import get_logger
 from core.config import Config
+from core.paths import asset_path
 from webremote.state import probe_duration
 
 
@@ -849,11 +850,10 @@ class ToolbarManager(QObject):
                 ("plus", "New show…", self.new_show_requested),
                 ("folder-open", "Open show…", self.open_show_requested),
                 ("save", "Save show", self.save_show_requested),
-                (None, "Save show as…", self.save_show_as_requested),
-                (None, "Import bundle…", self.import_bundle_requested),
+                ("save", "Save show as…", self.save_show_as_requested),
+                ("upload", "Import bundle…", self.import_bundle_requested),
                 ("package", "Export bundle…", self.export_bundle_requested)):
-            action = (menu.addAction(icons.icon(icon_name), text) if icon_name
-                      else menu.addAction(text))
+            action = menu.addAction(icons.icon(icon_name), text)
             action.triggered.connect(signal.emit)
             self._compact_actions.append(action)
 
@@ -872,6 +872,7 @@ class ToolbarManager(QObject):
 
         # Populated alongside the versions combobox by set_versions().
         self.versions_menu = QMenu("Restore version", menu)
+        self.versions_menu.setIcon(icons.icon("swap"))
         self.versions_menu.setEnabled(False)
         self._compact_actions.append(menu.addMenu(self.versions_menu))
 
@@ -902,13 +903,15 @@ class ToolbarManager(QObject):
         self._add_compact_actions(menu)
         # The stage's own dock button leaves with the stage, so this is the way
         # back when its window ends up on a display that is no longer there.
-        self.dock_stage_action = menu.addAction("Dock stage")
+        self.dock_stage_action = menu.addAction(
+            icons.icon("dock"), "Dock stage")
         self.dock_stage_action.setEnabled(False)
         self.dock_stage_action.triggered.connect(self.dock_stage_requested.emit)
         menu.addSeparator()
-        settings_action = menu.addAction("Settings…")
+        settings_action = menu.addAction(icons.icon("settings"), "Settings…")
         settings_action.triggered.connect(self.settings_requested.emit)
-        about_action = menu.addAction("About TupperDMX")
+        about_action = menu.addAction(
+            QIcon(asset_path("icons", "TupperDMX-icon.png")), "About TupperDMX")
         about_action.triggered.connect(self.about_requested.emit)
         button.setMenu(menu)
 
