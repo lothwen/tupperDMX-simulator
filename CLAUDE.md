@@ -256,7 +256,7 @@ way to change a setting on a headless rack box.
 ## UI notes
 
 - **1280×800 is the supported minimum display.** Both toolbars are wider than that with everything shown, so each folds
-  its low-priority half on a narrow window: the top bar's SHOW and VERSIONS cards into the ☰ menu, the timeline row's Rows/zoom/Fit zone into a "View ▾" popup.
+  its low-priority half on a narrow window: the top bar's SHOW card into the ☰ menu, the timeline row's Rows/zoom/Fit zone into a "View ▾" popup.
 - **`config.window.ui_scale`** (0.75–1.50, Settings ▸ Interface) is applied by `ui/theme.py` rewriting the theme's pixel values on load **A size set in Python is invisible to all of this
 - **MIDI channels are 0-15 everywhere** — the raw MIDI channel, on every surface.
 - The fixture browser's footer is the patch decision; OK stays disabled until the patch is legal, and the inspector

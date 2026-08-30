@@ -3,8 +3,8 @@ Characterization test: the app fits a 1280-wide display.
 
 Both toolbars are wider than 1280 when everything they hold is shown, so each
 one folds its low-priority half away on a narrow window — the top bar's SHOW
-and VERSIONS cards into the hamburger menu, the timeline row's view controls
-into a "View" popup. The mechanic that makes that possible is that a folding
+card into the hamburger menu, the timeline row's view controls into a "View"
+popup. The mechanic that makes that possible is that a folding
 bar reports its FOLDED minimum: a widget is never resized below its own
 minimum, so a bar that advertised its full width would never receive the
 resize event that tells it to fold.
@@ -102,17 +102,13 @@ def test_top_toolbar_folding_is_reversible(qapp):
 
     window.resize(TARGET_WIDTH, 800)
     _assert(manager._compact, "a 1280px window folds the bar")
-    _assert(not manager.show_section.isVisible()
-            and not manager.versions_section.isVisible(),
-            "SHOW and VERSIONS are gone")
+    _assert(not manager.show_section.isVisible(), "SHOW is gone")
     _assert(manager._compact_actions[0].isVisible(),
             "their menu stand-ins have appeared")
 
     window.resize(1920, 1080)
     _assert(not manager._compact, "a 1920px window brings the bar back")
-    _assert(manager.show_section.isVisible()
-            and manager.versions_section.isVisible(),
-            "SHOW and VERSIONS are back")
+    _assert(manager.show_section.isVisible(), "SHOW is back")
     _assert(not manager._compact_actions[0].isVisible(),
             "the menu stand-ins have stood down")
 

@@ -145,7 +145,7 @@ the stage. → [10](#10-the-web-remote)
 
 Run the set. Fix what looks wrong.
 
-When it is right, **VERSIONS ▸ Snapshot** and name it (`before Billares`). A
+When it is right, **☰ ▸ Snapshot** and name it (`before Billares`). A
 named snapshot is pinned and never pruned, so whatever happens during load-in you
 have a known-good state one click away — and restoring it snapshots the current
 state first, so even the rollback is reversible. → [6.4](#64-undo-and-redo)
@@ -178,6 +178,6 @@ drive the whole night from the tablet. → [6.1](#61-the-transport-bar),
 | Send lights to a real rig | **Settings ▸ Input / Output ▸ Software + real lights** |
 | Send the click to the in-ears only | **Settings ▸ Audio ▸ Routing ▸ Split** |
 | Run the show from a tablet | **Settings ▸ Web Remote** |
-| Go back to yesterday | **VERSIONS**, pick a snapshot, **Restore** |
+| Go back to yesterday | **☰ ▸ Restore version**, pick a snapshot |
 | Move the show to another machine | **SHOW ▸ Export**, then **… ▸ Import bundle…** |
 | Start over with settings | Delete `userprefs.json` — shows are not affected |

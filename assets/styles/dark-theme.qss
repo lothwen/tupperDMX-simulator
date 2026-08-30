@@ -555,48 +555,6 @@ QPushButton#FileCardAction[kind="guide"]   { color: #5da9e8; border-color: #3556
 QPushButton#FileCardAction:hover   { background-color: #333; }
 QPushButton#FileCardAction:pressed { background-color: #262626; }
 
-/* VERSIONS section: snapshot picker, History link and Snapshot action */
-QComboBox#VersionsCombo {
-    background-color: #262626;
-    border: 1px solid #161616;
-    border-radius: 6px;
-    color: #e6e6e6;
-    font-size: 12px;
-    padding: 2px 8px;
-}
-
-QComboBox#VersionsCombo::drop-down {
-    border: none;
-    width: 18px;
-}
-
-QComboBox#VersionsCombo QAbstractItemView {
-    background-color: #262626;
-    border: 1px solid #4a4a4a;
-    color: #e6e6e6;
-    selection-background-color: #2d4a63;
-    outline: none;
-}
-
-QPushButton#SnapshotButton {
-    background-color: #2f2f2f;
-    color: #d7d7d7;
-    border: 1px solid #3a4a5a;
-    border-radius: 3px;
-    padding: 2px 12px;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-QPushButton#SnapshotButton:hover {
-    background-color: #384555;
-    border-color: #4a6076;
-}
-
-QPushButton#SnapshotButton:pressed {
-    background-color: #2a2a2a;
-}
-
 /* Transport Buttons */
 QPushButton#StopButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);

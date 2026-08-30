@@ -1,8 +1,10 @@
 """
-Characterization test: the toolbar's VERSIONS section (ui/toolbar_manager.py).
+Characterization test: the ☰ menu's version entries (ui/toolbar_manager.py).
 
-Covers the snapshot picker population (labels for autosave vs pinned, newest
-selected), the autosave/pinned counts, and Restore enablement + restore signal.
+The VERSIONS card is gone — Snapshot and the Restore submenu live in the
+hamburger menu and stay visible at every bar width. Covers the submenu's
+population (labels for autosave vs pinned, newest first), its enablement, the
+restore signal and the always-visible Snapshot action.
 
 Run with:
     uv run python tests/test_toolbar_versions_panel.py
@@ -36,10 +38,17 @@ def _manager():
     return manager
 
 
-def test_versions_populate_and_counts():
-    print("test_versions_populate_and_counts")
+def _menu_action(manager, text):
+    for action in manager.menu_button.menu().actions():
+        if action.text() == text:
+            return action
+    raise AssertionError(f"no '{text}' entry in the ☰ menu")
+
+
+def test_versions_populate_the_submenu():
+    print("test_versions_populate_the_submenu")
     manager = _manager()
-    # Timestamps are dated "today" so the picker renders bare clock times
+    # Timestamps are dated "today" so the entries render bare clock times
     # (the toolbar prefixes MM-DD only for snapshots from other days).
     today = datetime.now().strftime("%Y-%m-%d")
     infos = [
@@ -49,31 +58,24 @@ def test_versions_populate_and_counts():
     ]
     manager.set_versions(infos)
 
-    _assert(manager.versions_combo.count() == 3, "every snapshot is listed")
-    _assert(manager.versions_combo.currentIndex() == 0, "newest is selected")
-    _assert(manager.versions_combo.itemText(0) == "Autosave · 14:32:07",
+    actions = manager.versions_menu.actions()
+    _assert(len(actions) == 3, "every snapshot is listed")
+    _assert(actions[0].text() == "Autosave · 14:32:07",
             "autosave label is time-stamped")
-    _assert(manager.versions_combo.itemText(2) == "before gig · 09:00:00",
+    _assert(actions[2].text() == "before gig · 09:00:00",
             "pinned label carries its name")
-    _assert(not manager.versions_combo.itemIcon(0).isNull()
-            and not manager.versions_combo.itemIcon(2).isNull(),
-            "the pinned/autosave distinction rides the item icons")
-    _assert(manager.versions_combo.itemData(0) == f"{today}T14-32-07",
-            "item data is the version_id")
-    _assert(manager.versions_stats_label.text() == "2 autosaves · 1 pinned",
-            "counts split autosaves and pinned")
-    _assert(manager.restore_button.isEnabled(), "Restore enables with versions")
+    _assert(not actions[0].icon().isNull() and not actions[2].icon().isNull(),
+            "the pinned/autosave distinction rides the entry icons")
+    _assert(manager.versions_menu.isEnabled(), "the submenu enables with versions")
 
 
 def test_versions_empty():
     print("test_versions_empty")
     manager = _manager()
     manager.set_versions([])
-    _assert(manager.versions_combo.count() == 0, "empty list clears the picker")
-    _assert(not manager.restore_button.isEnabled(),
-            "Restore disabled with no versions")
-    _assert(manager.versions_stats_label.text() == "0 autosaves · 0 pinned",
-            "zero counts render")
+    _assert(manager.versions_menu.actions() == [], "empty list clears the submenu")
+    _assert(not manager.versions_menu.isEnabled(),
+            "the submenu is disabled with no versions")
 
 
 def test_restore_signal():
@@ -85,16 +87,33 @@ def test_restore_signal():
     ])
     restored = []
     manager.restore_version_requested.connect(restored.append)
-    manager.versions_combo.setCurrentIndex(1)
-    manager.restore_button.click()
+    manager.versions_menu.actions()[1].trigger()
     _assert(restored == ["2026-07-12T14-31-00"],
-            "Restore emits the picked version_id")
+            "an entry emits its own version_id")
+
+
+def test_version_entries_survive_folding():
+    print("test_version_entries_survive_folding")
+    manager = _manager()
+    snapshot_action = _menu_action(manager, "Snapshot")
+    restore_action = _menu_action(manager, "Restore version")
+    fired = []
+    manager.snapshot_requested.connect(lambda: fired.append("snapshot"))
+
+    for compact in (False, True, False):
+        manager.set_compact(compact)
+        _assert(snapshot_action.isVisible() and restore_action.isVisible(),
+                f"both stay visible with the bar {'folded' if compact else 'open'}")
+
+    snapshot_action.trigger()
+    _assert(fired == ["snapshot"], "Snapshot fires its request")
 
 
 def main():
-    test_versions_populate_and_counts()
+    test_versions_populate_the_submenu()
     test_versions_empty()
     test_restore_signal()
+    test_version_entries_survive_folding()
     print("\nALL TESTS PASSED")
 
 

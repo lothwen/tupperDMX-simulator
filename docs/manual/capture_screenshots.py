@@ -468,26 +468,31 @@ def build_script(session: Session) -> None:
                 lambda: shot.shoot("toolbar-song-files",
                                    w.toolbar_manager.autosave_status_label
                                    .parentWidget(), pad=2))
-    session.add("toolbar-versions-section",
-                lambda: shot.shoot("toolbar-versions-section",
-                                   w.toolbar_manager.restore_button
-                                   .parentWidget(), pad=2))
     session.add("toolbar-setlist",
                 lambda: shot.shoot("toolbar-setlist",
                                    w.toolbar_manager.song_combo
                                    .parentWidget().parentWidget(), pad=2))
 
-    def open_versions():
-        w.toolbar_manager.versions_combo.showPopup()
+    def open_app_menu():
+        from PyQt6.QtCore import QPoint
+        button = w.toolbar_manager.menu_button
+        menu = button.menu()
+        # popup(), not showMenu(): the latter spins its own event loop and
+        # would not return until the menu closed, stalling the step chain.
+        # Right-aligned on the button — the ☰ sits at the far right of the bar,
+        # so a left-aligned popup hangs off the window and the crop cuts it.
+        menu.adjustSize()
+        menu.popup(button.mapToGlobal(
+            QPoint(button.width() - menu.width(), button.height())))
         for _ in range(4):
             app.processEvents()
 
-    def close_versions():
-        w.toolbar_manager.versions_combo.hidePopup()
+    def close_app_menu():
+        w.toolbar_manager.menu_button.menu().close()
 
-    session.add("_versions-open", open_versions, wait=0.8)
-    session.add("toolbar-versions", lambda: shot.shoot("toolbar-versions"))
-    session.add("_versions-close", close_versions, wait=0.5)
+    session.add("_menu-open", open_app_menu, wait=0.8)
+    session.add("toolbar-menu", lambda: shot.shoot("toolbar-menu"))
+    session.add("_menu-close", close_app_menu, wait=0.5)
 
     # -- chapter 7: the sidebar -------------------------------------------
     def sidebar(index):

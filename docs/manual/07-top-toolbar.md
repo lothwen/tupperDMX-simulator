@@ -3,7 +3,7 @@
 Everything about the *project* lives here: which show is open, which song is
 selected, which files that song uses, and how far back you can roll it.
 
-![The top toolbar: SHOW, SETLIST, SONG FILES, VERSIONS and the ☰ menu.](images/top-toolbar.png)
+![The top toolbar: SHOW, SETLIST, SONG FILES and the ☰ menu.](images/top-toolbar.png)
 
 ## 7.1 SHOW — the project
 
@@ -113,19 +113,22 @@ Top-right of this section, and it has exactly three states:
 You do not need to save. The show is written a few seconds after you stop
 editing, and always on song switch, on close, and when you press **Save**.
 
-## 7.4 VERSIONS — history
+## 7.4 The ☰ menu — history and the rest
 
-![The versions section: pick a snapshot, restore it, or pin a new one.](images/toolbar-versions-section.png)
+![The ☰ menu: Snapshot and Restore version, the stage, Settings and About.](images/toolbar-menu.png)
 
-Every save also leaves a point you can come back to.
+Every save also leaves a point you can come back to, and the history lives in
+the ☰ menu at the far right of the bar.
 
-| Control | What it does |
+| Entry | What it does |
 |---|---|
-| Snapshot drop-down | The history, newest first. Autosaves show a save icon and read `Autosave · 12:57:30`; pinned snapshots show an amber pin and their name |
-| **Restore** | Rolls the show back to the selected snapshot |
 | **Snapshot** | Takes a named snapshot that is **pinned** — never pruned |
+| **Restore version ▸** | The history, newest first. Autosaves show a save icon and read `Autosave · 12:57:30`; pinned snapshots show an amber pin and their name. Picking one rolls the show back to it. Greyed out until the show has a history |
+| **Dock stage** | Brings an undocked stage window back into the main window |
+| **Settings…** / **About TupperDMX** | The settings dialog and the version box |
 
-![The version history dropped down: pinned snapshots by name, autosaves by time, newest first.](images/toolbar-versions.png)
+On a narrow window the SHOW card folds into this menu as well, above the
+history entries — the same actions, the same signals.
 
 Times show as `HH:MM:SS` for today and `MM-DD HH:MM:SS` for older points.
 

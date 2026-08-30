@@ -1286,7 +1286,7 @@ class MainWindow(QMainWindow):
         self._refresh_versions_ui()
 
     def _refresh_versions_ui(self):
-        """Repopulate the toolbar's snapshot picker + counts from disk."""
+        """Repopulate the ☰ menu's Restore submenu from disk."""
         show = self.show_manager.show
         if show is None:
             self.toolbar_manager.set_versions([])
@@ -1295,7 +1295,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.set_versions(versions.list_versions(show))
 
     def restore_version_from_toolbar(self, version_id: str):
-        """Restore the snapshot picked in the toolbar's VERSIONS combobox,
+        """Restore the snapshot picked in the ☰ menu's Restore submenu,
         confirming first (the rollback itself snapshots the current state, so
         it stays undoable from History)."""
         if self.show_manager.show is None or not version_id:
