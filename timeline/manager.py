@@ -1945,13 +1945,19 @@ class Timeline(QWidget):
         return bool(self.midi_manager
                     and self.midi_manager.is_song_part({"note": int(note)}))
 
-    def can_accept_clip_drop(self, note: int, scene_y: float) -> bool:
+    def can_accept_clip_drop(self, note: int, scene_y: float,
+                             fixture_type: Optional[str] = None) -> bool:
         """Return True if a clip carrying `note` may land at `scene_y`.
 
         A note is droppable on a fixture lane when it is a meaningful verb for
         that fixture (channel offsets within range, scene/bank/chase verbs when
         the fixture defines them, global/utility verbs anywhere). Song parts
-        drop onto the waveform band, where they form the arrangement overlay."""
+        drop onto the waveform band, where they form the arrangement overlay.
+
+        When the payload names a `fixture_type` — the clip library tags its
+        channel clips, whose meaning is the SOURCE fixture's channel list, not a
+        slot number — the target lane's fixture must be that type, exactly as a
+        scene drop is gated."""
         if not self.midi_manager:
             return False
         if self._note_is_song_part(note):
@@ -1962,11 +1968,16 @@ class Timeline(QWidget):
         # A locked track rejects new clips.
         if self.midi_manager.is_fixture_locked(target_idx):
             return False
+        if (fixture_type is not None
+                and fixture_type != self._fixture_type(target_idx)):
+            return False
         return note_layout.note_applies_to(note, self._fdef(target_idx))
 
-    def handle_clip_drop(self, note: int, velocity: int, scene_x: float, scene_y: float) -> bool:
+    def handle_clip_drop(self, note: int, velocity: int, scene_x: float,
+                         scene_y: float,
+                         fixture_type: Optional[str] = None) -> bool:
         """Validate and insert a dropped clip. Returns True on success."""
-        if not self.can_accept_clip_drop(note, scene_y):
+        if not self.can_accept_clip_drop(note, scene_y, fixture_type):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
         clamped_velocity = max(1, min(127, int(velocity)))

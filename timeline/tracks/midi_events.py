@@ -1418,6 +1418,27 @@ class MidiEventsTrack(BaseTrack):
         return compute_bounds(occupants, idx, song_end_time, pps,
                               MIN_EVENT_DURATION)
 
+    def _clip_label(self, rep: dict) -> str:
+        """Text drawn on one single-event clip.
+
+        A channel-control clip names the channel AND the slot it drives — "Tilt
+        (ch.2)" — because the name alone is ambiguous the moment a fixture
+        repeats one (the shipped blinder has two "Cold White" slots) and a clip
+        on the timeline, unlike a library card, carries no ordered channel list
+        around it to read the slot off. The condition mirrors `describe_note`'s
+        channel branch, so a note it labelled generically ("CH 8" on a lane
+        whose fixture is narrower, a scene verb on a wide one) is left alone —
+        appending a slot number to those would name a channel that isn't
+        there."""
+        label = rep["info"].part
+        note = int(rep.get("note", 0))
+        fdef = (self.timeline_manager._fdef(rep.get("channel"))
+                if self.timeline_manager else None)
+        lo, hi = note_layout.CHANNEL_OFFSET_RANGE
+        if fdef and lo <= note <= min(hi, fdef.channel_count):
+            return f"{label} (ch.{note})"
+        return label
+
     def _scene_clip_color(self, members: List[dict]) -> QColor:
         """Derive a clip color from a scene group's channel values, using each
         channel's semantic role (so non-RGB fixtures like blinders still read
@@ -1708,7 +1729,7 @@ class MidiEventsTrack(BaseTrack):
                     color = self._scene_clip_color(members)
                 else:
                     info = rep['info']
-                    label_text = info.part
+                    label_text = self._clip_label(rep)
                     color = QColor(info.color)
                 brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
                 text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)

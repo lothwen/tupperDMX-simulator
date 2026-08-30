@@ -18,7 +18,7 @@ import sys
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
-from core import clips
+from core import clips, note_layout
 from core.config import Config, FixtureInstance, shipped_fixtures
 
 
@@ -95,6 +95,35 @@ def test_clip_payloads():
     chase = by_type["chase"]
     _assert(chase["payload"]["note"] == 70,
             "a chase drags as CHASE_LOAD with the index in the velocity")
+
+
+def test_indexed_clips_name_their_fixture():
+    """A channel clip's title is the SOURCE fixture's channel — "TILT" is this
+    moving head's channel 1 and nothing at all on a par that merely also has a
+    channel 1 — and a chase clip's velocity indexes that fixture's own chase
+    list. Both carry the fixture they were built from, and the timeline refuses
+    them on any other fixture's lane. The verbs addressed through the TARGET's
+    patch (a colour macro, a blackout, a show verb) stay droppable anywhere they
+    apply."""
+    print("test_indexed_clips_name_their_fixture")
+    lo, hi = note_layout.CHANNEL_OFFSET_RANGE
+    scoped_clips, others = [], []
+    for clip in _all_clips(clips.build_groups(_shipped_config())):
+        if clip["mime_type"] != clips.CLIP_MIME_TYPE:
+            continue  # a scene, which has always named its fixture
+        ref = clip["ref"]
+        scoped = ref.get("kind") == "note" and (
+            lo <= ref["note"] <= hi or ref["note"] == note_layout.CHASE_LOAD)
+        (scoped_clips if scoped else others).append(clip)
+
+    _assert(scoped_clips and all(
+        c["payload"].get("fixture_type") == c["ref"]["fixture"]
+        for c in scoped_clips),
+        f"all {len(scoped_clips)} channel and chase clips name their fixture")
+    _assert(any(c["type"] == "chase" for c in scoped_clips),
+            "chases are among them (the shipped patch has some)")
+    _assert(not any("fixture_type" in c["payload"] for c in others),
+            "blackout, colour macros and show verbs stay unscoped")
 
 
 def test_refs_are_unique_and_round_trip():

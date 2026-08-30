@@ -226,7 +226,10 @@ class ContentView(QGraphicsView):
     # --- Clip library drag & drop ----------------------------------------
 
     def _decode_clip_payload(self, mime):
-        """Return (note, velocity) from a clip-library MIME, or None."""
+        """Return (note, velocity, fixture_type) from a clip-library MIME, or
+        None. `fixture_type` is None unless the clip is scoped to the fixture it
+        was built from (channel clips are), in which case only that fixture's
+        lanes accept it."""
         if not mime.hasFormat(CLIP_MIME_TYPE):
             return None
         try:
@@ -234,7 +237,8 @@ class ContentView(QGraphicsView):
             payload = json.loads(raw)
             note = int(payload["note"])
             velocity = int(payload.get("velocity", DEFAULT_DROP_VELOCITY))
-            return note, velocity
+            fixture_type = payload.get("fixture_type")
+            return note, velocity, fixture_type
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
@@ -279,8 +283,9 @@ class ContentView(QGraphicsView):
         if clip_decoded is None:
             event.ignore()
             return
-        note, _ = clip_decoded
-        if self.timeline.can_accept_clip_drop(note, scene_pos.y()):
+        note, _, fixture_type = clip_decoded
+        if self.timeline.can_accept_clip_drop(note, scene_pos.y(),
+                                              fixture_type):
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -316,9 +321,10 @@ class ContentView(QGraphicsView):
         if clip_decoded is None:
             event.ignore()
             return
-        note, velocity = clip_decoded
+        note, velocity, fixture_type = clip_decoded
         if self.timeline.handle_clip_drop(note, velocity,
-                                          scene_pos.x(), scene_pos.y()):
+                                          scene_pos.x(), scene_pos.y(),
+                                          fixture_type):
             event.acceptProposedAction()
         else:
             event.ignore()

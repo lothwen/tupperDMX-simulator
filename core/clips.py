@@ -292,18 +292,29 @@ def _fixture_clips(fdef: FixtureDef, ftype: str, mode: str,
     + colour macros."""
     notes: List[int] = list(range(1, fdef.channel_count + 1))
     notes.append(note_layout.BLACKOUT_FIXTURE)
-    notes += list(range(note_layout.COLOR_MACRO_BASE,
-                        note_layout.COLOR_MACRO_BASE
-                        + len(note_layout.COLOR_MACROS)))
+    # Disable the addition of color macros to clip library.
+    # Needs a rework and fix.
+    #notes += list(range(note_layout.COLOR_MACRO_BASE,
+    #                    note_layout.COLOR_MACRO_BASE
+    #                    + len(note_layout.COLOR_MACROS)))
+    lo, hi = note_layout.CHANNEL_OFFSET_RANGE
     clips: List[Dict] = []
     for note in notes:
         info = note_layout.describe_note(note, fdef)
         if info is None:
             continue
+        # A channel verb's LABEL lies on another fixture: "TILT" is channel 1
+        # on this moving head and something else entirely on a par that also
+        # has a channel 1. So a channel clip names the fixture it was built from
+        # and only drops on that fixture's lanes (chases likewise, see
+        # _chase_clips). Blackout and the colour macros stay droppable anywhere
+        # — they are addressed by the target's own patch, not by a slot number.
+        owner = ftype if lo <= note <= hi else None
         clips.append(_note_clip(info, note, DEFAULT_DROP_VELOCITY,
                                 channel, clip_type(note),
                                 note_ref(ftype, mode, note,
-                                         DEFAULT_DROP_VELOCITY)))
+                                         DEFAULT_DROP_VELOCITY),
+                                fixture_type=owner))
     return clips
 
 
@@ -323,14 +334,19 @@ def _bank_groups(ftype: str, mode: str, fdef: FixtureDef, channel: int
 
 def _chase_clips(fdef: FixtureDef, ftype: str, mode: str,
                  channel: int) -> List[Dict]:
-    """The fixture's chases (drop as note CHASE_LOAD, velocity = index)."""
+    """The fixture's chases (drop as note CHASE_LOAD, velocity = index).
+
+    Scoped to their fixture for the same reason a channel clip is: the velocity
+    is an INDEX into the target's own chase list, so the card's name is only
+    true on the fixture it was built from."""
     clips: List[Dict] = []
     for idx in range(len(fdef.chases)):
         info = note_layout.describe_note(note_layout.CHASE_LOAD, fdef, idx)
         clips.append(_note_clip(info, note_layout.CHASE_LOAD, idx,
                                 channel, "chase",
                                 note_ref(ftype, mode,
-                                         note_layout.CHASE_LOAD, idx)))
+                                         note_layout.CHASE_LOAD, idx),
+                                fixture_type=ftype))
     return clips
 
 
@@ -372,9 +388,15 @@ def clip_type(note: int) -> str:
 
 
 def _note_clip(info, note: int, velocity: int, channel: int,
-               ctype: str, ref: Dict) -> Dict:
+               ctype: str, ref: Dict,
+               fixture_type: Optional[str] = None) -> Dict:
     payload = {"note": int(note), "velocity": int(velocity),
                "channel": int(channel)}
+    # Only clips whose verb means something DIFFERENT on another fixture name
+    # their owner (see _fixture_clips); the drop validator refuses a lane whose
+    # fixture doesn't match.
+    if fixture_type is not None:
+        payload["fixture_type"] = fixture_type
     return {"title": info.part, "type": ctype, "accent": info.color,
             "mime_type": CLIP_MIME_TYPE, "payload": payload,
             "preview": [(int(channel), int(note), int(velocity))],

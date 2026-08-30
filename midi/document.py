@@ -162,12 +162,22 @@ class MidiDocument:
         """UI metadata for a (note, channel) — the synthetic/test note map
         takes precedence (it carries the .fixture scoping hint); otherwise the
         data-driven reverse lookup resolves the verb against the channel's
-        fixture def. Returns None for notes with no defined meaning."""
+        fixture def. Returns None for notes with no defined meaning.
+
+        The one verb that OUTRANKS the map is a channel control on a resolved
+        fixture: the map is fixture-agnostic, so it can only ever say "CH 2",
+        while the patch knows that slot is the moving head's Tilt and colours it
+        as such. The map still answers for every other verb, and for a note past
+        the fixture's channel count — and for synthetic data with no patch,
+        where there is no def to ask."""
+        fdef = self._fdef_for_channel(channel)
+        lo, hi = note_layout.CHANNEL_OFFSET_RANGE
+        if fdef is not None and lo <= int(note) <= min(hi, fdef.channel_count):
+            return note_layout.describe_note(note, fdef, velocity)
         info = self.midi_note_map.get(str(note))
         if info is not None:
             return info
-        return note_layout.describe_note(note, self._fdef_for_channel(channel),
-                                         velocity)
+        return note_layout.describe_note(note, fdef, velocity)
 
     def channel_note_map(self, channel) -> Tuple[Tuple[str, int], ...]:
         """``((channel_field, note), ...)`` used to expand a scene into channel-

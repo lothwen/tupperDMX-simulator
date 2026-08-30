@@ -227,6 +227,80 @@ def test_blackout_scoped_to_its_fixture():
             "channel-2 BLACKOUT end-marker belongs only to Blinder 2")
 
 
+def test_channel_clip_drops_only_on_its_own_fixture():
+    """A channel clip carries the fixture the library built it from, because
+    its meaning is that fixture's channel list: dropping the ledbar's channel 1
+    on a blinder lane would author "whatever the blinder's channel 1 is", which
+    is the confusion the tag exists to stop. Verbs addressed through the target
+    fixture (a colour macro) and untagged payloads are unaffected."""
+    print("test_channel_clip_drops_only_on_its_own_fixture")
+    m, tl = _make()
+    y_led = tl._midi_track_y(0) + 5        # ledbar lane (DMX 1)
+    y_blinder = tl._midi_track_y(1) + 5    # 1st blinder lane (DMX 33)
+
+    _assert(tl.can_accept_clip_drop(LEDBAR_CLIP, y_led, "ledbar"),
+            "the ledbar's channel clip lands on the ledbar's own lane")
+    _assert(not tl.can_accept_clip_drop(LEDBAR_CLIP, y_blinder, "ledbar"),
+            "the same clip is refused on the blinder lane, channel 1 or not")
+    _assert(tl.can_accept_clip_drop(LEDBAR_CLIP, y_blinder),
+            "an untagged clip still drops wherever the note applies")
+    # The blinder DOES define chases, so the refusal below is the fixture tag
+    # doing the work rather than note_applies_to's coarser "has chases at all".
+    _assert(tl.can_accept_clip_drop(note_layout.CHASE_LOAD, y_blinder),
+            "the blinder has chases, so an untagged chase note applies to it")
+    _assert(not tl.can_accept_clip_drop(note_layout.CHASE_LOAD, y_blinder,
+                                        "ledbar"),
+            "a ledbar chase is refused there — its velocity indexes a LIST")
+    _assert(tl.can_accept_clip_drop(note_layout.COLOR_MACRO_BASE, y_blinder),
+            "a colour macro is addressed by the target fixture, so it lands")
+    # Scoped to the TYPE, not to the instance the library card was built from:
+    # the library has one group per patched type, so a blinder channel clip has
+    # to reach every blinder in the patch.
+    _assert(tl.can_accept_clip_drop(1, tl._midi_track_y(2) + 5, "blinder"),
+            "a blinder channel clip reaches the second blinder too")
+
+    _assert(not tl.handle_clip_drop(LEDBAR_CLIP, 100, 100.0, y_blinder,
+                                    "ledbar"),
+            "the refused drop is rejected, not silently retargeted")
+    _assert(not any(e["note"] == LEDBAR_CLIP for e in m.midi_events),
+            "and inserts nothing")
+    _assert(tl.handle_clip_drop(LEDBAR_CLIP, 100, 100.0, y_led, "ledbar"),
+            "the matching lane still accepts it")
+    _assert(_event(m, LEDBAR_CLIP).get("channel") == LEDBAR_CH,
+            "landing on the ledbar's own channel")
+
+
+def test_channel_clips_read_their_slot_number():
+    """A channel clip on the timeline names the channel AND the slot it drives:
+    the shipped blinder repeats "Cold White" on channels 2 and 3, so the name
+    alone cannot say which one a clip holds. A note the lane's fixture doesn't
+    have as a channel keeps the generic label describe_note gave it."""
+    print("test_channel_clips_read_their_slot_number")
+    m, tl = _make()
+    blinder = tl.midi_events_tracks[1]         # 1st blinder, 8 channels
+    ledbar = tl.midi_events_tracks[0]          # ledbar, 7 channels
+
+    m.add_event(2, 1.0, 100, channel=BLINDER1_CH)
+    m.add_event(3, 2.0, 100, channel=BLINDER1_CH)
+    e2, e3 = _event(m, 2, channel=BLINDER1_CH), _event(m, 3, channel=BLINDER1_CH)
+    _assert(e2["info"].part == e3["info"].part,
+            f"the blinder repeats a channel name ({e2['info'].part})")
+    _assert(blinder._clip_label(e2) == f"{e2['info'].part} (ch.2)",
+            f"a channel clip reads '{blinder._clip_label(e2)}'")
+    _assert(blinder._clip_label(e2) != blinder._clip_label(e3),
+            "so the two identically-named channels no longer read alike")
+
+    m.add_event(note_layout.COLOR_MACRO_BASE, 3.0, 100, channel=BLINDER1_CH)
+    macro = _event(m, note_layout.COLOR_MACRO_BASE, channel=BLINDER1_CH)
+    _assert(blinder._clip_label(macro) == macro["info"].part,
+            "a colour macro drives no single channel, so it gains no number")
+
+    m.add_event(8, 4.0, 100, channel=LEDBAR_CH)   # past the ledbar's 7 slots
+    wide = _event(m, 8, channel=LEDBAR_CH)
+    _assert(ledbar._clip_label(wide) == wide["info"].part,
+            f"a note the fixture has no channel for stays '{wide['info'].part}'")
+
+
 def test_display_order_by_dmx_binding_by_channel():
     """Tracks lay out top-to-bottom by DMX address, but each binds to its
     fixture's stable channel — the two are decoupled. Here a fixture with the
@@ -828,6 +902,8 @@ def main():
     test_clearing_the_track_clears_the_waveform()
     test_timeline_spans_the_longest_track()
     test_blackout_scoped_to_its_fixture()
+    test_channel_clip_drops_only_on_its_own_fixture()
+    test_channel_clips_read_their_slot_number()
     test_display_order_by_dmx_binding_by_channel()
     test_saved_row_outranks_the_dmx_address()
     test_grip_drag_restacks_the_lanes_and_commits_on_release()
