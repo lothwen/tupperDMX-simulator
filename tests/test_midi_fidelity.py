@@ -33,7 +33,9 @@ class FakeFixture:
 
 PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
 LEDBAR_CH, BLINDER_CH = 0, 1
-BLINDER_CLIP = 26  # standalone blinder verb; never scene-clustered
+BLINDER_CLIP = 2   # the blinder's cool1 channel: a standalone clip that
+                   # never scene-clusters (clustering needs 2+ at one time)
+                   # and whose velocity is a LEVEL, so it can carry a fade
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}

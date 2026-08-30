@@ -273,7 +273,7 @@ class DraggableMidiEvent(QGraphicsObject):
                  bounds: ClipBounds, is_blackout: bool = False,
                  group_id: Optional[str] = None,
                  group_event_ids: Optional[List[str]] = None,
-                 locked: bool = False,
+                 locked: bool = False, fadeable: bool = True,
                  parent=None):
         super().__init__(parent)
         self.rect = QRectF(0, 0, max(width, MIN_HIT_WIDTH_PX), height)
@@ -345,7 +345,12 @@ class DraggableMidiEvent(QGraphicsObject):
         self.fade_out_seconds = float(event_data.get("fade_out", 0.0)) if event_data else 0.0
         self._fade_in_handle: Optional[FadeHandle] = None
         self._fade_out_handle: Optional[FadeHandle] = None
-        if not is_blackout and not locked:
+        # `fadeable` is false where a ramp has nothing to move: a scene on a
+        # fixture with no Intensity channel (an RGBW wash, a hazer), or a clip
+        # whose verb packs an index into velocity rather than a level (a chase,
+        # a bank, a song part). The handles stay off rather than offering a
+        # drag the manager would refuse.
+        if not is_blackout and not locked and fadeable:
             self._fade_in_handle = FadeHandle("in", self)
             self._fade_out_handle = FadeHandle("out", self)
             self._fade_in_handle.fade_committed.connect(self._on_handle_committed)
@@ -1689,6 +1694,9 @@ class MidiEventsTrack(BaseTrack):
                     group_id=unit["group_id"] if is_group else None,
                     group_event_ids=unit["event_ids"] if is_group else None,
                     locked=locked,
+                    fadeable=(not mm or (mm.can_fade_scene(unit["group_id"])
+                                         if is_group
+                                         else mm.can_fade_event(rep["id"]))),
                 )
                 event_rect.set_timeline(self.timeline_manager)
 

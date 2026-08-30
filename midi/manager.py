@@ -19,7 +19,6 @@ from .constants import (
     # no longer references these (they live in midi/constants.py).
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
-    FADE_BRIGHTNESS_NOTE,
     SONG_PART_NOTES,
     _channel_to_velocity,
 )
@@ -65,7 +64,8 @@ class MidiManager(QObject):
                                  notify_changed=self.data_changed.emit)
 
         # Editing collaborators (all share the document; commit via callback).
-        self._clips = ClipEditor(self._doc, commit=self._commit)
+        self._clips = ClipEditor(self._doc, self._fades,
+                                 commit=self._commit)
         self._scenes = SceneEditor(self._doc, self._fades, commit=self._commit)
         self._selection = SelectionEditor(self._doc, self._fades,
                                           commit=self._commit)
@@ -326,10 +326,18 @@ class MidiManager(QObject):
         # legacy files without metas.
         self._apply_sidecar_meta()
 
+        # Ramps are derived from the fade durations that the two passes above
+        # settled, so re-emit them all. This is also the migration: a file
+        # written before a fade resolved the fixture's own dimmer has its ramp
+        # on the wrong note and MIDI channel, and gets it rewritten here.
+        self._fades.rebuild_all()
+
     def _apply_sidecar_meta(self) -> None:
-        """Pin stable scene group ids + custom names, and restore per-clip
-        fades (which have no note representation in the file). Scene fade
-        durations stay ramp-derived — the ramps are what actually plays."""
+        """Pin stable scene group ids + custom names, and restore fade
+        durations (a clip's have no note representation in the file at all; a
+        scene's are exact here, where the ramp heuristic only approximates
+        them and misses entirely when the ramp was written to the wrong
+        fixture)."""
         for meta in self._doc.sidecar_meta:
             at = meta.get("at")
             if not isinstance(at, (int, float)):
@@ -350,11 +358,15 @@ class MidiManager(QObject):
             return  # externally edited / moved — heuristics stay in charge
         gid = str(meta.get("gid") or heuristic_gid)
         name = meta.get("name")
+        fade_in = max(0.0, float(meta.get("fi", 0.0) or 0.0))
+        fade_out = max(0.0, float(meta.get("fo", 0.0) or 0.0))
         for e in self._doc.midi_events:
             if e.get("group_id") == heuristic_gid:
                 e["group_id"] = gid
                 if isinstance(name, str) and name:
                     e["scene_name"] = name
+                e["fade_in"] = fade_in
+                e["fade_out"] = fade_out
         for n in self._doc.midi_notes:
             if n.get("parent_group_id") == heuristic_gid:
                 n["parent_group_id"] = gid
@@ -393,6 +405,18 @@ class MidiManager(QObject):
 
     def set_scene_fade_out(self, group_id: str, seconds: float) -> bool:
         return self._fades.set_scene_fade_out(group_id, seconds)
+
+    def can_fade_scene(self, group_id: str) -> bool:
+        """Whether this scene's fixture has a dimmer for a ramp to ride —
+        false for an RGBW wash or a hazer, which the timeline reads to leave
+        the fade handles off a clip that could never honour them."""
+        return self._fades.can_fade_group(group_id)
+
+    def can_fade_event(self, event_id: str) -> bool:
+        """Whether this clip's verb takes a level a ramp could move — true for
+        a direct-channel clip, false for a chase, a bank or a song part, whose
+        velocity is an index rather than a brightness."""
+        return self._fades.can_fade_event(event_id)
 
     # ------------------------------------------------------------------
     # Editing API — delegated to the clip / scene / selection editors

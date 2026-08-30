@@ -345,6 +345,26 @@ def color_slots(fdef: FixtureDef) -> Dict[str, int]:
     return slots
 
 
+def intensity_slot(fdef: FixtureDef) -> int:
+    """The slot index of the fixture's master dimmer, or -1 when it has none.
+
+    The other write-direction index next to `color_slots`: "which channel dims
+    the whole fixture". Per-pixel and per-group Intensity channels are skipped
+    because they dim one cell rather than the fixture — the same distinction
+    `fixture_state._intensity` draws between its cell/group/plain levels — and
+    fine bytes carry part of their coarse channel's value, not a level of their
+    own. Plenty of fixtures answer -1 (an RGBW wash with no master, a hazer):
+    they have nothing to dim, which is why a fade can't ride them.
+    """
+    for index, spec in enumerate(fdef.channels):
+        if spec.fine_of >= 0 or spec.pixel_key or spec.pixel_group:
+            continue
+        cap = dominant_capability(spec.capabilities)
+        if cap is not None and cap.type == "Intensity":
+            return index
+    return -1
+
+
 def capability_types(fdef: FixtureDef) -> Set[str]:
     """The dominant capability type of every slot — the coarse "what kind of
     light is this" summary (does it mix colour at all, does it dim, …)."""

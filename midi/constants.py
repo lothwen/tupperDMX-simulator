@@ -24,8 +24,10 @@ BLACKOUT_EPSILON = 1e-4
 NOTE_MATCH_TOLERANCE = 0.005
 
 # Fade-generation constants (scene groups only). A "fade" is a chain of
-# brightness (note 1) note_on events at FADE_STEP_SECONDS apart whose
-# velocities ramp linearly between 0 and the group's brightness V.
+# note_on events at FADE_STEP_SECONDS apart whose velocities ramp linearly
+# between 0 and the group's level V, riding the fixture's OWN dimmer — there
+# is deliberately no constant for the target note, since which note dims a
+# fixture is the fixture's answer (`FadeEngine.fade_note`), not a fixed 1.
 # Fade notes live ONLY in midi_notes (never in midi_events) so they don't
 # pollute scene clustering, timeline rendering, or per-clip mutation logic.
 # They round-trip through the saved MIDI file and are detected on load by
@@ -33,8 +35,18 @@ NOTE_MATCH_TOLERANCE = 0.005
 FADE_STEP_SECONDS = 0.10
 FADE_NOTE_DURATION = 0.05  # < step so consecutive note_ons don't overlap
 FADE_MIN_DURATION = 0.01   # below this, treat as no fade
-# Brightness channel-control note number — the fade's target channel.
-FADE_BRIGHTNESS_NOTE = 1
+# A fade-out's last note stops this far SHORT of the clip's right edge. The
+# codec sorts ramp notes after originals sharing a timestamp — which is what
+# lets a fade-in's zero beat its own clip's value at the very same moment — so
+# a fade-out landing exactly ON the boundary would overwrite the value the NEXT
+# clip just set and black the fixture out precisely when it should light.
+FADE_OUT_END_GAP = 0.002
+# Shortest run load-time detection will call a fade. Two notes 100 ms apart
+# with a near-zero end is also what two ordinary channel clips look like, and
+# detection CONSUMES what it matches, so the bar sits at three: our own files
+# recover their durations from the tdmx1 metas either way, and only a foreign
+# file's sub-200 ms fade goes unrecognised.
+FADE_MIN_RUN_NOTES = 3
 # Velocity tolerance when matching a parsed midi_notes entry to a detected
 # fade-run member; absorbs the /2 quantization round-trip in MIDI export.
 FADE_VELOCITY_MATCH_TOLERANCE = 2
