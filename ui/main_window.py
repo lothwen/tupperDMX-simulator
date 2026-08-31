@@ -443,6 +443,11 @@ class MainWindow(QMainWindow):
 
         self.edit_toolbar = StageEditToolbar(
             self.stage_controller, self._on_patch_changed, self.exit_edit_mode)
+        # The fixture browser's Scenes tab writes a type's scene banks whichever
+        # button closes it, so the library panel is rebuilt on the write, not on
+        # OK — the same route the timeline's clip editor takes.
+        self.edit_toolbar.library_changed.connect(
+            lambda: self.clip_library.refresh_configuration(self.config))
         stage_view.add_overlay(self.edit_toolbar, anchor="top-left", reference="background")
         self.edit_toolbar.hide()
 

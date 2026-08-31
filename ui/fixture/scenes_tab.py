@@ -191,6 +191,11 @@ class _SceneTree(QTreeWidget):
 class FixtureScenesTab(QWidget):
     """List, edit and preview the scene banks of one fixture type."""
 
+    # A write landed on the type's sidecar: whoever reads the library (the clip
+    # library panel) is now stale. Emitted from `_save`, the one thing here that
+    # touches disk, so it covers Create, Save and the on-the-way-out prompt.
+    library_changed = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._type_name = ""
@@ -884,5 +889,6 @@ class FixtureScenesTab(QWidget):
             return
         self._clear_pending()
         self._refresh_status()
+        self.library_changed.emit()
 
 

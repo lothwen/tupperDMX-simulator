@@ -2,7 +2,7 @@
 # ABOUTME: per-selection inspector (name / type / DMX / delete). Placement is by drag.
 from contextlib import contextmanager
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QCheckBox, QDialog, QFrame, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QSlider, QSpinBox, QLabel, QLineEdit,
@@ -42,6 +42,10 @@ class StageEditToolbar(QWidget):
     the patch; ``on_done`` exits. Deleting a fixture lives in the
     FixtureInspector, not here.
     """
+
+    # The Add dialog's Scenes tab wrote the fixture library (independently of
+    # its OK/Cancel), so the host must rebuild what reads it.
+    library_changed = pyqtSignal()
 
     def __init__(self, stage_controller, on_patch_changed, on_done, parent=None):
         super().__init__(parent)
@@ -299,6 +303,7 @@ class StageEditToolbar(QWidget):
         """Open the fixture browser and patch what it returns. Public: the
         timeline toolbar's "+ Add track" opens the same flow."""
         dialog = AddFixtureDialog(self._stage, self)
+        dialog.library_changed.connect(self.library_changed)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         type_name, dmx_start, channel, mode = dialog.values()

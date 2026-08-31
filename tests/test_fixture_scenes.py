@@ -579,6 +579,58 @@ def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
                 "two-modes.json": dict(TWO_MODES, name="Two Modes")}, body)
 
 
+def test_every_sidecar_write_announces_itself(qapp):
+    print("test_every_sidecar_write_announces_itself")
+    from PyQt6.QtWidgets import QDialog, QMessageBox
+    from core.config import Config
+    from ui.fixture.browser import AddFixtureDialog
+    from stage.controller import StageController
+
+    def body(_shipped, _user):
+        config = Config()
+        config.fixtures = []
+        dialog = AddFixtureDialog(StageController(config))
+        writes = []
+        dialog.library_changed.connect(lambda: writes.append(True))
+        dialog.select_type("Wash 12")
+        tab = dialog.scenes_tab
+
+        tab._faders[0].slider.setValue(120)
+        _assert(writes == [], "dialling in a draft writes nothing, announces "
+                              "nothing")
+        tab.save_button.click()
+        _assert(len(writes) == 1, "Create writes the sidecar and says so")
+
+        _select(tab, "FILLS", 0)
+        tab._faders[0].slider.setValue(64)
+        tab.save_button.click()
+        _assert(len(writes) == 2, "so does Save on an edited scene")
+
+        _select(tab, "FILLS", 0)
+        tab._delete()
+        _assert(len(writes) == 2, "a delete is in memory until it is saved")
+        tab.save_button.click()
+        _assert(len(writes) == 3, "and announces itself when it is")
+
+        # The whole point: the Scenes tab writes the LIBRARY, so Cancel settles
+        # its pending work exactly as OK does — and must announce it too.
+        _select(tab, "FILLS", 0)
+        tab._faders[0].slider.setValue(32)
+        original = QMessageBox.question
+        QMessageBox.question = staticmethod(
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        try:
+            dialog.done(QDialog.DialogCode.Rejected)
+        finally:
+            QMessageBox.question = original
+        _assert(len(writes) == 4,
+                "closing on Cancel saves the pending scene edit and announces "
+                "the write — the clip library reads those banks")
+
+    _with_tree({"wash-12.json": _doc("Wash 12"),
+                "wash-12.tdmx.json": SIDECAR}, body)
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
@@ -594,6 +646,7 @@ def main():
     test_renaming_a_bank_follows_through_into_its_chases(app)
     test_a_drag_reorders_scenes_and_banks(app)
     test_the_dialog_shows_the_tab_and_follows_its_selection(app)
+    test_every_sidecar_write_announces_itself(app)
     print("ALL TESTS PASSED")
 
 

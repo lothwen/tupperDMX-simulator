@@ -19,7 +19,7 @@ patch, and OK stays disabled until the choice is legal.
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QRect, QRectF, Qt, QUrl
+from PyQt6.QtCore import QRect, QRectF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter,
 )
@@ -322,6 +322,10 @@ def library_entries() -> List[LibraryEntry]:
 class AddFixtureDialog(QDialog):
     """Pick a fixture type + mode from the library, and where to patch it."""
 
+    # The Scenes tab wrote the fixture library. Re-emitted so the caller can
+    # refresh what reads it without waiting for OK — Cancel saves scenes too.
+    library_changed = pyqtSignal()
+
     def __init__(self, stage_controller, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Add fixture")
@@ -534,6 +538,7 @@ class AddFixtureDialog(QDialog):
         # Edits the fixture *library* (its sidecar scene banks), not the patch
         # this dialog is building — so it is unaffected by OK/Cancel.
         self.scenes_tab = FixtureScenesTab()
+        self.scenes_tab.library_changed.connect(self.library_changed)
         self.tabs.addTab(self.scenes_tab, "Scenes")
         layout.addWidget(self.tabs, 1)
         return panel
