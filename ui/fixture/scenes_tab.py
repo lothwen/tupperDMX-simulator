@@ -8,7 +8,7 @@ note 36+n selects the n-th bank, note 24+n the n-th scene inside it — so both
 orders are semantic, and this editor keeps them visible rather than flattening
 them into one list.
 
-    SCENES               ┃  SCENE NAME  [ Open white  ] [Create]
+    SCENES               ┃  SCENE NAME [Open white] [Save as new] [Create]
     ▾ ANIMATIONS      8  ┃  SONG PARTS  (INTRO)(VERSE)(CHORUS)…
        ▪ Cuadrados       ┃  ┌ SIMULATED OUTPUT ──────────────┐
        ▪ Ping Pong       ┃  │ intensity 100 %      <the real │
@@ -26,10 +26,25 @@ The tab opens on a blank **draft**: nothing is selected, the faders sit at their
 channel defaults, and the button beside the name reads "Create" — dial a look in
 and press it, and the draft becomes a scene in the target bank. Clicking a scene
 in the list loads it instead, and the button becomes "Save", which overwrites
-that one. Either way that button is the only thing that writes the sidecar; it
-is deliberately NOT the surrounding dialog's OK, because this edits the fixture
-*library*, not the patch that dialog is building. Leaving the fixture, or
-closing the dialog, with work pending asks whether to write it.
+that one. **+ New ▸ New scene** never drafts: it adds the blank scene to the
+target bank there and then, selects it and puts the cursor in its name, because
+a command called "New scene" that leaves nothing in the list until some *other*
+button is found reads as though the click was lost.
+
+Beside it, **Save as new** writes the edits as the NEXT scene instead of over
+the one they came from, which puts the original back — pick a look, change it,
+press it, repeat, and a bank of variations builds itself without ever leaving
+the editor.
+
+**The Save button carries exactly one scene: the one on the faders.** Everything
+that changes the LIST rather than a look — new, duplicate, delete, drag,
+rename a bank — is applied to the sidecar as it happens, so the button never
+speaks for work the editor isn't showing. What it does speak for is settled
+before it can be carried anywhere else: stepping onto another scene, starting
+a new one, leaving the fixture or closing the dialog all ask whether to keep
+the edits, and "No" puts the scene back the way it was written. None of this is
+the surrounding dialog's OK, because this edits the fixture *library*, not the
+patch that dialog is building.
 
 One caveat this UI cannot hide: adding, deleting or reordering a scene shifts
 the indices after it, and a saved .mid binds a scene by index. Renaming a bank
@@ -209,10 +224,12 @@ class FixtureScenesTab(QWidget):
         # The scene being composed while nothing is selected: it belongs to no
         # bank yet, which is exactly what Create is for.
         self._draft: Optional[dict] = None
+        # The selected scene as the sidecar last got it. Comparing against it is
+        # what "this scene has unsaved changes" means — a flag would have to be
+        # cleared by every path that puts a scene back, and one that forgot
+        # would leave the button lying.
+        self._baseline: Optional[dict] = None
         self._part_chips: Dict[str, _PartChip] = {}
-        # Whether `self._banks` has run ahead of the sidecar. A draft never
-        # counts — it isn't in them yet.
-        self._dirty = False
         # A bank rename has to rewrite the chases naming it, so that one edit
         # widens what the next save writes.
         self._save_chases = False
@@ -246,7 +263,7 @@ class FixtureScenesTab(QWidget):
         self.new_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.new_button)
-        menu.addAction("New scene", self._new_draft)
+        menu.addAction("New scene", self._new_scene)
         menu.addAction("New bank…", self._add_bank)
         self.new_button.setMenu(menu)
         header.addWidget(self.new_button)
@@ -291,8 +308,20 @@ class FixtureScenesTab(QWidget):
         self.name_input = QLineEdit()
         self.name_input.setObjectName("AddFxSceneName")
         self.name_input.setPlaceholderText("Unnamed scene")
-        self.name_input.editingFinished.connect(self._on_name_edited)
+        # Per keystroke, not on `editingFinished`: the button reports what the
+        # editor holds, and waiting for the field to lose focus would leave it
+        # dark over a name that has already been changed. `textEdited` is the
+        # user's typing only — `setText` from `_refresh_editor` is not an edit.
+        self.name_input.textEdited.connect(lambda _text: self._on_name_edited())
         name_row.addWidget(self.name_input, 1)
+        self.save_as_button = QPushButton("Save as new")
+        self.save_as_button.setObjectName("AddFxSceneSaveAs")
+        self.save_as_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.save_as_button.setToolTip(
+            "Write these changes as a new scene, leaving this one as it was")
+        self.save_as_button.setEnabled(False)
+        self.save_as_button.clicked.connect(self._save_as_new)
+        name_row.addWidget(self.save_as_button)
         self.save_button = QPushButton("Save")
         self.save_button.setObjectName("AddFxSceneSave")
         self.save_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -361,7 +390,8 @@ class FixtureScenesTab(QWidget):
         self._banks = {name: [dict(scene) for scene in scenes]
                        for name, scenes in (fdef.banks if fdef else {}).items()}
         self._chases = [dict(chase) for chase in (fdef.chases if fdef else [])]
-        self._clear_pending()
+        self._baseline = None
+        self._save_chases = False
         # Open on a blank scene rather than on somebody else's: the faders are
         # live from the first click, and Create is what puts them in a bank.
         self._draft = self._default_scene() if fdef else None
@@ -405,9 +435,11 @@ class FixtureScenesTab(QWidget):
                 if wanted == (bank_name, index):
                     restored = child
             parent.setExpanded(True)
-        self.tree.blockSignals(False)
         if restored is not None:
+            # Still inside the block: putting the cursor back is not the user
+            # moving it, and `_on_tree_selection` asks about unsaved work.
             self.tree.setCurrentItem(restored)
+        self.tree.blockSignals(False)
 
     def _scene_label(self, scene: dict, index: int) -> str:
         return str(scene.get("name") or f"Scene {index + 1}")
@@ -445,6 +477,9 @@ class FixtureScenesTab(QWidget):
     # ------------------------------------------------------------------
     def _on_tree_selection(self, current, _previous) -> None:
         left_a_scene = self._selected is not None
+        # Whatever is pending belongs to the scene being LEFT, which is still
+        # `self._selected` here — settle it before that name changes hands.
+        self._settle_scene_edits()
         if current is None:
             self._selected = None
         else:
@@ -455,7 +490,70 @@ class FixtureScenesTab(QWidget):
             # Stepping off a scene starts a new one. Moving between bank headers
             # doesn't: it only re-targets the draft already being composed.
             self._draft = self._default_scene()
+        scene = self._current_scene()
+        self._baseline = (dict(scene) if self._selected is not None
+                          and scene is not None else None)
         self._refresh_editor()
+
+    def _scene_dirty(self) -> bool:
+        """Whether the selected scene has edits the sidecar hasn't got. A draft
+        is never "dirty" — it is not in the banks at all; `_draft_touched`
+        answers for that one."""
+        if self._selected is None or self._baseline is None:
+            return False
+        return self._current_scene() != self._baseline
+
+    def _settle_scene_edits(self) -> None:
+        """Ask what to do with the edits on the selected scene, then do it.
+
+        Called before anything that moves the faders onto something else, and
+        before anything that writes for its own reasons — a scene's edits are
+        never carried silently onto another scene, nor swept into a save the
+        user asked for about something else.
+        """
+        if not self._scene_dirty():
+            return
+        bank, index = self._selected
+        scene = self._current_scene()
+        keep = QMessageBox.question(
+            self, "Unsaved scene",
+            f"Save the changes to '{self._scene_label(scene, index)}'?")
+        if keep == QMessageBox.StandardButton.Yes:
+            self._save()
+            return
+        # Put it back: the dict is the one the banks hold, so it is restored in
+        # place, and the row that has been following the edits is re-stamped.
+        scene.clear()
+        scene.update(self._baseline)
+        self._relabel(bank, index)
+
+    def _relabel(self, bank: str, index: int) -> None:
+        """Re-stamp one row from its scene — name, tags and swatch.
+
+        A targeted alternative to `_rebuild_tree` for the paths that keep one
+        row in step with the editor. The discard in `_settle_scene_edits` needs
+        it rather than wants it: that one runs inside `currentItemChanged`, and
+        relaying the tree there would delete the item under the signal.
+        """
+        scenes = self._banks.get(bank, [])
+        if not 0 <= index < len(scenes):
+            return
+        for row in range(self.tree.topLevelItemCount()):
+            parent = self.tree.topLevelItem(row)
+            if parent.data(0, _ROLE_BANK) != bank:
+                continue
+            item = parent.child(index)
+            if item is None:
+                return
+            scene = scenes[index]
+            parts = self._parts_of(scene)
+            self.tree.blockSignals(True)     # setText is not a rename
+            item.setText(0, self._scene_label(scene, index))
+            item.setText(1, self._parts_label(scene))
+            item.setIcon(0, self._swatch(scene))
+            item.setToolTip(1, ", ".join(parts))
+            self.tree.blockSignals(False)
+            return
 
     def _drafting(self) -> bool:
         """Whether the faders hold a scene that is in no bank yet."""
@@ -529,14 +627,18 @@ class FixtureScenesTab(QWidget):
         self._output.set_values(values)
 
     def _refresh_save_button(self) -> None:
-        """Create a draft, Save the banks. A draft is always there to be
-        created, but a pending change to the banks themselves — a delete, a
-        reorder, an edited scene — takes the button first: it is the only way
-        to write one, and it leaves the draft on the faders for the press after.
+        """Create a draft, Save the scene on the faders — and nothing else.
+
+        Changes to the list itself are already on disk by the time they show,
+        so the button is only ever offering what the editor is showing.
         """
-        offer_create = self._drafting() and not self._dirty
+        offer_create = self._drafting()
         self.save_button.setText("Create" if offer_create else "Save")
-        self.save_button.setEnabled(offer_create or self._dirty)
+        self.save_button.setEnabled(offer_create or self._scene_dirty())
+        # Branching needs something to branch FROM, and a draft is already on
+        # its way to being a new scene — Create is that.
+        self.save_as_button.setEnabled(self._selected is not None
+                                       and self._current_scene() is not None)
 
     def _refresh_status(self) -> None:
         """The line under the list: what is pending, where a new scene would
@@ -550,10 +652,10 @@ class FixtureScenesTab(QWidget):
             self.status_label.setText(
                 "Every channel is 0 — the engine skips all-zero scenes.")
             return
-        if self._dirty:
+        if self._scene_dirty():
             self.status_label.setText(
-                "Unsaved changes — press Save to write them to the fixture's "
-                ".tdmx.json.")
+                f"Unsaved changes to '{self._scene_label(scene, self._selected[1])}'"
+                " — press Save to write them to the fixture's .tdmx.json.")
             return
         if self._drafting():
             self.status_label.setText(
@@ -582,9 +684,11 @@ class FixtureScenesTab(QWidget):
         scene[self._fdef.channels[index].field] = value
         self._refresh_output(self._scene_values(scene))
         if not self._drafting():
-            self._mark_dirty()
+            self._refresh_save_button()
+            self._refresh_status()
 
     def _on_name_edited(self) -> None:
+        """The typed name, into the scene, the row and the button — live."""
         scene = self._current_scene()
         if scene is None:
             return
@@ -597,8 +701,9 @@ class FixtureScenesTab(QWidget):
             scene.pop("name", None)
         if self._drafting():
             return          # nothing in the tree to relabel yet
-        self._mark_dirty()
-        self._rebuild_tree()
+        self._relabel(*self._selected)
+        self._refresh_save_button()
+        self._refresh_status()
 
     def _on_song_parts_changed(self) -> None:
         scene = self._current_scene()
@@ -611,8 +716,9 @@ class FixtureScenesTab(QWidget):
             scene.pop("song_parts", None)
         if self._drafting():
             return
-        self._mark_dirty()
-        self._rebuild_tree()
+        self._relabel(*self._selected)
+        self._refresh_save_button()
+        self._refresh_status()
 
     def _on_item_renamed(self, item: QTreeWidgetItem, column: int) -> None:
         """An inline edit in the tree renames a bank or a scene."""
@@ -628,10 +734,23 @@ class FixtureScenesTab(QWidget):
         else:
             bank = self._banks.get(item.data(0, _ROLE_BANK), [])
             if 0 <= index < len(bank):
+                # Editing the row IS editing the scene the faders are on — Qt
+                # made it current to start the edit — so this is a scene edit
+                # like any other, and the button picks it up.
                 bank[index]["name"] = text or f"Scene {index + 1}"
-                self._mark_dirty()
                 self._refresh_editor()
 
+    # ------------------------------------------------------------------
+    # The list itself
+    #
+    # Adding, copying, deleting, reordering and renaming all change what MIDI
+    # addresses, show in the list the moment they are done, and are not what
+    # the Save button is about — so each one writes as it happens. Those that
+    # can run with an edited scene on the faders settle it first, so their
+    # write never sweeps up a pending edit (and `_settle_scene_edits` asks
+    # nothing unless there is one). The bank-level ones cannot: a bank header
+    # is the current item there, so no scene is selected.
+    # ------------------------------------------------------------------
     def _rename_bank(self, old: str, new: str) -> None:
         """Rename a bank, following through into the chases that name it.
 
@@ -656,8 +775,9 @@ class FixtureScenesTab(QWidget):
         if self._selected and self._selected[0] == old:
             self._selected = (new, self._selected[1])
         self._save_chases = True
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
+        self._refresh_editor()
 
     def _add_bank(self) -> None:
         if self._fdef is None:
@@ -670,9 +790,10 @@ class FixtureScenesTab(QWidget):
             QMessageBox.warning(self, "New bank",
                                 f"A bank called '{name}' already exists.")
             return
+        self._settle_scene_edits()
         self._banks[name] = []
         self._selected = None
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -684,15 +805,29 @@ class FixtureScenesTab(QWidget):
             return item.data(0, _ROLE_BANK)
         return next(iter(self._banks), DEFAULT_BANK_NAME)
 
-    def _new_draft(self) -> None:
-        """Start a blank scene: the faders drop back to their defaults and the
-        button offers to Create what gets dialled in."""
+    def _new_scene(self) -> None:
+        """Add a blank scene to the target bank and select it for editing.
+
+        Unlike the draft the tab opens on, this one exists from the click: it
+        is in the list, in a bank, in the sidecar, and its name is focused so
+        it can be typed over. What the Save button then carries is the look
+        dialled into it, which is all it ever carries.
+        """
         if self._fdef is None:
             return
-        self.tree.setCurrentItem(None)     # -> _on_tree_selection, if anything
-        self._selected = None              #    was selected; force it either way
-        self._draft = self._default_scene()
+        self._settle_scene_edits()
+        bank = self._target_bank()
+        scenes = self._banks.setdefault(bank, [])
+        scene = self._default_scene()
+        scene["name"] = f"Scene {len(scenes) + 1}"
+        scenes.append(scene)
+        self._selected = (bank, len(scenes) - 1)
+        self._draft = None
+        self._save()
+        self._rebuild_tree()
         self._refresh_editor()
+        self.name_input.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.name_input.selectAll()
 
     def _create(self) -> None:
         """Turn the draft on the faders into a real scene in its target bank."""
@@ -705,15 +840,45 @@ class FixtureScenesTab(QWidget):
         scenes.append(scene)
         self._selected = (bank, len(scenes) - 1)
         self._draft = None
-        self._dirty = True
         self._save()
         self._rebuild_tree()
         self._refresh_editor()
+
+    def _save_as_new(self) -> None:
+        """Write what is on the faders as a NEW scene, next to the one it came
+        from, and put that one back the way it was written.
+
+        The template loop: the edits become the new scene rather than an
+        overwrite, so building a bank of variations never needs a Duplicate, a
+        re-select and a second round of dialling.
+        """
+        if self._fdef is None or self._selected is None or self._baseline is None:
+            return
+        bank, index = self._selected
+        scenes = self._banks.get(bank, [])
+        if not 0 <= index < len(scenes):
+            return
+        scene = dict(scenes[index])              # the edits, name and all
+        if scene.get("name", "") == self._baseline.get("name", ""):
+            # Not renamed on the way through, so name it for its source the
+            # way Duplicate does rather than leaving the bank with two of them.
+            scene["name"] = f"{self._scene_label(self._baseline, index)} copy"
+        scenes[index] = dict(self._baseline)     # the original, untouched
+        scenes.insert(index + 1, scene)
+        # Selecting the new one is what makes the loop work: the next branch
+        # comes off this scene, so repeats come out in the order they were made.
+        self._selected = (bank, index + 1)
+        self._save()
+        self._rebuild_tree()
+        self._refresh_editor()
+        self.name_input.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.name_input.selectAll()
 
     def _duplicate(self) -> None:
         item = self.tree.currentItem()
         if item is None:
             return
+        self._settle_scene_edits()
         bank = item.data(0, _ROLE_BANK)
         index = item.data(0, _ROLE_INDEX)
         if index is None:
@@ -726,7 +891,7 @@ class FixtureScenesTab(QWidget):
         copy["name"] = f"{self._scene_label(copy, index)} copy"
         scenes.insert(index + 1, copy)
         self._selected = (bank, index + 1)
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -740,7 +905,7 @@ class FixtureScenesTab(QWidget):
             name, suffix = f"{bank} copy {suffix}", suffix + 1
         self._banks[name] = [dict(scene) for scene in scenes]
         self._selected = None
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -756,9 +921,15 @@ class FixtureScenesTab(QWidget):
         scenes = self._banks.get(bank, [])
         if not 0 <= index < len(scenes):
             return
+        if QMessageBox.question(
+                self, "Delete scene",
+                f"Delete '{self._scene_label(scenes[index], index)}'?") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        # No settling: whatever was pending on it goes with it.
         del scenes[index]
         self._selected = (bank, min(index, len(scenes) - 1)) if scenes else None
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -777,7 +948,7 @@ class FixtureScenesTab(QWidget):
             return
         del self._banks[bank]
         self._selected = None
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -789,11 +960,12 @@ class FixtureScenesTab(QWidget):
         36+n the n-th bank), so a drag here re-binds notes — the same as adding
         or deleting one does.
         """
+        self._settle_scene_edits()
         if source_index < 0:
             self._move_bank(source_bank, position)
         else:
             self._move_scene(source_bank, source_index, target_bank, position)
-        self._mark_dirty()
+        self._save()
         self._rebuild_tree()
         self._refresh_editor()
 
@@ -826,8 +998,8 @@ class FixtureScenesTab(QWidget):
     # Persistence
     # ------------------------------------------------------------------
     def _on_save_clicked(self) -> None:
-        """The one button: Create the draft, or Save what the banks are owed."""
-        if self._drafting() and not self._dirty:
+        """The button: Create the draft, or Save the scene it is showing."""
+        if self._drafting():
             self._create()
         else:
             self._save()
@@ -840,32 +1012,20 @@ class FixtureScenesTab(QWidget):
     def save_pending_changes(self) -> None:
         """Settle unsaved work on the way out — to another fixture, or out of
         the dialog. Without an autosave, leaving quietly would drop it."""
-        drafted = self._draft_touched()
-        if self._fdef is None or not (self._dirty or drafted):
+        if self._fdef is None:
             return
-        answer = QMessageBox.question(
-            self, "Unsaved scenes",
-            f"Save the scene changes to '{self._type_name}'?")
-        if answer != QMessageBox.StandardButton.Yes:
-            self._clear_pending()
-        elif drafted:
-            # Writes the banks wholesale, so this covers a dirty one too.
-            self._create()
-        else:
-            self._save()
-
-    def _mark_dirty(self) -> None:
-        """Record that the in-memory banks have run ahead of the sidecar."""
-        if self._dirty:
+        if self._draft_touched():
+            # A draft is in no bank yet, so there is nothing to put back and
+            # nothing in the list to keep: it is created, or it is dropped.
+            answer = QMessageBox.question(
+                self, "Unsaved scene",
+                f"Add the new scene to '{self._type_name}'?")
+            if answer == QMessageBox.StandardButton.Yes:
+                self._create()
+            else:
+                self._draft = self._default_scene()
             return
-        self._dirty = True
-        self._refresh_save_button()
-        self._refresh_status()
-
-    def _clear_pending(self) -> None:
-        self._dirty = False
-        self._save_chases = False
-        self._refresh_save_button()
+        self._settle_scene_edits()
 
     def _save(self) -> None:
         """Write the banks through to the type's sidecar.
@@ -887,7 +1047,13 @@ class FixtureScenesTab(QWidget):
         if path is None:
             self.status_label.setText("Could not save — see the log.")
             return
-        self._clear_pending()
+        # The sidecar now holds what the selected scene holds: that is the new
+        # baseline, and so the button goes quiet.
+        scene = self._current_scene()
+        self._baseline = (dict(scene) if self._selected is not None
+                          and scene is not None else None)
+        self._save_chases = False
+        self._refresh_save_button()
         self._refresh_status()
         self.library_changed.emit()
 
