@@ -228,9 +228,12 @@ def test_cue_fires_the_resolved_favorite():
             "no show, no cues — favourites are show content, and prefs no "
             "longer carry a set to fall back on")
 
-    _attach_show(window, config, [clips.note_ref("ledbar", "", 73, 127)])
+    # Note 5 is one of ledbar's own channel verbs ("Effect"): the ref names the
+    # fixture by TYPE and the MIDI channel comes from the patch, so what is
+    # asserted here is the resolution, not a stored payload.
+    _attach_show(window, config, [clips.note_ref("ledbar", "", 5, 127)])
     manager._execute({"action": "cue", "index": 0})
-    _assert(window.calls == [("preview", [(0, 73, 127)])],
+    _assert(window.calls == [("preview", [(0, 5, 127)])],
             "cue fires the favourite resolved against the current patch")
 
     window.calls.clear()

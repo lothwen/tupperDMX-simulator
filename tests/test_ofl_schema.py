@@ -138,9 +138,13 @@ def test_bank_scenes_only_reference_real_channels():
         # A fine byte is a channel key too: it takes a DMX slot of its own, and
         # a mode that uses one expects every scene to carry it (load_scenes
         # skips a scene missing any of the mode's fields).
+        # Resolving the modes is what expands a matrix insert's
+        # `templateChannels` into the per-pixel keys ("Red 1"...) a matrix
+        # mode's scenes are keyed by; they are in no `availableChannels`.
         known = set(fixture.available_channels) | {
             alias for channel in fixture.available_channels.values()
-            for alias in channel.fine_aliases}
+            for alias in channel.fine_aliases} | {
+            slot.key for mode in fixture.modes for slot in mode.channels}
         for mode_name, extras in sidecar.modes.items():
             for bank, scenes in extras.banks.items():
                 stray = {key for scene in scenes for key in scene} - known - metadata
