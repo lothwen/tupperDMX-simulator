@@ -5,6 +5,8 @@ These are imported (and re-exported) by ``midi/manager.py`` so existing
 keep resolving, and shared by the MidiDocument / editor collaborators.
 """
 
+from core import note_layout
+
 # Identification of BLACKOUT events is by part-name PREFIX (case-insensitive),
 # not by note number — keeps it config-driven and lets each fixture have its
 # own gap marker (BLACKOUT for ledbar, BLACKOUT_BLINDERS for blinders, ...).
@@ -57,13 +59,11 @@ FADE_VELOCITY_MATCH_TOLERANCE = 2
 # the data-driven library def — there is no hardcoded channel list.
 DEFAULT_FIXTURE_TYPE = "ledbar"
 
-# Notes whose velocity carries a value rather than gating a note on/off:
-# the generalized note map's channel sets (1-23) and scene loaders (24-35).
-# A velocity of 0 on these is a real value ("set channel to 0" / "instant
-# blend"), so the codec must admit them instead of treating velocity 0 as a
-# note_off. (Superset of the per-fixture channel-control notes — 1..channel_count
-# — used by the scene-clustering heuristic.)
-VALUE_BEARING_NOTES = frozenset(range(1, 36))
+# Which notes carry a value in velocity is a property of the NOTE PROTOCOL, so
+# it is defined once in core.note_layout and re-exported here for the codec and
+# for `from midi.manager import ...` callers. The timeline asks note_layout
+# directly — it never imports this subsystem.
+VALUE_BEARING_NOTES = note_layout.VALUE_BEARING_NOTES
 
 # Song-part marker notes (INTRO..END). These are GLOBAL verbs: the software
 # controller dispatches them channel-agnostically (they reset every fixture —

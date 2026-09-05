@@ -54,7 +54,7 @@ is safe (the chases naming it are rewritten to follow).
 from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
     QLineEdit, QMenu, QMessageBox, QPushButton, QToolButton, QTreeWidget,
@@ -71,7 +71,8 @@ from ui.widgets.chips import flow_holder
 from ui.fixture.console import (  # noqa: F401  (re-exported)
     ChannelFader, FaderSlider as _FaderSlider, FaderStrip, OutputCard,
     ScenePreview, capability_rows as _capability_rows, clamp as _clamp,
-    colour_text as _colour_text, escape as _escape, scene_values,
+    PartChip as _PartChip, colour_text as _colour_text, escape as _escape,
+    scene_swatch, scene_values,
     strobe_text as _strobe_text, summary_html as _summary_html,
 )
 from tupperlogger import get_logger
@@ -84,48 +85,6 @@ DEFAULT_BANK_NAME = "SCENES"
 # without a parallel index.
 _ROLE_BANK = Qt.ItemDataRole.UserRole
 _ROLE_INDEX = Qt.ItemDataRole.UserRole + 1
-
-
-# --- song-part tags -----------------------------------------------------------
-
-class _PartChip(QLabel):
-    """One song-part tag: a chip you click, not a button.
-
-    A label rather than a checkable QPushButton because that is what these are
-    — tags — and a button carries chrome a tag shouldn't: its own minimum size
-    and the pressed/raised look every other button in the dialog has. The state
-    rides on a `checked` property, which is how the stylesheet reaches it (a
-    label has no `:checked` pseudo-state).
-    """
-
-    clicked = pyqtSignal()
-
-    def __init__(self, text: str, parent=None):
-        super().__init__(text, parent)
-        self.setObjectName("AddFxSongPart")
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._checked = False
-        self.setProperty("checked", "false")
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setChecked(self, checked: bool) -> None:
-        if checked == self._checked:
-            return
-        self._checked = checked
-        self.setProperty("checked", "true" if checked else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def mousePressEvent(self, event):
-        # A disabled widget never gets here, so there is nothing to guard.
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.setChecked(not self._checked)
-            self.clicked.emit()
-            return
-        super().mousePressEvent(event)
 
 
 # --- the scene list -----------------------------------------------------------
@@ -401,6 +360,18 @@ class FixtureScenesTab(QWidget):
         self._rebuild_tree()
         self._refresh_editor()
 
+    def refresh_chases(self, fdef: Optional[FixtureDef]) -> None:
+        """Re-read the chases from `fdef` — the Chases tab has just rewritten
+        them on disk.
+
+        Only the chases: the banks here may be carrying an unsaved edit, and
+        the chase editor never touches them. This copy exists solely so a bank
+        rename can follow through into the chases naming it, so a stale one
+        would put the old names back the next time one is renamed.
+        """
+        self._chases = [dict(chase) for chase in (fdef.chases if fdef else [])]
+        self._save_chases = False
+
     def set_dmx_start(self, dmx_start: int) -> None:
         """Re-stamp the fader addresses against a new DMX start."""
         self._dmx_start = dmx_start
@@ -461,16 +432,7 @@ class FixtureScenesTab(QWidget):
 
     def _swatch(self, scene: dict):
         """A chip of the colour this scene resolves to, painted by the engine."""
-        pixmap = QPixmap(10, 10)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        state = self._resolve(self._scene_values(scene))
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor("#4a4a4a"))
-        painter.setBrush(QColor(*state.scaled_rgb()) if state else QColor("#2a2a2a"))
-        painter.drawRoundedRect(0, 0, 9, 9, 2, 2)
-        painter.end()
-        return QIcon(pixmap)
+        return QIcon(scene_swatch(self._fdef, scene))
 
     # ------------------------------------------------------------------
     # Selection + the editor's state

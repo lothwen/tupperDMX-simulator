@@ -270,6 +270,28 @@ def test_channel_clip_drops_only_on_its_own_fixture():
             "landing on the ledbar's own channel")
 
 
+def test_a_value_bearing_clip_keeps_its_velocity_of_zero():
+    """A dropped clip's velocity is floored at 1 so a plain verb's note_on is
+    never mistaken for a note_off — but on a value-bearing note the velocity IS
+    the value. Flooring it put every "first chase" clip onto the SECOND chase,
+    and made a fixture with only one chase undroppable."""
+    print("test_a_value_bearing_clip_keeps_its_velocity_of_zero")
+    m, tl = _make()
+    y_blinder = tl._midi_track_y(1) + 5
+
+    _assert(tl.handle_clip_drop(note_layout.CHASE_LOAD, 0, 100.0, y_blinder),
+            "a clip for the FIRST chase (velocity 0) is accepted")
+    _assert(_event(m, note_layout.CHASE_LOAD)["velocity"] == 0,
+            "and lands at velocity 0 — chase index 0, not chase index 1")
+
+    m2, tl2 = _make()
+    tl2.handle_clip_drop(note_layout.BLACKOUT_FIXTURE, 0, 100.0,
+                         tl2._midi_track_y(1) + 5)
+    _assert(_event(m2, note_layout.BLACKOUT_FIXTURE)["velocity"] == 1,
+            "a plain verb still floors at 1, so its note_on can never read "
+            "back as a note_off")
+
+
 def test_channel_clips_read_their_slot_number():
     """A channel clip on the timeline names the channel AND the slot it drives:
     the shipped blinder repeats "Cold White" on channels 2 and 3, so the name
@@ -903,6 +925,7 @@ def main():
     test_timeline_spans_the_longest_track()
     test_blackout_scoped_to_its_fixture()
     test_channel_clip_drops_only_on_its_own_fixture()
+    test_a_value_bearing_clip_keeps_its_velocity_of_zero()
     test_channel_clips_read_their_slot_number()
     test_display_order_by_dmx_binding_by_channel()
     test_saved_row_outranks_the_dmx_address()

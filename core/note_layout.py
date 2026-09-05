@@ -56,6 +56,18 @@ FIXTURE_SETUP = 71               # per-track setup flags packed in velocity
                                  # returns None so it never renders as a clip.
 COLOR_MACRO_BASE = 72            # 72-75 WHITE/ORANGE/CYAN/PINK
 
+# Notes whose VELOCITY carries a value rather than gating the note on/off: the
+# channel sets (1-23, value*2), the scene loaders (24-35, the blend time) and
+# CHASE_LOAD (the chase index). A velocity of 0 on these is a real value — "set
+# this channel to 0", "blend instantly", "the FIRST chase" — so nothing may
+# treat it as the note_off it would be on any other note. Two things ask:
+# `midi.codec` when it reads a .mid, and the timeline when it takes a drop.
+#
+# CHASE_LOAD is here because a fixture with ONE chase can only ever address it
+# as index 0; without this its chase clip is unauthorable and unreadable.
+VALUE_BEARING_NOTES = frozenset(
+    range(CHANNEL_OFFSET_RANGE[0], SCENE_LOAD_RANGE[1] + 1)) | {CHASE_LOAD}
+
 # Ordered names (match handle_note_on's SONG_PARTS / colour-macro cases).
 SONG_PARTS = ['INTRO', 'VERSE', 'CHORUS', 'BREAK', 'BRIDGE',
               'INST', 'SOLO', 'OUTRO', 'END']

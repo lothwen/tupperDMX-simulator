@@ -27,7 +27,7 @@ Qt-facing only: what a channel *means* comes from `core.channel_families` and
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from PyQt6.QtCore import QPointF, QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QLinearGradient, QPainter
+from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QScrollArea,
     QSizePolicy, QSlider, QStyle, QStyleOptionSlider, QVBoxLayout, QWidget,
@@ -638,6 +638,49 @@ class OutputCard(QWidget):
         self.summary_label.setText("")
 
 
+class PartChip(QLabel):
+    """One song-part tag: a chip you click, not a button.
+
+    Shared by the Scenes and Chases tabs — a scene and a chase are tagged the
+    same way, because `note_layout.song_part_refs` reads the same key off both.
+
+    A label rather than a checkable QPushButton because that is what these are
+    — tags — and a button carries chrome a tag shouldn't: its own minimum size
+    and the pressed/raised look every other button in the dialog has. The state
+    rides on a `checked` property, which is how the stylesheet reaches it (a
+    label has no `:checked` pseudo-state).
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("AddFxSongPart")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._checked = False
+        self.setProperty("checked", "false")
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:
+        if checked == self._checked:
+            return
+        self._checked = checked
+        self.setProperty("checked", "true" if checked else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):
+        # A disabled widget never gets here, so there is nothing to guard.
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setChecked(not self._checked)
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+
 # --- values -------------------------------------------------------------------
 
 def clamp(value) -> int:
@@ -664,6 +707,26 @@ def scene_values(fdef: Optional[FixtureDef],
         return [0] * fdef.channel_count
     return [clamp(scene.get(spec.field, spec.default_value))
             for spec in fdef.channels]
+
+
+def scene_swatch(fdef: Optional[FixtureDef], scene: Optional[dict],
+                 size: int = 10):
+    """A chip of the colour `scene` resolves to, painted by the engine.
+
+    Shared so a scene reads the same colour wherever it is listed — the Scenes
+    tab's tree and the Chases tab's step rows both name the same look.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    values = scene_values(fdef, scene)
+    state = resolve_state(fdef, values) if fdef is not None and values else None
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QColor("#4a4a4a"))
+    painter.setBrush(QColor(*state.scaled_rgb()) if state else QColor("#2a2a2a"))
+    painter.drawRoundedRect(0, 0, size - 1, size - 1, 2, 2)
+    painter.end()
+    return pixmap
 
 
 def values_to_fields(fdef: Optional[FixtureDef],

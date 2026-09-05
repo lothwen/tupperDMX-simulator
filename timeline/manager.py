@@ -1980,7 +1980,12 @@ class Timeline(QWidget):
         if not self.can_accept_clip_drop(note, scene_y, fixture_type):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
-        clamped_velocity = max(1, min(127, int(velocity)))
+        # Velocity 0 is floored to 1 so a plain verb's note_on is never mistaken
+        # for a note_off — but on a value-bearing note the velocity IS the
+        # value, and flooring it silently drops a chase clip onto the SECOND
+        # chase (or a channel set onto 2 instead of 0).
+        floor = 0 if note in note_layout.VALUE_BEARING_NOTES else 1
+        clamped_velocity = max(floor, min(127, int(velocity)))
         # Song parts stay global (channel=None) and land on the waveform
         # arrangement overlay; fixture notes land on the exact fixture instance
         # they were dropped on.

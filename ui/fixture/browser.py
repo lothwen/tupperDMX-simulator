@@ -8,8 +8,9 @@ by *manufacturer* (the folder a definition lives in, see
 where a fixture legitimately belongs to several groups at once). The detail
 panel renders the OFL document — physical data, metadata, links, the channel
 layout of the selected mode, and every mode the fixture declares — plus the
-Scenes tab (`ui/fixture_scenes_tab.py`), which edits the type's sidecar scene
-banks rather than the patch.
+Scenes tab (`ui/fixture/scenes_tab.py`) and the Chases tab
+(`ui/fixture/chases_tab.py`), which edit the type's sidecar scene banks and the
+chases over them rather than the patch.
 
 The footer is the actual patch decision: where in the universe the fixture lands
 and which MIDI channel drives it. Both are validated live against the current
@@ -37,6 +38,7 @@ from core.fixture_library import (
 from core.channel_families import channel_family as _channel_family
 from ui.widgets.chips import FlowLayout, chip as _chip
 from ui.widgets.sizing import fit_to_screen
+from ui.fixture.chases_tab import FixtureChasesTab
 from ui.fixture.scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -535,13 +537,35 @@ class AddFixtureDialog(QDialog):
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_channels_tab(), "Channels")
         self.tabs.addTab(self._build_modes_tab(), "Modes")
-        # Edits the fixture *library* (its sidecar scene banks), not the patch
-        # this dialog is building — so it is unaffected by OK/Cancel.
+        # These two edit the fixture *library* (its sidecar scene banks and the
+        # chases over them), not the patch this dialog is building — so they are
+        # unaffected by OK/Cancel. They also share a sidecar, and each holds its
+        # own copy of it, so a write by either hands the other a fresh
+        # definition before it can save a stale one back over the top.
         self.scenes_tab = FixtureScenesTab()
-        self.scenes_tab.library_changed.connect(self.library_changed)
+        self.chases_tab = FixtureChasesTab()
+        self.scenes_tab.library_changed.connect(
+            lambda: self._on_library_changed(self.scenes_tab))
+        self.chases_tab.library_changed.connect(
+            lambda: self._on_library_changed(self.chases_tab))
         self.tabs.addTab(self.scenes_tab, "Scenes")
+        self.tabs.addTab(self.chases_tab, "Chases")
         layout.addWidget(self.tabs, 1)
         return panel
+
+    def _on_library_changed(self, writer: QWidget) -> None:
+        """One of the library tabs wrote the sidecar: re-read it into the other.
+
+        The Scenes tab rewrites the chases naming a renamed bank, and the
+        Chases tab is the authority on everything else in them — so whichever
+        did not write is now holding a stale copy of the half it doesn't own.
+        """
+        fdef = self._current_def()
+        if writer is not self.scenes_tab:
+            self.scenes_tab.refresh_chases(fdef)
+        if writer is not self.chases_tab:
+            self.chases_tab.reload(fdef)
+        self.library_changed.emit()
 
     def _add_stat(self, layout: QHBoxLayout, title: str) -> QLabel:
         block = QVBoxLayout()
@@ -811,7 +835,7 @@ class AddFixtureDialog(QDialog):
             card.style().polish(card)
         self._populate_channels()
         self._populate_stats()
-        self._populate_scenes()
+        self._populate_library_tabs()
         self._on_patch_changed()
 
     def _current_def(self) -> Optional[FixtureDef]:
@@ -865,14 +889,16 @@ class AddFixtureDialog(QDialog):
         self._populate_modes()
         self._populate_channels()
         self._populate_stats()
-        self._populate_scenes()
+        self._populate_library_tabs()
 
-    def _populate_scenes(self) -> None:
-        """Point the Scenes tab at the type + mode now on screen. The channel
-        set — and so every scene value — depends on the mode, so this follows
-        both."""
-        self.scenes_tab.set_fixture(self._entry.key if self._entry else "",
-                                    self._current_def(), self.dmx_spin.value())
+    def _populate_library_tabs(self) -> None:
+        """Point the Scenes and Chases tabs at the type + mode now on screen.
+        The channel set — and so every scene value, and every step naming one —
+        depends on the mode, so this follows both."""
+        key = self._entry.key if self._entry else ""
+        fdef = self._current_def()
+        self.scenes_tab.set_fixture(key, fdef, self.dmx_spin.value())
+        self.chases_tab.set_fixture(key, fdef)
 
     def _populate_stats(self) -> None:
         fdef = self._current_def()
@@ -1048,10 +1074,13 @@ class AddFixtureDialog(QDialog):
         return (key, self.dmx_spin.value(), self.channel_spin.value(), mode)
 
     def done(self, result: int) -> None:
-        # Scene edits are library edits, so neither button here decides their
-        # fate: an unsaved one asks on the way out, whichever closed the dialog.
+        # Scene and chase edits are library edits, so neither button here
+        # decides their fate: an unsaved one asks on the way out, whichever
+        # closed the dialog.
         self.scenes_tab.save_pending_changes()
+        self.chases_tab.save_pending_changes()
         self.scenes_tab.preview.clear()
+        self.chases_tab.preview.clear()
         super().done(result)
 
 

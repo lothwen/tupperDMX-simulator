@@ -69,10 +69,10 @@ addressing come only from the OFL document. That is what keeps saved .mid files
 Writing
 -------
 The scene editor edits `banks` (and, when a bank is renamed, the `chases` that
-name it) and nothing else. It therefore round-trips the *raw* JSON rather than
-re-serialising a parsed `Sidecar`: anything this parser doesn't model — a key
-from a newer version, a comment field someone added by hand — survives an edit
-untouched.
+name it); the chase editor edits `chases` and nothing else. Both round-trip the
+*raw* JSON rather than re-serialising a parsed `Sidecar`: anything this parser
+doesn't model — a key from a newer version, a comment field someone added by
+hand — survives an edit untouched, and so does the half the other editor owns.
 """
 
 import copy
@@ -233,13 +233,16 @@ def banks_mode_key(document: Any, mode_name: str, single_mode: bool) -> str:
     return ANY_MODE if single_mode else mode_name
 
 
-def apply_banks(document: Any, mode_key: str, banks: Mapping[str, List[dict]],
+def apply_banks(document: Any, mode_key: str,
+                banks: Optional[Mapping[str, List[dict]]] = None,
                 chases: Optional[List[dict]] = None) -> dict:
     """A copy of a raw sidecar document with `banks` replaced in `mode_key`.
 
-    `chases` is written only when given (a bank rename has to follow through
-    into the chases naming it). An empty bank set drops the key rather than
-    writing `"banks": {}`.
+    Each half is written only when given, so one editor can rewrite the chases
+    without speaking for the banks (and vice versa) — the Scenes and Chases tabs
+    hold their own copies of the block, and a write that carried both would
+    undo whatever the other tab had just done. An empty bank set drops the key
+    rather than writing `"banks": {}`; likewise an empty chase list.
     """
     result = copy.deepcopy(document) if isinstance(document, dict) else {}
     result.setdefault("tdmx", SIDECAR_VERSION)
@@ -250,10 +253,12 @@ def apply_banks(document: Any, mode_key: str, banks: Mapping[str, List[dict]],
     if not isinstance(block, dict):
         block = modes[mode_key] = {}
 
-    if banks:
-        block["banks"] = {str(name): list(scenes) for name, scenes in banks.items()}
-    else:
-        block.pop("banks", None)
+    if banks is not None:
+        if banks:
+            block["banks"] = {str(name): list(scenes)
+                              for name, scenes in banks.items()}
+        else:
+            block.pop("banks", None)
 
     if chases is not None:
         if chases:

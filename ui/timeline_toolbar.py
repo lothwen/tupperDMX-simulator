@@ -1,13 +1,14 @@
 from typing import Optional
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox,
-                             QComboBox, QSlider, QButtonGroup, QFrame, QSizePolicy)
+                             QComboBox, QSlider, QFrame, QSizePolicy)
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
 from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
 from ui.widgets import icons
+from ui.widgets.segmented import Segment, segmented
 from ui.widgets.toggle_switch import ToggleSwitch
 
 
@@ -247,28 +248,9 @@ class TimelineToolbar(QWidget):
         row.addWidget(self.beat_combo)
 
         # Bars | Time segmented toggle
-        bars_time = QButtonGroup(self)
-        bars_time.setExclusive(True)
-        bars_btn = QPushButton("Bars")
-        bars_btn.setObjectName("TTSegment")
-        bars_btn.setProperty("seg", "left")
-        bars_btn.setCheckable(True)
-        bars_btn.setChecked(True)
-        time_btn = QPushButton("Time")
-        time_btn.setObjectName("TTSegment")
-        time_btn.setProperty("seg", "right")
-        time_btn.setCheckable(True)
-        bars_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("bars"))
-        time_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("time"))
-        bars_time.addButton(bars_btn)
-        bars_time.addButton(time_btn)
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        seg.addWidget(bars_btn)
-        seg.addWidget(time_btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
+        seg_wrap, _buttons = segmented(
+            [Segment("bars", "Bars"), Segment("time", "Time")],
+            on_pick=self.ruler_mode_changed.emit, checked="bars", parent=self)
         row.addWidget(seg_wrap)
 
         row.addWidget(self._separator())
@@ -347,35 +329,19 @@ class TimelineToolbar(QWidget):
         # Editor monitor: which track you HEAR (and see as the waveform).
         # BACKING = the live master; GUIDE = the song's full-mix reference.
         # Session-only — live surfaces always play the backing.
-        self.monitor_backing_btn = QPushButton("BACKING")
-        self.monitor_backing_btn.setObjectName("TTSegment")
-        self.monitor_backing_btn.setProperty("seg", "left")
-        self.monitor_backing_btn.setCheckable(True)
-        self.monitor_backing_btn.setChecked(True)
-        self.monitor_backing_btn.setToolTip("Monitor the backing track (the live master)")
-        self.monitor_guide_btn = QPushButton("GUIDE")
-        self.monitor_guide_btn.setObjectName("TTSegment")
-        self.monitor_guide_btn.setProperty("seg", "right")
+        seg_wrap, monitor_buttons = segmented(
+            [Segment(MONITOR_BACKING, "BACKING",
+                     "Monitor the backing track (the live master)"),
+             Segment(MONITOR_GUIDE, "GUIDE",
+                     "Monitor the guide track (full-mix design reference; "
+                     "never played live)")],
+            on_pick=self.monitor_changed.emit, checked=MONITOR_BACKING,
+            parent=self)
+        self.monitor_backing_btn = monitor_buttons[MONITOR_BACKING]
+        self.monitor_guide_btn = monitor_buttons[MONITOR_GUIDE]
         self.monitor_guide_btn.setProperty("monitor", "guide")
-        self.monitor_guide_btn.setCheckable(True)
+        # Enabled by set_monitor_state once a song declares a guide.
         self.monitor_guide_btn.setEnabled(False)
-        self.monitor_guide_btn.setToolTip(
-            "Monitor the guide track (full-mix design reference; never played live)")
-        monitor_group = QButtonGroup(self)
-        monitor_group.setExclusive(True)
-        monitor_group.addButton(self.monitor_backing_btn)
-        monitor_group.addButton(self.monitor_guide_btn)
-        self.monitor_backing_btn.clicked.connect(
-            lambda: self.monitor_changed.emit(MONITOR_BACKING))
-        self.monitor_guide_btn.clicked.connect(
-            lambda: self.monitor_changed.emit(MONITOR_GUIDE))
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        seg.addWidget(self.monitor_backing_btn)
-        seg.addWidget(self.monitor_guide_btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
         row.addWidget(seg_wrap)
 
         return zone
@@ -404,39 +370,11 @@ class TimelineToolbar(QWidget):
         row.addWidget(rows_label)
 
         # S / M / L segmented preset for fixture-track height
-        self.rows_group = QButtonGroup(self)
-        self.rows_group.setExclusive(True)
-        self._row_buttons = {}
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        labels = ("S", "M", "L")
-        for i, label in enumerate(labels):
-            btn = QPushButton(label)
-            btn.setObjectName("TTSegment")
-            # Round only the outer corners of the segmented control.
-            if i == 0:
-                btn.setProperty("seg", "left")
-            elif i == len(labels) - 1:
-                btn.setProperty("seg", "right")
-            btn.setCheckable(True)
-            btn.setProperty("rows", "true")
-            if label == "M":
-                btn.setChecked(True)
-            if label == "S":
-                # "S" collapses every lane to a single header row (the smallest
-                # possible row) rather than picking a height preset.
-                btn.setToolTip("Collapse all tracks")
-                btn.clicked.connect(lambda _checked: self.collapse_all_requested.emit())
-            else:
-                height = self.ROW_HEIGHT_PRESETS[label]
-                btn.clicked.connect(
-                    lambda _checked, h=height: self.row_height_changed.emit(h))
-            self.rows_group.addButton(btn)
-            self._row_buttons[label] = btn
-            seg.addWidget(btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
+        seg_wrap, self._row_buttons = segmented(
+            [Segment("S", "S", "Collapse all tracks"),
+             Segment("M", "M"), Segment("L", "L")],
+            on_pick=self._pick_row_preset, checked="M", compact=True,
+            parent=self)
         row.addWidget(seg_wrap)
 
         row.addWidget(self._separator())
@@ -504,6 +442,14 @@ class TimelineToolbar(QWidget):
         self.zoom_slider.blockSignals(True)
         self.zoom_slider.setValue(value)
         self.zoom_slider.blockSignals(False)
+
+    def _pick_row_preset(self, label: str) -> None:
+        """"S" collapses every lane to a single header row (the smallest row
+        there is) rather than picking a height preset; M and L are heights."""
+        if label == "S":
+            self.collapse_all_requested.emit()
+        else:
+            self.row_height_changed.emit(self.ROW_HEIGHT_PRESETS[label])
 
     def set_row_height(self, height: int) -> None:
         """Check the M/L segment whose preset is closest to `height` (used on

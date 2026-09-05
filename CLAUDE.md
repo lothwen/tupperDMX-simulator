@@ -222,7 +222,9 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   shipped, `userprefs_dir()/fixtures/`, the open show's — later overriding by key, memoized, **sidecars never crossing
   layers**. **No summarised channel description, no role enum**: everything reads capabilities. `save_fixture_banks()` is
   the ONE writer: it round-trips the **raw** sidecar JSON so unmodelled keys survive, and **forks the definition into the
-  user layer** when the source dir isn't persistable. The OFL document itself is never written.
+  user layer** when the source dir isn't persistable. The OFL document itself is never written. It writes `banks` and
+  `chases` **separately** (`save_fixture_chases()` is the chases-only call), because the Scenes and Chases tabs each hold
+  their own copy of the block and a write carrying both would put the other's unsaved work on disk.
 - **`software_controller/`** — a pure-Python DMX controller (no hardware) managing a 96-channel universe patched from
   `config.fixtures`. `handle_note_on` uses a **generalized note map**: the pitch is a universal *verb*, the MIDI **channel
   selects the fixture** (its index in the patch). Layout: 1–23 channel-offset sets (velocity×2), 24–35 scene loaders,
@@ -265,6 +267,13 @@ way to change a setting on a headless rack box.
   OK/Cancel doesn't apply; one button writes. Its tree keeps **bank sections** with scenes beneath, because both orders
   are what MIDI addresses (36+n bank, 24+n scene); reorder is applied to the data, never by letting Qt move the items
   (their roles go stale).
+- `ui/fixture/chases_tab.py` is the same editor for a type's `chases`: same list, same "the list writes as it happens,
+  the Save button carries only what the editor shows". A step is **(bank NAME, index in that bank)**, so a chase survives
+  a bank rename and not a scene reorder.**`CHASE_TIMING_ENABLED` is OFF**, because `update_chase` runs every chase forwards
+  on one per-fixture CHASE TIME (note 54): with it off the tab builds no direction/units/fade/hold/level control and Run
+  steps at the engine's own `DEFAULT_CHASE_TIME`/`DEFAULT_BLEND_TIME`.
+  **SONG PARTS chips are the one control the runtime honours in full** — `song_part_refs` reads the tags off a chase as
+  it does off a scene, and an untagged chase is reachable only by note 70.
 - `ScenePreview` (`ui/fixture/console.py`) **is** the stage engine, fed raw DMX, so a look previews exactly as on stage;
   **`clear()` it before it goes away** — the bodies own timers on the shared clock.
 - `ui/fixture/affordances.py` — controls chosen from a fixture's capabilities and **never from its name**.

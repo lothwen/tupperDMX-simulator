@@ -1315,7 +1315,15 @@ QLabel#EditModeLabel {
     padding: 0 4px;
 }
 
-QWidget#StageEditToolbar QPushButton {
+/* The toolbar's OWN buttons only — `>`, not a descendant match, is load
+   bearing. This toolbar parents the Add-fixture dialog (designer.py's
+   `AddFixtureDialog(self._stage, self)`), and Qt walks the parent chain when it
+   matches a descendant selector, so a dialog IS "inside" the widget that owns
+   it. Written loosely, this rule paints every QPushButton in that dialog —
+   and wins, because one ID plus two types outranks the `QPushButton#Name` the
+   dialog styles its own buttons with. Its buttons all sit directly in this
+   widget's layouts, so the child selector still reaches every one of them. */
+QWidget#StageEditToolbar > QPushButton {
     color: white;
     background-color: #4a4a4a;
     border: 1px solid rgba(255, 255, 255, 40);
@@ -1324,11 +1332,11 @@ QWidget#StageEditToolbar QPushButton {
     font-weight: bold;
 }
 
-QWidget#StageEditToolbar QPushButton:hover {
+QWidget#StageEditToolbar > QPushButton:hover {
     background-color: #5a5a5a;
 }
 
-QWidget#StageEditToolbar QPushButton:disabled {
+QWidget#StageEditToolbar > QPushButton:disabled {
     color: #777;
     background-color: #3a3a3a;
     border-color: rgba(255, 255, 255, 20);
@@ -1570,33 +1578,61 @@ QWidget#TimelineToolbar QPushButton#TTSnap:checked {
     font-weight: bold;
 }
 
-/* Segmented toggles (Bars|Time, Rows S/M/L) */
-QWidget#TimelineToolbar QPushButton#TTSegment {
+/* The segmented switch (ui/widgets/segmented.py): Bars|Time, Rows S/M/L,
+   BACKING|GUIDE, and the fixture dialog's chase DIRECTION and TIMING UNITS.
+   Deliberately NOT scoped to #TimelineToolbar — it is the app's switch, not
+   that toolbar's, and a second copy of these rules under another name is how
+   two controls doing the same job start looking different. */
+QPushButton#TTSegment {
     color: #9a9a9a;
-    background-color: #242424;
+    /* Every one of these is stated on purpose, including the ones that look
+       like defaults. This switch is used inside dialogs, and `QDialog
+       QPushButton` up at the top of this file gives every button in one a
+       raised gradient, a lighter top edge, a 3px radius and its own font size
+       — none of which a segment wants, and all of which reach anything left
+       unsaid here. The radius is the visible one: unset, each segment rounds
+       its INNER corners too and the pill comes apart at the seam. */
+    background: #242424;
     border: 1px solid #161616;
+    border-top: 1px solid #161616;
+    border-radius: 0;
+    font-size: 12px;
+    /* A line of 12px text, so an icon-only segment stands as tall as a worded
+       one. Two switches side by side (chase DIRECTION and TIMING UNITS) are
+       one row, and 6px of difference between them reads as a mistake. */
+    min-height: 17px;
     padding: 4px 8px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment:checked {
+QPushButton#TTSegment:hover {
+    color: #d0d0d0;
+}
+
+QPushButton#TTSegment:checked {
     color: #e6e6e6;
-    background-color: #3a3a3a;
+    background: #3a3a3a;
     font-weight: bold;
 }
 
+QPushButton#TTSegment:disabled {
+    color: #4a4a4a;
+}
+
 /* Round only the outer corners of the segmented control */
-QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
+QPushButton#TTSegment[seg="left"] {
     border-top-left-radius: 5px;
     border-bottom-left-radius: 5px;
     border-right: 0px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment[rows="true"] {
+/* One narrow width for every segment: single letters (Rows S/M/L) and
+   icon-only segments, neither of which has text to size to. */
+QPushButton#TTSegment[compact="true"] {
     min-width: 28px;
     max-width: 28px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment[seg="right"] {
+QPushButton#TTSegment[seg="right"] {
     border-top-right-radius: 5px;
     border-bottom-right-radius: 5px;
     border-left: 0px;
@@ -2458,6 +2494,185 @@ QSlider#AddFxFader::handle:vertical {
 
 QSlider#AddFxFader:disabled::add-page:vertical {
     background: #2a2a2a;
+}
+
+/* --- chases ---
+   The list panel, the "+ New" button and the Save button are the Scenes tab's
+   (#AddFxScenesPanel, #AddFxNewScene, #AddFxSceneSave), so the two tabs read as
+   one editor. Only what the Scenes tab has no equivalent of is styled here. */
+QFrame#AddFxChaseHeader,
+QFrame#AddFxStepsCard {
+    background-color: #202020;
+    border: 1px solid #303030;
+    border-radius: 3px;
+}
+
+QPushButton#AddFxChaseRun {
+    background-color: #2c5f8a;
+    border: 1px solid #4a90e2;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-width: 56px;
+    padding: 5px 12px;
+}
+
+QPushButton#AddFxChaseRun:hover {
+    background-color: #35719f;
+}
+
+QPushButton#AddFxChaseRun:checked {
+    background-color: #8a3c2c;
+    border: 1px solid #e2704a;
+}
+
+QPushButton#AddFxChaseRun:disabled {
+    background-color: #242424;
+    border: 1px solid #333333;
+    color: #5a5a5a;
+}
+
+QLabel#AddFxChaseStep {
+    color: #f0f0f0;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* The step table. The header caption is #AddFxFieldLabel like every other
+   caption in the dialog; these are the cells under it. */
+QWidget#AddFxStepHeader {
+    border-bottom: 1px solid #303030;
+    padding-bottom: 4px;
+}
+
+QWidget#AddFxStepRow {
+    background: transparent;
+}
+
+QLabel#AddFxStepNumber {
+    color: #6f6f6f;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QComboBox#AddFxStepScene {
+    background-color: #191919;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: #d8d8d8;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+
+QComboBox#AddFxStepScene:hover {
+    border: 1px solid #4f4f4f;
+}
+
+QComboBox#AddFxStepScene::drop-down {
+    border: none;
+    width: 16px;
+}
+
+QComboBox#AddFxStepScene QAbstractItemView {
+    background-color: #1c1c1c;
+    border: 1px solid #3a3a3a;
+    color: #d8d8d8;
+    selection-background-color: #2c5f8a;
+}
+
+/* One box holding the number and the unit it is counted in, so the unit stays
+   at the right-hand edge instead of trailing the digits around. */
+QFrame#AddFxStepTime {
+    background-color: #191919;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QFrame#AddFxStepTime:hover {
+    border: 1px solid #4f4f4f;
+}
+
+QDoubleSpinBox#AddFxStepTimeSpin {
+    background: transparent;
+    border: none;
+    color: #d8d8d8;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QLabel#AddFxStepUnit {
+    color: #6f6f6f;
+    font-family: monospace;
+    font-size: 10px;
+}
+
+QLabel#AddFxStepLevelValue {
+    color: #d8d8d8;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QSlider#AddFxStepLevel::groove:horizontal {
+    background-color: #262626;
+    border-radius: 2px;
+    height: 4px;
+}
+
+QSlider#AddFxStepLevel::sub-page:horizontal {
+    background-color: #4a90e2;
+    border-radius: 2px;
+}
+
+QSlider#AddFxStepLevel::handle:horizontal {
+    background-color: #cfcfcf;
+    border-radius: 2px;
+    height: 10px;
+    margin: -4px 0;
+    width: 4px;
+}
+
+QToolButton#AddFxStepButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: #7a7a7a;
+    font-size: 10px;
+    padding: 2px;
+}
+
+QToolButton#AddFxStepButton:hover {
+    background-color: #2c2c2c;
+    border: 1px solid #3f3f3f;
+    color: #ffffff;
+}
+
+QToolButton#AddFxAddStep {
+    background: transparent;
+    border: 1px dashed #3a3a3a;
+    border-radius: 3px;
+    color: #8a8a8a;
+    font-size: 11px;
+    padding: 4px 10px;
+}
+
+QToolButton#AddFxAddStep:hover {
+    border: 1px dashed #4a90e2;
+    color: #ffffff;
+}
+
+QToolButton#AddFxAddStep:disabled {
+    border: 1px dashed #2a2a2a;
+    color: #454545;
+}
+
+QScrollArea#AddFxStepScroll,
+QScrollArea#AddFxStepScroll > QWidget > QWidget {
+    background: transparent;
+    border: none;
 }
 
 /* --- footer --- */

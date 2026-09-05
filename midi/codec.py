@@ -105,7 +105,13 @@ class MidiCodec:
         active_notes = {}
         for msg in doc.midi_data:
             current_time += msg.time
-            if msg.type == 'note_on' and msg.velocity > 0:
+            # A value-bearing note OPENS on velocity 0 like any other — its
+            # velocity is a value, not a gate. Without this the event would be
+            # admitted above but never paired with its note_off, and `rebuild`
+            # (which writes from midi_notes, not midi_events) would drop it on
+            # the next save.
+            if msg.type == 'note_on' and (msg.velocity > 0
+                                          or msg.note in VALUE_BEARING_NOTES):
                 active_notes[(msg.channel, msg.note)] = {
                     "time": current_time, "velocity": msg.velocity}
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
