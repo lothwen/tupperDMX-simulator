@@ -1,4 +1,4 @@
-# Roadmap TupperDMX Simulator
+# Roadmap TupperDMX Simulator (to v1.1)
 
 > Documento de producto, no de implementación. Ordena y desarrolla las ideas de futuro,
 > añade mejoras y propone funcionalidades nuevas. **No entra en cómo implementar.**
@@ -28,18 +28,18 @@ siguiente, evitando rehacer trabajo.
 
 ## Orden propuesto (vista rápida)
 
-| # | Fase | Idea(s) del TODO | Por qué aquí |
-|---|------|------------------|--------------|
-| 1 | Núcleo de fixtures generalizado | Sistema general de fixtures + rework midi map + 1 track por fixture | Spine: todo lo demás depende de esto |
-| 2 | Patch y salida DMX repensados | DMX output / UI input-output Artnet-USB | Acompaña al modelo de fixture (patch = fixture→dirección) |
-| 3 | Modelo de "Show" y persistencia | Gestión de canciones/playlists/shows, saves/exports/versionado | Base que sostiene el player y el control remoto |
-| 4 | Live show player | Click/backing por canales L/R, precuenta auto, control track TTS | Necesita el modelo de show y la base de audio |
-| 5 | UI remota web (SBC + tablet) | Webserver con UI web simple | Mejor sobre un núcleo y un modelo de show estables |
-| 6 | Modo automático de luces | Análisis de música en tiempo real (mic/line-in) | El más independiente/experimental; puede ir en paralelo como I+D |
+| # | Estado      | Fase                            | Idea(s) del TODO                                                    | Por qué aquí                                                     |
+|---|-------------|---------------------------------|---------------------------------------------------------------------|------------------------------------------------------------------|
+| 1 | ✅ Hecha     | Núcleo de fixtures generalizado | Sistema general de fixtures + rework midi map + 1 track por fixture | Spine: todo lo demás depende de esto                             |
+| 2 | ✅ Hecha     | Patch y salida DMX repensados   | DMX output / UI input-output Artnet-USB                             | Acompaña al modelo de fixture (patch = fixture→dirección)        |
+| 3 | ✅ Hecha     | Modelo de "Show" y persistencia | Gestión de canciones/playlists/shows, saves/exports/versionado      | Base que sostiene el player y el control remoto                  |
+| 4 | ✅ Hecha     | Live show player                | Click/backing por canales L/R, precuenta auto, control track TTS    | Necesita el modelo de show y la base de audio                    |
+| 5 | ✅ Hecha     | UI remota web (SBC + tablet)    | Webserver con UI web simple                                         | Mejor sobre un núcleo y un modelo de show estables               |
+| 6 | ⬜ Pendiente | Modo automático de luces        | Análisis de música en tiempo real (mic/line-in)                     | El más independiente/experimental; puede ir en paralelo como I+D |
 
 ---
 
-## Fase 1 — Núcleo de fixtures generalizado *(la columna vertebral)*
+## ✅ Fase 1 — Núcleo de fixtures generalizado *(la columna vertebral)*
 
 **Idea TODO:** "General fixture system — diseñador de escenarios, librería de fixtures,
 formato OFL" + "Rework midi map → generalizado para cualquier fixture" + "One track per
@@ -89,7 +89,7 @@ a otros usuarios. Merece el diseño más cuidadoso aunque hoy solo se usen 3 fix
 
 ---
 
-## Fase 2 — Patch y salida DMX repensados
+## ✅ Fase 2 — Patch y salida DMX repensados
 
 **Idea TODO:** "DMX output → repensar UI input/output Artnet/USB".
 
@@ -113,7 +113,7 @@ ayudaría mucho de cara a un SBC headless (Fase 5).
 
 ---
 
-## Fase 3 — Modelo de "Show" y persistencia
+## ✅ Fase 3 — Modelo de "Show" y persistencia
 
 **Idea TODO:** "Gestión de canciones, playlists, shows → saves, exports, incluso gestión
 de versiones integrada".
@@ -141,7 +141,7 @@ modelo de fixture es data-driven (Fase 1), el patch *forma parte* del show.
 
 ---
 
-## Fase 4 — Live show player
+## ✅ Fase 4 — Live show player
 
 **Idea TODO:** "Live show player: click/backing track por distintos canales (L/R),
 precuenta automática activada/desactivada, control track con text-to-speech".
@@ -167,7 +167,7 @@ como su propia subfase antes de TTS y precuenta.
 
 ---
 
-## Fase 5 — UI remota web (SBC + tablet)
+## ✅ Fase 5 — UI remota web (SBC + tablet)
 
 **Idea TODO:** "Webserver con UI web simple → UI remota desde tablet, app corriendo en un
 SBC en el rack".
@@ -221,18 +221,18 @@ Detectadas explorando el código; conviene abordarlas *dentro* de la fase donde 
 como big-bang:
 
 - **Persistencia de ediciones (urgente):** las ediciones de clips/escenas son solo en
-  memoria; se pierden sin export manual. → Autosave (Fase 3).
+  memoria; se pierden sin export manual. → Autosave (Fase 3). ✅ Hecha
 - **Deuda técnica de cableado:** rangos de canal, mapa MIDI y escenas cableados a los 2
-  fixtures actuales en muchos ficheros. → Se paga en Fase 1.
+  fixtures actuales en muchos ficheros. → Se paga en Fase 1. ✅ Hecha
 - **Red de seguridad de tests:** ya hay suite de caracterización (`tests/`, `uv run pytest`,
   `test_crash_repro.py`). Mantenerla y *ampliarla antes* de cada refactor grande para no
-  romper comportamiento. Es lo que hace viable la Fase 1.
+  romper comportamiento. Es lo que hace viable la Fase 1. ✅ Hecha
 - **Separación núcleo / UI:** hoy todo asume GUI. Empujar la lógica fuera de la UI habilita
-  headless (Fase 5) y tests más fáciles.
+  headless (Fase 5) y tests más fáciles. ✅ Hecha
 - **Multi-universo:** el límite de 96 canales / 1 universo se queda corto en cuanto haya
   fixtures arbitrarios (Fase 2).
 - **Setup E/S unificado:** entrada (MIDI/click) y salida (Art-Net/USB) hoy conviven en la
-  toolbar de forma difusa (Fase 2).
+  toolbar de forma difusa (Fase 2). ✅ Hecha
 
 ---
 
@@ -242,7 +242,7 @@ Priorizadas por encaje con el uso de directo; no están en el TODO original:
 
 - **Cue list / botón GO (alta utilidad):** además del timeline scriptado, una pila de cues
   manuales que se disparan con un botón. Para momentos no cronometrados (charlas, bises).
-  Encaja tras Fase 3 y brilla en la tablet (Fase 5).
+  Encaja tras Fase 3 y brilla en la tablet (Fase 5). ✅ Hecha
 - **Busking / overrides en vivo (alta):** sobreescribir color/intensidad/blackout a mano
   durante la reproducción sin tocar la secuencia. Imprescindible en directo real.
 - **Mapeo de superficie de control MIDI (alta):** pedalera/Launchpad/APC para disparar
@@ -256,9 +256,9 @@ Priorizadas por encaje con el uso de directo; no están en el TODO original:
 - **Grupos y macros de fixtures (media):** seleccionar "todos los pares", "frontales", etc.
   Habilitador del motor de efectos y del modo automático.
 - **Fixtures con movimiento/beam (movers, gobos) en el visualizador (baja/futuro):** si la
-  librería OFL entra, el stage virtual querrá representar más que barras y blinders.
-- **Undo/redo en el timeline (media):** edición clip-style sin deshacer es frágil.
-- **Backup/restore de shows (baja):** y, "producto después", sync opcional a la nube.
+  librería OFL entra, el stage virtual querrá representar más que barras y blinders. ✅ Hecha
+- **Undo/redo en el timeline (media):** edición clip-style sin deshacer es frágil. ✅ Hecha
+- **Backup/restore de shows (baja):** y, "producto después", sync opcional a la nube. ✅ Hecha
 
 ---
 
@@ -271,12 +271,12 @@ infraestructura para ello):
   (`uv run pytest`). Ampliar tests *antes* de tocar el código cableado; el comportamiento
   observable (DMX que sale, render del stage) no debe cambiar mientras se generaliza.
 - **"Done" por fase:**
-  - F1: se puede definir un fixture nuevo por datos (no por código), colocarlo, verlo en
+  - ✅ F1: se puede definir un fixture nuevo por datos (no por código), colocarlo, verlo en
     stage, editarlo en su propia pista y que salga DMX correcto.
-  - F2: patch multi-universo configurable; in/out claramente separados en UI.
-  - F3: se abre un fichero de show y queda todo montado; las ediciones persisten solas.
-  - F4: click y backing salen por canales distintos; precuenta on/off; aviso TTS audible.
-  - F5: se controla play/stop/next/blackout desde una tablet contra la app en SBC headless.
-  - F6: con line-in, las luces reaccionan a intensidad/beat sin secuencia programada.
+  - ✅ F2: patch multi-universo configurable; in/out claramente separados en UI.
+  - ✅ F3: se abre un fichero de show y queda todo montado; las ediciones persisten solas.
+  - ✅ F4: click y backing salen por canales distintos; precuenta on/off; aviso TTS audible.
+  - ✅ F5: se controla play/stop/next/blackout desde una tablet contra la app en SBC headless.
+  - ⬜ F6: con line-in, las luces reaccionan a intensidad/beat sin secuencia programada.
 - **Regla de oro:** no empezar una fase sin que la anterior sea usable. Personal-ahora exige
   que la app siga tocando shows reales en cada punto del camino.
