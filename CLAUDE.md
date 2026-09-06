@@ -274,9 +274,18 @@ way to change a setting on a headless rack box.
   steps at the engine's own `DEFAULT_CHASE_TIME`/`DEFAULT_BLEND_TIME`.
   **SONG PARTS chips are the one control the runtime honours in full** — `song_part_refs` reads the tags off a chase as
   it does off a scene, and an untagged chase is reachable only by note 70.
+- **`AddFixtureDialog` has two modes, and `instance=` is the whole difference.**
+- **In edit mode nothing is written until OK.** 
+- All three
+  entry points (a track header, a clip card's menu, the clip library's `+ New`) emit from inside a widget a patch edit
+  destroys — `rebuild_for_patch` and the clip library's `_rebuild` both `deleteLater` — and a modal `exec()` is an
+  event loop that runs those deletions, so a synchronous open returns into a freed C++ object.
 - `ScenePreview` (`ui/fixture/console.py`) **is** the stage engine, fed raw DMX, so a look previews exactly as on stage;
   **`clear()` it before it goes away** — the bodies own timers on the shared clock.
 - `ui/fixture/affordances.py` — controls chosen from a fixture's capabilities and **never from its name**.
+- `MainWindow._on_fixture_selected` is **gated on edit mode**, not on the emission: `change_fixture_mode` and
+  `set_fixture_hanging` also emit `fixture_selected`, and the editor drives both with the stage nowhere near the
+  designer.
 
 ## The clip model and favourites (`core/clips.py`)
 
@@ -286,6 +295,9 @@ need the same answer** — the library panel renders cards, the timeline decodes
 which is what stops `timeline/` importing `ui/`), and the web remote resolves the show's favourites.
 
 - **A favourite stores a symbolic `ref`, never resolved MIDI.** 
+- **A per-fixture group carries `fixture`/`mode`; the Show group carries neither** — a bank group is labelled after the
+  *bank*, so its label cannot say which fixture it came from, and "this group is about no one fixture" has to be
+  answerable rather than inferred (the clip library's `+ New` and its card menus both turn on it).
 - **A scene keys on `(bank, name)` with its index as a TIEBREAKER ONLY.** Reorder is a data operation. The index earns its place because names repeat (the shipped ledbar pads FILLS2 with four identical rows).
 - **Resolution failure is a display state, never a delete.** 
 - Favourites are **show content** (`show.json`'s `favorites`), so there is no machine-level fallback and no prefs seed — a

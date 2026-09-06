@@ -33,12 +33,25 @@ Each card is one cue: a title, a subtitle naming its kind (`channel`, `scene`,
 a scene means its colour comes from the palette rather than from fixed values,
 so it follows whatever the START clip set up.
 
-**Two things you can do with a card:**
+**Three things you can do with a card:**
 
 | Gesture | Result |
 |---|---|
 | **Click** | Auditions the cue live through whatever output is routed. **The timeline is not touched** |
 | **Drag onto a lane** | Inserts it as a clip at the drop point |
+| **Right-click** | **Edit '<fixture>'…** — opens that fixture's dialog ([5.6](#56-editing-a-fixture-you-have-already-patched)) **on the very scene or chase the card is for**, ready to edit. A card that is neither (a channel control, a colour macro, a blackout) names no scene, so it opens on the Scenes tab with nothing selected |
+
+A card in the grey **Show** group belongs to the show rather than to a fixture,
+and a starred card whose fixture has been unpatched resolves to nobody — neither
+offers the menu.
+
+### Making new cues
+
+The **+ New** tile at the end of the pill row opens the same **Edit fixture**
+dialog on its Scenes tab, ready to compose one. It uses the fixture the view is
+already about — whichever group is selected. When no single fixture owns the
+view (the **Show** group, **Favorites**, or an active search) it asks which
+fixture you mean first.
 
 Auditioning goes through the same path as everything else, so it respects your
 I/O routing — with the factory settings that means the internal controller and
@@ -51,9 +64,8 @@ selected one, and the header switches to `SEARCH · N clips` while it is active.
 It is the fastest way to find a scene when you cannot remember which bank it
 went into.
 
-> **Not yet implemented:** the grid/list view buttons, the `Name ▾` sort label
-> and the `+ New` tile at the end of the pill row are placeholders. They are
-> drawn but do nothing.
+> **Not yet implemented:** the grid/list view buttons and the `Name ▾` sort
+> label are placeholders. They are drawn but do nothing.
 
 If nothing is patched, the panel says so: *"No fixtures patched. Patch a fixture
 (Design stage) or edit the fixture defs."*

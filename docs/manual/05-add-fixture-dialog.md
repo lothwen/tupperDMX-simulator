@@ -86,6 +86,11 @@ everything after the first few.
 This tab edits stored looks for the fixture **type** — see
 [5.4](#54-the-scenes-tab).
 
+### Chases
+
+Sequences built from those scenes, again for the **type** — see
+[5.5](#55-the-chases-tab).
+
 ## 5.3 The footer — the patch decision
 
 ![The footer refusing an illegal patch: the address overlaps an existing fixture, so OK is disabled.](images/add-fixture-footer.png)
@@ -93,13 +98,19 @@ This tab edits stored looks for the fixture **type** — see
 | Control | What it tells you |
 |---|---|
 | **DMX START** | The address, 1–512. Beside it, `occupies 94 – 109` and the status: `free · no overlap`, `overlaps Ledbar 1`, or `needs 16 ch · past 512` |
-| **MIDI CHANNEL** | The channel, 0–15, with all sixteen as clickable buttons. Channels already in use are marked, and picking one says `already used` |
+| **MIDI CHANNEL** | The channel, 0–15, with all sixteen as clickable buttons. Channels already in use are marked, and picking one says `already used`. **On a narrow window the sixteen buttons fold away** — the footer is the widest row in the app — leaving the spin box, which refuses a used channel just the same |
 | **PatchBar** | The whole universe as a strip. Hatched blocks are already patched, the solid blue block is where this fixture would land — **and it turns red when it collides** |
 | **UNIVERSE 0 · PATCH n / 512 USED** | How much of the universe the show is using |
 | **✓ OK** / **⊘ Cancel** | **OK stays disabled until the patch is legal** |
 
-You cannot create an illegal patch from this dialog. The Inspector applies the
-same two checks afterwards, so you cannot edit your way into one either.
+You cannot create an illegal patch from this dialog — and editing a fixture you
+have already patched goes through this same footer ([5.6](#56-editing-a-fixture-you-have-already-patched)),
+so you cannot edit your way into one either.
+
+> The stage **Inspector** ([4.5](#45-the-inspector)) is the one
+> exception: it checks the MIDI channel, but its address field does not check
+> for an overlap. It is a quick tweak surface next to the fixture on the stage;
+> this dialog is the one that validates.
 
 ## 5.4 The Scenes tab
 
@@ -112,6 +123,10 @@ colour swatch painted by the real renderer and, if it has any, abbreviated
 song-part tags. **+ New** offers **New scene** and **New bank…**; **Duplicate**
 and **Delete** work on whatever is selected. Banks and scenes are renamed
 in place by clicking the name, and reordered by dragging.
+
+It opens at about a third of the tab's width — so a wide window gives a wide
+list — and **the divider between the two panels drags**, for when your bank
+names want more room than that (or less).
 
 **Right panel.** The scene name, a row of nine song-part chips (INTRO, VERSE,
 CHORUS, BREAK, BRIDGE, INST, SOLO, OUTRO, END — tag a scene and the app will
@@ -147,3 +162,109 @@ SCENES."*, *"Unsaved changes — press Save to write them to the fixture's
 > deleting or reordering scenes shifts the numbering, and existing songs will
 > load a different look.** Add new scenes at the end of a bank, or in a new bank,
 > once a show depends on them.
+
+## 5.5 The Chases tab
+
+![The Chases tab: the type's chases, the steps of the selected one, and the preview that plays it.](images/add-fixture-chases.png)
+
+A *chase* is an ordered walk through scenes — again stored on the fixture
+**type**, alongside its banks, and written to the same `.tdmx.json` sidecar.
+
+**Left panel.** The chases this type declares, each with its step count
+(`4×`). **+ New**, **Duplicate** and **Delete** work the same way as on the
+Scenes tab, the name is renamed in place by clicking it, and the divider drags.
+The status line underneath says what the list is for — *"5 chase(s) · MIDI note
+70 loads one by index · saved to the fixture's .tdmx.json"*.
+
+**Right panel.** The chase name and its **Save** button, the nine song-part
+chips, **SIMULATED OUTPUT** with a **Run** button, and the **STEPS** table.
+
+**Pick a chase and it starts running.** A chase *is* its motion — a still
+picture of one step tells you almost nothing about it — so selecting one plays
+it through the preview straight away. **Run** becomes **Stop** for the times
+you would rather it held still, and moving to another chase runs that one.
+Leaving the tab stops it.
+
+**STEPS** is the chase itself: one row per step, each naming a scene. **New
+step** adds one, and the scene picker offers every scene of the type, bank
+first.
+
+> **A step names its scene by bank NAME and position in that bank.** So a chase
+> survives renaming a bank — the rename rewrites every chase that pointed at it
+> — but **not** reordering the scenes inside one, which leaves the chase
+> stepping through whatever now sits at those positions. The same warning as
+> [5.4](#54-the-scenes-tab), for the same reason.
+
+> **SONG PARTS are the one control here the runtime honours in full.** Tag a
+> chase and auto mode will run it during that part of a song, exactly as it
+> picks a tagged scene. **An untagged chase can only ever be fired by hand**
+> (MIDI note 70), which from the audience is indistinguishable from a chase
+> that does not work.
+
+> **Per-step timing is not offered**, because the engine cannot play it: it runs
+> every chase forwards on one per-fixture CHASE TIME. There is no direction,
+> no seconds/beats choice, and no per-step fade, hold or level — Run steps at
+> the engine's own rate, which is what you will hear from the rig.
+
+## 5.6 Editing a fixture you have already patched
+
+Everything above is about *adding* a fixture. Once one is in the show, the same
+dialog edits it — it is the same set of answers, so it is the same dialog. Only
+the first question is already settled: **there is no library rail**, because you
+cannot swap a patched fixture for another type. All five tabs and the whole
+footer are exactly as described above, now pointed at your fixture; the header
+gains the two things that belong to *this* fixture rather than to its type —
+its name, and how it is rigged.
+
+![Edit fixture: no library rail, the fixture's own name as the title, and Delete in the footer.](images/edit-fixture.png)
+
+**Three ways in:**
+
+| Where | Gesture |
+|---|---|
+| The timeline | **Double-click a lane header**, or right-click it and choose **Edit '<fixture>'…** |
+| The clip library | **Right-click any card** and choose **Edit '<fixture>'…** — it opens **on that scene or chase**, not merely on its tab |
+| The clip library | The **+ New** tile at the end of the pill row |
+
+**The title becomes the fixture.** Give one a name and the big heading is that
+name, with the model stepping back beside the manufacturer — a rig has three
+Wash 12s, and calling all three "Wash 12" is what naming them was for. Leave it
+unnamed and the heading is the model, as everywhere else.
+
+**Rename it in place**: the **✎** beside the title, or a **double-click on the
+title itself**. Enter or clicking away commits, Escape puts the old name back —
+and Escape here cancels the rename only, not the dialog.
+
+Beside the title, **MOUNTING** — whether the fixture is flown (upside down,
+beam at the stage) or standing on the deck. It only appears for a fixture whose
+profile can hang at all; a smoke machine always sits on its own feet.
+
+**In the footer**, the same patch decision as when adding — **DMX START**,
+**MIDI CHANNEL** and the universe bar, validated live and disabling **OK** while
+the choice is illegal. The one difference: the fixture's *own* address and
+channel are left out of that check, so it does not report itself as a clash.
+
+**Changing the mode** is the **Modes** tab, exactly as when adding. Because
+scene banks are stored per mode, switching it re-points the Scenes and Chases
+tabs at that mode's banks; anything unsaved is offered to you first.
+
+**OK applies, Cancel discards** — the name, mounting, address, channel and mode
+are all held until you press OK. **The Scenes and Chases tabs are the exception
+and always were:** they edit the fixture *library*, shared by every show using
+that type, and they write when *their* buttons say so ([5.4](#54-the-scenes-tab),
+[5.5](#55-the-chases-tab)).
+
+**Delete** removes the fixture from the show. It asks first, then closes — it is
+not held until OK.
+
+> **The sixteen channel buttons fold away on a narrow window.** The footer is
+> the widest row in the app and an edit dialog carries a Delete button the add
+> one does not, so below about 1270px the overview collapses to its spin box
+> rather than squeezing into an unreadable smear. Nothing is lost: the spin box
+> still refuses a channel already in use.
+
+> **Which fixture opens, when a type is patched twice?** A clip library group is
+> per fixture *type*, so a card belonging to a type you have patched twice
+> resolves to the **first by DMX address** — the same instance that card's own
+> click would fire at. The menu names it, so you can see which you are getting.
+> The timeline route has no such ambiguity: a lane is one instance.

@@ -112,8 +112,14 @@ stage. Correct it in the Inspector whenever the guess is wrong.
 
 ## 4.5 The Inspector
 
-Select a fixture and the Inspector appears in the top-right corner. It is the
-whole per-fixture settings surface.
+Select a fixture and the Inspector appears in the top-right corner. It is every
+per-fixture setting, right next to the fixture on the stage.
+
+The same settings are also reachable without coming here — off a timeline lane
+or a clip-library card — in the **Edit fixture** dialog
+([5.6](#56-editing-a-fixture-you-have-already-patched)),
+which adds the type's scenes and chases and checks the DMX address for an
+overlap, which this card does not.
 
 ![The Inspector for a moving head: identity, profile, mounting, patch and routing.](images/fixture-inspector.png)
 

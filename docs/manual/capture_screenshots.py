@@ -438,9 +438,45 @@ def build_script(session: Session) -> None:
     session.add("_tab-modes", browser_tab(2), wait=0.8)
     session.add("add-fixture-modes",
                 lambda: shot.shoot("add-fixture-modes", window=state["browser"]))
-    session.add("_tab-scenes", browser_tab(3), wait=1.2)
+    def show_scenes():
+        # Pin the type: the Scenes and Chases figures are only worth shooting
+        # on a definition that HAS banks and chases, and whichever entry the
+        # search happened to land on may declare neither — an empty tree shows
+        # none of what either tab is for.
+        dlg = state["browser"]
+        dlg.select_type("moving-head")
+        dlg.tabs.setCurrentIndex(3)
+        # And open one, so the faders and the preview carry a real look rather
+        # than a blank draft.
+        tree = dlg.scenes_tab.tree
+        if tree.topLevelItemCount():
+            bank = tree.topLevelItem(0)
+            bank.setExpanded(True)
+            if bank.childCount():
+                tree.setCurrentItem(bank.child(1))
+        for _ in range(8):
+            app.processEvents()
+
+    session.add("_tab-scenes", show_scenes, wait=1.4)
     session.add("add-fixture-scenes",
                 lambda: shot.shoot("add-fixture-scenes", window=state["browser"]))
+
+    def show_chases():
+        dlg = state["browser"]
+        dlg.select_type("moving-head")      # a no-op after the Scenes step
+        dlg.tabs.setCurrentIndex(4)
+        # And pick one: unselected, the whole right half is empty, which shows
+        # none of what the tab is for. Selecting also starts it running, so the
+        # preview is caught mid-chase — which is the point of the tab.
+        tree = dlg.chases_tab.tree
+        if tree.topLevelItemCount():
+            tree.setCurrentItem(tree.topLevelItem(1))
+        for _ in range(8):
+            app.processEvents()
+
+    session.add("_tab-chases", show_chases, wait=1.6)
+    session.add("add-fixture-chases",
+                lambda: shot.shoot("add-fixture-chases", window=state["browser"]))
 
     def collide_patch():
         dlg = state["browser"]
@@ -457,9 +493,43 @@ def build_script(session: Session) -> None:
 
     def close_browser():
         session.close_dialog(state.pop("browser"))
-        w.exit_edit_mode()
 
     session.add("_close-browser", close_browser, wait=1.0)
+
+    # The same dialog in EDIT mode: no library rail, the fixture's own name as
+    # the title, and Delete in the footer. Shot on a named fixture where the
+    # show has one, since "the title is the name" is the half worth seeing.
+    def open_editor():
+        from ui.fixture.browser import AddFixtureDialog
+        patched = list(w.config.fixtures)
+        instance = next((f for f in patched if f.name), None) or patched[0]
+        # The headline of that section is "the title becomes the fixture", and
+        # a demo show whose fixtures are all unnamed shows the model instead —
+        # which illustrates the other half. Borrow a name for the shot and put
+        # it back afterwards, so the later figures see the show unchanged.
+        state["editor_named"] = (instance, instance.name)
+        if not instance.name:
+            instance.name = "Front bar"
+        dlg = AddFixtureDialog(w.stage_controller, w, instance=instance)
+        state["editor"] = session.open_dialog(dlg, 1180, 800)
+        for _ in range(6):
+            app.processEvents()
+
+    session.add("_open-editor", open_editor, wait=2.0)
+    session.add("edit-fixture",
+                lambda: shot.shoot("edit-fixture", window=state["editor"]))
+
+    def close_editor():
+        # `close()` rejects, which is the point: this dialog applies its patch
+        # edits on OK, and a figure must not repatch the show it was shot
+        # against. Nothing here calls accept(), so nothing is applied.
+        session.close_dialog(state.pop("editor"))
+        instance, original = state.pop("editor_named")
+        instance.name = original
+        w.stage_controller.refresh_labels()
+        w.exit_edit_mode()
+
+    session.add("_close-editor", close_editor, wait=1.0)
 
     # -- chapter 6: the top toolbar ---------------------------------------
     session.add("top-toolbar",

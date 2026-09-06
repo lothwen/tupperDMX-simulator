@@ -26,6 +26,21 @@ QSplitter::handle:vertical {
     height: 2px;
 }
 
+/* The fixture editors' list/editor divider. Wider than the 2px above because
+   this one is meant to be found and dragged, not just to separate two docked
+   regions — and transparent, since both panes already carry their own border.
+   Scoped by object name so the window's own splitters keep the hairline. */
+QSplitter#RatioSplitter::handle:horizontal {
+    width: 11px;
+    background-color: transparent;
+}
+
+QSplitter#RatioSplitter::handle:horizontal:hover {
+    background-color: #4aa3df;
+    margin: 0 4px;
+    border-radius: 1px;
+}
+
 /* Timeline Widget */
 #Timeline {
     border: none;
@@ -1016,8 +1031,20 @@ QLabel#ClipPillCount {
 
 QFrame#ClipPillNew {
     background-color: transparent;
-    border: 1px dashed #666;
+    border: 1px solid #1f1f1f;
     border-radius: 12px;
+}
+
+/* It opens the fixture editor, so it has to answer the pointer like the pills
+   beside it do. The dash brightens with the fill, or the outline washes out
+   against the lighter ground it is drawn on. */
+QFrame#ClipPillNew:hover {
+    background-color: #3a3a3a;
+    border-color: #8a8a8a;
+}
+
+QFrame#ClipPillNew:hover QLabel#ClipPillLabel {
+    color: #dddddd;
 }
 
 QFrame#ClipPillNew QLabel#ClipPillLabel {
@@ -2079,6 +2106,29 @@ QLabel#AddFxDetailName {
     font-size: 21px;
 }
 
+/* The model, once the title above it is carrying a name of the operator's
+   own. Set beside the manufacturer and styled with it, so the pair reads as
+   one line of provenance rather than as a second title. */
+QLabel#AddFxDetailModel {
+    color: #6f6f6f;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
+/* Rename: a pencil that only shows its edges under the pointer, so it sits
+   beside the title without competing with it. */
+QToolButton#AddFxRename {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QToolButton#AddFxRename:hover {
+    background-color: #3a3a3a;
+    border-color: #4f4f4f;
+}
+
 QLabel#AddFxStatLabel {
     color: #7a7a7a;
     font-size: 10px;
@@ -2500,6 +2550,7 @@ QSlider#AddFxFader:disabled::add-page:vertical {
    The list panel, the "+ New" button and the Save button are the Scenes tab's
    (#AddFxScenesPanel, #AddFxNewScene, #AddFxSceneSave), so the two tabs read as
    one editor. Only what the Scenes tab has no equivalent of is styled here. */
+QFrame#AddFxSceneHeader,
 QFrame#AddFxChaseHeader,
 QFrame#AddFxStepsCard {
     background-color: #202020;
@@ -2766,6 +2817,37 @@ QDialog#AddFixtureDialog QPushButton#AddFxOk:disabled {
     background-color: #3a4a52;
     border-color: #35424a;
     color: #6a7a82;
+}
+
+/* Edit mode only: the instance's own name, up in the header beside the type,
+   and Delete down in the footer. Both share the dialog's existing family —
+   the name field matches the footer's spin boxes, Delete the inspector's. */
+QDialog#AddFixtureDialog QLineEdit#AddFxNameEdit {
+    background-color: #1a1a1a;
+    border: 1px solid #4f4f4f;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 21px;
+    padding: 1px 8px;
+}
+
+QDialog#AddFixtureDialog QLineEdit#AddFxNameEdit:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxDelete {
+    background-color: rgba(120, 40, 40, 200);
+    border: 1px solid #a04040;
+    border-radius: 5px;
+    color: #ff8a8a;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 7px 18px;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxDelete:hover {
+    background-color: rgba(150, 50, 50, 220);
+    color: #ffffff;
 }
 
 QDialog#AddFixtureDialog QPushButton#AddFxCancel {

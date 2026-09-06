@@ -675,6 +675,30 @@ class StageController(QObject):
             f"Added fixture '{type_name}' at DMX {dmx_start} (channel {channel})")
         return instance
 
+    def _detach_fixture(self, instance: FixtureInstance) -> bool:
+        """Drop one fixture's bodies and its patch entry, announcing nothing.
+
+        The two public removers announce at different moments — `remove_selected`
+        detaches the whole selection before emitting for any of it — so the
+        signal is deliberately not in here."""
+        self._remove_render_group(instance)
+        if instance in self.config.fixtures:
+            self.config.fixtures.remove(instance)
+            return True
+        return False
+
+    def remove_fixture(self, instance: FixtureInstance) -> bool:
+        """Remove one patched fixture BY IDENTITY, selected or not.
+
+        `remove_selected` answers the stage's selection; this answers a dialog
+        opened from the timeline or the clip library, where there is none."""
+        if instance is None:
+            return False
+        removed = self._detach_fixture(instance)
+        if removed:
+            self.fixture_removed.emit(instance)
+        return removed
+
     def remove_selected(self) -> List[FixtureInstance]:
         """Remove the instance(s) backing the current selection (incrementally)."""
         instances: List[FixtureInstance] = []
@@ -683,9 +707,7 @@ class StageController(QObject):
             if inst is not None and inst not in instances:
                 instances.append(inst)
         for inst in instances:
-            self._remove_render_group(inst)
-            if inst in self.config.fixtures:
-                self.config.fixtures.remove(inst)
+            self._detach_fixture(inst)
         for inst in instances:
             self.fixture_removed.emit(inst)
         return instances

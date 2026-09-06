@@ -3,12 +3,12 @@
 # ABOUTME: grouped data-driven from the patched fixtures' library definitions.
 
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
                              QLineEdit, QToolButton, QButtonGroup, QScrollArea,
-                             QLayout, QApplication, QSizePolicy)
-from PyQt6.QtGui import QColor, QPainter, QDrag
+                             QLayout, QApplication, QSizePolicy, QMenu)
+from PyQt6.QtGui import QColor, QPainter, QDrag, QCursor
 from PyQt6.QtCore import Qt, QMimeData, QRect, QSize, QPoint, pyqtSignal
 
 from core import clips as clip_model
@@ -41,7 +41,8 @@ _PILL_HEIGHT = 28
 class ClipPill(QFrame):
     """A group-selection chip: a per-fixture colour dot, the group name and a
     clip-count badge. Toggling its ``selected`` property drives the QSS
-    highlight. The inert ``+ New`` tile is a pill with ``is_new=True``."""
+    highlight. The ``+ New`` tile is a pill with ``is_new=True``: no dot, no
+    badge, no elision, and it reports index -1 rather than a group."""
 
     clicked = pyqtSignal(int)
 
@@ -68,6 +69,9 @@ class ClipPill(QFrame):
         self._label = QLabel(label)
         self._label.setObjectName("ClipPillLabel")
         row.addWidget(self._label)
+        if is_new:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Add scenes and chases to a fixture")
         if not is_new:
             # Pin the count badge to the right edge; the label elides into the
             # space between the dot and the badge.
@@ -124,8 +128,9 @@ class ClipPill(QFrame):
         self._apply_elision()
 
     def mouseReleaseEvent(self, event):
-        if (not self._is_new
-                and event.button() == Qt.MouseButton.LeftButton
+        # The "+ New" tile reports index -1, which is not a group — the panel
+        # routes it to the fixture editor rather than to a selection.
+        if (event.button() == Qt.MouseButton.LeftButton
                 and self.rect().contains(event.position().toPoint())):
             self.clicked.emit(self._index)
         super().mouseReleaseEvent(event)
@@ -143,6 +148,10 @@ class ClipCard(QFrame):
 
     clicked = pyqtSignal(list)      # preview messages: [(channel, note, velocity)]
     star_toggled = pyqtSignal(dict)  # the clip's ref
+    # Right-clicked: (the clip's ref, its clip type). The MENU is not built
+    # here — the panel knows the patch, so it can name the fixture that would
+    # open, and it is not one of the widgets a patch edit destroys.
+    context_menu_requested = pyqtSignal(dict, str)
 
     def __init__(self, clip: Dict, starred: bool = False, parent=None):
         super().__init__(parent)
@@ -238,6 +247,13 @@ class ClipCard(QFrame):
             self._star_rect().adjusted(-4, -4, 4, 4).contains(pos)
 
     def mousePressEvent(self, event):
+        # On the PRESS, never the release: the drag and the star are both
+        # left-button-only, so a right press cannot fight either of them.
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_menu_requested.emit(self._ref or {},
+                                             self._subtitle_text)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
             self._press_on_star = self._hit_star(self._press_pos)
@@ -303,6 +319,11 @@ class ClipLibraryWidget(QWidget):
     # for a scene expanded into its fixture's channel-control notes. The MIDI
     # channel selects the fixture (its patch index), mirroring handle_note_on.
     preview_requested = pyqtSignal(list)
+    # A card's menu or the "+ New" tile wants a patched fixture opened for
+    # editing: (its stable MIDI channel, which tab to land on, and the clip's
+    # own ref so the editor can open ON that scene or chase rather than merely
+    # on its tab). The ref is empty when nothing in particular was asked for.
+    edit_fixture_requested = pyqtSignal(int, str, dict)
 
     def __init__(self, config: Config, show_manager=None, parent=None):
         super().__init__(parent)
@@ -450,8 +471,11 @@ class ClipLibraryWidget(QWidget):
             pill.clicked.connect(self._select_group)
             self.pill_flow.addWidget(pill)
             self._pills.append(pill)
-        # Inert "+ New" tile, matching the mockup.
-        self.pill_flow.addWidget(ClipPill(-1, "+ New", None, 0, is_new=True))
+        # "+ New" tile: index -1, so its click routes to the fixture editor
+        # rather than to _select_group.
+        new_pill = ClipPill(-1, "+ New", None, 0, is_new=True)
+        new_pill.clicked.connect(lambda _index: self._on_new_clicked())
+        self.pill_flow.addWidget(new_pill)
 
     def _select_group(self, index: int) -> None:
         if not (0 <= index < len(self._groups)):
@@ -489,6 +513,7 @@ class ClipLibraryWidget(QWidget):
             card = ClipCard(clip, starred=self._is_starred(clip))
             card.clicked.connect(self.preview_requested.emit)
             card.star_toggled.connect(self._on_star_toggled)
+            card.context_menu_requested.connect(self._on_card_menu)
             self.card_flow.addWidget(card)
 
     def _show_placeholder(self) -> None:
@@ -528,6 +553,105 @@ class ClipLibraryWidget(QWidget):
         if self.show_manager is None or not ref:
             return
         self.show_manager.toggle_favorite(ref)
+
+    # --- opening the fixture editor -----------------------------------
+    def _instance_for_type(self, ftype: str, mode: str = ""):
+        """The patched instance a (type, mode) group speaks for, or None.
+
+        The first by DMX address, which is the one `fixture_index_for_type`
+        picks and so the one the group's own clips already fire at. When the
+        same type is patched twice this is an arbitrary-but-consistent choice,
+        which is why the menu names the fixture it will open.
+        """
+        candidates = [f for f in self.config.fixtures
+                      if f.type == ftype
+                      and (not mode or getattr(f, "mode", "") == mode)]
+        if not candidates:
+            # A group's mode came from the patch, so a miss here means the type
+            # is patched in another mode only — still the right fixture to edit.
+            candidates = [f for f in self.config.fixtures if f.type == ftype]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda f: getattr(f, "dmx_start", 0))
+
+    def _instance_for_ref(self, ref: Dict):
+        """The patched instance a clip's ref points at, or None for one that
+        names no fixture — a global Show verb, or a favourite whose fixture has
+        been unpatched."""
+        if not ref:
+            return None
+        ftype = ref.get("fixture")
+        if not ftype:
+            return None
+        return self._instance_for_type(ftype, ref.get("mode", "") or "")
+
+    @staticmethod
+    def _instance_label(instance) -> str:
+        return instance.name or instance.type
+
+    def _ask_to_edit(self, instance, clip_type: str = "",
+                     ref: Optional[Dict] = None) -> None:
+        """Announce the request. A chase card lands on the Chases tab; anything
+        else on Scenes — and `ref`, when a card supplied one, says which scene
+        or chase on it."""
+        channel = int(getattr(instance, "channel", -1))
+        if channel < 0:
+            return
+        tab = "chases" if clip_type == "chase" else "scenes"
+        self.edit_fixture_requested.emit(channel, tab, dict(ref or {}))
+
+    def _on_card_menu(self, ref: Dict, clip_type: str) -> None:
+        """Right-click on a card. The menu is built here rather than on the
+        card so it can name the instance that will actually open — and so its
+        owner is not one of the widgets a patch edit destroys."""
+        instance = self._instance_for_ref(ref)
+        if instance is None:
+            return  # a Show verb, or a favourite that no longer resolves
+        menu = QMenu(self)
+        edit = menu.addAction(f"Edit {self._instance_label(instance)}…")
+        if menu.exec(QCursor.pos()) is edit:
+            self._ask_to_edit(instance, clip_type, ref)
+
+    def _selected_group_instance(self):
+        """The fixture behind the selected pill, or None when no single one
+        owns the view: search mode (which spans every group), the global Show
+        group, or the synthetic Favourites group (mixed fixtures)."""
+        if self.search_box.text().strip():
+            return None
+        if not (0 <= self._selected < len(self._groups)):
+            return None
+        group = self._groups[self._selected]
+        ftype = group.get("fixture")
+        if not ftype or group["label"] == _FAVORITES_LABEL:
+            return None
+        return self._instance_for_type(ftype, group.get("mode", "") or "")
+
+    def _on_new_clicked(self) -> None:
+        """The "+ New" tile. New scenes and chases are authored in the fixture
+        editor, so this opens it — on the fixture the view is already about
+        when there is one, and otherwise on the one the operator picks."""
+        instance = self._selected_group_instance()
+        if instance is not None:
+            self._ask_to_edit(instance)
+            return
+        self._pick_fixture_to_edit()
+
+    def _pick_fixture_to_edit(self) -> None:
+        """Show / Favourites / search: no one fixture owns the view, so ask."""
+        patched = sorted(self.config.fixtures,
+                         key=lambda f: getattr(f, "dmx_start", 0))
+        if not patched:
+            return  # the placeholder already says why
+        if len(patched) == 1:
+            self._ask_to_edit(patched[0])
+            return
+        menu = QMenu(self)
+        actions = {menu.addAction(
+            f"{self._instance_label(f)}  ·  ch {getattr(f, 'channel', -1)}"): f
+            for f in patched}
+        chosen = menu.exec(QCursor.pos())
+        if chosen in actions:
+            self._ask_to_edit(actions[chosen])
 
     def _on_favorites_changed(self) -> None:
         """Rebuild for a star change, keeping the operator where they were —

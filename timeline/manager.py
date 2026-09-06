@@ -66,6 +66,10 @@ class Timeline(QWidget):
     # A lane was dragged to a new row by its header grip: every fixture's MIDI
     # channel, top to bottom. Emitted on release, only when the order changed.
     track_order_changed = pyqtSignal(list)
+    # A lane header was double-clicked (or its menu used): open that fixture's
+    # editor. Carries the fixture's stable MIDI channel. The dialog lives in
+    # `ui/`, which this package must not import — hence the signal.
+    fixture_edit_requested = pyqtSignal(int)
 
     # Constants
     # HEADER_WIDTH is the designed width; __init__ shadows it with the

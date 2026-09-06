@@ -150,13 +150,24 @@ Below them, one header per fixture:
 
 | Element | What it does |
 |---|---|
-| grip | Reordering — *not implemented yet*, and permanently disabled |
+| grip | Drag to reorder the lanes. The order is remembered with the show |
 | chevron | Collapses the lane to a single row. View only |
 | colour swatch | Matches this fixture's group in the clip library and its section in the DMX monitor |
 | name / `Ch. 0 · DMX 1–7` | The fixture's name over its MIDI channel and address range |
 | **eye** | Mutes this lane's MIDI output. Its clips redraw dimmed |
 | **lock** | Makes the lane read-only: no moves, no resizes, no new clips, no editing |
 | **A** | Follow the song-part program automatically |
+
+**Double-click the header** — anywhere on it that isn't one of those controls —
+to open the **Edit fixture** dialog for that lane's fixture
+([5.6](#56-editing-a-fixture-you-have-already-patched)):
+its name, mode, address and MIDI channel, and its type's scenes and chases.
+Right-clicking the header offers the same thing as a menu item. A lane *is* one
+patched fixture, so there is never any doubt which one you get.
+
+**The header says so as you point at it**: the fixture's colour stripe down the
+left edge lightens, and the address line underneath the name turns into
+*"Double-click to edit"*, then goes back to the address when you move away.
 
 ### The lanes
 
@@ -266,6 +277,9 @@ Right-clicking empty lane space offers only **Add event at this position**.
 
 Right-clicking a song-section box offers **Edit '<part>'…** and **Delete
 '<part>'**.
+
+Right-clicking a lane *header* offers **Edit '<fixture>'…**, which opens that
+fixture's own dialog ([5.6](#56-editing-a-fixture-you-have-already-patched)).
 
 Hovering a clip shows its part name, note number, time, bar and beat, and
 velocity.

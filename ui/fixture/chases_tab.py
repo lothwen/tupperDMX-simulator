@@ -80,6 +80,7 @@ from ui.fixture.console import (
 from ui.widgets.chips import flow_holder
 from ui.widgets import icons
 from ui.widgets.segmented import Segment, segmented
+from ui.widgets.panes import RatioSplitter
 from tupperlogger import get_logger
 
 logger = get_logger("ui.fixture.chases_tab")
@@ -281,6 +282,13 @@ def _apply_level(values: List[int], indices: Sequence[int],
 
 # Column widths shared by the step header and the step rows, which are separate
 # widgets and would otherwise drift apart.
+# The list opens at this share of the tab's width, and never narrower than the
+# floor — wide enough for a bank name and its song-part tags. Both tabs use the
+# same pair: they are the same editor over different data, and a list that was
+# one width in Scenes and another in Chases would read as an accident.
+_LIST_RATIO = 0.3
+_LIST_MIN_WIDTH = 230
+
 _COL_NUM = 24
 _COL_SWATCH = 14
 _COL_TIME = 74
@@ -627,11 +635,17 @@ class FixtureChasesTab(QWidget):
         self._run_timer.setInterval(33)
         self._run_timer.timeout.connect(self._on_run_tick)
 
+        # A splitter rather than a fixed rail: how much room the list wants
+        # depends on how long the bank and scene names are, which is the
+        # fixture author's business rather than ours. It opens at a share of
+        # the width — so a wide dialog gives a wide list — and the divider is
+        # there for when that share is wrong.
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(14)
-        layout.addWidget(self._build_list_panel())
-        layout.addWidget(self._build_editor_panel(), 1)
+        layout.setSpacing(0)
+        self.splitter = RatioSplitter(self._build_list_panel(),
+                                      self._build_editor_panel(), _LIST_RATIO)
+        layout.addWidget(self.splitter)
 
     # ------------------------------------------------------------------
     # Construction
@@ -639,7 +653,8 @@ class FixtureChasesTab(QWidget):
     def _build_list_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("AddFxScenesPanel")
-        panel.setFixedWidth(238)
+        # A floor, not a width: the splitter decides the rest.
+        panel.setMinimumWidth(_LIST_MIN_WIDTH)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(8)
@@ -704,11 +719,13 @@ class FixtureChasesTab(QWidget):
         outer.addLayout(layout)
         outer.addLayout(self._build_song_parts_row())
 
-        name_column = QVBoxLayout()
-        name_column.setSpacing(4)
+        # Caption beside the field, not above it, and the same 96px column the
+        # SONG PARTS caption below uses — so the two captions line up and the
+        # card reads as one two-column form, exactly as the Scenes tab's does.
         caption = QLabel("CHASE NAME")
         caption.setObjectName("AddFxFieldLabel")
-        name_column.addWidget(caption)
+        caption.setFixedWidth(96)
+        layout.addWidget(caption)
         self.name_input = QLineEdit()
         self.name_input.setObjectName("AddFxSceneName")
         self.name_input.setPlaceholderText("Unnamed chase")
@@ -718,15 +735,15 @@ class FixtureChasesTab(QWidget):
         # it dark over a name that has already been changed. `textEdited` is the
         # user's typing only — `setText` from `_refresh_editor` is not an edit.
         self.name_input.textEdited.connect(lambda _text: self._on_name_edited())
-        name_column.addWidget(self.name_input)
-        layout.addLayout(name_column, 1)
+        layout.addWidget(self.name_input, 1)
 
         self._direction_buttons: Dict[str, QPushButton] = {}
         self._units_buttons: Dict[str, QPushButton] = {}
         if not CHASE_TIMING_ENABLED:
             # No direction, no units: the engine runs every chase forwards on
-            # one interval, so there is nothing here to choose.
-            layout.addLayout(self._build_save_column())
+            # one interval, so there is nothing here to choose. Nothing tall is
+            # left in the row either, so Save goes straight into it.
+            layout.addWidget(self._build_save_button())
             return card
 
         direction_column = QVBoxLayout()
@@ -797,11 +814,7 @@ class FixtureChasesTab(QWidget):
         row.addWidget(holder, 1)
         return row
 
-    def _build_save_column(self) -> QVBoxLayout:
-        save_column = QVBoxLayout()
-        save_column.setSpacing(4)
-        save_column.addSpacing(1)
-        save_column.addStretch(1)
+    def _build_save_button(self) -> QPushButton:
         self.save_button = QPushButton("✓ Save")
         self.save_button.setObjectName("AddFxSceneSave")
         self.save_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -809,7 +822,17 @@ class FixtureChasesTab(QWidget):
             "Write this chase to the fixture's .tdmx.json sidecar")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self._save)
-        save_column.addWidget(self.save_button)
+        return self.save_button
+
+    def _build_save_column(self) -> QVBoxLayout:
+        """Save hung from the bottom of a column, for the timing layout: the
+        direction and units controls carry a caption above them, so a button
+        dropped straight into that row would float halfway up it."""
+        save_column = QVBoxLayout()
+        save_column.setSpacing(4)
+        save_column.addSpacing(1)
+        save_column.addStretch(1)
+        save_column.addWidget(self._build_save_button())
         return save_column
 
     def _build_preview_card(self) -> QWidget:
@@ -961,6 +984,21 @@ class FixtureChasesTab(QWidget):
         self._rebuild_tree()
         self._refresh_editor()
 
+    def select_chase(self, index: int) -> bool:
+        """Put the cursor on one chase by its index — which is what a clip
+        carries, because note 70 loads a chase by index and nothing else.
+
+        Not signal-blocked: this IS the cursor moving, so the editor follows
+        it, and (as with any selection here) the chase starts running.
+        """
+        for row in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(row)
+            if item.data(0, _ROLE_INDEX) == index:
+                self.tree.setCurrentItem(item)
+                self.tree.scrollToItem(item)
+                return True
+        return False
+
     def reload(self, fdef: Optional[FixtureDef]) -> None:
         """Re-read everything from `fdef` — the Scenes tab has just written the
         same sidecar.
@@ -1055,6 +1093,14 @@ class FixtureChasesTab(QWidget):
         self._baseline = copy_chase(chase) if chase is not None else None
         self._focus = 0
         self._refresh_editor()
+        # Picking a chase runs it. A chase IS its motion — a still frame of one
+        # step says almost nothing about it — so the question "what does this
+        # one look like?" is answered by playing it, and Run becomes Stop for
+        # the times you would rather it held still.
+        # `run_button.isEnabled()` rather than a second copy of its rule:
+        # _refresh_editor has just decided whether this chase can run at all.
+        if self.run_button.isEnabled():
+            self._start_run()
 
     def _current_chase(self) -> Optional[dict]:
         if self._selected is None:
@@ -1551,6 +1597,17 @@ class FixtureChasesTab(QWidget):
         self.run_button.setIcon(icons.icon("play", "#ffffff"))
         self._mark_running(False)
         self._refresh_preview()
+
+    def hideEvent(self, event):
+        """Stop on the way out — to the Scenes tab, or out of the dialog.
+
+        Now that selecting a chase starts one, a run is the normal state of
+        this tab rather than something the operator switched on, so leaving it
+        ticking at 30 Hz against a preview nobody is looking at would be the
+        common case rather than the rare one.
+        """
+        super().hideEvent(event)
+        self._stop_run()
 
     def _mark_running(self, running: bool) -> None:
         if self._selected is None:

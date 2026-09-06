@@ -30,6 +30,7 @@ from ui.about_dialog import AboutDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
+from ui.fixture.browser import AddFixtureDialog
 from ui.fixture.designer import StageEditToolbar, FixtureInspector
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
@@ -130,6 +131,10 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove all margins
         self.main_layout.setSpacing(0)  # Remove spacing between widgets
 
+        # The Edit-fixture dialog while it is up, so a second request queued
+        # behind the first raises it instead of opening a rival.
+        self._fixture_editor = None
+
         # Create UI
         self.setup_ui()
 
@@ -204,6 +209,9 @@ class MainWindow(QMainWindow):
         self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
         self.clip_library = ClipLibraryWidget(self.config, self.show_manager)
         self.clip_library.preview_requested.connect(self.app_core.preview_clip)
+        # A card's menu or the "+ New" tile. Deferred inside the opener: the
+        # dialog can rebuild the very card that asked.
+        self.clip_library.edit_fixture_requested.connect(self.open_fixture_editor)
 
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
 
@@ -319,6 +327,9 @@ class MainWindow(QMainWindow):
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         self.timeline.header_width_changed.connect(self.on_header_width_changed)
         self.timeline.track_order_changed.connect(self.on_track_order_changed)
+        # A lane header wants its fixture edited. Deferred inside the opener:
+        # the dialog can rebuild the very header that asked.
+        self.timeline.fixture_edit_requested.connect(self.open_fixture_editor)
         # The clip editor can write a fixture's scene banks, which the library
         # panel has already read — rebuild it rather than wait for a restart.
         self.timeline.library_changed.connect(
@@ -1004,12 +1015,72 @@ class MainWindow(QMainWindow):
         self.enter_edit_mode()
         self.edit_toolbar.open_add_fixture()
 
+    def open_fixture_editor(self, channel: int, tab: str = "scenes",
+                            ref: dict = None) -> None:
+        """The ONE entry point for the Edit-fixture dialog. `channel` is the
+        fixture's stable MIDI channel (the binding key, not a display row).
+
+        Deferred by a zero timer on purpose. Every caller emits from inside a
+        widget this dialog can destroy: an edit in it runs _on_patch_changed,
+        which rebuilds the timeline tracks — deleteLater()ing every
+        TrackHeaderWidget — and refreshes the clip library, which
+        deleteLater()s every pill and card. deleteLater posts to the event
+        loop, and a modal exec() IS an event loop, so a dialog opened straight
+        from a header's or a card's own handler returns into a freed C++
+        object. Letting the emitting stack unwind first is the whole fix.
+        """
+        QTimer.singleShot(
+            0, lambda: self._open_fixture_editor_now(channel, tab, ref))
+
+    def _open_fixture_editor_now(self, channel: int, tab: str,
+                                 ref: dict = None) -> None:
+        if self._fixture_editor is not None:
+            # A second request queued behind the first (an impatient
+            # double-click): show the one that is already up.
+            self._fixture_editor.raise_()
+            self._fixture_editor.activateWindow()
+            return
+        instance = next((f for f in self.config.fixtures
+                         if getattr(f, "channel", -1) == channel), None)
+        if instance is None:
+            # Repatched away between the request and this tick.
+            self.logger.info(f"No fixture on channel {channel} to edit")
+            return
+        dialog = AddFixtureDialog(self.stage_controller, self, instance=instance)
+        dialog.select_tab(tab)
+        # A card names one scene or chase, not just a tab — open on it.
+        dialog.reveal(ref)
+        # The tabs write the library whichever button closes the dialog, so the
+        # panel rebuilds on the write — the same route the edit toolbar takes.
+        dialog.library_changed.connect(
+            lambda: self.clip_library.refresh_configuration(self.config))
+        self._fixture_editor = dialog
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._fixture_editor = None
+        # A confirmed Delete already removed the fixture and accepted; anything
+        # else the dialog holds is answered by OK and discarded by Cancel.
+        if accepted and (dialog.was_deleted() or dialog.apply_edits()):
+            self._on_patch_changed()
+        dialog.deleteLater()
+
     def _on_fixture_selected(self, instance):
-        """Show + populate the inspector for the selected fixture (or hide it)."""
+        """Show + populate the overlay inspector for the selected fixture.
+
+        Gated on edit mode rather than assumed from the emission: a mode or
+        rigging change also emits this, and the fixture dialog's edit mode
+        drives both from the timeline and the clip library — with the stage not
+        in the designer at all, where an inspector card popping up over it
+        would be nonsense.
+        `isHidden` rather than `isVisible`, for the same reason
+        `_escape_leaves_edit_mode` uses it: the toolbar is an overlay whose
+        ancestors may not be shown yet."""
+        editing = not self.edit_toolbar.isHidden()
         stage_view = self.stage_controller.get_stage_view()
-        self.fixture_inspector.set_instance(instance)
-        self.fixture_inspector.setVisible(instance is not None)
-        if instance is not None:
+        self.fixture_inspector.set_instance(instance if editing else None)
+        self.fixture_inspector.setVisible(editing and instance is not None)
+        if editing and instance is not None:
             self.fixture_inspector.adjustSize()
         stage_view.reposition_overlays()
 

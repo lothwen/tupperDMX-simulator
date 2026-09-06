@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget,
                              QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout)
 from PyQt6.QtGui import (QColor, QBrush, QPen, QLinearGradient, QPainter,
-                         QPolygonF, QIcon)
+                         QPolygonF, QIcon, QCursor)
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF, QSize
 
 from ui.widgets import icons
@@ -1061,19 +1061,41 @@ class TrackHeaderWidget(QWidget):
     # carry in between rides the header view's own events (see _TrackGrip).
     reorder_started = pyqtSignal()
     reorder_finished = pyqtSignal()
+    # This lane's fixture should be opened for editing. Carries the fixture's
+    # stable MIDI channel — the binding key, never the display row. The dialog
+    # itself lives in `ui/`, which this package must not import, so the window
+    # is asked through the manager's own signal.
+    edit_requested = pyqtSignal(int)
 
     def __init__(self, label: str, channel: int, dmx_start: int, dmx_end: int,
                  accent: str, parent=None):
         super().__init__(parent)
         self.setObjectName("TrackHeader")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._channel = int(channel)
+        self._label_text = label
+        self.setToolTip("Double-click to edit this fixture")
         # Per-instance accent: the left border + swatch use the fixture colour;
         # the rest of the styling comes from the app stylesheet by objectName.
+        #
+        # Hover lightens that accent, which — with the address line below
+        # turning into a hint — is how the header says it opens onto something.
+        # Only the COLOUR moves, never the 4px: a border is outside the content
+        # rect, so widening it on hover would shove the whole row sideways and
+        # snap back, once per lane crossed.
+        #
+        # Lightened gently: this stripe is also the fixture's COLOUR CODE, the
+        # one the clip library pill and the DMX monitor section share, so a
+        # factor that washes every fixture toward the same pastel would answer
+        # "you can click this" by mislaying "this is the ledbar".
+        hover_accent = QColor(accent).lighter(130).name()
         self.setStyleSheet(
             "QWidget#TrackHeader { background-color: #242424; "
             f"border-left: 4px solid {accent}; "
             "border-bottom: 1px solid #444; "
-            "border-right: 1px solid #444; }")
+            "border-right: 1px solid #444; }"
+            "QWidget#TrackHeader:hover { "
+            f"border-left-color: {hover_accent}; }}")
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 4, 6, 4)
@@ -1113,6 +1135,7 @@ class TrackHeaderWidget(QWidget):
         addr = f"Ch. {channel}"
         if dmx_end >= dmx_start:
             addr += f"  ·  DMX {dmx_start}–{dmx_end}"
+        self._address_text = addr
         self.info_label = QLabel(addr)
         self.info_label.setObjectName("TrackInfo")
 
@@ -1181,6 +1204,73 @@ class TrackHeaderWidget(QWidget):
         self.chevron.setChecked(collapsed)
         self.chevron.blockSignals(False)
         self.info_label.setVisible(not collapsed)
+
+    # ------------------------------------------------------------------
+    # Opening the fixture
+    # ------------------------------------------------------------------
+    def enterEvent(self, event):
+        """Say what the header is for, in the line that is already there.
+
+        The address is the one thing here with room to spare — it is a
+        read-out, not a control — so borrowing it costs no chrome in a row that
+        has none to give, and nothing moves.
+        """
+        super().enterEvent(event)
+        self.info_label.setText("Double-click to edit")
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.info_label.setText(self._address_text)
+
+    def mousePressEvent(self, event):
+        """Right-click offers the menu; a left press is accepted so that the
+        double-click can arrive.
+
+        Accepting is load-bearing: QWidget.mousePressEvent IGNORES by default,
+        and an ignored press inside a QGraphicsProxyWidget means no
+        double-click is ever delivered to the widget. Nothing else wants a
+        press on the header background — the grip, chevron and toggles are
+        children that take their own, and the manager's event filter only acts
+        once the grip has started a reorder.
+        """
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.edit_requested.emit(self._channel)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _show_context_menu(self):
+        """One action, on the fixture this lane is.
+
+        **The menu must have no parent.** This widget lives inside a
+        QGraphicsProxyWidget, and a popup parented to a proxied widget is not
+        given a window of its own: Qt embeds it in the graphics SCENE, through
+        a child proxy, where the view's viewport clips it. A header is 30-odd
+        pixels tall, so all that survived was the sliver of menu overlapping
+        the lane it came from. Unparented it is a real popup again, and the
+        app stylesheet reaches it regardless — the `QMenu` rules are global.
+
+        `QCursor.pos()` rather than the event's own global position, for the
+        neighbouring reason: a proxied widget's idea of where the window
+        starts is not to be trusted under Wayland (see _TrackGrip).
+
+        Comparing the returned action rather than connecting `triggered` puts
+        the emit after the menu's nested event loop instead of inside it.
+        """
+        menu = QMenu(None)
+        edit_action = menu.addAction(f"Edit '{self._label_text}'…")
+        if menu.exec(QCursor.pos()) is edit_action:
+            self.edit_requested.emit(self._channel)
 
 
 class MidiEventsTrack(BaseTrack):
@@ -1385,6 +1475,10 @@ class MidiEventsTrack(BaseTrack):
             self._header_widget.collapse_toggled.connect(self._on_collapse_toggled)
             self._header_widget.reorder_started.connect(self._on_reorder_started)
             self._header_widget.reorder_finished.connect(self._on_reorder_finished)
+            # Straight through to the manager's own signal: the window opens the
+            # dialog, not this track (and not this package).
+            self._header_widget.edit_requested.connect(
+                self.timeline_manager.fixture_edit_requested)
             self._header_proxy = QGraphicsProxyWidget()
             self._header_proxy.setWidget(self._header_widget)
             self._header_proxy.setZValue(1)

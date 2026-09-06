@@ -5,8 +5,9 @@
 Four surfaces over one domain, plus the stage designer that patches them:
 
 - `browser` — the fixture browser and the patch decision (DMX start, MIDI
-  channel, mode). `AddFixtureDialog`, `suggest_free_dmx_start`,
-  `used_midi_channels`.
+  channel, mode). `AddFixtureDialog`, in its two modes: adding a type from the
+  library, or editing a fixture the show already has. `suggest_free_dmx_start`,
+  `used_midi_channels`, `used_dmx_spans`.
 - `scenes_tab` — edits a *type's* sidecar scene banks, i.e. the library, not
   the patch.
 - `console` — one fixture's channels as faders over a live `ScenePreview`,

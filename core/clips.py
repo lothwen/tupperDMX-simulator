@@ -256,9 +256,14 @@ def fixture_index_for_type(config, ftype: str, mode: str = "") -> int:
 
 
 def build_groups(config) -> List[Dict]:
-    """Ordered group descriptors ``{label, color, clips}``: per patched
-    fixture a channel-controls group, one group per scene bank and a chases
-    group, all sharing the fixture's colour, plus a global Show group."""
+    """Ordered group descriptors ``{label, color, clips, fixture, mode}``: per
+    patched fixture a channel-controls group, one group per scene bank and a
+    chases group, all sharing the fixture's colour, plus a global Show group.
+
+    A per-fixture group names the ``(type, mode)`` it came from, which its
+    label cannot be relied on to give back — a bank is labelled after the bank,
+    not after the fixture. The Show group carries neither key, so "which
+    fixture is this group about?" is answerable rather than inferred."""
     groups: List[Dict] = []
     for i, (ftype, mode) in enumerate(patched_types(config)):
         fdef = resolve_fixture(ftype, mode)
@@ -270,14 +275,17 @@ def build_groups(config) -> List[Dict]:
         clips = _fixture_clips(fdef, ftype, mode, channel)
         if clips:
             groups.append({"label": ftype.replace("_", " ").capitalize(),
-                           "color": color, "clips": clips})
+                           "color": color, "clips": clips,
+                           "fixture": ftype, "mode": mode})
         for bank, bank_clips in _bank_groups(ftype, mode, fdef, channel):
             groups.append({"label": bank.replace("_", " ").capitalize(),
-                           "color": color, "clips": bank_clips})
+                           "color": color, "clips": bank_clips,
+                           "fixture": ftype, "mode": mode})
         chase_clips = _chase_clips(fdef, ftype, mode, channel)
         if chase_clips:
             groups.append({"label": "Chases", "color": color,
-                           "clips": chase_clips})
+                           "clips": chase_clips,
+                           "fixture": ftype, "mode": mode})
 
     show_clips = _show_clips()
     if show_clips:

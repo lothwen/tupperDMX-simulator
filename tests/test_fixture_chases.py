@@ -462,21 +462,25 @@ def test_run_drives_the_preview_through_the_steps(qapp):
         tab.tree.setCurrentItem(tab.tree.topLevelItem(0))   # 2 steps, no fade
         _assert("Red wash" in tab.step_label.text() and frames[-1][1] == 255,
                 "the still picture is the step the editor is looking at")
+        _assert(tab._run_timer.isActive(),
+                "and picking a chase runs it — a chase IS its motion, so a "
+                "still frame of one step answers almost nothing about it")
 
-        tab.run_button.click()
-        _assert(tab._run_timer.isActive(), "Run starts the clock")
         tab._run_elapsed = 5.0          # past the first step's 1s hold
         tab._on_run_tick()
         _assert("White" in tab.step_label.text() and frames[-1][2] == 255,
-                "and a tick past a step's hold advances to the next")
+                "a tick past a step's hold advances to the next")
 
         tab.run_button.click()
-        _assert(not tab._run_timer.isActive(), "pressing it again stops")
+        _assert(not tab._run_timer.isActive(),
+                "the button is there for when you would rather it held still")
+        tab.run_button.click()
+        _assert(tab._run_timer.isActive(), "and starts it again")
 
         # Fades interpolate rather than snap: the second step of "Timed" fades
         # in over 1.5 beats, so partway through it is neither scene.
         tab.tree.setCurrentItem(tab.tree.topLevelItem(1))
-        tab.run_button.click()
+        _assert(tab._run_timer.isActive(), "moving to another chase runs that one")
         tab._run_position, tab._run_elapsed = 1, 0.3
         tab._run_from = tab._step_values(tab._chases[1], 0)
         tab._on_run_tick()
@@ -487,7 +491,12 @@ def test_run_drives_the_preview_through_the_steps(qapp):
                 "and where it is going is that scene scaled by the step's "
                 "LEVEL — a brightness of 128 authored at 60 %")
 
-        tab.run_button.click()
+        # Hiding the tab — switching to Scenes, or closing the dialog — must
+        # stop it: now that selecting runs, a chase left ticking at 30 Hz
+        # against a preview nobody is looking at is the common case.
+        tab.show()          # a hideEvent only follows an actual show
+        tab.hide()
+        _assert(not tab._run_timer.isActive(), "hiding the tab stops the run")
         tab._preview.set_values = original
         tab.preview.clear()
 

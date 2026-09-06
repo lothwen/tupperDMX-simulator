@@ -73,6 +73,26 @@ def test_group_structure():
             "show verbs belong to no fixture")
 
 
+def test_a_group_names_the_fixture_it_came_from():
+    """A group's LABEL cannot answer "which fixture is this about?" — a bank
+    group is named after the bank. The clip library has to know, to offer
+    "Edit <fixture>…" on a card and to route its "+ New" tile."""
+    print("test_a_group_names_the_fixture_it_came_from")
+    config = _shipped_config()
+    patched = {(f.type, getattr(f, "mode", "")) for f in config.fixtures}
+    groups = clips.build_groups(config)
+
+    for group in groups[:-1]:
+        _assert((group.get("fixture"), group.get("mode", "")) in patched,
+                f"'{group['label']}' names a (type, mode) that is patched")
+
+    show = groups[-1]
+    _assert(show["label"] == "Show", "the last group is the global one")
+    _assert("fixture" not in show and "mode" not in show,
+            "which names no fixture, so 'no single fixture' is answerable "
+            "rather than inferred")
+
+
 def test_clip_payloads():
     print("test_clip_payloads")
     groups = clips.build_groups(_shipped_config())

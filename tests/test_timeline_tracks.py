@@ -409,6 +409,117 @@ def test_grip_drag_restacks_the_lanes_and_commits_on_release():
             "the header settles onto its new row")
 
 
+class _FakeButtonEvent:
+    """A stand-in for QMouseEvent, which PyQt6 will not let a test construct.
+
+    The header's handlers only ask which button it was and accept it."""
+
+    def __init__(self, button):
+        self._button = button
+        self.accepted = False
+
+    def button(self):
+        return self._button
+
+    def accept(self):
+        self.accepted = True
+
+
+def test_a_header_double_click_asks_for_its_fixture_by_channel():
+    """The header reports the fixture's STABLE MIDI channel — the binding key —
+    not the row it happens to be sitting in. Reordering first is what tells the
+    two apart: after the carry, row 0 is channel 1."""
+    print("test_a_header_double_click_asks_for_its_fixture_by_channel")
+    from PyQt6.QtCore import Qt
+    _, tl = _make()
+
+    asked = []
+    tl.fixture_edit_requested.connect(asked.append)
+
+    tl.begin_track_reorder(tl.midi_events_tracks[0])
+    tl.update_track_reorder(500.0)
+    tl.update_track_reorder(500.0 + 1.8 * tl.midi_events_tracks[0].get_track_height())
+    tl.end_track_reorder()
+    top = tl.midi_events_tracks[0]
+    _assert(top.fixture_index == 1, "after the carry, row 0 is the channel-1 lane")
+
+    event = _FakeButtonEvent(Qt.MouseButton.LeftButton)
+    top._header_widget.mouseDoubleClickEvent(event)
+    _assert(asked == [1], "the double-click names the channel, not the row")
+    _assert(event.accepted, "and consumes the event")
+
+    # A left PRESS must be accepted too, or the proxy widget never delivers a
+    # double-click at all — but it must not itself ask for the editor.
+    press = _FakeButtonEvent(Qt.MouseButton.LeftButton)
+    top._header_widget.mousePressEvent(press)
+    _assert(press.accepted, "a left press on the header is accepted")
+    _assert(asked == [1], "but a single click does not open anything")
+
+
+def test_the_header_says_it_is_clickable_while_hovered():
+    """The row has no chrome to spare, so the affordance borrows what is
+    already there: the address line — a read-out, not a control — says what a
+    double-click does, and the fixture's accent stripe lightens."""
+    print("test_the_header_says_it_is_clickable_while_hovered")
+    from PyQt6.QtCore import Qt
+    _m, tl = _make()
+    header = tl.midi_events_tracks[0]._header_widget
+
+    _assert(header.testAttribute(Qt.WidgetAttribute.WA_Hover),
+            "Qt tracks hover on the header — its :hover rule is what arms it, "
+            "and without one the widget never hears the pointer at all")
+
+    address = header.info_label.text()
+    _assert("Ch. 0" in address, "it rests showing the address")
+
+    header.enterEvent(None)
+    _assert(header.info_label.text() == "Double-click to edit",
+            "and says what it does while pointed at")
+    header.leaveEvent(None)
+    _assert(header.info_label.text() == address,
+            "then gives the address back, so nothing is lost to the hint")
+
+    sheet = header.styleSheet()
+    _assert(":hover" in sheet and "border-left-color" in sheet,
+            "the accent brightens by COLOUR only — a border sits outside the "
+            "content rect, so a wider one on hover would shove the whole row "
+            "sideways and snap back, once per lane crossed")
+
+
+def test_the_header_menu_is_a_real_popup_not_a_scene_item():
+    """A header lives in a QGraphicsProxyWidget, and a popup parented to a
+    proxied widget gets no window of its own — Qt embeds it in the graphics
+    SCENE, where the viewport clips it. A header is 30-odd pixels tall, so all
+    that survives is the sliver of menu overlapping its own lane."""
+    print("test_the_header_menu_is_a_real_popup_not_a_scene_item")
+    from PyQt6.QtWidgets import QMenu
+    _m, tl = _make()
+
+    asked = []
+    tl.fixture_edit_requested.connect(asked.append)
+
+    seen = {}
+    original = QMenu.exec
+
+    def stub(self, *args, **kwargs):
+        seen["embedded"] = self.graphicsProxyWidget() is not None
+        seen["labels"] = [a.text() for a in self.actions()]
+        return self.actions()[0]
+
+    QMenu.exec = stub
+    try:
+        tl.midi_events_tracks[0]._header_widget._show_context_menu()
+    finally:
+        QMenu.exec = original
+
+    _assert(seen["embedded"] is False,
+            "the menu is a real top-level popup, so it is not clipped to the "
+            "header it came from")
+    _assert(seen["labels"] == ["Edit 'Ledbar'…"],
+            "and it names the lane's own fixture")
+    _assert(asked == [0], "choosing it asks for that fixture by channel")
+
+
 def test_a_lane_holds_its_row_until_it_has_passed_half_a_neighbour():
     """Grabbing a lane must not move anything, and a lane restacks only once it
     has been carried over half of the neighbour it is passing — the same going
@@ -930,6 +1041,9 @@ def main():
     test_display_order_by_dmx_binding_by_channel()
     test_saved_row_outranks_the_dmx_address()
     test_grip_drag_restacks_the_lanes_and_commits_on_release()
+    test_a_header_double_click_asks_for_its_fixture_by_channel()
+    test_the_header_says_it_is_clickable_while_hovered()
+    test_the_header_menu_is_a_real_popup_not_a_scene_item()
     test_a_lane_holds_its_row_until_it_has_passed_half_a_neighbour()
     test_passing_a_collapsed_lane_only_costs_half_of_ITS_height()
     test_a_crossing_moves_the_clips_rather_than_rebuilding_them()

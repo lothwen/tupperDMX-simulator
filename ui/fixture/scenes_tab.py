@@ -65,6 +65,7 @@ from core.fixture_library import FixtureDef, save_fixture_banks
 from core.fixture_state import FixtureState, resolve_state
 from core.note_layout import SONG_PARTS
 from ui.widgets.chips import flow_holder
+from ui.widgets.panes import RatioSplitter
 # The console — faders, preview and read-out — is shared with the timeline's
 # clip editor, so a scene looks the same wherever it is edited. Re-exported
 # under their old private names for the callers (and tests) that reach in.
@@ -78,6 +79,13 @@ from ui.fixture.console import (  # noqa: F401  (re-exported)
 from tupperlogger import get_logger
 
 logger = get_logger("ui.fixture.scenes_tab")
+
+# The list opens at this share of the tab's width, and never narrower than the
+# floor — wide enough for a bank name and its song-part tags. Both tabs use the
+# same pair: they are the same editor over different data, and a list that was
+# one width in Scenes and another in Chases would read as an accident.
+_LIST_RATIO = 0.3
+_LIST_MIN_WIDTH = 230
 
 DEFAULT_BANK_NAME = "SCENES"
 
@@ -193,11 +201,17 @@ class FixtureScenesTab(QWidget):
         # widens what the next save writes.
         self._save_chases = False
 
+        # A splitter rather than a fixed rail: how much room the list wants
+        # depends on how long the bank and scene names are, which is the
+        # fixture author's business rather than ours. It opens at a share of
+        # the width — so a wide dialog gives a wide list — and the divider is
+        # there for when that share is wrong.
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(14)
-        layout.addWidget(self._build_list_panel())
-        layout.addWidget(self._build_editor_panel(), 1)
+        layout.setSpacing(0)
+        self.splitter = RatioSplitter(self._build_list_panel(),
+                                      self._build_editor_panel(), _LIST_RATIO)
+        layout.addWidget(self.splitter)
 
     # ------------------------------------------------------------------
     # Construction
@@ -205,7 +219,8 @@ class FixtureScenesTab(QWidget):
     def _build_list_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("AddFxScenesPanel")
-        panel.setFixedWidth(238)
+        # A floor, not a width: the splitter decides the rest.
+        panel.setMinimumWidth(_LIST_MIN_WIDTH)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(8)
@@ -258,6 +273,17 @@ class FixtureScenesTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
+        # Name and tags ride a card, exactly as the Chases tab's do: the two
+        # tabs are one editor over different data, and what a scene is called
+        # and when it plays are one group of answers — sitting bare on the
+        # dialog's own ground they read as loose furniture instead.
+        header = QFrame()
+        header.setObjectName("AddFxSceneHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(12, 8, 12, 10)
+        header_layout.setSpacing(8)
+        layout.addWidget(header)
+
         name_row = QHBoxLayout()
         name_row.setSpacing(12)
         caption = QLabel("SCENE NAME")
@@ -289,7 +315,7 @@ class FixtureScenesTab(QWidget):
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self._on_save_clicked)
         name_row.addWidget(self.save_button)
-        layout.addLayout(name_row)
+        header_layout.addLayout(name_row)
 
         parts_row = QHBoxLayout()
         parts_row.setSpacing(12)      # same gutter as the name row above
@@ -309,7 +335,7 @@ class FixtureScenesTab(QWidget):
             self._part_chips[part] = chip
             holder.layout().addWidget(chip)
         parts_row.addWidget(holder, 1)
-        layout.addLayout(parts_row)
+        header_layout.addLayout(parts_row)
 
         self._output = OutputCard()
         self._faders = FaderStrip()
@@ -359,6 +385,44 @@ class FixtureScenesTab(QWidget):
         self._output.set_fixture(fdef)
         self._rebuild_tree()
         self._refresh_editor()
+
+    def select_scene(self, bank: str, name: str = "", index: int = -1) -> bool:
+        """Put the cursor on one scene, named the way a clip names it.
+
+        Keyed on (bank, name) with the index as a TIEBREAKER ONLY — the same
+        rule the clip model resolves by. Names repeat (the shipped ledbar pads
+        FILLS2 with four identical rows), so the index breaks the tie; but a
+        reordered bank must still land on the scene the card was about rather
+        than on whatever now sits at its old row.
+
+        Not signal-blocked, unlike the internal relayers: this IS the cursor
+        moving, and the editor is meant to follow it.
+        """
+        scenes = self._banks.get(bank)
+        if not scenes:
+            return False
+        matches = [i for i, scene in enumerate(scenes)
+                   if str(scene.get("name") or "") == name]
+        if index in matches:
+            target = index
+        elif matches:
+            target = matches[0]
+        elif 0 <= index < len(scenes):
+            target = index                 # renamed since the card was built
+        else:
+            return False
+        for row in range(self.tree.topLevelItemCount()):
+            parent = self.tree.topLevelItem(row)
+            if parent.data(0, _ROLE_BANK) != bank:
+                continue
+            item = parent.child(target)
+            if item is None:
+                return False
+            parent.setExpanded(True)
+            self.tree.setCurrentItem(item)
+            self.tree.scrollToItem(item)
+            return True
+        return False
 
     def refresh_chases(self, fdef: Optional[FixtureDef]) -> None:
         """Re-read the chases from `fdef` — the Chases tab has just rewritten
