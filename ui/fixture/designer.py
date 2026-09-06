@@ -10,10 +10,13 @@ from PyQt6.QtWidgets import (
 )
 
 from tupperlogger import get_logger
+from core.config import fixture_channel_count
 from core.fixture_library import fixture_modes
 from ui.widgets import icons
 from ui.widgets.toggle_switch import ToggleSwitch
-from ui.fixture.browser import AddFixtureDialog, used_midi_channels
+from ui.fixture.browser import (
+    AddFixtureDialog, UNIVERSE_SIZE, used_dmx_spans, used_midi_channels,
+)
 
 
 def _separator() -> QFrame:
@@ -421,8 +424,25 @@ class FixtureInspector(QWidget):
         layout.addWidget(self._field_label("Start address"))
         self._dmx_spin = QSpinBox()
         self._dmx_spin.setRange(1, 512)
-        self._dmx_spin.valueChanged.connect(self._on_dmx_changed)
+        # Commit on editing-finished, like the channel below: an overlap check
+        # on every step would fire all the way across an occupied span.
+        self._dmx_spin.editingFinished.connect(self._on_dmx_changed)
         layout.addWidget(self._dmx_spin)
+
+        # A mode change is allowed to grow a fixture onto its neighbour — the
+        # new channel layout is usually the point, and the address is the thing
+        # to move afterwards — so the clash is reported as a STANDING condition
+        # on the card instead of as a dialog: it is recomputed every time the
+        # card is populated, so it is still there when the fixture comes back.
+        self._patch_warning = QLabel()
+        self._patch_warning.setObjectName("InspectorWarning")
+        self._patch_warning.setWordWrap(True)
+        # Same trap as the mounting hint: a wrapped QLabel reports one line.
+        policy = self._patch_warning.sizePolicy()
+        policy.setHeightForWidth(True)
+        self._patch_warning.setSizePolicy(policy)
+        self._patch_warning.hide()
+        layout.addWidget(self._patch_warning)
 
         # ROUTING
         layout.addWidget(self._section_label("ROUTING"))
@@ -497,6 +517,7 @@ class FixtureInspector(QWidget):
         self._channel_spin.blockSignals(True)
         self._channel_spin.setValue(max(0, instance.channel))
         self._channel_spin.blockSignals(False)
+        self._refresh_patch_warning()
 
     def _on_mode_changed(self, mode: str) -> None:
         if self._current is None or not mode:
@@ -504,6 +525,9 @@ class FixtureInspector(QWidget):
         # Rebuilding the render group re-emits fixture_selected, so the host
         # keeps the inspector pointed at the same fixture.
         self._stage.change_fixture_mode(self._current, mode)
+        # The new layout may be wider than the old one, which can push this
+        # fixture onto the next one's channels. That is allowed — and said so.
+        self._refresh_patch_warning()
         self._stage.refresh_labels()
         self._notify()
 
@@ -538,10 +562,57 @@ class FixtureInspector(QWidget):
             self._stage.refresh_labels()
             self._notify()
 
-    def _on_dmx_changed(self, value: int) -> None:
+    def _span_problem(self, start: int) -> str:
+        """Why `start` is not a legal address for the current fixture, or "".
+
+        The browser footer's two refusals, off the footer's own helpers so the
+        two surfaces cannot drift: a span running off the end of the universe,
+        and a span landing on another fixture. `exclude` keeps the fixture from
+        clashing with the span it already holds.
+        """
+        count = fixture_channel_count(self._current.type, self._current.mode)
+        if not count:
+            return ""
+        last = start + count - 1
+        if last > UNIVERSE_SIZE:
+            return (f"{count} channels from {start} run past the "
+                    f"{UNIVERSE_SIZE}-channel universe.")
+        clash = next((name for name, first, end in
+                      used_dmx_spans(self._stage.config, exclude=self._current)
+                      if start <= end and last >= first), "")
+        return f"DMX {start} – {last} overlaps {clash}." if clash else ""
+
+    def _refresh_patch_warning(self) -> None:
+        """Re-ask whether the fixture AS IT STANDS holds a legal span.
+
+        Called on every populate, so a clash a mode change left behind is back
+        on the card the next time that fixture is selected — and so a patch that
+        arrived overlapping (hand-edited, or from an older show) says so too.
+        """
+        problem = ("" if self._current is None
+                   else self._span_problem(self._current.dmx_start))
+        self._patch_warning.setText(
+            f"{problem} Move the start address, or pick another mode."
+            if problem else "")
+        self._patch_warning.setVisible(bool(problem))
+
+    def _on_dmx_changed(self) -> None:
         if self._current is None:
             return
+        value = self._dmx_spin.value()
+        if value == self._current.dmx_start:
+            return
+        # Unlike the mode, an address the user types is refused outright: there
+        # is nothing to keep from it, and the old value is right there.
+        problem = self._span_problem(value)
+        if problem:
+            QMessageBox.warning(self, "Address unavailable", problem)
+            self._dmx_spin.blockSignals(True)
+            self._dmx_spin.setValue(self._current.dmx_start)
+            self._dmx_spin.blockSignals(False)
+            return
         self._current.dmx_start = int(value)
+        self._refresh_patch_warning()
         self._stage.refresh_labels()
         self._notify()
 

@@ -261,8 +261,10 @@ way to change a setting on a headless rack box.
   its low-priority half on a narrow window: the top bar's SHOW card into the ☰ menu, the timeline row's Rows/zoom/Fit zone into a "View ▾" popup.
 - **`config.window.ui_scale`** (0.75–1.50, Settings ▸ Interface) is applied by `ui/theme.py` rewriting the theme's pixel values on load **A size set in Python is invisible to all of this
 - **MIDI channels are 0-15 everywhere** — the raw MIDI channel, on every surface.
-- The fixture browser's footer is the patch decision; OK stays disabled until the patch is legal, and the inspector
-  validates the same two things.
+- The fixture browser's footer is the patch decision; OK stays disabled until the patch is legal, and the stage
+  inspector refuses the same two (address overlapping/overflowing the universe, MIDI channel already used) one field at
+  a time — warn and put the old value back.
+- **A DMX clash is rig-wide, so the timeline shows it too**: a lane's address row (`TrackInfo`) goes red via a `state` property.
 - `ui/fixture/scenes_tab.py` edits the fixture **library** (a type's sidecar scene banks), not the patch — the dialog's
   OK/Cancel doesn't apply; one button writes. Its tree keeps **bank sections** with scenes beneath, because both orders
   are what MIDI addresses (36+n bank, 24+n scene); reorder is applied to the data, never by letting Qt move the items

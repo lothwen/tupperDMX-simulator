@@ -242,6 +242,42 @@ def fixture_channel_count(type_name: str, mode: str = "") -> int:
     return fdef.channel_count if fdef else 0
 
 
+def dmx_clashes(fixtures, fixture) -> List[str]:
+    """Names of the patched fixtures whose DMX slots `fixture` also holds.
+
+    Empty when its span is legal. Symmetric by construction — if A is reported
+    against B then B is reported against A — which is what lets a surface flag
+    BOTH sides of a clash rather than only the fixture that moved. A type that
+    resolves no channels occupies nothing, so an unresolvable patch entry is
+    never reported as clashing (and is never clashed with).
+
+    Qt-free and here rather than beside the browser footer's `used_dmx_spans`
+    because `timeline/` may not import `ui/`, and the track headers need the
+    same answer the stage inspector does.
+    """
+    def span(f):
+        # A patch entry may carry no mode at all — "" already means "the type's
+        # first declared mode", so an absent one reads the same way.
+        count = fixture_channel_count(f.type, getattr(f, "mode", ""))
+        return (f.dmx_start, f.dmx_start + count - 1) if count else None
+
+    mine = span(fixture)
+    if mine is None:
+        return []
+    first, last = mine
+    names = []
+    for other in fixtures:
+        if other is fixture:
+            continue
+        theirs = span(other)
+        if theirs is None:
+            continue
+        o_first, o_last = theirs
+        if first <= o_last and last >= o_first:
+            names.append(other.name or other.type)
+    return names
+
+
 def known_fixture_types() -> set:
     """All resolvable fixture-type names, from the fixture library."""
     return set(load_fixture_defs())

@@ -34,9 +34,11 @@ from timeline.manager import Timeline
 class FakeFixture:
     type: str
     name: str = ""
+    dmx_start: int = 1     # a patched fixture always holds an address
 
 
-PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
+PATCH = [FakeFixture("ledbar", dmx_start=1),
+         FakeFixture("blinder", dmx_start=33)]
 
 
 def _assert(cond, msg):

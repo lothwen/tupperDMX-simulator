@@ -107,10 +107,13 @@ You cannot create an illegal patch from this dialog — and editing a fixture yo
 have already patched goes through this same footer ([5.6](#56-editing-a-fixture-you-have-already-patched)),
 so you cannot edit your way into one either.
 
-> The stage **Inspector** ([4.5](#45-the-inspector)) is the one
-> exception: it checks the MIDI channel, but its address field does not check
-> for an overlap. It is a quick tweak surface next to the fixture on the stage;
-> this dialog is the one that validates.
+> The stage **Inspector** ([4.5](#45-the-inspector)) refuses the same two
+> things on the fields it offers — a used MIDI channel, and an address that
+> overlaps or runs past 512 — but one at a time, as a warning that puts the old
+> value back, rather than as a footer that keeps OK disabled. Its **Mode**
+> switch is the one edit it lets through: a mode with more channels can grow a
+> fixture onto its neighbour, which it reports as a standing warning
+> ([4.5](#45-the-inspector)) rather than refusing.
 
 ## 5.4 The Scenes tab
 

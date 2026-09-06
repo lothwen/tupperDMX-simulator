@@ -33,6 +33,7 @@ from .clip_geometry import (
     zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
 )
 from core import note_layout
+from core.config import dmx_clashes
 from core.fixture_library import color_for_type, GROUP_COLORS
 from tupperlogger import get_logger
 
@@ -1189,6 +1190,24 @@ class TrackHeaderWidget(QWidget):
             btn.blockSignals(False)
         self.auto_btn.setEnabled(auto_enabled)
 
+    def set_dmx_clash(self, others: List[str]) -> None:
+        """Flag this lane's fixture as sharing DMX slots with `others`.
+
+        The address row is what the clash is ABOUT, so the address row is what
+        reports it — red and bold, with the fixtures it collides with in the
+        tooltip. **The words are left alone on purpose**: the row has ~94px and
+        the address already spends 89 of them, so any marker added to the text
+        clips the span it is warning about. Weight is the second channel colour
+        alone would not give, and the fixture's own Inspector spells the clash
+        out in full. Re-asked on every reflow, so it clears itself as soon as
+        the patch is fixed.
+        """
+        self.info_label.setToolTip(
+            ("Shares DMX channels with " + ", ".join(others)) if others else "")
+        self.info_label.setProperty("state", "clash" if others else "")
+        self.info_label.style().unpolish(self.info_label)
+        self.info_label.style().polish(self.info_label)
+
     def _on_chevron_toggled(self, collapsed: bool):
         """Hide the MIDI/DMX address row (the checked chevron icon flips to
         point right by itself), then let the owning track restack the timeline
@@ -1420,6 +1439,12 @@ class MidiEventsTrack(BaseTrack):
             mute=bool(mm is not None and mm.is_fixture_muted(self.fixture_index)),
             lock=bool(mm is not None and mm.is_fixture_locked(self.fixture_index)),
             auto_enabled=controller is not None)
+        # A patch clash is a property of the whole patch, not of this lane, so
+        # it is re-asked here (on every reflow) rather than baked in when the
+        # header was built. n is bounded by the 16 MIDI channels.
+        inst = self.timeline_manager._fixture_for_channel(self.fixture_index)
+        self._header_widget.set_dmx_clash(
+            dmx_clashes(self.timeline_manager.fixtures, inst) if inst else [])
 
     def matches_filter(self, event) -> bool:
         """True if `event` belongs on this fixture's lane.

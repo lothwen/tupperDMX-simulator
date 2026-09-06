@@ -37,14 +37,20 @@ from timeline.tracks.midi_events import DraggableMidiEvent
 
 @dataclass
 class FakeFixture:
-    """Minimal stand-in for a patched fixture (type + optional name)."""
+    """Minimal stand-in for a patched fixture (type + address + optional name).
+
+    The address is not decoration: a patched fixture always holds one, and the
+    track headers read the patch's spans to flag fixtures that share channels.
+    """
     type: str
     name: str = ""
+    dmx_start: int = 1
 
 
 # Patch: one ledbar (channel 0) + one blinder (channel 1).
 LEDBAR_CH, BLINDER_CH = 0, 1
-FAKE_FIXTURES = [FakeFixture("ledbar"), FakeFixture("blinder")]
+FAKE_FIXTURES = [FakeFixture("ledbar", dmx_start=1),
+                 FakeFixture("blinder", dmx_start=33)]
 
 
 # (note, channel) clip specs. Notes 24-27 are scene-load verbs resolved against

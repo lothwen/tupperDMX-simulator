@@ -118,8 +118,7 @@ per-fixture setting, right next to the fixture on the stage.
 The same settings are also reachable without coming here — off a timeline lane
 or a clip-library card — in the **Edit fixture** dialog
 ([5.6](#56-editing-a-fixture-you-have-already-patched)),
-which adds the type's scenes and chases and checks the DMX address for an
-overlap, which this card does not.
+which adds the type's scenes and chases.
 
 ![The Inspector for a moving head: identity, profile, mounting, patch and routing.](images/fixture-inspector.png)
 
@@ -127,11 +126,20 @@ overlap, which this card does not.
 |---|---|---|
 | **IDENTITY** | Name | Free text. Shows on the timeline lane and the DMX monitor. Blank falls back to the type name |
 | **PROFILE** | Fixture type | Read-only. A type's DMX footprint is not editable from here |
-| | Mode | **Only shown when the type declares more than one mode.** Changing it changes the channel layout, so the body is rebuilt |
+| | Mode | **Only shown when the type declares more than one mode.** Changing it changes the channel layout, so the body is rebuilt. A mode with more channels can push the fixture onto its neighbour's — that is allowed, and flagged; see the warning below |
 | **MOUNTING** | On the floor / Hanging | **Only shown for fixtures that can be flown.** A smoke machine or a floor can always stands on its own feet, so it gets no switch |
-| **DMX PATCH** | Start address | 1–512 |
+| **DMX PATCH** | Start address | 1–512. Committed when you leave the field or press ⏎, not on every step. An address whose channels would land on another fixture or run past 512 is refused, and the old one comes back |
 | **ROUTING** | MIDI channel | 0–15. See the warning below |
 | | **Delete** | Asks for confirmation, and says how many bars go with it for a multi-body fixture |
+
+> **A red block under the start address means the patch is broken.** It names
+> what the fixture's channels collide with — *"DMX 100 – 117 overlaps Par-rgbw
+> 1. Move the start address, or pick another mode."* — and it **stays**: select
+> another fixture, come back, and it is still there. Typing an overlapping
+> address is refused outright, so the only ways into this state are a **Mode**
+> change that grows the fixture, and a show whose patch was already overlapping
+> when it loaded. Both fixtures in a clash carry the block; moving either one's
+> start address clears it for both.
 
 **Mounting** flips two things at once: the housing turns upside down, and the
 beam is aimed at the floor instead of the ceiling. The hint under the switch says

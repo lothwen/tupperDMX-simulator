@@ -153,7 +153,7 @@ Below them, one header per fixture:
 | grip | Drag to reorder the lanes. The order is remembered with the show |
 | chevron | Collapses the lane to a single row. View only |
 | colour swatch | Matches this fixture's group in the clip library and its section in the DMX monitor |
-| name / `Ch. 0 · DMX 1–7` | The fixture's name over its MIDI channel and address range |
+| name / `Ch. 0 · DMX 1–7` | The fixture's name over its MIDI channel and address range. **It turns red when those channels are shared with another fixture** — see below |
 | **eye** | Mutes this lane's MIDI output. Its clips redraw dimmed |
 | **lock** | Makes the lane read-only: no moves, no resizes, no new clips, no editing |
 | **A** | Follow the song-part program automatically |
@@ -168,6 +168,19 @@ patched fixture, so there is never any doubt which one you get.
 **The header says so as you point at it**: the fixture's colour stripe down the
 left edge lightens, and the address line underneath the name turns into
 *"Double-click to edit"*, then goes back to the address when you move away.
+
+> **A red address line means two fixtures are sharing DMX channels.** Both
+> lanes turn red, not just the one you changed — they are equally wrong, and
+> either one can be moved to fix it. Point at the line and the tooltip names
+> what it collides with; double-click the header and the Inspector spells the
+> clash out and refuses any address that would keep it. The line keeps its own
+> words either way: the header row has no space to spare, and the address is
+> the thing you need to read.
+>
+> You cannot patch your way into this from the **Add fixture** dialog, which
+> disables OK ([5.3](#53-the-footer--the-patch-decision)). It comes from a
+> **Mode** change in the Inspector growing a fixture onto its neighbour, or
+> from a show whose patch was already overlapping when it loaded.
 
 ### The lanes
 

@@ -708,6 +708,51 @@ def test_grip_drag_stays_inside_the_strip():
     _assert(committed == [[2, 0, 1]], "a press with no movement commits nothing")
 
 
+def test_a_dmx_clash_reddens_both_lanes_that_share_the_channels():
+    """A patch clash is a property of the whole rig, so it shows on the strip.
+
+    The address row is what the clash is about, so it is the row that reports
+    it — via a `state` property the stylesheet paints red, plus a tooltip
+    naming what it collides with. It is re-asked on every reflow rather than
+    baked in when the header was built, so it appears and clears without the
+    lane being rebuilt.
+    """
+    print("test_a_dmx_clash_reddens_both_lanes_that_share_the_channels")
+    _, tl = _make()
+
+    def state(track):
+        return track._header_widget.info_label.property("state")
+
+    for track in tl.midi_events_tracks:
+        _assert(not state(track), f"lane ch{track.fixture_index} starts clean")
+
+    # par-rgbw is 6 ch: at 36 it lands inside the blinder's 33-40.
+    clashing = list(PATCH) + [FakeFixture("par-rgbw", 36, 3, name="Front Par")]
+    tl.rebuild_for_patch(clashing)
+    by_channel = {t.fixture_index: t for t in tl.midi_events_tracks}
+
+    _assert(state(by_channel[1]) == "clash", "the blinder that was landed on is flagged")
+    _assert(state(by_channel[3]) == "clash", "and so is the fixture that landed on it")
+    _assert(state(by_channel[0]) != "clash" and state(by_channel[2]) != "clash",
+            "lanes that share nothing stay as they were")
+    _assert("Front Par" in by_channel[1]._header_widget.info_label.toolTip(),
+            "the blinder's tooltip names the fixture on its channels")
+    _assert("blinder" in by_channel[3]._header_widget.info_label.toolTip().lower(),
+            "and the par's names the blinder — the flag is symmetric")
+
+    # The words are left alone: the row has no width for a marker, so only the
+    # colour changes and the address it is warning about stays readable.
+    _assert("DMX 36" in by_channel[3]._header_widget.info_label.text(),
+            "the address itself is not displaced by the warning")
+
+    # Moving it clear must clear both, on a plain reflow.
+    clashing[-1].dmx_start = 200
+    for track in tl.midi_events_tracks:
+        track.sync_header_state()
+    _assert(not state(by_channel[1]) and not state(by_channel[3]),
+            "a legal patch clears the flag on both lanes")
+
+
 def test_rebuild_for_patch_adds_and_removes_tracks():
     print("test_rebuild_for_patch_adds_and_removes_tracks")
     _, tl = _make()
@@ -1050,6 +1095,7 @@ def main():
     test_the_carry_ignores_screen_coordinates()
     test_a_drag_cannot_outlive_its_gesture()
     test_grip_drag_stays_inside_the_strip()
+    test_a_dmx_clash_reddens_both_lanes_that_share_the_channels()
     test_rebuild_for_patch_adds_and_removes_tracks()
     test_rebuild_for_patch_keeps_clip_binding()
     test_rebuild_to_empty_patch()

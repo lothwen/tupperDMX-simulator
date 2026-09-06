@@ -1238,6 +1238,14 @@ QLabel#TrackInfo {
     font-size: 10px;
 }
 
+/* This lane's fixture shares DMX slots with another. The row is the address
+   read-out, so it is the row that says so — red, and marked, since colour
+   alone is not a message. */
+QLabel#TrackInfo[state="clash"] {
+    color: #e05252;
+    font-weight: bold;
+}
+
 /* Reorder grip (placeholder) + collapse chevron — frameless; the chevron
    collapses the track and swaps its glyph rather than showing a checked fill. */
 QPushButton#TrackGrip,
@@ -1484,6 +1492,18 @@ QLabel#InspectorSideLabel[active="true"] {
 
 QLabel#InspectorHint {
     color: #8a8a8a;
+    font-size: 10px;
+}
+
+/* A standing patch clash. The address field refuses an overlap outright, but a
+   mode change is let through, so the card carries the condition until it is
+   fixed — a block rather than a status word, since nobody dismissed it. */
+QLabel#InspectorWarning {
+    color: #e05252;
+    background-color: rgba(120, 40, 40, 90);
+    border: 1px solid rgba(224, 82, 82, 110);
+    border-radius: 3px;
+    padding: 6px 8px;
     font-size: 10px;
 }
 
