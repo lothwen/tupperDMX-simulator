@@ -40,6 +40,8 @@ from ui import theme
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.markers_dialog import MarkersDialog
+from ui.offset_dialog import (CHOICE_AUDIO_ONLY, CHOICE_CANCEL,
+                              CHOICE_MOVE_SHOW, OffsetRippleDialog)
 from core import markers as core_markers
 from webremote.state import probe_duration, song_duration
 
@@ -318,6 +320,8 @@ class MainWindow(QMainWindow):
         self.timeline.seek_requested.connect(self.seek_playback)
         self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
+        self.timeline.waveform_offset_committed.connect(
+            self.on_waveform_offset_committed)
         self.timeline.metronome_volume_changed.connect(self.on_metronome_volume_changed)
         self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
         self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
@@ -559,16 +563,153 @@ class MainWindow(QMainWindow):
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def on_waveform_offset_changed(self, offset_sec):
-        """Handle waveform offset changes from timeline: the drag edits the
-        offset of whichever track is being monitored."""
+        """Live preview of a waveform drag — a LABEL and nothing else.
+
+        This fires on every mouse-move frame, so it must stay free of anything
+        with a side effect: the drag is a proposal until the release, where the
+        dialog decides what it meant. In particular it does NOT move the
+        controller's offsets, which is what keeps a drag out of the audio path
+        (and out of the log) and what lets Cancel put everything back by simply
+        repositioning the item.
+
+        The SETLIST chip shows the BACKING offset, so a guide drag leaves it
+        alone; the chip is also why this runs at all on a programmatic
+        set_waveform_offset (song load, monitor switch, Cancel's revert).
+        """
+        if not self._monitoring_guide():
+            self.toolbar_manager.update_offset_display(offset_sec)
+
+    def on_waveform_offset_committed(self, old_sec, new_sec):
+        """A waveform drag finished: ask what should follow the audio, then
+        persist that decision.
+
+        The offset moves ONE audio track (`audio_time = timeline_time -
+        active_offset()`); every clip, song part and marker is anchored in
+        timeline seconds, and the other track has its own offset — so nothing
+        else moves on its own. That is what you want the first time a track is
+        aligned, and wrong every time after, which is why the drag asks.
+
+        Nothing is written before the answer: Cancel has to be able to put the
+        offset back, and the drag itself only ever changed it in memory.
+        """
         mc = self.media_controller
-        if mc.monitor == MONITOR_GUIDE and mc.guide_file:
-            mc.set_guide_offset(offset_sec)
-            self.config.update_current_song(guide_offset=offset_sec)
+        moved_guide = self._monitoring_guide()
+        choice, move_other, offset = self._ask_offset_ripple(
+            old_sec, new_sec, moved_guide)
+
+        if choice == CHOICE_CANCEL:
+            # The controller never saw the drag, so putting the item back (which
+            # re-emits the preview, restoring the chip) is the whole revert.
+            self.timeline.set_waveform_offset(old_sec)
+            return
+
+        if offset != new_sec:
+            # Advanced overrode where the drag landed; the item has to agree.
+            self.timeline.set_waveform_offset(offset)
+
+        if moved_guide:
+            mc.set_guide_offset(offset)
+            self.config.update_current_song(guide_offset=offset)
         else:
-            mc.set_audio_offset(offset_sec)
-            self.config.update_current_song(offset=offset_sec)
+            mc.set_audio_offset(offset)
+            self.config.update_current_song(offset=offset)
+            self.toolbar_manager.update_offset_display(offset)
+
+        delta = offset - old_sec
+        if move_other:
+            self._move_other_track(moved_guide, delta)
+        if choice == CHOICE_MOVE_SHOW:
+            self.move_show_with_audio(delta)
         self.save_config()
+
+    def _monitoring_guide(self) -> bool:
+        """Whether the waveform band is showing (and so editing) the guide."""
+        mc = self.media_controller
+        return mc.monitor == MONITOR_GUIDE and bool(mc.guide_file)
+
+    def _other_track(self, moved_guide: bool):
+        """`(label, current offset)` of the track the drag did NOT move, or
+        `(None, None)` when there is none — the checkbox has nothing to offer
+        for a song with one track. The offset comes along because the dialog
+        quotes absolutes: it shows where that track would LAND, not by how far
+        it would shift."""
+        mc = self.media_controller
+        if moved_guide:
+            return (("backing track", mc.audio_offset_sec) if mc.audio_file
+                    else (None, None))
+        return (("guide track", mc.guide_offset_sec) if mc.guide_file
+                else (None, None))
+
+    def _move_other_track(self, moved_guide: bool, delta: float) -> None:
+        """Slide the track the drag did not touch by the same delta.
+
+        Relative, not absolute: the two files have their own lead-ins, so what
+        transfers between them is the CORRECTION, never the offset itself."""
+        mc = self.media_controller
+        if moved_guide:
+            offset = mc.audio_offset_sec + delta
+            mc.set_audio_offset(offset)
+            self.config.update_current_song(offset=offset)
+            self.toolbar_manager.update_offset_display(offset)
+        else:
+            offset = mc.guide_offset_sec + delta
+            mc.set_guide_offset(offset)
+            self.config.update_current_song(guide_offset=offset)
+        self.logger.info(
+            f"Moved the {'backing' if moved_guide else 'guide'} track with it "
+            f"({delta:+.3f}s -> {offset:+.3f}s)")
+
+    def _show_start_time(self):
+        """The earliest thing the show has anywhere on this song's timeline —
+        a clip or a marker — or None when the song is still empty."""
+        song = self.config.get_current_song()
+        starts = [t for t in (self.midi_manager.earliest_event_time(),
+                              core_markers.earliest_marker_time(song))
+                  if t is not None]
+        return min(starts) if starts else None
+
+    def _ask_offset_ripple(self, old_sec: float, new_sec: float,
+                           moved_guide: bool):
+        """Ask what follows the track a drag moved. Returns
+        `(choice, move_other_track, offset)`.
+
+        Silent — and AUDIO_ONLY at the dragged offset — when there is nothing
+        to offer: aligning a lone track on a song with no clips or markers is
+        the normal first step and must not nag.
+        """
+        start = self._show_start_time()
+        other_label, other_offset = self._other_track(moved_guide)
+        if start is None and other_label is None:
+            return CHOICE_AUDIO_ONLY, False, new_sec
+
+        dialog = OffsetRippleDialog(
+            self,
+            moved_label="guide track" if moved_guide else "backing track",
+            other_label=other_label, other_offset=other_offset or 0.0,
+            old_offset=old_sec, new_offset=new_sec, show_start=start)
+        dialog.exec()
+        return dialog.choice(), dialog.move_other(), dialog.offset()
+
+    def move_show_with_audio(self, delta: float) -> None:
+        """Slide everything authored against the music by `delta`: the whole
+        sequence and the whole marker track, in that order.
+
+        Both halves are checked to be movable before either one moves (see
+        OffsetRippleDialog) — a shift that applied to only one of them
+        would put the clips and the markers out of sync with each other, which
+        is worse than the staleness this fixes."""
+        song = self.config.get_current_song()
+        moved_events = self.midi_manager.shift_all(delta)
+        moved_markers = core_markers.shift_markers(song, delta) if song else False
+        if moved_markers:
+            # Persists, redraws the ruler and re-applies the tempo map / cues.
+            self.apply_marker_edits(song)
+        elif moved_events:
+            self.save_config()
+        if moved_events or moved_markers:
+            self.logger.info(
+                f"Moved the show with the audio by {delta:+.3f}s "
+                f"(events={moved_events}, markers={moved_markers})")
 
     def _waveform_audio_info(self, audio_file):
         """(duration, PCM) for the timeline's waveform band.

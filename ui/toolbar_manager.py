@@ -865,6 +865,19 @@ class ToolbarManager(QObject):
                                self.midi_empty_button, filename)
         self.logger.debug(f"MIDI file display updated: {filename or '(empty)'}")
 
+    def update_offset_display(self, offset: float,
+                             has_song: bool = True) -> None:
+        """Refresh just the SETLIST footer's offset chip.
+
+        Its own setter because the audio offset changes WITHOUT the song
+        changing — a waveform drag retimes the audio under a song that is
+        already loaded, and update_song_info's other arguments (title, status,
+        bpm, key) are not the drag's to supply. Always the backing offset: the
+        guide has its own, and the chip has always meant `song.offset`."""
+        if self.offset_label is not None:
+            self.offset_label.setText(
+                f"offset {offset:+.2f}s" if has_song else "")
+
     def update_song_info(self, title: str, status: str,
                          bpm: Optional[int] = None,
                          offset: float = 0.0,
@@ -875,9 +888,7 @@ class ToolbarManager(QObject):
         combobox."""
         if self.bpm_label is not None:
             self.bpm_label.setText(f"{int(bpm)} BPM" if bpm else "")
-        if self.offset_label is not None:
-            self.offset_label.setText(
-                f"offset {offset:+.2f}s" if title else "")
+        self.update_offset_display(offset, has_song=bool(title))
         if self.key_edit is not None:
             self.key_edit.blockSignals(True)
             self.key_edit.setText(key)

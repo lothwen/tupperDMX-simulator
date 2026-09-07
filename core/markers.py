@@ -113,3 +113,42 @@ def ruler_rows(song) -> List[Tuple[float, str, str]]:
         rows.append((float(getattr(song, "segue_time", 0.0)), KIND_SEGUE,
                      "next song, no count-in"))
     return sorted(rows)
+
+
+def earliest_marker_time(song) -> Optional[float]:
+    """The earliest time anything on `song`'s marker track sits at, or None.
+
+    Voice cues, control markers and the segue are three separate lists on the
+    song, so "where does the marker track start" has no single owner to ask —
+    which is what a rigid shift of the whole track needs before it can clamp.
+    A segue at its 0.0 default is not counted: `segue_time` is kept even while
+    `segue` is off (see SongConfig), so 0.0 there means never dialled rather
+    than a marker at the top of the song."""
+    times = [float(c.time) for c in getattr(song, "voice_tts", [])]
+    times += [float(m.time) for m in getattr(song, "control_markers", [])]
+    segue_time = float(getattr(song, "segue_time", 0.0))
+    if segue_time > 0.0:
+        times.append(segue_time)
+    return min(times) if times else None
+
+
+def shift_markers(song, delta_sec: float) -> bool:
+    """Slide the whole marker track by `delta_sec`, rigidly. Returns whether
+    anything moved.
+
+    Every kind moves — a tempo change is part of the arrangement just as much
+    as a voice cue, so an audio offset the show follows must carry it too. The
+    caller clamps: this shifts what it is given and only refuses to push a
+    marker before t=0, where it would be unreachable."""
+    if not delta_sec:
+        return False
+    earliest = earliest_marker_time(song)
+    if earliest is None or earliest + delta_sec < 0.0:
+        return False
+    for cue in getattr(song, "voice_tts", []):
+        cue.time = float(cue.time) + delta_sec
+    for marker in getattr(song, "control_markers", []):
+        marker.time = float(marker.time) + delta_sec
+    if float(getattr(song, "segue_time", 0.0)) > 0.0:
+        song.segue_time = float(song.segue_time) + delta_sec
+    return True

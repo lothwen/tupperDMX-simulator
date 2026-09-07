@@ -50,9 +50,19 @@ def render_waveform_pixmap(pcm, width: int, height: int) -> QPixmap:
 
 
 class DraggableWaveform(QGraphicsObject):
-    """Draggable waveform graphics item."""
-    
+    """Draggable waveform graphics item.
+
+    Two signals, because a drag has two different audiences. `position_changed`
+    is the live preview every mouse-move frame — it is what keeps a playing
+    transport following the drag, and it also fires when the offset is set
+    programmatically. `offset_committed` fires once, on mouse release, and only
+    for a drag that actually moved the item: it carries where the drag STARTED
+    as well as where it ended, which is the only moment the app knows by how
+    much the audio just slid under the show.
+    """
+
     position_changed = pyqtSignal(QPointF)
+    offset_committed = pyqtSignal(float, float)   # old_x, new_x (scene px)
 
     def __init__(self, pixmap, parent=None):
         super().__init__(parent)
@@ -60,6 +70,7 @@ class DraggableWaveform(QGraphicsObject):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.y_pos = 0
+        self._press_x = None
 
     def boundingRect(self):
         return QRectF(self.pixmap.rect())
@@ -79,6 +90,17 @@ class DraggableWaveform(QGraphicsObject):
             self.position_changed.emit(new_pos)
             return new_pos
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        self._press_x = self.x()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # Let the base class land the move first, then report the whole drag.
+        super().mouseReleaseEvent(event)
+        press_x, self._press_x = self._press_x, None
+        if press_x is not None and self.x() != press_x:
+            self.offset_committed.emit(press_x, self.x())
 
 
 class WaveformTrack(BaseTrack):
@@ -192,6 +214,8 @@ class WaveformTrack(BaseTrack):
             self.waveform_item.setX(preserved_x)
             self.waveform_item.setZValue(0.5)  # Keep waveform above grid but below events
             self.waveform_item.position_changed.connect(self._on_waveform_moved)
+            self.waveform_item.offset_committed.connect(
+                self._on_waveform_committed)
             self.content_scene.addItem(self.waveform_item)
             self.items.append(self.waveform_item)
 
@@ -199,9 +223,17 @@ class WaveformTrack(BaseTrack):
             self.logger.error(f"Error drawing waveform: {e}")
 
     def _on_waveform_moved(self, pos):
-        """Handle waveform position changes."""
+        """Live preview of a drag in progress (also fires on a programmatic
+        set_waveform_offset). Nothing is persisted from here — that is the
+        committed signal's job."""
         offset_sec = pos.x() / self.timeline_manager.PIXELS_PER_SECOND
         self.timeline_manager.waveform_offset_changed.emit(offset_sec)
+
+    def _on_waveform_committed(self, old_x: float, new_x: float):
+        """The drag ended: report old and new offsets in seconds."""
+        pps = self.timeline_manager.PIXELS_PER_SECOND
+        self.timeline_manager.waveform_offset_committed.emit(
+            old_x / pps, new_x / pps)
 
     def draw_song_sections(self, events, y_offset: int):
         """Draw the song-part arrangement as translucent contiguous boxes over

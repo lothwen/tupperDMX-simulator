@@ -478,6 +478,25 @@ class MidiManager(QObject):
     def delete_selection(self, event_ids) -> bool:
         return self._selection.delete_selection(event_ids)
 
+    def earliest_event_time(self):
+        """Time of the first event, or None when the document is empty."""
+        return self._doc.earliest_event_time()
+
+    def shift_all(self, delta_sec: float) -> bool:
+        """Slide the whole sequence by `delta_sec` as one undoable edit.
+
+        The audio offset moved and the show is following it (see
+        MainWindow.on_waveform_offset_committed): everything authored against
+        the music has to travel the same distance, so this is a document-wide
+        shift rather than a selection move.
+        """
+        if not self._doc.shift_all_events(delta_sec):
+            return False
+        self._doc.reconcile_blackouts()
+        self._commit()
+        self.logger.info(f"Shifted the whole sequence by {delta_sec:+.3f}s")
+        return True
+
     def get_events_for_ui(self) -> List[Dict[str, Any]]:
         """Get MIDI events formatted for Timeline display."""
         return copy.deepcopy(self.midi_events)

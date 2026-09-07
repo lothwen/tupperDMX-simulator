@@ -39,7 +39,10 @@ class Timeline(QWidget):
     # Signals
     seek_requested = pyqtSignal(float)
     bpm_detected = pyqtSignal(int)
+    # Live preview during a waveform drag (and on a programmatic set).
     waveform_offset_changed = pyqtSignal(float)
+    # Drag finished: (offset the drag started at, offset it ended at).
+    waveform_offset_committed = pyqtSignal(float, float)
     metronome_volume_changed = pyqtSignal(int)
     metronome_mute_toggled = pyqtSignal(bool)
     audio_volume_changed = pyqtSignal(int)

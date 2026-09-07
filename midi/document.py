@@ -518,6 +518,39 @@ class MidiDocument:
                 break
         return True
 
+    def earliest_event_time(self):
+        """Time of the first event in the document, or None when it is empty."""
+        if not self.midi_events:
+            return None
+        return min(e['time'] for e in self.midi_events)
+
+    def shift_all_events(self, delta_sec: float) -> bool:
+        """Slide the WHOLE document by `delta_sec`. No rebuild/emit.
+
+        Rigid by construction, which is why this is not a `move_selection` over
+        every id: with nothing left unselected there are no obstacles to clamp
+        against and no gap to reconcile — every clip, every BLACKOUT marker and
+        every fade ramp keeps its neighbour, so the relative arrangement that
+        makes the BLACKOUT invariants hold is exactly the one that survives.
+        Fade notes shift too: they are absolute times parented by id, not
+        offsets from their clip.
+
+        Refuses rather than clamps when the block would cross t=0 — clamping
+        here would silently break the rigidity the caller is relying on.
+        """
+        if not delta_sec:
+            return False
+        earliest = self.earliest_event_time()
+        if earliest is None or earliest + delta_sec < 0.0:
+            return False
+        for event in self.midi_events:
+            event['time'] += delta_sec
+        for note in self.midi_notes:
+            note['time'] += delta_sec
+        self.midi_events.sort(key=lambda x: x['time'])
+        self.midi_notes.sort(key=lambda x: x['time'])
+        return True
+
     # --- per-track setup persistence (note 71) -------------------------------
 
     def _setup_note_for(self, channel: int):

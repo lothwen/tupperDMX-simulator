@@ -73,6 +73,17 @@ TTS cache is written at and what the pipeline starts at. Stereo formats are offe
 the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing synthesizes during playback — cache-first always**.
 `app/media_controller.py` owns the timeline position (`time.time()` master clock, engine slaved with 150 ms drift resync).
 
+- **An offset moves ONE audio track** (`audio_time = timeline_time - active_offset()`) — clips, song parts and markers
+  are anchored in timeline seconds, and the other track has its own offset, so nothing else follows on its own. The drag
+  therefore **commits once on mouseRelease** (the only moment Δ is knowable) and `ui/offset_dialog.py` asks what should:
+  the show (`MidiManager.shift_all` + `core.markers.shift_markers`, both checked movable before either moves) and, by
+  checkbox, the other track — which takes the **correction, never the offset**, since the two files have independent
+  lead-ins. Guide drags ask too: the guide is the reference you design against. **A shift crossing t=0 is REFUSED, not
+  clamped** (a partial shift looks aligned while sitting the remainder out from the music); the dialog disables "Move
+  show" and says why, so Advanced can retype the offset without the dialog changing shape. **It quotes only ABSOLUTE
+  offsets, `from → to`** — the numbers `show.json` stores. **A drag in progress is a proposal**: the live signal moves
+  the SETLIST chip and nothing else (no controller offset, no config, nothing per-frame in the audio path), so Cancel
+  reverts by just repositioning the item.
 - **Count-in is negative timeline time.** With `song.precount`, playback begins at `-(bars × 4 beats)`; audio/MIDI/lights
   wait for t ≥ 0; pausing resets to 0 and seeking cancels it. AppCore speaks the numbers on the LAST count-in bar when
   `config.audio.count_in_voice` is on.
