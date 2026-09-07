@@ -105,8 +105,11 @@ small box in the rack with no screen, where **the web remote is the only
 interface**. It force-enables the remote in memory without writing that choice
 to your preferences, and never downloads a TTS voice.
 
-`--headless` is the only flag the app defines; anything else on the command line
-is handed to Qt, so `-platform`, `-style` and friends still work.
+The app defines four flags — `--headless`, `--show PATH` (open a specific show
+folder), `--list-dmx-usb` (print the USB DMX interfaces this machine can see)
+and `--dmx-usb INDEX|auto` (send DMX out of one of them for this run, without
+touching your preferences). Anything else on the command line is handed to Qt,
+so `-platform`, `-style` and friends still work.
 
 ## 1.5 Where things are stored
 

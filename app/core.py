@@ -153,9 +153,15 @@ class AppCore(QObject):
     # Config application
     # ------------------------------------------------------------------
     def apply_io_config(self):
-        """Apply config.io end to end: MIDI routing + controller/sinks/stage."""
-        self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
-        self.dmx_manager.apply_io(self.config.io)
+        """Apply config.io end to end: MIDI routing + controller/sinks/stage.
+
+        Through effective_io(), so a command-line pick (`--dmx-usb`) is
+        re-applied on every pass — including the one a live prefs reload
+        triggers, which replaces config.io wholesale.
+        """
+        io = self.config.effective_io()
+        self.media_controller.set_midi_routing(midi_routing_from_io(io))
+        self.dmx_manager.apply_io(io)
 
     def apply_audio_config(self):
         """Apply config.audio to the live engine + count-in wiring."""

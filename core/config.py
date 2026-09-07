@@ -1,6 +1,6 @@
 # ABOUTME: Configuration management for TupperDMX. Splits storage across two files:
 # ABOUTME: shipped config.json (read-only fixture patch) and userprefs.json (writable user prefs).
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from typing import Dict, List, Optional, Any
 import json
 import os
@@ -374,6 +374,14 @@ class Config:
     _last_written: Optional[Dict[str, Any]] = field(
         default=None, init=False, repr=False, compare=False)
 
+    #: I/O routing fields the command line pinned for THIS RUN — `--dmx-usb`
+    #: naming the dongle that happens to be plugged into this box. A fact about
+    #: the run, not a preference, so it is kept apart from `io`: applied on top
+    #: at every apply (effective_io), which is what makes it survive a live
+    #: prefs reload, and never written back by save().
+    _io_overrides: Dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False)
+
     #: Sections reload_prefs() adopts from disk while the app runs. Everything
     #: else in the file is deliberately excluded: `playlist`/`fixtures` are the
     #: legacy keys the show migration reads once, and after
@@ -382,6 +390,22 @@ class Config:
     #: would mean swapping the show out from under a running session.
     RELOADABLE_SECTIONS = ("window", "artnet", "volume", "logging", "io",
                            "audio", "webremote")
+
+    def override_io(self, **values: Any) -> None:
+        """Pin I/O routing fields from the command line, for this run only."""
+        self._io_overrides.update(values)
+
+    def effective_io(self) -> IOConfig:
+        """The routing to actually apply: `io` with this run's command-line
+        overrides on top.
+
+        `io` itself stays the preferences' view — what the Settings dialog
+        edits and what save() writes — so a `--dmx-usb` pick drives the
+        hardware without ever rewriting userprefs.json.
+        """
+        if not self._io_overrides:
+            return self.io
+        return replace(self.io, **self._io_overrides)
 
     def next_free_channel(self) -> int:
         """Lowest non-negative MIDI channel not used by any patched fixture.

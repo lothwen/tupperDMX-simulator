@@ -132,6 +132,13 @@ MIDI routing and drives `DMXManager.apply_io(io)`, which owns the software `DMXC
 `StageFrameBridge` — no UDP loopback. Cardinalities: MIDI out 1→N (a stateful command protocol — fan-out fine, **fan-in
 forbidden**), controller DMX out 1→N (idempotent snapshots), stage DMX in = exactly one selectable feed.
 
+**The one routing decision that can come from outside Settings is which USB dongle sends**: headless has no dialog, so
+`--dmx-usb INDEX|auto` (indices from `--list-dmx-usb`, hence that list is **sorted**) pins the controller's USB output
+leg. It goes to `Config.override_io()`, NOT into `config.io` — `effective_io()` lays it over the prefs' view at every
+`apply_io_config()`, so it survives a live prefs reload and `save()` never writes it. `auto` **owns the leg**: with
+nothing detected the USB output is off rather than falling back to a remembered device, while an explicit index that
+isn't there exits 2 (a typo, not a missing dongle). The buildroot init script boots with `--dmx-usb auto`.
+
 ## The render engine (`stage/`)
 
 **Two stages, in this order — the OFL *category* picks the body and the kind of light it makes; the *capabilities* its

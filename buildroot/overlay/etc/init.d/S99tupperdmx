@@ -61,9 +61,20 @@ start() {
 	# this script has at boot; -N is busybox's start-stop-daemon FANCY option,
 	# enabled in the buildroot config.
 	#
+	# --dmx-usb auto sends the controller's DMX out of whatever FTDI dongle is
+	# plugged in, resolved at every boot. The box has no Settings dialog, so the
+	# alternative is writing the device's "manufacturer:product:serial" string
+	# into userprefs.json by hand -- and that string changes with the dongle, so
+	# a replacement at the venue would leave the rig dark until someone edits
+	# the file over the share. The pick is NOT written back to userprefs.json:
+	# it is a fact about tonight's hardware, not a preference. With nothing
+	# plugged in the USB output simply stays off and the box boots as usual
+	# (Art-Net and the web remote do not depend on it). Add --show ... here too
+	# to pin one show; see buildroot/README.md.
+	#
 	HOME="$DATA_DIR" \
 	start-stop-daemon -S -q -b -m -N -5 -p "$PIDFILE" \
-		-x /bin/sh -- -c "exec >'$BOOTLOG' 2>&1; exec '$DAEMON' '$APP' --headless"
+		-x /bin/sh -- -c "exec >'$BOOTLOG' 2>&1; exec '$DAEMON' '$APP' --headless --dmx-usb auto"
 	if [ $? -ne 0 ]; then echo 'FAIL (start-stop-daemon)'; return 1; fi
 	# The daemon is backgrounded, so its exit status never reaches this script:
 	# without this check a process that dies on startup still prints OK, which
