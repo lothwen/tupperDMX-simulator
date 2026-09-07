@@ -242,7 +242,10 @@
             "green": 0,
             "blue": 0,
             "white": 255,
-            "name": "White wash"
+            "name": "White wash",
+            "song_parts": [
+              "CHORUS"
+            ]
           },
           {
             "red": 255,
@@ -385,7 +388,10 @@
             "green": 255,
             "blue": 255,
             "white": 0,
-            "name": "Palette"
+            "name": "Palette",
+            "song_parts": [
+              "CHORUS"
+            ]
           },
           {
             "red": 255,
@@ -469,6 +475,9 @@
           "scenes": [
             0,
             7
+          ],
+          "song_parts": [
+            "CHORUS"
           ]
         },
         {
