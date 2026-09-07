@@ -7,6 +7,7 @@ import sys
 
 from core.config import Config, userprefs_path
 from core.paths import asset_path
+from core import splash
 from core.show.migrate import open_or_create_startup_show
 from tupperlogger import setup_logging, get_logger
 
@@ -60,6 +61,10 @@ def _stage_gpu_requested() -> bool:
 
 
 def run_gui(argv, show_path=None):
+    # The boot splash is already up (the bootloader drew it while the onefile
+    # archive unpacked); from here on it reports what we are actually doing.
+    splash.update("Starting Qt...", 0.10)
+
     from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
@@ -81,10 +86,13 @@ def run_gui(argv, show_path=None):
     from ui import theme
     app.setStyleSheet(theme.load_qss())
 
+    splash.update("Loading configuration...", 0.30)
     try:
         config = Config.load()
     except Exception as e:
-        # Show configuration error before main window is created
+        # Show configuration error before main window is created. The splash is
+        # always-on-top, so it has to go first or it sits over the dialog.
+        splash.close()
         from ui.error_dialogs import ErrorDialogManager
         if ErrorDialogManager.show_configuration_error(None, str(e), can_reset=True):
             # User chose to reset: remove userprefs.json (shipped config.json is read-only)
@@ -112,11 +120,18 @@ def run_gui(argv, show_path=None):
     try:
         # Resolve the show project this machine had open, migrating the legacy
         # userprefs playlist/patch into a default show on first launch.
+        splash.update("Opening the show...", 0.50)
         show = open_or_create_startup_show(config, explicit_path=show_path)
         logger.info(f"Show: {show.root}")
 
+        splash.update("Building the interface...", 0.75)
         from ui.main_window import MainWindow
         main_window = MainWindow(config, show)
+
+        splash.update("Ready", 1.0)
+        # Down before the window comes up, never after: on Windows the splash
+        # is a topmost, undecorated Tk window and would cover it.
+        splash.close()
         main_window.show()
 
         logger.info("Application started successfully")
@@ -128,6 +143,7 @@ def run_gui(argv, show_path=None):
         logger.critical(f"Application crashed: {e}")
 
         # Show crash dialog if possible
+        splash.close()
         try:
             from ui.error_dialogs import ErrorDialog
             crash_dialog = ErrorDialog(
@@ -145,6 +161,9 @@ def run_gui(argv, show_path=None):
 
 
 def run_headless_mode(argv, show_path=None):
+    # A rack box has no one to watch a splash, and may have no display at all.
+    splash.close()
+
     try:
         config = Config.load()
     except Exception as e:

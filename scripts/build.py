@@ -68,6 +68,28 @@ class Builder:
         except (subprocess.CalledProcessError, ImportError) as e:
             print(f"Icon conversion failed: {e}")
             
+    def _pyinstaller_env(self):
+        """Environment for the PyInstaller subprocess.
+
+        On Linux the boot splash needs PyInstaller to resolve the *paths* of the
+        Tcl and Tk shared libraries from `_tkinter`'s dynamic-link entries. A
+        python-build-standalone interpreter (what `uv python install` provides)
+        names them with no RPATH: the interpreter finds them through its own,
+        PyInstaller cannot, and the build quietly drops the splash. Pointing the
+        loader at the interpreter's own lib/ is enough. See BUILD.md.
+        """
+        env = os.environ.copy()
+        if self.platform != "linux":
+            return env
+        lib_dir = Path(sys.base_prefix) / "lib"
+        if not lib_dir.is_dir():
+            return env
+        existing = env.get("LD_LIBRARY_PATH", "")
+        parts = [p for p in existing.split(os.pathsep) if p]
+        if str(lib_dir) not in parts:
+            env["LD_LIBRARY_PATH"] = os.pathsep.join([str(lib_dir), *parts])
+        return env
+
     def build_executable(self):
         """Build executable using PyInstaller"""
         print("Building executable...")
@@ -78,7 +100,7 @@ class Builder:
                 "--clean",
                 "--noconfirm",
                 "build.spec"
-            ], check=True, cwd=self.project_root)
+            ], check=True, cwd=self.project_root, env=self._pyinstaller_env())
             print("Executable built successfully")
         except subprocess.CalledProcessError as e:
             print(f"Build failed: {e}")
