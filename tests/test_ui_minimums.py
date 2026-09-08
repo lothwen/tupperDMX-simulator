@@ -263,6 +263,24 @@ def test_scale_is_clamped_to_its_range(qapp):
             "and the default is the size the interface was designed at")
 
 
+def test_theme_asset_urls_are_absolute(qapp):
+    print("test_theme_asset_urls_are_absolute")
+    import re
+
+    # Qt resolves a relative url() against the process working directory, not
+    # against the sheet — so the combo arrows, the radio dot and the check mark
+    # drew in a dev run (started in the repo root) and vanished in a frozen
+    # build, whose assets sit in the PyInstaller extraction dir. Silent: a url
+    # that misses renders nothing rather than raising.
+    urls = re.findall(r"url\(\s*['\"]?([^'\"()]+)['\"]?\s*\)", theme.load_qss())
+    _assert(urls, "the theme still styles sub-controls with images")
+    for url in urls:
+        _assert(os.path.isabs(url), f"{url} is resolved against the bundle")
+        _assert(os.path.exists(url), f"{url} is a file that ships")
+        _assert("\\" not in url,
+                f"{url} uses forward slashes — QSS reads a backslash as an escape")
+
+
 def test_applying_the_same_scale_twice_is_free(qapp):
     print("test_applying_the_same_scale_twice_is_free")
     # The window only re-measures its toolbars when this returns True, and a
@@ -289,6 +307,7 @@ def main():
     test_scaling_is_a_no_op_at_one(app)
     test_scale_is_clamped_to_its_range(app)
     test_applying_the_same_scale_twice_is_free(app)
+    test_theme_asset_urls_are_absolute(app)
     print("\nALL TESTS PASSED")
 
 
