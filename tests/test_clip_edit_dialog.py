@@ -511,6 +511,20 @@ def test_the_wheel_writes_through_the_dialog(qapp):
 
     led = resolve_fixture("ledbar")
     fields = [c.field for c in led.channels]
+    opened = ClipEditDialog.for_scene(
+        fdef=led, type_name="ledbar", channel=0, dmx_start=1, name="S",
+        channels={"brightness": 255, "red": 255, "green": 120, "blue": 0},
+        present={"brightness", "red", "green", "blue"}, time=1.0)
+    try:
+        # The wheel loads the scene's own colour, and it has to do so while the
+        # dialog is still being built — where every child reports itself
+        # invisible, so the sync cannot be gated on isVisible().
+        _assert(opened.color_wheel.color().name() == "#ff7800",
+                f"the wheel opens on the scene's colour "
+                f"({opened.color_wheel.color().name()})")
+    finally:
+        opened.close()
+
     dialog = ClipEditDialog.for_scene(
         fdef=led, type_name="ledbar", channel=0, dmx_start=1, name="S",
         channels={"brightness": 255}, present={"brightness"}, time=1.0)
