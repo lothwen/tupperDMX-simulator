@@ -115,21 +115,37 @@ def ruler_rows(song) -> List[Tuple[float, str, str]]:
     return sorted(rows)
 
 
+def earliest_marker(song) -> Optional[Tuple[float, str]]:
+    """`(time, label)` of the earliest marker on `song`'s track, or None.
+
+    The label names the marker as a user knows it — its kind, plus the line a
+    voice cue speaks or the tempo a change sets — because it is what gets
+    quoted when that marker is the one standing in the way of a shift.
+
+    A segue at its 0.0 default is not counted: `segue_time` is kept even while
+    `segue` is off (see SongConfig), so 0.0 there means never dialled rather
+    than a marker at the top of the song."""
+    rows = [(float(c.time), f"{kind_label(KIND_VOICE)} marker “{c.text}”")
+            for c in getattr(song, "voice_tts", [])]
+    for marker in getattr(song, "control_markers", []):
+        label = f"{kind_label(marker.kind)} marker"
+        if marker.kind == KIND_TEMPO:
+            label += f" ({marker.bpm} BPM)"
+        rows.append((float(marker.time), label))
+    segue_time = float(getattr(song, "segue_time", 0.0))
+    if segue_time > 0.0:
+        rows.append((segue_time, f"{kind_label(KIND_SEGUE)} marker"))
+    return min(rows, key=lambda row: row[0]) if rows else None
+
+
 def earliest_marker_time(song) -> Optional[float]:
     """The earliest time anything on `song`'s marker track sits at, or None.
 
     Voice cues, control markers and the segue are three separate lists on the
     song, so "where does the marker track start" has no single owner to ask —
-    which is what a rigid shift of the whole track needs before it can clamp.
-    A segue at its 0.0 default is not counted: `segue_time` is kept even while
-    `segue` is off (see SongConfig), so 0.0 there means never dialled rather
-    than a marker at the top of the song."""
-    times = [float(c.time) for c in getattr(song, "voice_tts", [])]
-    times += [float(m.time) for m in getattr(song, "control_markers", [])]
-    segue_time = float(getattr(song, "segue_time", 0.0))
-    if segue_time > 0.0:
-        times.append(segue_time)
-    return min(times) if times else None
+    which is what a rigid shift of the whole track needs before it can clamp."""
+    first = earliest_marker(song)
+    return first[0] if first is not None else None
 
 
 def shift_markers(song, delta_sec: float) -> bool:

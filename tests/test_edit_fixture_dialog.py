@@ -90,7 +90,8 @@ def test_edit_mode_drops_the_library_rail_and_keeps_everything_else(qapp):
             _assert(dialog._library_panel.isHidden(),
                     "the browser tree is hidden — a patched fixture cannot be "
                     "swapped for another type")
-            tabs = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+            tabs = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())
+                    if dialog.tabs.isTabVisible(i)]
             _assert(tabs == ["General", "Channels", "Modes", "Scenes", "Chases"],
                     f"all five tabs are still here (got {tabs})")
             _assert(dialog.dmx_spin.value() == 10

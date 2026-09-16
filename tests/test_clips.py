@@ -67,8 +67,11 @@ def test_group_structure():
             "one colour per patched fixture, plus the neutral Show colour")
 
     show = groups[-1]["clips"]
-    _assert([c["title"] for c in show][:2] == ["START", "INTRO"],
-            "the Show group leads with START and the song parts")
+    _assert([c["title"] for c in show][:2] == ["INTRO", "VERSE"],
+            "the Show group is the song parts, then blackout-all — START (60) "
+            "is fixture state now, not a clip anyone can drag")
+    _assert(not any(c["payload"]["note"] == note_layout.START for c in show),
+            "no START clip is offered anywhere")
     _assert(all(c["ref"]["kind"] == "show" for c in show),
             "show verbs belong to no fixture")
 

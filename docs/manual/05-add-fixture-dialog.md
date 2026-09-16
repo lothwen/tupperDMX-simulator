@@ -104,7 +104,7 @@ Sequences built from those scenes, again for the **type** — see
 | **✓ OK** / **⊘ Cancel** | **OK stays disabled until the patch is legal** |
 
 You cannot create an illegal patch from this dialog — and editing a fixture you
-have already patched goes through this same footer ([5.6](#56-editing-a-fixture-you-have-already-patched)),
+have already patched goes through this same footer ([5.7](#57-editing-a-fixture-you-have-already-patched)),
 so you cannot edit your way into one either.
 
 > The stage **Inspector** ([4.5](#45-the-inspector)) refuses the same two
@@ -209,13 +209,42 @@ first.
 > no seconds/beats choice, and no per-step fade, hold or level — Run steps at
 > the engine's own rate, which is what you will hear from the rig.
 
-## 5.6 Editing a fixture you have already patched
+## 5.6 The Palette tab
+
+![The Palette tab: a base hue and the palette mode built from it.](images/fixture-palette.png)
+
+The colours a fixture cycles through, for the song that is loaded. **Offered
+only for a Color Changer** — a hazer or a plain dimmer has no colour to cycle,
+so the tab is not there at all.
+
+Two choices:
+
+- a **Base Color** from a twelve-hue grid, or **?** for a hue picked at random
+  each time the song runs;
+- a **Palette Mode** — COMPLEMENTARY, ANALOGOUS, TRIADIC, COLOR+WHITE,
+  MONOCHROMATIC or SINGLE — each previewed beside its button as a live colour
+  band built from the hue you chose.
+
+Unlike the Scenes and Chases tabs, this one is **not** a library edit: it is one
+of the dialog's answers, held until **OK** and discarded by Cancel.
+
+> **The palette is per song, per fixture.** It is stored in that song's `.mid`
+> as one note 60 at t=0 (see [A.4](12-appendix-midi-notes.md#a4-the-start-palette-note-60)),
+> which is why the tab shows nothing to edit when no song is loaded — and why
+> opening the dialog while song 3 is up edits song 3's palette. It used to be a
+> draggable **START** clip on the timeline; it is fixture state now, and the
+> timeline does not show it.
+
+> **Setting a palette does not turn anything on.** It stores the palette; a
+> song-part marker is what arms the fixture to cycle it.
+
+## 5.7 Editing a fixture you have already patched
 
 Everything above is about *adding* a fixture. Once one is in the show, the same
 dialog edits it — it is the same set of answers, so it is the same dialog. Only
 the first question is already settled: **there is no library rail**, because you
-cannot swap a patched fixture for another type. All five tabs and the whole
-footer are exactly as described above, now pointed at your fixture; the header
+cannot swap a patched fixture for another type. Every tab and the whole footer
+are exactly as described above, now pointed at your fixture; the header
 gains the two things that belong to *this* fixture rather than to its type —
 its name, and how it is rigged.
 
@@ -251,11 +280,11 @@ channel are left out of that check, so it does not report itself as a clash.
 scene banks are stored per mode, switching it re-points the Scenes and Chases
 tabs at that mode's banks; anything unsaved is offered to you first.
 
-**OK applies, Cancel discards** — the name, mounting, address, channel and mode
-are all held until you press OK. **The Scenes and Chases tabs are the exception
-and always were:** they edit the fixture *library*, shared by every show using
-that type, and they write when *their* buttons say so ([5.4](#54-the-scenes-tab),
-[5.5](#55-the-chases-tab)).
+**OK applies, Cancel discards** — the name, mounting, address, channel, mode and
+palette are all held until you press OK. **The Scenes and Chases tabs are the
+exception and always were:** they edit the fixture *library*, shared by every
+show using that type, and they write when *their* buttons say so
+([5.4](#54-the-scenes-tab), [5.5](#55-the-chases-tab)).
 
 **Delete** removes the fixture from the show. It asks first, then closes — it is
 not held until OK.

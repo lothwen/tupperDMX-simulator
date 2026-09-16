@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout, QG
 from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QEvent
 
-from .widgets import (ContentView, StartEventEditDialog, TrackResizeHandle,
+from .widgets import (ContentView, TrackResizeHandle,
                       HeaderResizeHandle, CustomTooltip)
 from .widgets.clip_edit import ClipEditDialog
 from core import note_layout
@@ -27,10 +27,6 @@ from .tracks.clip_geometry import uniform_grid
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.midi_events import build_render_units, DraggableMidiEvent
 from tupperlogger import get_logger
-
-# MIDI note number for the song-part marker that triggers START handling in
-# the software controller (see software_controller/main.py:pick_scene_from_song_part).
-START_NOTE = note_layout.START
 
 
 class Timeline(QWidget):
@@ -1723,9 +1719,8 @@ class Timeline(QWidget):
     def on_midi_event_edit_by_id(self, event_id: str):
         """Edit dialog request for the event with `event_id`.
 
-        Scene groups get the console; START keeps its own palette editor (its
-        velocity packs a hue and a mode, which is not a verb parameter like the
-        others); everything else is one clip on one fixture.
+        Scene groups get the console; everything else is one clip on one
+        fixture.
         """
         if not self.midi_manager or not event_id:
             return
@@ -1736,15 +1731,6 @@ class Timeline(QWidget):
         group_id = event_data.get('group_id')
         if group_id:
             self._edit_scene(group_id)
-            return
-
-        if int(event_data.get('note', -1)) == START_NOTE:
-            dialog = StartEventEditDialog(event_data)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            new_values = dialog.get_values()
-            if self.midi_manager.edit_event(event_id, **new_values):
-                self._schedule_refresh()
             return
 
         channel = event_data.get('channel')

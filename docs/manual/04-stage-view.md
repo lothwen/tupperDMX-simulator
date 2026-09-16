@@ -117,7 +117,7 @@ per-fixture setting, right next to the fixture on the stage.
 
 The same settings are also reachable without coming here — off a timeline lane
 or a clip-library card — in the **Edit fixture** dialog
-([5.6](#56-editing-a-fixture-you-have-already-patched)),
+([5.7](#57-editing-a-fixture-you-have-already-patched)),
 which adds the type's scenes and chases.
 
 ![The Inspector for a moving head: identity, profile, mounting, patch and routing.](images/fixture-inspector.png)

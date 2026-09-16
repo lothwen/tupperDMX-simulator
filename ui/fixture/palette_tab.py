@@ -1,19 +1,43 @@
-# ABOUTME: Edit dialog for the special START MIDI event (note 60).
-# ABOUTME: Encodes a hue choice (12 fixed hues + random) and palette mode
-# ABOUTME: into the event's velocity as: hue_index * 6 + palette_mode_index.
+# ABOUTME: Fixture-dialog tab for the per-fixture colour palette (note 60).
+# ABOUTME: A hue choice (12 fixed hues + random) and a palette mode, packed into
+# ABOUTME: one MIDI velocity as hue_index * 6 + mode_index.
+"""The palette a fixture cycles through, edited where the fixture is edited.
 
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
-                             QLabel, QPushButton, QButtonGroup, QFrame,
-                             QDialogButtonBox, QWidget)
+It used to be a dialog behind a draggable START clip on the timeline. START is
+not a clip any more — it is the fixture's own state, one note 60 pinned at t=0
+per MIDI channel (see `core/note_layout`) — so the editor lives here, beside the
+fixture's scenes and chases.
+
+Offered only for a **Color Changer**: a hazer or a plain dimmer has no colour to
+cycle, so the tab would be a control over nothing. `AddFixtureDialog` asks
+`applies_to` and hides the tab when the answer is no.
+
+Song-scoped, like the auto/mute/lock flags note 71 carries: the value is read
+from and written to the .mid of the song that is loaded right now, so each song
+gets its own palette per fixture.
+"""
+
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+                             QLabel, QPushButton, QButtonGroup, QFrame)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QColor
 
+from core import note_layout
 from software_controller.main import (
     PALETTE_MODES, RAINBOW_HUE_12, DEFAULT_HSL_S, DEFAULT_HSL_L,
     generate_song_colors, hsl_to_rgb,
 )
 
-RANDOM_HUE_INDEX = 12
+RANDOM_HUE_INDEX = note_layout.RANDOM_HUE_INDEX
+
+# The OFL category that earns the tab: only a fixture that can change colour has
+# a palette to walk.
+COLOR_CHANGER = "Color Changer"
+
+
+def applies_to(fdef) -> bool:
+    """Whether `fdef` is a fixture the palette means anything for."""
+    return bool(fdef) and COLOR_CHANGER in getattr(fdef, "categories", ())
 
 
 class _PalettePreview(QFrame):
@@ -57,38 +81,49 @@ class _PalettePreview(QFrame):
                              QColor(int(r), int(g), int(b)))
 
 
-class StartEventEditDialog(QDialog):
-    """Edit dialog for the START song-part MIDI event.
+class FixturePaletteTab(QWidget):
+    """Base colour + palette mode for one fixture, as one packed velocity.
 
-    Encodes the user's choices into the event's velocity as:
-        velocity = hue_index * 6 + palette_mode_index
-    where hue_index 0-11 maps to RAINBOW_HUE_12 and 12 means random.
+    Holds an ANSWER, like the footer's address and the header's rigging: nothing
+    is written until the dialog is accepted, and the host asks for
+    ``velocity()`` then.
     """
 
     SWATCH_SIZE = 44
 
-    def __init__(self, event_data, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.event_data = event_data
-        self.setWindowTitle("Edit START Event")
-        self.setModal(True)
-
-        velocity = int(event_data.get('velocity', 0))
-        self.hue_index = velocity // 6
-        self.palette_mode_index = velocity % 6
-        if self.hue_index > RANDOM_HUE_INDEX:
-            self.hue_index = 0
-        if self.palette_mode_index >= len(PALETTE_MODES):
-            self.palette_mode_index = 0
+        self.setObjectName("FixturePaletteTab")
+        self.hue_index = 0
+        self.palette_mode_index = 0
 
         self.color_buttons = []
         self.mode_buttons = []
         self.preview_widgets = []
 
         self._setup_ui()
-        self._apply_initial_selection()
+        self._apply_selection()
         self._refresh_previews()
 
+    # ------------------------------------------------------------------
+    # Value
+    # ------------------------------------------------------------------
+    def set_velocity(self, velocity: int) -> None:
+        """Load a packed note-60 velocity into the controls."""
+        self.hue_index, self.palette_mode_index = \
+            note_layout.unpack_palette(velocity)
+        if self.palette_mode_index >= len(PALETTE_MODES):
+            self.palette_mode_index = 0
+        self._apply_selection()
+        self._refresh_previews()
+
+    def velocity(self) -> int:
+        """The packed note-60 velocity for the current choices."""
+        return note_layout.pack_palette(self.hue_index, self.palette_mode_index)
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
     def _setup_ui(self):
         layout = QVBoxLayout(self)
 
@@ -104,7 +139,7 @@ class StartEventEditDialog(QDialog):
         grid = QGridLayout()
         grid.setSpacing(6)
 
-        for i in range(12):
+        for i in range(len(RAINBOW_HUE_12)):
             r, g, b = hsl_to_rgb(RAINBOW_HUE_12[i], DEFAULT_HSL_S, DEFAULT_HSL_L)
             btn = self._make_swatch(f"rgb({r}, {g}, {b})")
             row, col = divmod(i, 4)
@@ -157,11 +192,7 @@ class StartEventEditDialog(QDialog):
             row.addWidget(preview, 1)
             layout.addLayout(row)
 
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        self.button_box.accepted.connect(self.accept)
-        self.button_box.rejected.connect(self.reject)
-        layout.addWidget(self.button_box)
+        layout.addStretch(1)
 
         self.color_group.idClicked.connect(self._on_color_changed)
         self.mode_group.idClicked.connect(self._on_mode_changed)
@@ -176,7 +207,7 @@ class StartEventEditDialog(QDialog):
         btn.setStyleSheet(f"QPushButton#ColorSwatch {{ background-color: {css_color}; }}")
         return btn
 
-    def _apply_initial_selection(self):
+    def _apply_selection(self):
         if self.hue_index >= RANDOM_HUE_INDEX:
             self.random_button.setChecked(True)
         else:
@@ -194,11 +225,3 @@ class StartEventEditDialog(QDialog):
         for idx, name in enumerate(PALETTE_MODES):
             colors = generate_song_colors(name, self.hue_index, True)
             self.preview_widgets[idx].set_colors(colors)
-
-    def get_values(self):
-        velocity = self.hue_index * 6 + self.palette_mode_index
-        return {
-            'note': self.event_data.get('note'),
-            'time': self.event_data.get('time'),
-            'velocity': velocity,
-        }

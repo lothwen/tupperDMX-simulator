@@ -594,7 +594,8 @@ def test_the_dialog_mounts_the_tab_and_keeps_the_two_in_step(qapp):
         config = Config()
         config.fixtures = []
         dialog = AddFixtureDialog(StageController(config))
-        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())
+                 if dialog.tabs.isTabVisible(i)]
                 == ["General", "Channels", "Modes", "Scenes", "Chases"],
                 "Chases joins the detail panel's tabs, beside Scenes")
 

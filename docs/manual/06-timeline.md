@@ -122,10 +122,15 @@ Verbs are grouped by number:
 | 48 / 49 / 50 | Take manual control / manual / black out this fixture |
 | 51 | Black out everything (a toggle) |
 | 52 – 59 | Timing, palette and scene-step verbs |
-| 60 | **START** — initialise the palette |
 | 61 – 69 | Song parts (INTRO, VERSE, CHORUS…) |
 | 70 | Run a chase |
 | 72 – 75 | Colour macros |
+
+Notes 60 and 71 are missing from that table on purpose. They are the fixture's
+own **state** rather than anything authored against the music: 60 is its colour
+palette (Palette tab of the fixture dialog, §5) and 71 its per-track auto / mute
+/ lock flags (the lane header). Both sit at t=0 in the `.mid`, one per fixture,
+and neither ever appears as a clip.
 
 **Only a fixture's first 23 DMX slots can be driven from the timeline**, because
 notes 24 and up are already scene verbs. Channels past that are still patched,
@@ -160,7 +165,7 @@ Below them, one header per fixture:
 
 **Double-click the header** — anywhere on it that isn't one of those controls —
 to open the **Edit fixture** dialog for that lane's fixture
-([5.6](#56-editing-a-fixture-you-have-already-patched)):
+([5.7](#57-editing-a-fixture-you-have-already-patched)):
 its name, mode, address and MIDI channel, and its type's scenes and chases.
 Right-clicking the header offers the same thing as a menu item. A lane *is* one
 patched fixture, so there is never any doubt which one you get.
@@ -292,7 +297,7 @@ Right-clicking a song-section box offers **Edit '<part>'…** and **Delete
 '<part>'**.
 
 Right-clicking a lane *header* offers **Edit '<fixture>'…**, which opens that
-fixture's own dialog ([5.6](#56-editing-a-fixture-you-have-already-patched)).
+fixture's own dialog ([5.7](#57-editing-a-fixture-you-have-already-patched)).
 
 Hovering a clip shows its part name, note number, time, bar and beat, and
 velocity.
@@ -376,11 +381,9 @@ edit.
   re-send, not a restore: it cannot put back what the automatic program was
   doing.
 
-### The START clip
+### The palette is not a clip
 
-![The START clip's own editor: a base hue and the palette mode built from it.](images/start-event-edit.png)
-
-Note 60 gets its own dialog, because its velocity packs two choices rather than
-one parameter: a **Base Color** from a twelve-hue grid (or **?** for random) and
-a **Palette Mode** — COMPLEMENTARY, ANALOGOUS, TRIADIC, COLOR+WHITE,
-MONOCHROMATIC or SINGLE — each previewed as a live colour band.
+Note 60 (**START**) used to be a draggable clip with an editor of its own. It is
+the fixture's colour palette now — state you set on the fixture, not a cue you
+place in the song — so it lives in the **Palette** tab of the fixture dialog
+(§5.7) and has no representation on the timeline at all.

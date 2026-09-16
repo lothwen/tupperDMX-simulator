@@ -510,7 +510,8 @@ def build_script(session: Session) -> None:
         state["editor_named"] = (instance, instance.name)
         if not instance.name:
             instance.name = "Front bar"
-        dlg = AddFixtureDialog(w.stage_controller, w, instance=instance)
+        dlg = AddFixtureDialog(w.stage_controller, w, instance=instance,
+                               midi_manager=w.midi_manager)
         state["editor"] = session.open_dialog(dlg, 1180, 800)
         for _ in range(6):
             app.processEvents()
@@ -518,6 +519,21 @@ def build_script(session: Session) -> None:
     session.add("_open-editor", open_editor, wait=2.0)
     session.add("edit-fixture",
                 lambda: shot.shoot("edit-fixture", window=state["editor"]))
+
+    # The Palette tab of that same dialog — the fixture's colour palette, which
+    # used to be a dialog of its own behind a START clip. Offered for a Color
+    # Changer only, so the shot is skipped when the borrowed fixture is not one.
+    def show_palette_tab():
+        dlg = state.get("editor")
+        if dlg is None or not dlg.tabs.isTabVisible(dlg._palette_index):
+            return
+        dlg.select_tab("palette")
+        for _ in range(6):
+            app.processEvents()
+
+    session.add("_show-palette-tab", show_palette_tab, wait=1.2)
+    session.add("fixture-palette",
+                lambda: shot.shoot("fixture-palette", window=state.get("editor")))
 
     def close_editor():
         # `close()` rejects, which is the point: this dialog applies its patch
@@ -644,8 +660,8 @@ def build_script(session: Session) -> None:
         tl = w.timeline
 
         # Prefer a verb that actually has a parameter editor: a channel verb,
-        # then a chase, then a scene load. START (60) has its own dialog and
-        # renders as an empty page here, which makes a useless figure.
+        # then a chase, then a scene load. A verb with no parameter renders as
+        # an empty page here, which makes a useless figure.
         def rank(event):
             note = int(event.get('note', 0))
             for index, group in enumerate(((1, 23), (70, 70), (24, 35), (52, 59))):
@@ -700,21 +716,6 @@ def build_script(session: Session) -> None:
                 lambda: shot.shoot("clip-edit-scene", window=state.get("scene_dlg")))
     session.add("_close-scene-editor",
                 lambda: session.close_dialog(state.pop("scene_dlg", None)), wait=0.8)
-
-    def open_start_editor():
-        from timeline.widgets.start_event_edit import StartEventEditDialog
-        tl = w.timeline
-        event = next((e for e in tl._cached_events
-                      if int(e.get('note', -1)) == 60), None)
-        if event is None:
-            event = {'note': 60, 'velocity': 12, 'time': 0.0, 'channel': 0}
-        state["start_dlg"] = session.open_dialog(StartEventEditDialog(event, w))
-
-    session.add("_open-start-editor", open_start_editor, wait=1.2)
-    session.add("start-event-edit",
-                lambda: shot.shoot("start-event-edit", window=state.get("start_dlg")))
-    session.add("_close-start-editor",
-                lambda: session.close_dialog(state.pop("start_dlg", None)), wait=0.8)
 
     def open_voice_tts():
         from core.config import ControlMarkerConfig, VoiceTTSConfig

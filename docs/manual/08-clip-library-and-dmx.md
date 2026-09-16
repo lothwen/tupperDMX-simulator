@@ -21,7 +21,7 @@ several:
   `Multicolor`, `Strobes`, `Beams`, `Looks`…)
 - **a `Chases` group** for that fixture's chases
 - and, once for the whole show, a grey **`Show`** group holding the global
-  verbs: START, the song parts, and blackout-all
+  verbs: the song parts and blackout-all
 
 A pill's colour dot matches that fixture's timeline lane and its section in the
 DMX monitor, so a colour means the same fixture everywhere.
@@ -31,7 +31,8 @@ DMX monitor, so a colour means the same fixture everywhere.
 Each card is one cue: a title, a subtitle naming its kind (`channel`, `scene`,
 `chase`, `color`, `blackout`, `cue`) and a coloured accent bar. A small **✱** on
 a scene means its colour comes from the palette rather than from fixed values,
-so it follows whatever the START clip set up.
+so it follows whatever the fixture's Palette tab set up
+([5.6](05-add-fixture-dialog.md#56-the-palette-tab)).
 
 **Three things you can do with a card:**
 
@@ -39,7 +40,7 @@ so it follows whatever the START clip set up.
 |---|---|
 | **Click** | Auditions the cue live through whatever output is routed. **The timeline is not touched** |
 | **Drag onto a lane** | Inserts it as a clip at the drop point |
-| **Right-click** | **Edit '<fixture>'…** — opens that fixture's dialog ([5.6](#56-editing-a-fixture-you-have-already-patched)) **on the very scene or chase the card is for**, ready to edit. A card that is neither (a channel control, a colour macro, a blackout) names no scene, so it opens on the Scenes tab with nothing selected |
+| **Right-click** | **Edit '<fixture>'…** — opens that fixture's dialog ([5.7](#57-editing-a-fixture-you-have-already-patched)) **on the very scene or chase the card is for**, ready to edit. A card that is neither (a channel control, a colour macro, a blackout) names no scene, so it opens on the Scenes tab with nothing selected |
 
 A card in the grey **Show** group belongs to the show rather than to a fixture,
 and a starred card whose fixture has been unpatched resolves to nobody — neither

@@ -47,7 +47,8 @@ PALETTE_RANDOM_OFF = 56
 SCENE_PREV = 57
 SCENE_NEXT = 58
 SCENE_PACKED = 59
-START = 60                       # palette init (global verb)
+START = 60                       # per-fixture palette, packed in velocity
+                                 # (see FIXTURE_SETUP: same shape, same rules)
 SONG_PART_BASE = 61              # 61-69 INTRO..END (global verbs)
 CHASE_LOAD = 70                  # load chase (velocity = chase index) — NEW verb
 FIXTURE_SETUP = 71               # per-track setup flags packed in velocity
@@ -78,7 +79,6 @@ COLOR_MACROS = ['WHITE', 'ORANGE', 'CYAN', 'PINK']
 # ---------------------------------------------------------------------------
 _NEUTRAL = '#555555'
 _BLACKOUT_COLOR = '#363636'
-_START_COLOR = '#c73737'
 
 # Curated per-song-part marker colours (carried over from the old config.json
 # midi_note_map so existing timelines keep their familiar palette).
@@ -113,6 +113,48 @@ def is_song_part(note: int) -> bool:
 def is_fixture_setup(note: int) -> bool:
     """True for the per-track setup note (note 71)."""
     return int(note) == FIXTURE_SETUP
+
+
+def is_fixture_palette(note: int) -> bool:
+    """True for the per-fixture palette note (note 60, START)."""
+    return int(note) == START
+
+
+# ---------------------------------------------------------------------------
+# The two per-fixture notes that are STATE, not clips (60 and 71).
+# ---------------------------------------------------------------------------
+# Both live at t=0, one per MIDI channel, in ``midi_notes`` only: describe_note
+# returns None for either, so the codec keeps them in the .mid and drops them
+# from ``midi_events`` — they persist and they replay, but they never render as
+# a clip and no drop can author one. Everything they say is packed into the
+# note's velocity, and ABSENCE MEANS THE DEFAULT (velocity 0 is a note_off on
+# any note outside VALUE_BEARING_NOTES, so a default-valued note cannot be
+# written at all).
+#
+# Palette (note 60): the hue the fixture cycles from and the mode it walks it
+# in — ``velocity = hue_index * PALETTE_MODE_COUNT + mode_index``, which is
+# exactly how handle_note_on's case 60 unpacks it. Hue 0-11 index RAINBOW_HUE_12
+# and RANDOM_HUE_INDEX means "pick one per song".
+PALETTE_MODE_COUNT = 6           # len(software_controller.main.PALETTE_MODES)
+PALETTE_HUE_COUNT = 12           # len(software_controller.main.RAINBOW_HUE_12)
+RANDOM_HUE_INDEX = PALETTE_HUE_COUNT
+
+
+def pack_palette(hue_index: int, mode_index: int) -> int:
+    """Pack a hue choice + palette mode into a note-60 velocity (0-127)."""
+    hue = max(0, min(RANDOM_HUE_INDEX, int(hue_index)))
+    mode = max(0, min(PALETTE_MODE_COUNT - 1, int(mode_index)))
+    return hue * PALETTE_MODE_COUNT + mode
+
+
+def unpack_palette(velocity: int) -> Tuple[int, int]:
+    """Unpack a note-60 velocity into ``(hue_index, mode_index)``.
+
+    Out-of-range velocities fall back to hue 0 rather than raising: the .mid is
+    an interchange format and a foreign note 60 is not a crash."""
+    v = max(0, int(velocity))
+    hue, mode = divmod(v, PALETTE_MODE_COUNT)
+    return (hue if hue <= RANDOM_HUE_INDEX else 0), mode
 
 
 # Setup-note velocity bitfield. Each fixture's persisted track setup is packed
@@ -151,9 +193,9 @@ def unpack_setup(velocity: int) -> Dict[str, bool]:
 
 def is_global_verb(note: int) -> bool:
     """True for notes ``handle_note_on`` dispatches *before* the channel check —
-    i.e. channel-agnostic verbs (blackout-all and the song-part markers). START
-    and the colour macros are per-fixture (they run after the channel selects
-    the fixture), so they are NOT global."""
+    i.e. channel-agnostic verbs (blackout-all and the song-part markers). The
+    colour macros are per-fixture (they run after the channel selects the
+    fixture), so they are NOT global."""
     n = int(note)
     return n == BLACKOUT_ALL or is_song_part(n)
 
@@ -206,8 +248,6 @@ def describe_note(note: int, fdef: Optional[FixtureDef] = None,
     # ---- Global verbs (channel-agnostic) ----
     if n == BLACKOUT_ALL:
         return NoteInfo('BLACKOUT ALL', _BLACKOUT_COLOR)
-    if n == START:
-        return NoteInfo('START', _START_COLOR)
     if is_song_part(n):
         name = SONG_PARTS[n - SONG_PART_BASE]
         return NoteInfo(name, _SONG_PART_COLORS.get(name, _NEUTRAL))
@@ -235,10 +275,10 @@ def describe_note(note: int, fdef: Optional[FixtureDef] = None,
         idx = n - BANK_SELECT_RANGE[0]
         return NoteInfo(_bank_name(fdef, idx) or f'Bank {idx}', _NEUTRAL)
 
-    # 0, 76-127: reserved / NOP. Note 71 (FIXTURE_SETUP) is intentionally None
-    # here: it persists per-track setup flags in the .mid but must never render
-    # as a timeline clip (the codec keeps it in midi_notes, drops it from
-    # midi_events).
+    # 0, 76-127: reserved / NOP. Notes 60 (START) and 71 (FIXTURE_SETUP) are
+    # intentionally None here: they persist the fixture's palette and its
+    # per-track setup flags in the .mid but must never render as a timeline clip
+    # (the codec keeps them in midi_notes, drops them from midi_events).
     return None
 
 
@@ -257,9 +297,11 @@ def note_applies_to(note: int, fdef: Optional[FixtureDef]) -> bool:
         return bool(fdef and fdef.banks)
     if n == CHASE_LOAD:
         return bool(fdef and fdef.chases)
-    # START, colour macros, blackout-fixture, manual + timing verbs all run
-    # against whatever fixture the channel selects, so they apply to any one.
-    if n == START or n == BLACKOUT_FIXTURE or n in _UTILITY_LABELS:
+    # Colour macros, blackout-fixture, manual + timing verbs all run against
+    # whatever fixture the channel selects, so they apply to any one. START is
+    # NOT among them: it is fixture state edited in the fixture dialog, never a
+    # clip, so no picker offers it and no drop may author it.
+    if n == BLACKOUT_FIXTURE or n in _UTILITY_LABELS:
         return True
     return _in((COLOR_MACRO_BASE, COLOR_MACRO_BASE + len(COLOR_MACROS) - 1), n)
 
@@ -277,7 +319,7 @@ _VERB_GROUPS: Tuple[Tuple[str, Tuple[int, ...]], ...] = (
                  PALETTE_RANDOM_ON, PALETTE_RANDOM_OFF)),
     ("Colour", tuple(range(COLOR_MACRO_BASE,
                            COLOR_MACRO_BASE + len(COLOR_MACROS)))),
-    ("Show", (START, BLACKOUT_ALL)
+    ("Show", (BLACKOUT_ALL,)
      + tuple(range(SONG_PART_BASE, SONG_PART_BASE + len(SONG_PARTS)))),
 )
 
@@ -456,7 +498,7 @@ def build_note_map() -> Dict[str, NoteInfo]:
     """
     notes: List[int] = (
         list(range(CHANNEL_OFFSET_RANGE[0], 8))            # channel controls 1-7
-        + [BLACKOUT_FIXTURE, BLACKOUT_ALL, START]          # blackout/start
+        + [BLACKOUT_FIXTURE, BLACKOUT_ALL]                 # blackouts
         + list(range(SONG_PART_BASE, SONG_PART_BASE + len(SONG_PARTS)))
         + [CHASE_LOAD]
         + list(range(COLOR_MACRO_BASE, COLOR_MACRO_BASE + len(COLOR_MACROS)))

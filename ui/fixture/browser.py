@@ -10,7 +10,9 @@ panel renders the OFL document — physical data, metadata, links, the channel
 layout of the selected mode, and every mode the fixture declares — plus the
 Scenes tab (`ui/fixture/scenes_tab.py`) and the Chases tab
 (`ui/fixture/chases_tab.py`), which edit the type's sidecar scene banks and the
-chases over them rather than the patch.
+chases over them rather than the patch, and — for a Color Changer only — the
+Palette tab (`ui/fixture/palette_tab.py`), which is this INSTANCE's palette in
+the song that is loaded.
 
 The footer is the actual patch decision: where in the universe the fixture lands
 and which MIDI channel drives it. Both are validated live against the current
@@ -43,6 +45,7 @@ from ui.widgets.chips import FlowLayout, chip as _chip
 from ui.widgets.sizing import fit_to_screen
 from ui.widgets.toggle_switch import ToggleSwitch
 from ui.fixture.chases_tab import FixtureChasesTab
+from ui.fixture.palette_tab import FixturePaletteTab, applies_to as _has_palette
 from ui.fixture.scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -378,7 +381,8 @@ class AddFixtureDialog(QDialog):
     # refresh what reads it without waiting for OK — Cancel saves scenes too.
     library_changed = pyqtSignal()
 
-    def __init__(self, stage_controller, parent=None, *, instance=None):
+    def __init__(self, stage_controller, parent=None, *, instance=None,
+                 midi_manager=None):
         super().__init__(parent)
         self.setObjectName("AddFixtureDialog")
         self.setModal(True)
@@ -387,6 +391,11 @@ class AddFixtureDialog(QDialog):
 
         self._stage = stage_controller
         self._config = stage_controller.config
+        # Where the palette tab reads and writes: the CURRENT song's .mid, which
+        # is the only thing that knows a fixture's palette. None for a dialog
+        # opened with no song loaded (and in the tests), which simply hides the
+        # tab — there is nowhere to put the answer.
+        self._midi = midi_manager
         # EDIT MODE. `instance` is a fixture the show already has, so the two
         # questions the browser exists to ask are already answered: the library
         # rail is hidden (you cannot swap a patched fixture for another type)
@@ -453,6 +462,9 @@ class AddFixtureDialog(QDialog):
             # the footer would then never have been filled in.
             self._on_patch_changed()
             self._populate_instance_fields()
+            if self._midi is not None:
+                self.palette_tab.set_velocity(
+                    self._midi.fixture_palette(int(instance.channel)))
         else:
             self._rebuild_tree()
             self.dmx_spin.setValue(suggest_free_dmx_start(self._config))
@@ -687,6 +699,13 @@ class AddFixtureDialog(QDialog):
             lambda: self._on_library_changed(self.chases_tab))
         self.tabs.addTab(self.scenes_tab, "Scenes")
         self.tabs.addTab(self.chases_tab, "Chases")
+        # The instance's palette in the song that is loaded — unlike the two
+        # above it IS one of the dialog's answers, so it waits for OK. Built
+        # unconditionally and hidden per fixture (`_sync_palette_tab`): only a
+        # Color Changer has a palette to walk.
+        self.palette_tab = FixturePaletteTab()
+        self._palette_index = self.tabs.addTab(self.palette_tab, "Palette")
+        self.tabs.setTabVisible(self._palette_index, False)
         layout.addWidget(self.tabs, 1)
         return panel
 
@@ -1210,6 +1229,7 @@ class AddFixtureDialog(QDialog):
         self._populate_channels()
         self._populate_stats()
         self._populate_library_tabs()
+        self._sync_palette_tab()
 
     def _populate_library_tabs(self) -> None:
         """Point the Scenes and Chases tabs at the type + mode now on screen.
@@ -1219,6 +1239,19 @@ class AddFixtureDialog(QDialog):
         fdef = self._current_def()
         self.scenes_tab.set_fixture(key, fdef, self.dmx_spin.value())
         self.chases_tab.set_fixture(key, fdef)
+
+    def _sync_palette_tab(self) -> None:
+        """Show the Palette tab for a Color Changer, hide it for anything else.
+
+        Asked on every def/mode change, because a mode can move a fixture in or
+        out of the category. The value is loaded ONCE per fixture, not per
+        re-sync: re-reading it here would throw away a choice the user made and
+        then switched modes on.
+        """
+        visible = self._midi is not None and _has_palette(self._current_def())
+        self.tabs.setTabVisible(self._palette_index, visible)
+        if not visible and self.tabs.currentIndex() == self._palette_index:
+            self.tabs.setCurrentIndex(0)
 
     def _populate_stats(self) -> None:
         fdef = self._current_def()
@@ -1462,7 +1495,25 @@ class AddFixtureDialog(QDialog):
                 changed = True
         if changed:
             self._stage.refresh_labels()
+        # Not folded into `changed`: the palette is not part of the patch, and
+        # writing it already committed the .mid. Applied against the channel the
+        # footer just settled on, so re-channelling a fixture takes its palette
+        # with it.
+        self.apply_palette(int(channel))
         return changed
+
+    def apply_palette(self, channel: int) -> bool:
+        """Write this dialog's palette answer onto `channel`'s note 60.
+
+        Public because ADD mode has no instance to apply to until the caller has
+        patched one — the designer calls this with the channel it just used. A
+        no-op when the tab was never offered (no song loaded, or a fixture with
+        no colour to cycle).
+        """
+        if self._midi is None or not self.tabs.isTabVisible(self._palette_index):
+            return False
+        return self._midi.set_fixture_palette(channel,
+                                              self.palette_tab.velocity())
 
     def _on_delete(self) -> None:
         """Remove the fixture being edited, once. Confirmed, then closed —

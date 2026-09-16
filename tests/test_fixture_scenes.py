@@ -720,7 +720,8 @@ def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
         config = Config()
         config.fixtures = []
         dialog = AddFixtureDialog(StageController(config))
-        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())
+                 if dialog.tabs.isTabVisible(i)]
                 == ["General", "Channels", "Modes", "Scenes", "Chases"],
                 "Scenes joins the detail panel's tabs, with Chases after it")
 

@@ -165,6 +165,25 @@ class MidiManager(QObject):
             return True
         return False
 
+    # ------------------------------------------------------------------
+    # Per-fixture palette (persisted in the .mid via note 60 / START)
+    # ------------------------------------------------------------------
+    def fixture_palette(self, channel) -> int:
+        """`channel`'s packed palette velocity (0 = the default palette)."""
+        return self._doc.fixture_palette(channel)
+
+    def set_fixture_palette(self, channel, velocity: int) -> bool:
+        """Persist `channel`'s palette (note 60 at t=0) and commit, so the
+        rebuilt .mid replays it at the top of the song and the show autosaves.
+
+        Unlike the setup flags there is no live mirror to push: the palette only
+        means anything once the note reaches the controller, and it does that on
+        the next playback like every other note in the file."""
+        if self._doc.set_fixture_palette(channel, velocity):
+            self._commit()
+            return True
+        return False
+
     def _apply_muted_to_worker(self) -> None:
         """Push the current muted-channel set onto the running worker (if any),
         so muting takes effect mid-playback without a restart."""

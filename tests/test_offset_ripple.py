@@ -16,6 +16,9 @@ ripple that keeps them together:
   * a drag in progress touches nothing but the SETLIST chip;
   * Advanced overrides the offset the drag landed on, and everything that
     follows — headline, checkbox, the show shift — follows the typed value;
+  * Advanced also takes the move in beats, and the two fields write each other;
+  * a show that cannot follow names the item in the way and the lowest offset
+    it can follow to;
   * every figure the dialog shows is an ABSOLUTE offset written `from -> to`,
     the same number that lands in show.json, never a relative nudge.
 
@@ -25,6 +28,7 @@ Run with:
 
 import sys
 import os
+import tempfile
 from dataclasses import dataclass
 
 # Headless Qt for standalone runs (pytest sets this via conftest.py).
@@ -128,6 +132,44 @@ def test_shift_all_moves_the_mirrored_notes():
             "the notes the .mid is rebuilt from moved too")
 
 
+def test_shift_all_leaves_the_setup_notes_at_zero():
+    print("test_shift_all_leaves_the_setup_notes_at_zero")
+    m = _make_midi()
+    m.add_event(LEDBAR_CLIP, 3.0, 100, channel=LEDBAR_CH)
+    m.set_fixture_auto(LEDBAR_CH, True)
+    m.set_fixture_auto(BLINDER_CH, True)
+
+    def _setup_times():
+        return [n["time"] for n in m.midi_notes
+                if n["note"] == note_layout.FIXTURE_SETUP]
+
+    _assert(_setup_times() == [0.0, 0.0], "both setup notes start at t=0")
+    _assert(m.shift_all(-1.0), "a leftward shift the clips can take is allowed")
+    _assert(_setup_times() == [0.0, 0.0],
+            "the setup notes stayed at t=0 (they are timeless persistence)")
+    _assert(_close(m.earliest_event_time(), 2.0), "the clip still moved")
+    _assert(m.shift_all(2.0), "a rightward shift too")
+    _assert(_setup_times() == [0.0, 0.0], "and they stay put that way as well")
+
+
+def test_a_leftward_shift_still_saves():
+    """The bug the exclusion fixes: a setup note dragged below t=0 makes
+    `rebuild` write a negative delta tick, which only blows up in
+    `MidiFile.save` — so the export failed and the edit was lost from disk."""
+    print("test_a_leftward_shift_still_saves")
+    m = _make_midi()
+    m.add_event(LEDBAR_CLIP, 3.0, 100, channel=LEDBAR_CH)
+    m.set_fixture_auto(LEDBAR_CH, True)
+    _assert(m.shift_all(-1.0), "the show follows the audio left")
+    out = os.path.join(tempfile.gettempdir(), "tupper_shift_save.mid")
+    try:
+        _assert(m.export_to_file(out), "the .mid still exports")
+        _assert(os.path.exists(out), "and lands on disk")
+    finally:
+        if os.path.exists(out):
+            os.remove(out)
+
+
 def test_shift_all_refuses_across_zero():
     print("test_shift_all_refuses_across_zero")
     m = _make_midi()
@@ -137,6 +179,35 @@ def test_shift_all_refuses_across_zero():
     _assert(_times(m) == before, "and nothing moved (no partial clamp)")
     _assert(m.shift_all(-1.0), "a shift landing exactly on t=0 is allowed")
     _assert(_close(m.earliest_event_time(), 0.0), "first clip sits at 0")
+
+
+def test_a_blackout_never_blocks_the_shift():
+    """A BLACKOUT is a gap marker — dark, not content — so one sitting before
+    the first clip does not hold the show back, and one a leftward shift pushes
+    before t=0 is dropped rather than refusing the move."""
+    print("test_a_blackout_never_blocks_the_shift")
+    m = _make_midi()
+    m.add_event(LEDBAR_CLIP, 1.0, 100, channel=LEDBAR_CH)
+    m.add_event(LEDBAR_CLIP, 3.0, 100, channel=LEDBAR_CH)
+    m.add_event(BLINDER_CLIP, 2.0, 100, channel=BLINDER_CH)
+    # Deleting the first clip leaves a BLACKOUT at 1.0 on the ledbar.
+    m.replace_with_blackout(min(m.midi_events, key=lambda e: e["time"])["id"])
+
+    def _blackouts():
+        return [e["time"] for e in m.midi_events if m.is_blackout(e)]
+
+    _assert(_blackouts() == [1.0], "the ledbar has a BLACKOUT at 1.0")
+    _assert(_close(m.earliest_event_time(), 2.0),
+            "the show starts at the first clip, not at the BLACKOUT")
+    _assert(m.shift_all(-0.5), "a shift the BLACKOUT can take")
+    _assert(_blackouts() == [0.5], "moves it with the rest")
+    _assert(m.shift_all(-1.5), "a shift past the BLACKOUT is not refused")
+    _assert(_times(m) == {(LEDBAR_CLIP, LEDBAR_CH): 1.0,
+                          (BLINDER_CLIP, BLINDER_CH): 0.0},
+            "every clip moved by the delta")
+    _assert(_blackouts() == [], "the BLACKOUT pushed before t=0 was dropped")
+    _assert(all(n["time"] >= 0.0 for n in m.midi_notes),
+            "and so was its note, so the .mid never gets a negative time")
 
 
 def test_shift_all_is_one_undo_step():
@@ -209,7 +280,7 @@ def test_shift_markers_leaves_an_undialled_segue_alone():
 # collaborators they touch — building a real window would drag in the stage
 # engine, the audio device and the web remote. It IS a QWidget, so the real
 # QMessageBox can be parented to it and its composition tested for real.
-RIPPLE_METHODS = ("_show_start_time",
+RIPPLE_METHODS = ("_show_start", "_describe_event",
                   "move_show_with_audio", "on_waveform_offset_committed",
                   "on_waveform_offset_changed", "_ask_offset_ripple",
                   "_monitoring_guide", "_other_track",
@@ -260,10 +331,11 @@ class DialogDriver:
     what it offered — so the dialog's composition is under test too, not just
     the branch that follows it."""
 
-    def __init__(self, pick, tick_checkbox=False, override=None):
+    def __init__(self, pick, tick_checkbox=False, override=None, beats=None):
         self.pick = pick                 # button text, or None to close it
         self.tick_checkbox = tick_checkbox
         self.override = override         # an absolute offset typed in Advanced
+        self.beats = beats               # or a move in beats typed there
         self.seen = []                   # as opened
         self.driven = []                 # after the override / tick
 
@@ -287,6 +359,7 @@ class DialogDriver:
                             if dialog._other_check is not None else None),
                 "advanced_open": dialog.advanced.isChecked(),
                 "spin": dialog.offset_spin.value(),
+                "beats": dialog.beats_spin.value(),
             }
 
         def _exec(dialog):
@@ -296,6 +369,9 @@ class DialogDriver:
             if driver.override is not None:
                 dialog.advanced.setChecked(True)
                 dialog.offset_spin.setValue(driver.override)
+            if driver.beats is not None:
+                dialog.advanced.setChecked(True)
+                dialog.beats_spin.setValue(driver.beats)
             if driver.tick_checkbox and dialog._other_check is not None:
                 dialog._other_check.setChecked(True)
             driver.driven.append(_snapshot(dialog))
@@ -330,12 +406,15 @@ class FakeWindow(QWidget):
     """The collaborators MainWindow's ripple methods actually touch, with the
     real methods bound on so they call each other for real."""
 
-    def __init__(self, midi_manager, song, media_controller=None):
+    def __init__(self, midi_manager, song, media_controller=None, bpm=120):
         import logging
+        from app.bpm import BpmState
         from ui.main_window import MainWindow
         _ensure_app()
         super().__init__()
         self.midi_manager = midi_manager
+        self.bpm_state = BpmState(bpm)
+        self.fixtures = PATCH
         self.media_controller = media_controller or FakeMediaController()
         self.toolbar_manager = FakeToolbar()
         self.timeline = FakeTimeline()
@@ -378,17 +457,46 @@ def _with_guide(monitor=None):
                                monitor=monitor or MONITOR_GUIDE)
 
 
-def test_show_start_time_spans_clips_and_markers():
-    print("test_show_start_time_spans_clips_and_markers")
+def test_show_start_spans_clips_and_markers():
+    print("test_show_start_spans_clips_and_markers")
     w, m = _window()
     # Clips start at 2.0, the earliest marker at 4.0.
-    _assert(_close(w._show_start_time(), 2.0),
-            "the show starts at the earlier of the two halves")
+    time, label = w._show_start()
+    _assert(_close(time, 2.0), "the show starts at the earlier of the two halves")
+    part = m.midi_events[0]["info"].part
+    _assert(label == f"clip “{part}” on ledbar (MIDI channel 0)",
+            f"and names the clip, its fixture and its channel ({label!r})")
     w._song = SongConfig(voice_tts=[VoiceTTSConfig(time=0.5, text="ya")])
-    _assert(_close(w._show_start_time(), 0.5),
-            "a marker before the first clip wins")
-    _assert(FakeWindow(_make_midi(), SongConfig())._show_start_time() is None,
+    time, label = w._show_start()
+    _assert(_close(time, 0.5), "a marker before the first clip wins")
+    _assert(label == "Voice TTS marker “ya”", f"and is named ({label!r})")
+    _assert(FakeWindow(_make_midi(), SongConfig())._show_start() is None,
             "an empty song has no start")
+
+
+def test_every_kind_of_first_item_is_named():
+    print("test_every_kind_of_first_item_is_named")
+    m = _make_midi()
+    m.add_event(INTRO, 1.0, 100)
+    w = FakeWindow(m, SongConfig())
+    _assert(w._show_start()[1] == "song part “INTRO”",
+            f"a song part ({w._show_start()[1]!r})")
+    m.add_scene(0.5, {"brightness": 255, "blue": 255, "green": 0, "red": 0,
+                      "animation": 0, "speed": 0, "direction": 0},
+                "Cold open", channel=LEDBAR_CH)
+    _assert(w._show_start()[1] == "scene “Cold open” on ledbar (MIDI channel 0)",
+            f"a scene, by its scene name ({w._show_start()[1]!r})")
+    for song, expected in (
+            (SongConfig(control_markers=[ControlMarkerConfig(
+                time=0.2, kind=core_markers.KIND_TEMPO, bpm=96)]),
+             "Tempo change marker (96 BPM)"),
+            (SongConfig(control_markers=[ControlMarkerConfig(
+                time=0.2, kind=core_markers.KIND_CLICK_STOP)]),
+             "Stop click marker"),
+            (SongConfig(segue=True, segue_time=0.2), "Segue marker")):
+        w._song = song
+        _assert(w._show_start()[1] == expected,
+                f"a marker of each kind ({w._show_start()[1]!r})")
 
 
 def test_move_show_moves_both_halves():
@@ -582,6 +690,100 @@ def test_a_show_that_cannot_follow_is_told_in_absolutes_too():
             "and where this offset would start it, not by how much it slips")
 
 
+def test_a_show_that_cannot_follow_names_what_is_in_the_way():
+    print("test_a_show_that_cannot_follow_names_what_is_in_the_way")
+    w, m = _window()
+    with DialogDriver("Audio only") as driver:
+        w.on_waveform_offset_committed(3.0, 0.0)     # -3.0 against a show at 2.0
+    question = driver.dialog["question"]
+    part = m.midi_events[0]["info"].part
+    _assert(f"clip “{part}” on ledbar (MIDI channel 0)" in question,
+            f"it names the clip in the way ({question!r})")
+    _assert("+2.000" in question and "-1.000" in question,
+            "where that clip starts and where it would land")
+    _assert("down to an offset of +1.000 s" in question,
+            "and the lowest offset the show can still follow to")
+
+
+def test_a_blackout_is_never_in_the_way():
+    print("test_a_blackout_is_never_in_the_way")
+    w, m = _window(song=SongConfig())                 # clips at 2.0
+    m.add_event(BLINDER_CLIP, 0.5, 100, channel=BLINDER_CH)
+    m.replace_with_blackout(min(m.midi_events, key=lambda e: e["time"])["id"])
+    _assert(_close(w._show_start()[0], 2.0),
+            "the show's start skips the BLACKOUT at 0.5")
+    with DialogDriver("Move show") as driver:
+        w.on_waveform_offset_committed(3.0, 1.5)     # -1.5: the BLACKOUT goes <0
+    _assert(driver.dialog["enabled"]["Move show"] is True,
+            f"'Move show' is offered ({driver.dialog['question']!r})")
+    _assert(_close(m.earliest_event_time(), 0.5), "the show moved by -1.5")
+    _assert(not any(m.is_blackout(e) for e in m.midi_events),
+            "and the BLACKOUT it pushed before t=0 is gone")
+
+
+def test_a_marker_in_the_way_is_named_too():
+    print("test_a_marker_in_the_way_is_named_too")
+    song = SongConfig(voice_tts=[VoiceTTSConfig(time=0.5, text="ya")])
+    w, m = _window(song=song)
+    with DialogDriver("Audio only") as driver:
+        w.on_waveform_offset_committed(1.0, 0.0)     # -1.0 against a cue at 0.5
+    question = driver.dialog["question"]
+    _assert("Voice TTS marker “ya”" in question,
+            f"the voice cue is what is in the way, not the clip ({question!r})")
+    _assert("+0.500" in question and "-0.500" in question
+            and "down to an offset of +0.500 s" in question,
+            "with its times and the lowest offset")
+
+
+def test_the_lowest_offset_quoted_can_be_typed_back():
+    print("test_the_lowest_offset_quoted_can_be_typed_back")
+    _ensure_app()
+    from ui.offset_dialog import OffsetRippleDialog
+    # An offset from an earlier drag carries more than millisecond precision.
+    dialog = OffsetRippleDialog(None, moved_label="backing track",
+                                other_label=None, old_offset=0.1234567,
+                                new_offset=-3.0, show_start=2.0,
+                                show_start_item="clip “X”", bpm=120)
+    _assert(_close(dialog.lowest_offset(), -1.876),
+            f"rounded UP to the millisecond ({dialog.lowest_offset()})")
+    dialog.advanced.setChecked(True)
+    dialog.offset_spin.setValue(dialog.lowest_offset())
+    _assert(dialog.can_move_show(), "typing the quoted figure is accepted")
+    dialog.offset_spin.setValue(dialog.lowest_offset() - 0.001)
+    _assert(not dialog.can_move_show(), "a millisecond lower is refused")
+
+
+def test_a_blocked_move_is_marked_not_just_disabled():
+    """Under the theme a disabled dialog button looks enabled (its colour rule
+    wins), so a blocked move carries the `state` the QSS turns red, a warning
+    glyph and a tooltip — and drops all three once the offset is legal again."""
+    print("test_a_blocked_move_is_marked_not_just_disabled")
+    _ensure_app()
+    from ui.offset_dialog import OffsetRippleDialog
+    dialog = OffsetRippleDialog(None, moved_label="backing track",
+                                other_label=None, old_offset=3.0,
+                                new_offset=0.0, show_start=2.0,
+                                show_start_item="clip “X” & <co>", bpm=120)
+    button, question = dialog._move_button, dialog._question
+    _assert(not button.isEnabled(), "the move is disabled")
+    _assert(button.property("state") == "blocked"
+            and question.property("state") == "blocked",
+            "the button and the reason are both marked blocked")
+    _assert(not button.icon().isNull(), "the button carries the warning glyph")
+    _assert("+1.000 s" in button.toolTip(),
+            f"and its tooltip says how far it can go ({button.toolTip()!r})")
+    _assert("<img" in question.text() and "clip “X” &amp; &lt;co&gt;" in question.text(),
+            "the reason is marked too, with the item name escaped for rich text")
+
+    dialog.advanced.setChecked(True)
+    dialog.offset_spin.setValue(2.5)
+    _assert(button.isEnabled(), "a legal offset re-enables it")
+    _assert(button.property("state") == "" and question.property("state") == "",
+            "and clears the blocked state")
+    _assert(button.icon().isNull() and button.toolTip() == "",
+            "the glyph and the tooltip go with it")
+
+
 def test_advanced_overrides_the_offset_the_drag_landed_on():
     print("test_advanced_overrides_the_offset_the_drag_landed_on")
     from app.media_controller import MONITOR_BACKING
@@ -630,7 +832,8 @@ def test_collapsing_advanced_throws_the_override_away():
     from ui.offset_dialog import OffsetRippleDialog
     dialog = OffsetRippleDialog(None, moved_label="backing track",
                                 other_label=None, old_offset=0.0,
-                                new_offset=1.75, show_start=2.0)
+                                new_offset=1.75, show_start=2.0,
+                                show_start_item="clip “X”", bpm=120)
     dialog.advanced.setChecked(True)
     dialog.offset_spin.setValue(9.0)
     _assert(_close(dialog.offset(), 9.0), "an open Advanced supplies the offset")
@@ -639,6 +842,50 @@ def test_collapsing_advanced_throws_the_override_away():
             "collapsing it goes back to where the drag landed")
     _assert(_close(dialog.offset_spin.value(), 1.75),
             "and the field is reset, never left showing a value in force")
+    _assert(_close(dialog.beats_spin.value(), 3.5),
+            "the beats field too")
+
+
+def test_beats_and_seconds_write_each_other():
+    print("test_beats_and_seconds_write_each_other")
+    _ensure_app()
+    from ui.offset_dialog import OffsetRippleDialog
+    dialog = OffsetRippleDialog(None, moved_label="backing track",
+                                other_label=None, old_offset=1.0,
+                                new_offset=2.75, show_start=2.0,
+                                show_start_item="clip “X”", bpm=120)
+    _assert(_close(dialog.beats_spin.value(), 3.5),
+            "beats open on the drag's move, counted from where it started")
+    dialog.advanced.setChecked(True)
+    dialog.beats_spin.setValue(-4.0)
+    _assert(_close(dialog.offset_spin.value(), -1.0)
+            and _close(dialog.offset(), -1.0),
+            "typing beats writes the offset, which is the value in force")
+    _assert("-1.000" in dialog._headline.text(),
+            f"and the headline follows ({dialog._headline.text()!r})")
+    _assert(dialog.can_move_show(),
+            "a move landing the show exactly on t=0 is one it can follow")
+    dialog.offset_spin.setValue(2.0)
+    _assert(_close(dialog.beats_spin.value(), 2.0),
+            "typing the offset writes the beats")
+
+
+def test_a_move_in_beats_moves_the_show_by_those_beats():
+    print("test_a_move_in_beats_moves_the_show_by_those_beats")
+    from app.media_controller import MONITOR_BACKING
+    mc = _with_guide(monitor=MONITOR_BACKING)
+    w, m = _window(media_controller=mc)
+    # Base 120, but 90 BPM from 0.5 s: the drag started at 1.0 s, so a beat
+    # there is 0.667 s and 3 beats is exactly 2 s.
+    w.bpm_state.set_tempo_changes([(0.5, 90)])
+    with DialogDriver("Move show", tick_checkbox=True, beats=3.0):
+        w.on_waveform_offset_committed(1.0, 1.3)
+    _assert(_close(w._song.offset, 3.0, tol=5e-4),
+            f"the offset moved by 3 beats at 90 BPM ({w._song.offset})")
+    _assert(_close(m.earliest_event_time(), 4.0, tol=5e-4),
+            "the show followed by the same 2 s")
+    _assert(_close(mc.guide_offset_sec, 2.0, tol=5e-4),
+            "and so did the other track")
 
 
 def test_the_checkbox_is_absent_with_only_one_track():
@@ -771,14 +1018,18 @@ def main():
     _ensure_app()
     test_shift_all_is_rigid()
     test_shift_all_moves_the_mirrored_notes()
+    test_shift_all_leaves_the_setup_notes_at_zero()
+    test_a_leftward_shift_still_saves()
     test_shift_all_refuses_across_zero()
+    test_a_blackout_never_blocks_the_shift()
     test_shift_all_is_one_undo_step()
     test_shift_all_empty_document()
     test_earliest_marker_time()
     test_shift_markers_moves_every_kind()
     test_shift_markers_refuses_across_zero()
     test_shift_markers_leaves_an_undialled_segue_alone()
-    test_show_start_time_spans_clips_and_markers()
+    test_show_start_spans_clips_and_markers()
+    test_every_kind_of_first_item_is_named()
     test_move_show_moves_both_halves()
     test_move_show_with_no_markers_still_saves()
     test_a_backing_drag_offers_the_show_and_the_guide()
@@ -792,9 +1043,16 @@ def main():
     test_a_show_that_cannot_follow_disables_the_move_button()
     test_every_figure_on_the_dialog_is_an_absolute_offset()
     test_a_show_that_cannot_follow_is_told_in_absolutes_too()
+    test_a_show_that_cannot_follow_names_what_is_in_the_way()
+    test_a_blackout_is_never_in_the_way()
+    test_a_marker_in_the_way_is_named_too()
+    test_the_lowest_offset_quoted_can_be_typed_back()
+    test_a_blocked_move_is_marked_not_just_disabled()
     test_advanced_overrides_the_offset_the_drag_landed_on()
     test_advanced_can_rescue_a_show_that_could_not_follow()
     test_collapsing_advanced_throws_the_override_away()
+    test_beats_and_seconds_write_each_other()
+    test_a_move_in_beats_moves_the_show_by_those_beats()
     test_the_checkbox_is_absent_with_only_one_track()
     test_an_empty_song_with_one_track_is_never_asked()
     test_an_empty_song_with_two_tracks_is_still_asked_about_the_other()

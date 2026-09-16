@@ -83,8 +83,8 @@ def scene_ref(ftype: str, mode: str, bank: str, name: str,
 
 
 def show_ref(note: int, velocity: int = DEFAULT_DROP_VELOCITY) -> Dict:
-    """Ref for a global show verb (START, a song part, blackout-all), which
-    belongs to no fixture."""
+    """Ref for a global show verb (a song part, blackout-all), which belongs to
+    no fixture."""
     return {"kind": "show", "note": int(note), "velocity": int(velocity)}
 
 
@@ -359,12 +359,15 @@ def _chase_clips(fdef: FixtureDef, ftype: str, mode: str,
 
 
 def _show_clips() -> List[Dict]:
-    """Show-control verbs that route globally (no fixture): START, the song
-    parts and blackout-all."""
-    notes = ([note_layout.START]
-             + list(range(note_layout.SONG_PART_BASE,
-                          note_layout.SONG_PART_BASE
-                          + len(note_layout.SONG_PARTS)))
+    """Show-control verbs that route globally (no fixture): the song parts and
+    blackout-all.
+
+    START (note 60) used to head this list. It is the fixture's palette now —
+    state the fixture dialog edits, pinned at t=0 in the .mid — so it is no
+    longer a clip anyone can drag."""
+    notes = (list(range(note_layout.SONG_PART_BASE,
+                        note_layout.SONG_PART_BASE
+                        + len(note_layout.SONG_PARTS)))
              + [note_layout.BLACKOUT_ALL])
     clips: List[Dict] = []
     for note in notes:
@@ -388,7 +391,7 @@ def clip_type(note: int) -> str:
                   + len(note_layout.COLOR_MACROS) - 1)
     if note_layout.COLOR_MACRO_BASE <= n <= last_macro:
         return "color"
-    if n == note_layout.START or note_layout.is_song_part(n):
+    if note_layout.is_song_part(n):
         return "cue"
     if n == note_layout.CHASE_LOAD:
         return "chase"

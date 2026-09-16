@@ -5,8 +5,8 @@
 A clip's note is a *verb* and its velocity is that verb's parameter — but what
 the parameter MEANS changes completely with the verb: a channel verb's velocity
 is `value // 2`, a chase verb's is a chase index, a blend-time verb's is
-tenths of a second, START's packs a hue and a palette mode into one byte. One
-spin box labelled "Velocity" is the wrong control for all of them.
+tenths of a second. One spin box labelled "Velocity" is the wrong control for
+all of them.
 
 So each class gets a control that speaks its own units, behind one protocol:
 
@@ -101,9 +101,6 @@ class NoParamEditor(VerbEditor):
             "Steps back one scene in the fixture's current bank.",
         note_layout.SCENE_NEXT:
             "Steps forward one scene in the fixture's current bank.",
-        note_layout.START:
-            "Initialises the palette. Edit the colours with the palette "
-            "editor.",
     }
 
     def __init__(self, parent=None):

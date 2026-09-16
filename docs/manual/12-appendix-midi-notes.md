@@ -38,7 +38,7 @@ that channel.
 | 57 | Previous scene in the current bank | fixture | blend time × 100 ms |
 | 58 | Next scene in the current bank | fixture | blend time × 100 ms |
 | 59 | Load bank **and** scene together | fixture | **bank = velocity ÷ 8, scene = velocity mod 8** |
-| 60 | **START** — build the colour palette | fixture | **hue = velocity ÷ 6, mode = velocity mod 6** |
+| 60 | **START** — the fixture's colour palette; never produces light on its own | fixture | **hue = velocity ÷ 6, mode = velocity mod 6** |
 | **61 – 69** | Song part — INTRO … END | **global** | ignored |
 | 70 | Load chase | fixture | chase index |
 | 71 | Track setup flags — never produces light | fixture | bit 0 auto, bit 1 mute, bit 2 lock |
@@ -95,11 +95,20 @@ palette_mode = velocity mod 6    # see the table below
 | 5 | SINGLE | the hue alone |
 
 So velocity 14 is hue 2 in TRIADIC mode; velocity 75 is a random hue in
-MONOCHROMATIC. The timeline's own **Edit START Event** dialog
-([6.9](#69-the-clip-editor)) is a picker over exactly this arithmetic.
+MONOCHROMATIC. The **Palette** tab of the fixture dialog
+([5.7](#57-the-palette-tab)) is a picker over exactly this arithmetic.
 
 Setting a palette does **not** start it cycling. It stores the palette on the
 fixture; a song-part marker is what arms it.
+
+### Note 60 and note 71 are state, not cues
+
+They are the two notes that are never clips. Each song's `.mid` holds **at most
+one of each per fixture**, pinned at t=0 and living outside the timeline: they
+persist and they replay, but nothing draws them and nothing can drop one. The
+`.mid` therefore stores no note 60 for a fixture on the default palette (hue 0,
+COMPLEMENTARY) or a fixture with all three setup flags off — velocity 0 is a
+note-off, so **absence is how the default is written**.
 
 ## A.5 Things that catch people out
 

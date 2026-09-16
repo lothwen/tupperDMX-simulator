@@ -43,6 +43,7 @@ from ui.markers_dialog import MarkersDialog
 from ui.offset_dialog import (CHOICE_AUDIO_ONLY, CHOICE_CANCEL,
                               CHOICE_MOVE_SHOW, OffsetRippleDialog)
 from core import markers as core_markers
+from core import note_layout
 from webremote.state import probe_duration, song_duration
 
 # ←/→ scrub the playhead. A tap nudges by ARROW_SEEK_STEP; holding ramps the
@@ -457,7 +458,8 @@ class MainWindow(QMainWindow):
         self.dock_stage_button.show()
 
         self.edit_toolbar = StageEditToolbar(
-            self.stage_controller, self._on_patch_changed, self.exit_edit_mode)
+            self.stage_controller, self._on_patch_changed, self.exit_edit_mode,
+            midi_manager=self.midi_manager)
         # The fixture browser's Scenes tab writes a type's scene banks whichever
         # button closes it, so the library panel is rebuilt on the write, not on
         # OK — the same route the timeline's clip editor takes.
@@ -659,14 +661,43 @@ class MainWindow(QMainWindow):
             f"Moved the {'backing' if moved_guide else 'guide'} track with it "
             f"({delta:+.3f}s -> {offset:+.3f}s)")
 
-    def _show_start_time(self):
-        """The earliest thing the show has anywhere on this song's timeline —
-        a clip or a marker — or None when the song is still empty."""
+    def _show_start(self):
+        """`(time, label)` of the earliest thing the show has anywhere on this
+        song's timeline — a clip, a song part or a marker — or None when the
+        song is still empty. The label is what the offset dialog quotes when
+        that item is the one keeping the show from following a drag left.
+        BLACKOUTs never count: a shift drops the ones it pushes before t=0."""
         song = self.config.get_current_song()
-        starts = [t for t in (self.midi_manager.earliest_event_time(),
-                              core_markers.earliest_marker_time(song))
-                  if t is not None]
-        return min(starts) if starts else None
+        firsts = []
+        events = [e for e in self.midi_manager.midi_events
+                  if not self.midi_manager.is_blackout(e)]
+        if events:
+            event = min(events, key=lambda e: e["time"])
+            firsts.append((event["time"], self._describe_event(event)))
+        marker = core_markers.earliest_marker(song)
+        if marker is not None:
+            firsts.append(marker)
+        return min(firsts, key=lambda first: first[0]) if firsts else None
+
+    def _describe_event(self, event) -> str:
+        """Name one timeline event the way its lane shows it: the song part, or
+        the scene/clip label plus the fixture whose lane it sits on and that
+        lane's MIDI channel."""
+        note = int(event["note"])
+        label = getattr(event.get("info"), "part", None) or f"Note {note}"
+        if note_layout.is_song_part(note):
+            return f"song part “{label}”"
+        if event.get("group_id"):
+            what = f"scene “{event.get('scene_name') or 'Scene'}”"
+        else:
+            what = f"clip “{label}”"
+        channel = event.get("channel")
+        if channel is None:
+            return what
+        fixture = next((f for f in self.config.fixtures
+                        if f.channel == channel), None)
+        where = f" on {fixture.name or fixture.type}" if fixture else ""
+        return f"{what}{where} (MIDI channel {channel})"
 
     def _ask_offset_ripple(self, old_sec: float, new_sec: float,
                            moved_guide: bool):
@@ -677,16 +708,20 @@ class MainWindow(QMainWindow):
         to offer: aligning a lone track on a song with no clips or markers is
         the normal first step and must not nag.
         """
-        start = self._show_start_time()
+        start = self._show_start()
         other_label, other_offset = self._other_track(moved_guide)
         if start is None and other_label is None:
             return CHOICE_AUDIO_ONLY, False, new_sec
 
+        start_time, start_item = start if start is not None else (None, None)
         dialog = OffsetRippleDialog(
             self,
             moved_label="guide track" if moved_guide else "backing track",
             other_label=other_label, other_offset=other_offset or 0.0,
-            old_offset=old_sec, new_offset=new_sec, show_start=start)
+            old_offset=old_sec, new_offset=new_sec,
+            show_start=start_time, show_start_item=start_item,
+            # Beats are counted at the tempo sounding where the track started.
+            bpm=self.bpm_state.tempo_map().bpm_at(old_sec))
         dialog.exec()
         return dialog.choice(), dialog.move_other(), dialog.offset()
 
@@ -1187,7 +1222,8 @@ class MainWindow(QMainWindow):
             # Repatched away between the request and this tick.
             self.logger.info(f"No fixture on channel {channel} to edit")
             return
-        dialog = AddFixtureDialog(self.stage_controller, self, instance=instance)
+        dialog = AddFixtureDialog(self.stage_controller, self, instance=instance,
+                                  midi_manager=self.midi_manager)
         dialog.select_tab(tab)
         # A card names one scene or chase, not just a tab — open on it.
         dialog.reveal(ref)

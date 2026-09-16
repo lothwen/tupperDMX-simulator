@@ -7,7 +7,6 @@ dialogs, custom views, and coordinate utilities.
 
 from .tooltip import CustomTooltip
 from .content_view import ContentView
-from .start_event_edit import StartEventEditDialog
 from .resize_handle import TrackResizeHandle, HeaderResizeHandle
 
 # clip_edit is NOT re-exported here: it pulls in the stage render engine
@@ -17,7 +16,6 @@ from .resize_handle import TrackResizeHandle, HeaderResizeHandle
 __all__ = [
     'CustomTooltip',
     'ContentView',
-    'StartEventEditDialog',
     'TrackResizeHandle',
     'HeaderResizeHandle'
 ]

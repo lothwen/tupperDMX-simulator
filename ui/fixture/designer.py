@@ -50,13 +50,17 @@ class StageEditToolbar(QWidget):
     # its OK/Cancel), so the host must rebuild what reads it.
     library_changed = pyqtSignal()
 
-    def __init__(self, stage_controller, on_patch_changed, on_done, parent=None):
+    def __init__(self, stage_controller, on_patch_changed, on_done, parent=None,
+                 *, midi_manager=None):
         super().__init__(parent)
         self.setObjectName("StageEditToolbar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._stage = stage_controller
         self._notify = on_patch_changed
         self._on_done = on_done
+        # Handed straight to the Add dialog: its Palette tab writes the new
+        # fixture's note 60 into the song that is loaded.
+        self._midi = midi_manager
         self.logger = get_logger("ui.fixture.designer")
 
         # Two rows: the patch and the air on top, the fog's look underneath.
@@ -305,7 +309,7 @@ class StageEditToolbar(QWidget):
     def open_add_fixture(self) -> None:
         """Open the fixture browser and patch what it returns. Public: the
         timeline toolbar's "+ Add track" opens the same flow."""
-        dialog = AddFixtureDialog(self._stage, self)
+        dialog = AddFixtureDialog(self._stage, self, midi_manager=self._midi)
         dialog.library_changed.connect(self.library_changed)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -322,6 +326,8 @@ class StageEditToolbar(QWidget):
             type_name, dmx_start, int(rect.width() / 2), int(rect.height() / 2),
             channel, mode,
         )
+        # Only now does the channel the palette belongs to exist.
+        dialog.apply_palette(channel)
         self._notify()
 
 

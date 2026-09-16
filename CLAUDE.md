@@ -79,9 +79,12 @@ the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing s
   the show (`MidiManager.shift_all` + `core.markers.shift_markers`, both checked movable before either moves) and, by
   checkbox, the other track — which takes the **correction, never the offset**, since the two files have independent
   lead-ins. Guide drags ask too: the guide is the reference you design against. **A shift crossing t=0 is REFUSED, not
-  clamped** (a partial shift looks aligned while sitting the remainder out from the music); the dialog disables "Move
+  clamped** (a partial shift looks aligned while sitting the remainder out from the music) — except BLACKOUTs, which
+  are gap markers, not content: they never count as the show's start, and one pushed before t=0 is dropped. The dialog disables "Move
   show" and says why, so Advanced can retype the offset without the dialog changing shape. **It quotes only ABSOLUTE
-  offsets, `from → to`** — the numbers `show.json` stores. **A drag in progress is a proposal**: the live signal moves
+  offsets, `from → to`** — the numbers `show.json` stores. Advanced's beats field is the one relative figure, an INPUT
+  counted from the old offset at `bpm_at(old offset)`; it writes the seconds field, which stays the value in force.
+  **A drag in progress is a proposal**: the live signal moves
   the SETLIST chip and nothing else (no controller offset, no config, nothing per-frame in the audio path), so Cancel
   reverts by just repositioning the item.
 - **Count-in is negative timeline time.** With `song.precount`, playback begins at `-(bars × 4 beats)`; audio/MIDI/lights
@@ -249,6 +252,15 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   36–47 bank select, 48 take-manual / 49 manual / 50 blackout-fixture, 51 blackout-all, 52–59 timing/palette/scene step,
   60 START, 61–69 song parts, 72–75 colour macros. START has no `song_index` — velocity packs the palette (`hue_index =
   velocity // 6`; `mode = PALETTE_MODES[velocity % 6]`).
+- **Notes 60 and 71 are per-fixture STATE, not clips.** Both live at t=0, at most one per MIDI channel, in
+  `midi_notes` **only** — `describe_note` returns None for either, so the codec keeps them in the `.mid` (they persist,
+  they replay) and drops them from `midi_events`, `note_applies_to` refuses every drop, and `shift_all_events` leaves
+  them where they are. **Absence IS the default**: velocity 0 is a note_off outside `VALUE_BEARING_NOTES`, so a default
+  palette (hue 0, mode 0) and all-flags-off setup have no representation on disk. The palette is edited in
+  `ui/fixture/palette_tab.py` — a tab of `AddFixtureDialog` shown only for a **Color Changer**, and one of the dialog's
+  answers rather than a library write, so it waits for OK (`apply_edits` in edit mode, `apply_palette(channel)` from the
+  designer in add mode, once the channel exists). Song-scoped, since the `.mid` is: the tab edits whichever song is
+  loaded. `scripts/migrate_start_note.py` converted existing shows once; **the app carries no migration code**.
 - **`webremote/`** — embedded tablet remote, off by default; plain HTTP on the stage LAN, no auth. aiohttp HTTP+WS on its
   own asyncio loop in a QThread; inbound commands execute on the Qt thread, cues/blackout/panic through `preview_clip` so
   `config.io` routing applies. Panic sends note 51 only when `blackout_all_state` is off (blackout is a toggle).

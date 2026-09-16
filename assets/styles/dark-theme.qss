@@ -3072,3 +3072,26 @@ QSpinBox#MarkersBpmSpin:focus, QDoubleSpinBox#MarkersTimeSpin:focus,
 QDoubleSpinBox#MarkersSegueSpin:focus, QLineEdit#MarkersTextEdit:focus {
     border: 1px solid #79cdf0;
 }
+
+
+/* ============================================================
+   OFFSET RIPPLE DIALOG (ui/offset_dialog.py)
+   A show that cannot follow the offset. `QDialog QPushButton` sets a
+   text colour, which Qt keeps for a disabled button — so disabled
+   alone reads as enabled here. Blocked turns the button and the
+   reason red; the dialog adds the warning glyph to both.
+   ============================================================ */
+QLabel#OffsetQuestion {
+    min-width: 460px;
+}
+
+QLabel#OffsetQuestion[state="blocked"] {
+    color: #e05252;
+}
+
+QPushButton#OffsetMoveShow[state="blocked"] {
+    background: #3a2a2a;
+    color: #9a5a5a;
+    border: 1px solid #6b3434;
+    border-top: 1px solid #6b3434;
+}
