@@ -528,12 +528,14 @@ def build_script(session: Session) -> None:
         if dlg is None or not dlg.tabs.isTabVisible(dlg._palette_index):
             return
         dlg.select_tab("palette")
+        state["palette_shown"] = True
         for _ in range(6):
             app.processEvents()
 
     session.add("_show-palette-tab", show_palette_tab, wait=1.2)
     session.add("fixture-palette",
-                lambda: shot.shoot("fixture-palette", window=state.get("editor")))
+                lambda: state.pop("palette_shown", False)
+                and shot.shoot("fixture-palette", window=state.get("editor")))
 
     def close_editor():
         # `close()` rejects, which is the point: this dialog applies its patch

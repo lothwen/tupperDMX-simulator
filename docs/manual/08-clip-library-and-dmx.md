@@ -32,7 +32,7 @@ Each card is one cue: a title, a subtitle naming its kind (`channel`, `scene`,
 `chase`, `color`, `blackout`, `cue`) and a coloured accent bar. A small **✱** on
 a scene means its colour comes from the palette rather than from fixed values,
 so it follows whatever the fixture's Palette tab set up
-([5.6](05-add-fixture-dialog.md#56-the-palette-tab)).
+([5.6](#56-the-palette-tab)).
 
 **Three things you can do with a card:**
 

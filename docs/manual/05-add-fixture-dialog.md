@@ -229,7 +229,7 @@ Unlike the Scenes and Chases tabs, this one is **not** a library edit: it is one
 of the dialog's answers, held until **OK** and discarded by Cancel.
 
 > **The palette is per song, per fixture.** It is stored in that song's `.mid`
-> as one note 60 at t=0 (see [A.4](12-appendix-midi-notes.md#a4-the-start-palette-note-60)),
+> as one note 60 at t=0 (see [A.4](#a4-the-start-palette-note-60)),
 > which is why the tab shows nothing to edit when no song is loaded — and why
 > opening the dialog while song 3 is up edits song 3's palette. It used to be a
 > draggable **START** clip on the timeline; it is fixture state now, and the

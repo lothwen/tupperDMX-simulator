@@ -96,7 +96,7 @@ palette_mode = velocity mod 6    # see the table below
 
 So velocity 14 is hue 2 in TRIADIC mode; velocity 75 is a random hue in
 MONOCHROMATIC. The **Palette** tab of the fixture dialog
-([5.7](#57-the-palette-tab)) is a picker over exactly this arithmetic.
+([5.6](#56-the-palette-tab)) is a picker over exactly this arithmetic.
 
 Setting a palette does **not** start it cycling. It stores the palette on the
 fixture; a song-part marker is what arms it.

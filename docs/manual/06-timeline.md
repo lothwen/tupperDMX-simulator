@@ -128,7 +128,7 @@ Verbs are grouped by number:
 
 Notes 60 and 71 are missing from that table on purpose. They are the fixture's
 own **state** rather than anything authored against the music: 60 is its colour
-palette (Palette tab of the fixture dialog, §5) and 71 its per-track auto / mute
+palette (Palette tab of the fixture dialog, [5.6](#56-the-palette-tab)) and 71 its per-track auto / mute
 / lock flags (the lane header). Both sit at t=0 in the `.mid`, one per fixture,
 and neither ever appears as a clip.
 
@@ -183,7 +183,7 @@ left edge lightens, and the address line underneath the name turns into
 > the thing you need to read.
 >
 > You cannot patch your way into this from the **Add fixture** dialog, which
-> disables OK ([5.3](#53-the-footer--the-patch-decision)). It comes from a
+> disables OK ([5.3](#53-the-footer-the-patch-decision)). It comes from a
 > **Mode** change in the Inspector growing a fixture onto its neighbour, or
 > from a show whose patch was already overlapping when it loaded.
 
@@ -386,4 +386,4 @@ edit.
 Note 60 (**START**) used to be a draggable clip with an editor of its own. It is
 the fixture's colour palette now — state you set on the fixture, not a cue you
 place in the song — so it lives in the **Palette** tab of the fixture dialog
-(§5.7) and has no representation on the timeline at all.
+([5.6](#56-the-palette-tab)) and has no representation on the timeline at all.
