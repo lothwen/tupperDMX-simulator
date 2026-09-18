@@ -132,8 +132,10 @@ class AppCore(QObject):
 
         self.playlist_controller = PlaylistCore(self)
 
-        # The running software controller (None until DMXManager spawns one).
+        # The running software controller (None until DMXManager spawns one),
+        # and the patch signature it was last handed (see on_patch_edited).
         self.software_controller = None
+        self._last_dmx_sig = self._patch_dmx_signature()
 
         # Embedded web remote (tablet UI); created here, served on start().
         # force_webremote overrides config.webremote.enabled in memory only
@@ -193,6 +195,18 @@ class AppCore(QObject):
         self.media_controller.set_audio_volume(self.config.volume.audio)
         self.audio_controller.set_metronome_volume(self.config.volume.metronome)
         self.audio_engine.set_bus_volume(BUS_VOICE, self.config.volume.voice)
+
+    def set_volume(self, **volumes):
+        """Set bus volumes (0.0–1.0) by name — `audio`, `metronome`, `voice`,
+        as the timeline header's sliders move them — then apply and persist.
+
+        Applied through apply_volume_config, the same route a prefs reload
+        takes, so which controller owns which bus is written down once. It
+        re-applies all three: each is a stored level, so the two that did not
+        move are simply set to the value they already hold."""
+        self.config.update_volume(**volumes)
+        self.apply_volume_config()
+        self.save_config()
 
     # ------------------------------------------------------------------
     # Live prefs reload
@@ -333,6 +347,32 @@ class AppCore(QObject):
             self.audio_controller.start_metronome(position)
 
         self.tempo_map_changed.emit(tempo_map)
+
+    # ------------------------------------------------------------------
+    # Current song's details
+    # ------------------------------------------------------------------
+    def set_song_title(self, title: str) -> bool:
+        """Rename the current song (the setlist's edit field): persisted and
+        published to the web remote. Returns whether anything changed, so the
+        view knows to redraw its setlist."""
+        song = self.config.get_current_song()
+        title = title.strip()
+        if song is None or song.title == title:
+            return False
+        song.title = title
+        self.save_config()
+        self.webremote_manager._publish_full()
+        return True
+
+    def set_song_key(self, key: str):
+        """Set the current song's musical key (the TONO chip): persisted and
+        published to the web remote."""
+        song = self.config.get_current_song()
+        if song is None or song.key == key:
+            return
+        song.key = key
+        self.save_config()
+        self.webremote_manager._publish_full()
 
     # ------------------------------------------------------------------
     # Count-in + spoken guide (Fase 4)
@@ -507,6 +547,23 @@ class AppCore(QObject):
         self.software_controller.repatch(self.config.fixtures)
         self.midi_manager.seed_controller_auto(self.software_controller)
 
+    def on_patch_edited(self):
+        """A patch edit landed (the stage designer, the fixture dialog): hot-swap
+        it onto the software controller — but only when it changed something
+        the controller depends on, since a stage drag-move or a rename edits
+        the patch too and must not re-patch (and so black out) the rig."""
+        dmx_sig = self._patch_dmx_signature()
+        if self.software_controller is not None and dmx_sig != self._last_dmx_sig:
+            self._last_dmx_sig = dmx_sig
+            self.repatch_controller()
+
+    def _patch_dmx_signature(self):
+        """What the software DMX engine depends on (per fixture). Excludes the
+        name so a rename never re-patches (and never blacks out) the rig;
+        includes `mode`, which changes the fixture's DMX footprint."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel)
+                     for f in self.config.fixtures)
+
     def preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) through the
         configured MIDI outputs without modifying the timeline. `messages` is
@@ -573,6 +630,7 @@ class AppCore(QObject):
         and show_reloaded (counters/title/autosave chip)."""
         self.midi_manager.update_fixtures(self.config.fixtures)
         self.repatch_controller()
+        self._last_dmx_sig = self._patch_dmx_signature()
         self.patch_reloaded.emit()
 
         self.playlist_controller.load_current_song()

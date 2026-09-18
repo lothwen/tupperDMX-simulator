@@ -4,6 +4,7 @@
 import os
 import time
 from dataclasses import asdict
+from functools import partial
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
@@ -55,6 +56,10 @@ ARROW_SEEK_STEP = 0.5
 ARROW_SEEK_MAX_STEP = 5.0
 ARROW_SEEK_RAMP = 3.0
 ARROW_SEEK_INTERVAL = 0.08
+
+# Widgets that type text, so a Space or an arrow is a keystroke for them and
+# never a transport command.
+TEXT_ENTRY_WIDGETS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
 
 # The audio formats the app loads. One list behind the load-time check and the
 # drop target's accept test, so the window never accepts a drag it will then
@@ -141,10 +146,10 @@ class MainWindow(QMainWindow):
         # Create UI
         self.setup_ui()
 
-        # Live-patch baselines: the last-applied patch signatures, so
-        # _on_patch_changed only propagates real changes.
+        # Live-patch baseline: the last-applied patch signature, so
+        # _on_patch_changed only rebuilds the views on real changes (the
+        # controller's half keeps its own, in AppCore.on_patch_edited).
         self._last_ui_sig = self._patch_ui_signature()
-        self._last_dmx_sig = self._patch_dmx_signature()
 
         # Widget fan-out of BPM changes (the metronome/count-in half already
         # rides bpm_state inside the core). Connected before the initial song
@@ -216,7 +221,9 @@ class MainWindow(QMainWindow):
         # dialog can rebuild the very card that asked.
         self.clip_library.edit_fixture_requested.connect(self.open_fixture_editor)
 
-        self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
+        # The core already logged it; the window only owes the dialog.
+        self.audio_controller.audio_error_occurred.connect(
+            partial(ErrorDialogManager.show_audio_hardware_error, self))
 
         self.stage_controller = StageController(self.config)
 
@@ -235,14 +242,16 @@ class MainWindow(QMainWindow):
         # Show project signals
         self.toolbar_manager.new_show_requested.connect(self.new_show_dialog)
         self.toolbar_manager.open_show_requested.connect(self.open_show_dialog)
-        self.toolbar_manager.save_show_requested.connect(self.save_show_now)
+        # Manual Save: a forced flush (autosave already covers the rest).
+        self.toolbar_manager.save_show_requested.connect(
+            partial(self.show_manager.flush, "manual"))
         self.toolbar_manager.save_show_as_requested.connect(self.save_show_as_dialog)
         self.toolbar_manager.snapshot_requested.connect(self.take_snapshot_dialog)
         self.toolbar_manager.restore_version_requested.connect(self.restore_version_from_toolbar)
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
         self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
-        self.toolbar_manager.song_key_edited.connect(self.on_song_key_edited)
+        self.toolbar_manager.song_key_edited.connect(self.app_core.set_song_key)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
         self.show_manager.versions_changed.connect(self._refresh_versions_ui)
@@ -281,9 +290,7 @@ class MainWindow(QMainWindow):
         # Create and add toolbar
         toolbar = self.toolbar_manager.create_toolbar(self)
         self.addToolBar(toolbar)
-        show = self.show_manager.show
-        self.toolbar_manager.set_show_name(show.name if show else "")
-        self.toolbar_manager.set_autosave_state("saved")
+        self._refresh_show_status()
         self._refresh_versions_ui()
 
         # Create main content splitter (stage | sidebar); added to the vertical
@@ -319,16 +326,23 @@ class MainWindow(QMainWindow):
         # The decode the song change kicked off lands after the band is drawn.
         self.audio_engine.backing_loaded.connect(self._on_backing_decoded)
         self.timeline.seek_requested.connect(self.seek_playback)
-        self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
+        self.timeline.bpm_detected.connect(self.bpm_state.set_bpm)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
         self.timeline.waveform_offset_committed.connect(
             self.on_waveform_offset_committed)
-        self.timeline.metronome_volume_changed.connect(self.on_metronome_volume_changed)
-        self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
-        self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
-        self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
-        self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
-        self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
+        # The header's sliders run 0–100; the core takes 0.0–1.0, applies it
+        # to the bus and persists it.
+        self.timeline.metronome_volume_changed.connect(
+            lambda value: self.app_core.set_volume(metronome=value / 100.0))
+        self.timeline.metronome_mute_toggled.connect(
+            self.audio_controller.set_metronome_muted)
+        self.timeline.audio_volume_changed.connect(
+            lambda value: self.app_core.set_volume(audio=value / 100.0))
+        self.timeline.audio_mute_toggled.connect(self.media_controller.set_audio_muted)
+        self.timeline.voice_volume_changed.connect(
+            lambda value: self.app_core.set_volume(voice=value / 100.0))
+        self.timeline.voice_mute_toggled.connect(
+            partial(self.audio_engine.set_bus_muted, BUS_VOICE))
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
         self.timeline.header_width_changed.connect(self.on_header_width_changed)
         self.timeline.track_order_changed.connect(self.on_track_order_changed)
@@ -337,8 +351,7 @@ class MainWindow(QMainWindow):
         self.timeline.fixture_edit_requested.connect(self.open_fixture_editor)
         # The clip editor can write a fixture's scene banks, which the library
         # panel has already read — rebuild it rather than wait for a restart.
-        self.timeline.library_changed.connect(
-            lambda: self.clip_library.refresh_configuration(self.config))
+        self.timeline.library_changed.connect(self._refresh_clip_library)
         # Auditioning a clip from the editor takes the same route as the clip
         # library's click-to-preview, so config.io routing applies.
         self.timeline.preview_requested.connect(self.app_core.preview_clip)
@@ -463,8 +476,7 @@ class MainWindow(QMainWindow):
         # The fixture browser's Scenes tab writes a type's scene banks whichever
         # button closes it, so the library panel is rebuilt on the write, not on
         # OK — the same route the timeline's clip editor takes.
-        self.edit_toolbar.library_changed.connect(
-            lambda: self.clip_library.refresh_configuration(self.config))
+        self.edit_toolbar.library_changed.connect(self._refresh_clip_library)
         stage_view.add_overlay(self.edit_toolbar, anchor="top-left", reference="background")
         self.edit_toolbar.hide()
 
@@ -804,14 +816,6 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.set_song_bpm(value)
         self.timeline_toolbar.set_bpm(value)
 
-    def _on_audio_error(self, error_message, error_type):
-        """Handle audio system errors (the core already logged them)."""
-        ErrorDialogManager.show_audio_hardware_error(self, error_message, error_type)
-
-    def on_bpm_detected_from_timeline(self, value):
-        """Handle BPM detection from timeline analysis."""
-        self.bpm_state.set_bpm(value)
-    
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
         self.timeline_toolbar.update_play_pause_icon(is_playing)
@@ -842,12 +846,8 @@ class MainWindow(QMainWindow):
     
     def _on_media_error(self, error_message, file_path=None):
         """Handle media errors from media controller (the core logged them)."""
-        # Show user-friendly error dialog
-        if file_path:
-            ErrorDialogManager.show_media_file_error(self, file_path, error_message)
-        else:
-            # Generic media error
-            ErrorDialogManager.show_media_file_error(self, "Unknown file", error_message)
+        ErrorDialogManager.show_media_file_error(
+            self, file_path or "Unknown file", error_message)
 
     def on_dmx_error(self, source, error):
         """Handle DMX errors (the core logged them) with a retry dialog."""
@@ -880,7 +880,7 @@ class MainWindow(QMainWindow):
         """Apply a manual value dragged in the DMX monitor to the live software
         controller. Transient: the normal workflow (scenes, chases, MIDI)
         overwrites it on its next frame; a no-op if no controller is active."""
-        controller = getattr(self, "software_controller", None)
+        controller = self.software_controller
         if controller is not None:
             controller.set_manual_channel(channel, value)
 
@@ -892,26 +892,29 @@ class MainWindow(QMainWindow):
         # Update DMX display
         self.dmx_display.update_dmx_data(dmx_data)
 
-    def on_metronome_volume_changed(self, value):
-        """Handle metronome volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.audio_controller.set_metronome_volume(volume)
-        self.config.update_volume(metronome=volume)
-        self.save_config()
-
-    def on_metronome_mute_toggled(self, muted):
-        """Handle metronome mute toggle from the timeline header's CLICK row."""
-        self.audio_controller.set_metronome_muted(muted)
-
     def show_settings_dialog(self):
         """Open the preferences editor and apply any changes live."""
-        old_io = asdict(self.config.io)
-        old_artnet = asdict(self.config.artnet)
-        old_webremote = asdict(self.config.webremote)
-        old_audio = asdict(self.config.audio)
-        old_fog = asdict(self.config.window.fog)
-        old_gpu = self.config.window.stage_gpu
-        old_logging = asdict(self.config.logging)
+        cfg = self.config
+        # What the dialog can change, read afresh each time (it hands back new
+        # objects), and what re-applies it — run in THIS order when it did.
+        watched = (
+            # Build or drop the GL context first: the light layer that fog is
+            # then handed to is the one this call decides the existence of.
+            (lambda: cfg.window.stage_gpu, self._apply_stage_gpu),
+            # The dialog hands back a NEW fog object, so the light layer is
+            # still holding the old one until it is told otherwise.
+            (lambda: asdict(cfg.window.fog), self.stage_controller.apply_stage_config),
+            # The routing, or the Art-Net target the sinks and listener read.
+            (lambda: (asdict(cfg.io), asdict(cfg.artnet)), self.app_core.apply_io_config),
+            (lambda: asdict(cfg.webremote), self.webremote_manager.apply_config),
+            (lambda: asdict(cfg.audio), self.app_core.apply_audio_config),
+            # Level and folder both take effect now rather than at the next
+            # launch: turning DEBUG on to chase something has to help with the
+            # thing happening in front of you, and the page's own live pane
+            # would otherwise sit tailing a file nothing writes to.
+            (lambda: asdict(cfg.logging), self.app_core.apply_logging_config),
+        )
+        before = [read() for read, _ in watched]
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         # The Interface page previews its slider live and puts the old scale
@@ -921,34 +924,9 @@ class MainWindow(QMainWindow):
             return
 
         self.apply_ui_scale()
-
-        # Build or drop the GL context first: the light layer that fog is then
-        # handed to is the one this call decides the existence of.
-        if self.config.window.stage_gpu != old_gpu:
-            self._apply_stage_gpu()
-
-        # The dialog hands back a NEW fog object, so the light layer is still
-        # holding the old one until it is told otherwise.
-        if asdict(self.config.window.fog) != old_fog:
-            self.stage_controller.apply_stage_config()
-
-        # Re-apply the routing when it (or the Art-Net target the sinks and
-        # listener read from) changed.
-        if asdict(self.config.io) != old_io or asdict(self.config.artnet) != old_artnet:
-            self.app_core.apply_io_config()
-
-        if asdict(self.config.webremote) != old_webremote:
-            self.webremote_manager.apply_config()
-
-        if asdict(self.config.audio) != old_audio:
-            self.app_core.apply_audio_config()
-
-        # Level and folder both take effect now rather than at the next
-        # launch: turning DEBUG on to chase something has to help with the
-        # thing happening in front of you, and the page's own live pane would
-        # otherwise sit tailing a file nothing writes to.
-        if asdict(self.config.logging) != old_logging:
-            self.app_core.apply_logging_config()
+        for (read, apply), old in zip(watched, before):
+            if read() != old:
+                apply()
 
         self.save_config()
         self.logger.info("Settings updated")
@@ -1229,8 +1207,7 @@ class MainWindow(QMainWindow):
         dialog.reveal(ref)
         # The tabs write the library whichever button closes the dialog, so the
         # panel rebuilds on the write — the same route the edit toolbar takes.
-        dialog.library_changed.connect(
-            lambda: self.clip_library.refresh_configuration(self.config))
+        dialog.library_changed.connect(self._refresh_clip_library)
         self._fixture_editor = dialog
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -1268,35 +1245,34 @@ class MainWindow(QMainWindow):
         return tuple((f.type, f.mode, f.dmx_start, f.channel, f.name)
                      for f in self.config.fixtures)
 
-    def _patch_dmx_signature(self):
-        """What the software DMX engine depends on (per fixture). Excludes the
-        name so a rename never re-patches (and never blacks out) the rig;
-        includes `mode`, which changes the fixture's DMX footprint."""
-        return tuple((f.type, f.mode, f.dmx_start, f.channel)
-                     for f in self.config.fixtures)
-
     def _on_patch_changed(self):
         """Persist a fixture-patch edit and propagate it live: rebuild the
         timeline tracks, refresh the clip library + DMX monitor, and hot-swap the
         running software DMX engine — each gated by a cheap signature so stage
-        drag-moves (and, for the engine, renames) don't cause needless churn."""
+        drag-moves (and, for the engine, renames) don't cause needless churn.
+        The engine's half, signature included, is AppCore.on_patch_edited."""
         self.save_config()
 
         ui_sig = self._patch_ui_signature()
         if ui_sig != self._last_ui_sig:
             self._last_ui_sig = ui_sig
             self.midi_manager.update_fixtures(self.config.fixtures)
-            self.timeline.rebuild_for_patch(self.config.fixtures)
-            self.clip_library.refresh_configuration(self.config)
-            self.dmx_display.refresh_configuration(self.config)
+            self._rebuild_patch_views()
 
-        dmx_sig = self._patch_dmx_signature()
-        controller = getattr(self, "software_controller", None)
-        if controller is not None and dmx_sig != self._last_dmx_sig:
-            self._last_dmx_sig = dmx_sig
-            self.app_core.repatch_controller()
-
+        self.app_core.on_patch_edited()
         self.toolbar_manager.update_show_stats()
+
+    def _rebuild_patch_views(self):
+        """Rebuild every view laid out from the patch: the timeline lanes, the
+        clip library and the DMX monitor."""
+        self.timeline.rebuild_for_patch(self.config.fixtures)
+        self._refresh_clip_library()
+        self.dmx_display.refresh_configuration(self.config)
+
+    def _refresh_clip_library(self):
+        """Rebuild the library panel, after a patch edit or a write to a
+        fixture type's scene banks or chases."""
+        self.clip_library.refresh_configuration(self.config)
 
     # ------------------------------------------------------------------
     # Show project operations
@@ -1306,10 +1282,7 @@ class MainWindow(QMainWindow):
         view (the core already propagated the patch to midi/controller).
         Reuses the exact propagation path of _on_patch_changed, unconditionally."""
         self._last_ui_sig = self._patch_ui_signature()
-        self._last_dmx_sig = self._patch_dmx_signature()
-        self.timeline.rebuild_for_patch(self.config.fixtures)
-        self.clip_library.refresh_configuration(self.config)
-        self.dmx_display.refresh_configuration(self.config)
+        self._rebuild_patch_views()
         # The stage too: opening a show rebinds config.fixtures to a new list,
         # and without this the previous show's rig stayed lit until a restart.
         self.stage_controller.sync_from_config(self.config)
@@ -1317,10 +1290,14 @@ class MainWindow(QMainWindow):
     def _on_show_reloaded(self):
         """Counters, show name, autosave chip and title after a show reload."""
         self.playlist_controller.update_song_counter()
+        self._refresh_show_status()
+        self.update_window_title()
+
+    def _refresh_show_status(self):
+        """The top bar's show name, and its autosave chip back at "saved"."""
         show = self.show_manager.show
         self.toolbar_manager.set_show_name(show.name if show else "")
         self.toolbar_manager.set_autosave_state("saved")
-        self.update_window_title()
 
     def new_show_dialog(self):
         """Create a new show project (seeded with the default patch) and open
@@ -1356,10 +1333,6 @@ class MainWindow(QMainWindow):
             self.show_manager.open_show(path)
         except ShowError as e:
             ErrorDialogManager.show_media_file_error(self, path, str(e))
-
-    def save_show_now(self):
-        """Manual Save: a forced flush (autosave already covers the rest)."""
-        self.show_manager.flush("manual")
 
     def save_show_as_dialog(self):
         """Duplicate the show (without its versions/ history) and open the copy."""
@@ -1427,17 +1400,11 @@ class MainWindow(QMainWindow):
             ErrorDialogManager.show_media_file_error(self, path, str(e))
 
     def on_song_title_edited(self, title: str):
-        """Persist an edited song title (feeds the setlist + web remote)."""
-        song = self.config.get_current_song()
-        if song is None or song.title == title.strip():
-            return
-        song.title = title.strip()
-        self.save_config()
-        # Refresh the setlist combobox so the renamed entry updates in place.
-        self.playlist_controller.update_song_counter()
-        webremote = getattr(self, "webremote_manager", None)
-        if webremote is not None:
-            webremote._publish_full()
+        """Rename the current song (the core persists it and tells the web
+        remote), then refresh the setlist combobox so the renamed entry
+        updates in place."""
+        if self.app_core.set_song_title(title):
+            self.playlist_controller.update_song_counter()
 
     def on_marker_edit_requested(self, kind: str, time_sec: float):
         """A ruler flag was double-clicked: its editor, opened on it."""
@@ -1509,17 +1476,6 @@ class MainWindow(QMainWindow):
         self.timeline.set_voice_tts([(c.time, c.text) for c in song.voice_tts])
         self.timeline.set_control_markers(core_markers.ruler_rows(song))
 
-    def on_song_key_edited(self, key: str):
-        """Persist the current song's musical key (TONO chip / web remote)."""
-        song = self.config.get_current_song()
-        if song is None or song.key == key:
-            return
-        song.key = key
-        self.save_config()
-        webremote = getattr(self, "webremote_manager", None)
-        if webremote is not None:
-            webremote._publish_full()
-
     def take_snapshot_dialog(self):
         """Take a named, pinned (never-pruned) snapshot of the show."""
         show = self.show_manager.show
@@ -1566,28 +1522,6 @@ class MainWindow(QMainWindow):
             self.show_manager.restore_version(version_id)
         except Exception as e:
             QMessageBox.critical(self, "Restore failed", str(e))
-
-    def on_audio_volume_changed(self, value):
-        """Handle audio volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.media_controller.set_audio_volume(volume)
-        self.config.update_volume(audio=volume)
-        self.save_config()
-
-    def on_audio_mute_toggled(self, muted):
-        """Handle audio mute toggle from timeline."""
-        self.media_controller.set_audio_muted(muted)
-
-    def on_voice_volume_changed(self, value):
-        """Handle voice (TTS guide) volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.audio_engine.set_bus_volume(BUS_VOICE, volume)
-        self.config.update_volume(voice=volume)
-        self.save_config()
-
-    def on_voice_mute_toggled(self, muted):
-        """Handle voice mute toggle from the timeline header's VOICE row."""
-        self.audio_engine.set_bus_muted(BUS_VOICE, muted)
 
     def on_track_heights_changed(self, waveform_height, midi_events_height):
         """Persist track heights when the user finishes resizing."""
@@ -1696,8 +1630,7 @@ class MainWindow(QMainWindow):
         # mouseReleaseEvent (via MidiManager.move_event → data_changed).
         # A synchronous refresh would destroy scene items while Qt is
         # still processing events on them, causing SIGSEGV.
-        if self.timeline:
-            self.timeline._schedule_refresh()
+        self.timeline._schedule_refresh()
 
         # Enable export button if we have MIDI data
         has_midi_data = self.midi_manager.midi_data is not None
@@ -1822,10 +1755,7 @@ class MainWindow(QMainWindow):
     def dragMoveEvent(self, event):
         # Same answer as the enter: a child that refuses the drag (the timeline
         # takes clips and scenes, not files) propagates its moves up here too.
-        if audio_paths_from_mime(event.mimeData()):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+        self.dragEnterEvent(event)
 
     def dropEvent(self, event):
         """Take a dropped audio file as the current song's backing or guide."""
@@ -1954,10 +1884,6 @@ class MainWindow(QMainWindow):
     def _on_config_save_failed(self, prefs_file):
         ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
 
-    def start_playback(self):
-        """Start media playback using media controller."""
-        self.media_controller.start_playback()
-
     def play_pause_playback(self):
         """Toggle playback via the core."""
         self.app_core.play_pause_playback()
@@ -1990,14 +1916,7 @@ class MainWindow(QMainWindow):
         in the process: while a dialog is up, or a text field in this window has
         focus, Space belongs to them and must not reach the transport.
         """
-        active = QApplication.activeWindow()
-        if active is not None and active is not self:
-            return False
-        focus = QApplication.focusWidget()
-        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
-                              QAbstractSpinBox)):
-            return False
-        return not (isinstance(focus, QComboBox) and focus.isEditable())
+        return self._window_owns_key(TEXT_ENTRY_WIDGETS)
 
     def _arrow_seeks_playhead(self):
         """True when ←/→ mean "move the playhead" instead of a keystroke for a
@@ -2013,15 +1932,20 @@ class MainWindow(QMainWindow):
         and hands ←/→ to the transport. An open menu and a dialog own the key
         outright, which the popup and active-window checks answer.
         """
+        if QApplication.activePopupWidget() is not None:
+            return False
+        return self._window_owns_key(
+            TEXT_ENTRY_WIDGETS + (QAbstractSlider, QAbstractItemView, QTabBar))
+
+    def _window_owns_key(self, keepers):
+        """True unless the key belongs elsewhere: to another window that is
+        active (a dialog), or to the focused widget — one of the `keepers`
+        types, or an editable combo box, whose text caret it moves."""
         active = QApplication.activeWindow()
         if active is not None and active is not self:
             return False
-        if QApplication.activePopupWidget() is not None:
-            return False
         focus = QApplication.focusWidget()
-        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
-                              QAbstractSpinBox, QAbstractSlider,
-                              QAbstractItemView, QTabBar)):
+        if isinstance(focus, keepers):
             return False
         return not (isinstance(focus, QComboBox) and focus.isEditable())
 
@@ -2096,24 +2020,27 @@ class MainWindow(QMainWindow):
         self.exit_edit_mode()
 
     def eventFilter(self, source, event):
-        """Global event filter to capture spacebar / Esc / ←→ from any widget."""
-        if (event.type() == QEvent.Type.KeyPress and
-            event.key() == Qt.Key.Key_Space and
-            self._spacebar_toggles_playback()):
-            # Toggle play/pause when spacebar is pressed anywhere
-            self.play_pause_playback()
-            return True  # Event handled, don't pass to widget
-        if (event.type() == QEvent.Type.KeyPress and
-                event.key() == Qt.Key.Key_Escape and
-                self._escape_leaves_edit_mode()):
-            self._leave_edit_level()
-            return True
-        if (event.type() == QEvent.Type.KeyPress and
-                event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right) and
-                self._arrow_seeks_playhead()):
-            self._arrow_seek(1 if event.key() == Qt.Key.Key_Right else -1,
-                             new_hold=not event.isAutoRepeat())
-            return True
+        """Global event filter to capture spacebar / Esc / ←→ from any widget.
+
+        Installed on the QApplication, so it runs for EVERY event on the GUI
+        thread — paints, timers, queued signals. The KeyPress test stays the
+        one gate in front of everything else: only a key event has `.key()`,
+        and an exception raised in here aborts the whole process (PyQt6's
+        qFatal on an unhandled exception in a virtual), on the next event.
+        """
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Space and self._spacebar_toggles_playback():
+                self.play_pause_playback()
+                return True  # Event handled, don't pass to widget
+            if key == Qt.Key.Key_Escape and self._escape_leaves_edit_mode():
+                self._leave_edit_level()
+                return True
+            if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
+                    and self._arrow_seeks_playhead()):
+                self._arrow_seek(1 if key == Qt.Key.Key_Right else -1,
+                                 new_hold=not event.isAutoRepeat())
+                return True
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
