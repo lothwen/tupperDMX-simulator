@@ -6,7 +6,7 @@ Coordinates multiple timeline tracks and provides the main timeline interface.
 
 import math
 import time
-from typing import Optional, List, Dict
+from typing import Optional
 
 from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
                              QGraphicsScene, QSlider, QPushButton, QLabel,
@@ -19,9 +19,9 @@ from .widgets import (ContentView, TrackResizeHandle,
                       HeaderResizeHandle, CustomTooltip)
 from .widgets.clip_edit import ClipEditDialog
 from core import note_layout
-from core.fixture_library import resolve_fixture
 from core.tempo_map import TempoMap
 from .tracks.clip_geometry import uniform_grid
+from . import lanes
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.base import elided_label
 from .tracks.midi_events import AutoSceneClip, DraggableMidiEvent
@@ -520,50 +520,14 @@ class Timeline(QWidget):
         """Compute total scene height from the current track layout."""
         self.scene_height = self._midi_tracks_bottom()
 
-    def _fixture_labels(self, ordered) -> List[str]:
-        """Header label per patched fixture (in display order): its name, or the
-        capitalized type (plus a 1-based ordinal when that type appears more than
-        once in the patch) -> e.g. ['Ledbar', 'Blinder 1', 'Blinder 2']."""
-        type_counts: Dict[str, int] = {}
-        for inst in ordered:
-            type_counts[inst.type] = type_counts.get(inst.type, 0) + 1
-        seen: Dict[str, int] = {}
-        labels: List[str] = []
-        for inst in ordered:
-            name = (getattr(inst, "name", "") or "").strip()
-            if name:
-                labels.append(name)
-                continue
-            cap = inst.type.capitalize()
-            if type_counts.get(inst.type, 0) > 1:
-                seen[inst.type] = seen.get(inst.type, 0) + 1
-                labels.append(f"{cap} {seen[inst.type]}")
-            else:
-                labels.append(cap)
-        return labels
-
-    @staticmethod
-    def _display_key(inst):
-        """Sort key for the track strip: the row this lane was dragged to, else
-        its DMX address.
-
-        A fixture with no row of its own (`order` -1 — a freshly patched one,
-        and every fixture in a show saved before the strip could be reordered)
-        sorts below the placed ones and keeps DMX order among its own kind, so
-        an untouched patch lays out exactly as it always did."""
-        dmx = getattr(inst, "dmx_start", 0)
-        order = getattr(inst, "order", -1)
-        order = -1 if order is None else int(order)
-        return (order, dmx) if order >= 0 else (float("inf"), dmx)
-
     def _build_midi_event_tracks(self):
         """(Re)build the MidiEventsTrack list from the current patch — objects
         only, no drawing. Tracks are laid out top-to-bottom by the row the user
         dragged them to (falling back to DMX address), but each binds to its
         fixture's stable MIDI channel (identity), so reordering/insert/remove
         never re-binds existing clips."""
-        display = sorted(self.fixtures, key=self._display_key)
-        labels = self._fixture_labels(display)
+        display = sorted(self.fixtures, key=lanes.display_key)
+        labels = lanes.fixture_labels(display)
 
         def _channel(inst, row):
             # Stable channel for real fixtures; fall back to the display row for
@@ -1740,38 +1704,23 @@ class Timeline(QWidget):
                 return track.fixture_index
         return None
 
-    def _fixture_for_channel(self, channel):
-        """The patched fixture instance with stable `channel`, or None.
+    # --- Patch lookups: the answers live in `lanes`, which is Qt-free ----
 
-        Falls back to positional lookup for synthetic fixtures built without a
-        stable channel (the display row doubles as the channel there)."""
-        if channel is None:
-            return None
-        for inst in self.fixtures:
-            if getattr(inst, "channel", -1) == channel:
-                return inst
-        if 0 <= channel < len(self.fixtures):
-            inst = self.fixtures[channel]
-            if getattr(inst, "channel", -1) < 0:
-                return inst
-        return None
+    def _fixture_for_channel(self, channel):
+        """The patched fixture instance with stable `channel`, or None."""
+        return lanes.fixture_for_channel(self.fixtures, channel)
 
     def _fixture_type(self, channel):
         """Type name of the patched fixture with stable `channel`, or None."""
-        inst = self._fixture_for_channel(channel)
-        return inst.type if inst else None
+        return lanes.fixture_type(self.fixtures, channel)
 
     def _fdef(self, channel):
         """FixtureDef of the patched fixture with stable `channel`, or None."""
-        inst = self._fixture_for_channel(channel)
-        if inst is None:
-            return None
-        return resolve_fixture(inst.type, getattr(inst, "mode", ""))
+        return lanes.fdef(self.fixtures, channel)
 
     def _dmx_start(self, channel) -> int:
         """First DMX address of the fixture with stable `channel` (1 if none)."""
-        inst = self._fixture_for_channel(channel)
-        return int(getattr(inst, "dmx_start", 1) or 1) if inst else 1
+        return lanes.dmx_start(self.fixtures, channel)
 
     def _is_locked(self, channel) -> bool:
         """Whether the lane is read-only. Drops already check this; editing
