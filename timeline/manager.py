@@ -4,14 +4,13 @@ Timeline manager for TupperDMX Simulator.
 Coordinates multiple timeline tracks and provides the main timeline interface.
 """
 
-import math
 import time
 from typing import Optional
 
-from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout, QGraphicsView,
-                             QGraphicsScene, QSlider, QPushButton, QLabel,
-                             QSizePolicy, QGraphicsLineItem, QGraphicsRectItem,
-                             QGraphicsProxyWidget, QDialog, QMessageBox)
+from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QGraphicsView,
+                             QGraphicsScene, QSizePolicy, QGraphicsLineItem,
+                             QGraphicsRectItem, QGraphicsProxyWidget, QDialog,
+                             QMessageBox)
 from PyQt6.QtGui import QBrush, QColor, QPen
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QEvent
 
@@ -22,6 +21,7 @@ from core import note_layout
 from core.tempo_map import TempoMap
 from .tracks.clip_geometry import uniform_grid
 from . import lanes
+from .master_header import MasterHeaderPanel
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.base import elided_label
 from .tracks.midi_events import AutoSceneClip, DraggableMidiEvent
@@ -217,9 +217,21 @@ class Timeline(QWidget):
         # Logger for debug messages
         self.logger = get_logger("timeline.manager")
 
-        # Create control widgets
-        self._create_control_widgets(initial_metronome_volume, initial_audio_volume,
-                                     initial_voice_volume)
+        # The head of the strip: the TRACKS counter over the three bus
+        # volume rows. It owns those controls and reports through its own
+        # signals, re-emitted here so listeners still see one timeline.
+        self.master_header = MasterHeaderPanel(
+            initial_audio_volume, initial_metronome_volume, initial_voice_volume,
+            self.HEADER_WIDTH)
+        for reported, own in (
+                (self.master_header.audio_volume_changed, self.audio_volume_changed),
+                (self.master_header.audio_mute_toggled, self.audio_mute_toggled),
+                (self.master_header.metronome_volume_changed, self.metronome_volume_changed),
+                (self.master_header.metronome_mute_toggled, self.metronome_mute_toggled),
+                (self.master_header.voice_volume_changed, self.voice_volume_changed),
+                (self.master_header.voice_mute_toggled, self.voice_mute_toggled)):
+            reported.connect(own)
+        self.master_header.set_track_count(len(self.fixtures))
         
         # Initialize UI
         self.init_ui()
@@ -232,142 +244,24 @@ class Timeline(QWidget):
         # Initialize tracks
         self._init_tracks()
         
-    def _create_control_widgets(self, initial_metronome_volume, initial_audio_volume,
-                                initial_voice_volume=0.8):
-        """Build the combined header panel: a "TRACKS" title + fixture
-        counter over MASTER (audio), CLICK (metronome) and VOICE (TTS guide)
-        volume rows."""
-        # MASTER = audio output volume, drawn with a green→orange level gradient.
-        (self.audio_volume_slider, self.audio_mute_button,
-         self._audio_db_label) = self._volume_controls(
-            initial_audio_volume, "MasterVolumeSlider", "AudioMuteButton",
-            self.audio_volume_changed, self.audio_mute_toggled)
-
-        # METRO = metronome volume (kept here so the control isn't lost; the
-        # metronome mute also lives on the toolbar).
-        (self.metronome_volume_slider, self.metronome_mute_button,
-         self._metro_db_label) = self._volume_controls(
-            initial_metronome_volume, "MetroVolumeSlider", "MetronomeMuteButton",
-            self.metronome_volume_changed, self.metronome_mute_toggled)
-
-        # VOICE = TTS guide bus (voice cues + spoken count-in). It borrows the
-        # metronome's object names, so the stylesheet draws it the same way.
-        (self.voice_volume_slider, self.voice_mute_button,
-         self._voice_db_label) = self._volume_controls(
-            initial_voice_volume, "MetroVolumeSlider", "MetronomeMuteButton",
-            self.voice_volume_changed, self.voice_mute_toggled)
-
-        # "TRACKS" title row with the live fixture counter.
-        tracks_title = QLabel("TRACKS")
-        tracks_title.setObjectName("TracksTitle")
-        self.track_count_label = QLabel()
-        self.track_count_label.setObjectName("TracksCount")
-        self.track_count_label.setAlignment(Qt.AlignmentFlag.AlignRight
-                                            | Qt.AlignmentFlag.AlignVCenter)
-        tracks_row = QHBoxLayout()
-        tracks_row.setContentsMargins(0, 0, 0, 0)
-        tracks_row.addWidget(tracks_title)
-        tracks_row.addStretch(1)
-        tracks_row.addWidget(self.track_count_label)
-
-        self.master_header_container = QWidget()
-        self.master_header_container.setObjectName("TrackHeaderPanel")
-        self.master_header_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.master_header_container.setFixedWidth(self.HEADER_WIDTH)
-        panel = QVBoxLayout(self.master_header_container)
-        panel.setContentsMargins(8, 6, 8, 8)
-        panel.setSpacing(4)
-        panel.addLayout(tracks_row)
-        panel.addStretch(1)
-        panel.addLayout(self._volume_row("MASTER", self.audio_mute_button,
-                                         self.audio_volume_slider, self._audio_db_label))
-        panel.addLayout(self._volume_row("CLICK", self.metronome_mute_button,
-                                         self.metronome_volume_slider, self._metro_db_label))
-        panel.addLayout(self._volume_row("VOICE", self.voice_mute_button,
-                                         self.voice_volume_slider, self._voice_db_label))
-        panel.addStretch(1)
-
-        self._update_track_counts()
-
-    def _volume_controls(self, initial, slider_name, mute_name,
-                         volume_signal, mute_signal):
-        """One bus's (slider, mute toggle, dB readout), wired to its signals."""
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setObjectName(slider_name)
-        slider.setRange(0, 100)
-        slider.setValue(int(initial * 100))
-
-        mute_button = QPushButton("M")
-        mute_button.setObjectName(mute_name)
-        mute_button.setCheckable(True)
-        mute_button.setFixedSize(18, 18)
-
-        db_label = QLabel(self._format_db(slider.value()))
-        db_label.setObjectName("VolumeDbLabel")
-        db_label.setAlignment(Qt.AlignmentFlag.AlignRight
-                              | Qt.AlignmentFlag.AlignVCenter)
-
-        slider.valueChanged.connect(volume_signal.emit)
-        slider.valueChanged.connect(
-            lambda value: db_label.setText(self._format_db(value)))
-        mute_button.toggled.connect(mute_signal.emit)
-        return slider, mute_button, db_label
-
-    def _volume_row(self, label_text, mute_button, slider, db_label) -> QHBoxLayout:
-        """One labeled volume row: title, mute toggle, slider, dB readout."""
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        label = QLabel(label_text)
-        label.setObjectName("VolumeRowLabel")
-        row.addWidget(label)
-        row.addWidget(mute_button)
-        row.addWidget(slider, 1)
-        row.addWidget(db_label)
-        return row
-
-    @staticmethod
-    def _format_db(percent: int) -> str:
-        """Render a 0-100 volume percentage as an approximate dB readout
-        (100% = 0 dB, 0% = -∞)."""
-        if percent <= 0:
-            return "-∞"
-        db = 20.0 * math.log10(percent / 100.0)
-        return "0dB" if db >= -0.5 else f"{round(db)}dB"
-
     def set_volumes(self, audio=None, metronome=None, voice=None) -> None:
         """Move the header sliders to volumes that changed elsewhere (a live
-        userprefs reload). Signals are blocked: these values have already been
-        applied to the buses, and re-emitting them as user edits would bounce
-        straight back out as another save."""
-        for value, slider, db_label in (
-                (audio, self.audio_volume_slider, self._audio_db_label),
-                (metronome, self.metronome_volume_slider, self._metro_db_label),
-                (voice, self.voice_volume_slider, self._voice_db_label)):
-            if value is None:
-                continue
-            blocked = slider.blockSignals(True)
-            slider.setValue(int(round(float(value) * 100)))
-            slider.blockSignals(blocked)
-            db_label.setText(self._format_db(slider.value()))
-
-    def _update_track_counts(self) -> None:
-        """Refresh the TRACKS counter (live fixture count)."""
-        self.track_count_label.setText(str(len(self.fixtures)))
+        userprefs reload)."""
+        self.master_header.set_volumes(audio, metronome, voice)
 
     def _layout_master_header(self) -> None:
         """Create/position the combined header panel so it spans the ruler and
         waveform header band as one block."""
         if self._master_header_proxy is None:
             self._master_header_proxy = QGraphicsProxyWidget()
-            self._master_header_proxy.setWidget(self.master_header_container)
+            self._master_header_proxy.setWidget(self.master_header)
             # Above the per-track background rects, below the resize handle (z=6).
             self._master_header_proxy.setZValue(1)
         if self._master_header_proxy.scene() is None:
             self.header_scene.addItem(self._master_header_proxy)
         bottom = self._waveform_y() + self.waveform_track_height
-        self.master_header_container.setFixedWidth(self.HEADER_WIDTH)
-        self.master_header_container.setFixedHeight(int(bottom))
+        self.master_header.setFixedWidth(self.HEADER_WIDTH)
+        self.master_header.setFixedHeight(int(bottom))
         self._master_header_proxy.setPos(0, 0)
 
     def init_ui(self):
@@ -614,7 +508,7 @@ class Timeline(QWidget):
             self.midi_events_resize_handle = None
 
         self.fixtures = list(fixtures or [])
-        self._update_track_counts()
+        self.master_header.set_track_count(len(self.fixtures))
         self._build_midi_event_tracks()
         self._create_midi_resize_handle()
         # Reposition headers/content, redraw clips onto the new lanes (by
