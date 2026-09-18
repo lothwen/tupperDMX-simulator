@@ -166,7 +166,7 @@ class MainWindow(QMainWindow):
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
 
-        # Install global event filter for spacebar / Esc / arrow handling
+        # Install global event filter for spacebar / Esc / arrow / F handling
         QApplication.instance().installEventFilter(self)
 
         # Arrow-key scrub: when the current hold began and when its last step
@@ -460,6 +460,7 @@ class MainWindow(QMainWindow):
         self._stage_window = None
         self._docked_content_sizes = None
         self._collapsed_before_undock = False
+        self._docked_before_fullscreen = False
         self.dock_stage_button = QPushButton()
         self.dock_stage_button.setObjectName("StageDockButton")
         self.dock_stage_button.setIconSize(QSize(18, 18))
@@ -1161,6 +1162,27 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.stage_controller.resume_gpu_light)
         self.logger.info("Stage docked back into the main window")
 
+    def toggle_stage_fullscreen(self):
+        """F: the stage alone on a whole screen, and back (Esc also comes back).
+
+        Fullscreen belongs to the floating window, so a docked stage undocks
+        for it first and docks again on the way out — docked is where the
+        operator had it. One that was already floating returns to its window.
+        """
+        window = self._stage_window
+        if window is not None and window.isFullScreen():
+            if self._docked_before_fullscreen:
+                self.dock_stage()
+            else:
+                window.showNormal()
+            self.logger.info("Stage left fullscreen")
+            return
+        self._docked_before_fullscreen = window is None
+        if window is None:
+            self.undock_stage()
+        self._stage_window.showFullScreen()
+        self.logger.info("Stage fullscreen")
+
     def add_fixture_from_timeline(self):
         """Timeline toolbar's "+ Add track": a timeline lane IS a patched
         fixture, so this enters the stage designer and opens the same fixture
@@ -1228,7 +1250,7 @@ class MainWindow(QMainWindow):
         in the designer at all, where an inspector card popping up over it
         would be nonsense.
         `isHidden` rather than `isVisible`, for the same reason
-        `_escape_leaves_edit_mode` uses it: the toolbar is an overlay whose
+        `_escape_backs_out` uses it: the toolbar is an overlay whose
         ancestors may not be shown yet."""
         editing = not self.edit_toolbar.isHidden()
         stage_view = self.stage_controller.get_stage_view()
@@ -1937,12 +1959,29 @@ class MainWindow(QMainWindow):
         return self._window_owns_key(
             TEXT_ENTRY_WIDGETS + (QAbstractSlider, QAbstractItemView, QTabBar))
 
-    def _window_owns_key(self, keepers):
+    def _f_toggles_stage_fullscreen(self, event):
+        """True when F means "stage fullscreen" instead of a keystroke for a
+        widget.
+
+        Space's rule, with two additions. The floating stage window counts as
+        ours: fullscreen, it is the only window on that screen, and it has to
+        answer the key that takes it back out. And only a bare F — a modifier
+        leaves the key to whichever shortcut it spells, and an open popup (a
+        menu, a combo's list) is typing to find an entry.
+        """
+        if event.modifiers() != Qt.KeyboardModifier.NoModifier:
+            return False
+        if QApplication.activePopupWidget() is not None:
+            return False
+        return self._window_owns_key(TEXT_ENTRY_WIDGETS, also=self._stage_window)
+
+    def _window_owns_key(self, keepers, also=None):
         """True unless the key belongs elsewhere: to another window that is
-        active (a dialog), or to the focused widget — one of the `keepers`
-        types, or an editable combo box, whose text caret it moves."""
+        active (a dialog — `also` names one that is not), or to the focused
+        widget — one of the `keepers` types, or an editable combo box, whose
+        text caret it moves."""
         active = QApplication.activeWindow()
-        if active is not None and active is not self:
+        if active is not None and active is not self and active is not also:
             return False
         focus = QApplication.focusWidget()
         if isinstance(focus, keepers):
@@ -1984,13 +2023,15 @@ class MainWindow(QMainWindow):
         # here — watching them move is the whole point of the key.
         self._on_position_changed(target)
 
-    def _escape_leaves_edit_mode(self):
-        """True when Esc means "back out of the stage designer".
+    def _escape_backs_out(self):
+        """True when Esc means "back out of the stage designer" or "leave the
+        fullscreen stage".
 
         Every dialog cancels on Esc for free (QDialog routes it to reject()), and
         so do combo/menu popups — so this filter, which sees every key press in
         the process, must stand down while one of those is up and answer only for
-        the designer, which is a mode rather than a window. Modality is asked
+        the designer and fullscreen, which are modes rather than windows of
+        their own. Modality is asked
         about directly and not left to `activeWindow`, because the Add-fixture
         dialog opens FROM the designer's own toolbar: its Esc arrives with edit
         mode still on, and eating it would strand the dialog.
@@ -2000,7 +2041,8 @@ class MainWindow(QMainWindow):
         `isVisible` because the toolbar is an overlay whose ancestors may not be
         up yet.
         """
-        if self.edit_toolbar.isHidden():
+        fullscreen = self._stage_window is not None and self._stage_window.isFullScreen()
+        if self.edit_toolbar.isHidden() and not fullscreen:
             return False
         if (QApplication.activePopupWidget() is not None
                 or QApplication.activeModalWidget() is not None):
@@ -2008,8 +2050,9 @@ class MainWindow(QMainWindow):
         active = QApplication.activeWindow()
         return active is None or active is self or active is self._stage_window
 
-    def _leave_edit_level(self):
-        """Esc backs out ONE level: the inspector first, then edit mode itself.
+    def _back_out_one_level(self):
+        """Esc backs out ONE level: the inspector first, then edit mode itself,
+        then fullscreen — the outermost, since the designer runs inside it.
 
         Clearing the selection is what the inspector's own ✕ does — the card
         hides in response to `fixture_selected(None)`, never on its own.
@@ -2017,10 +2060,13 @@ class MainWindow(QMainWindow):
         if not self.fixture_inspector.isHidden():
             self.stage_controller.scene.clearSelection()
             return
-        self.exit_edit_mode()
+        if not self.edit_toolbar.isHidden():
+            self.exit_edit_mode()
+            return
+        self.toggle_stage_fullscreen()
 
     def eventFilter(self, source, event):
-        """Global event filter to capture spacebar / Esc / ←→ from any widget.
+        """Global event filter to capture spacebar / Esc / ←→ / F from any widget.
 
         Installed on the QApplication, so it runs for EVERY event on the GUI
         thread — paints, timers, queued signals. The KeyPress test stays the
@@ -2033,13 +2079,17 @@ class MainWindow(QMainWindow):
             if key == Qt.Key.Key_Space and self._spacebar_toggles_playback():
                 self.play_pause_playback()
                 return True  # Event handled, don't pass to widget
-            if key == Qt.Key.Key_Escape and self._escape_leaves_edit_mode():
-                self._leave_edit_level()
+            if key == Qt.Key.Key_Escape and self._escape_backs_out():
+                self._back_out_one_level()
                 return True
             if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
                     and self._arrow_seeks_playhead()):
                 self._arrow_seek(1 if key == Qt.Key.Key_Right else -1,
                                  new_hold=not event.isAutoRepeat())
+                return True
+            if key == Qt.Key.Key_F and self._f_toggles_stage_fullscreen(event):
+                if not event.isAutoRepeat():   # a held F must not flicker
+                    self.toggle_stage_fullscreen()
                 return True
         return super().eventFilter(source, event)
 
