@@ -26,7 +26,7 @@ from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF, QSize
 
 from ui.widgets import icons
 
-from .base import BaseTrack
+from .base import BaseTrack, elided_label
 from .clip_geometry import (
     ClipBounds, Occupant,
     MODE_IDLE, MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT, MODE_GROUP_MOVE,
@@ -816,13 +816,11 @@ class DraggableMidiEvent(QGraphicsObject):
     def _refresh_text_truncation(self, new_width: float):
         if self.text_item is None or self.timeline is None:
             return
-        zoom = self.timeline.content_view.transform().m11()
-        available = (new_width - 10) * zoom
         full_text = self.text_item.data(0)
         if not full_text:
             return
-        fm = self.timeline.content_view.fontMetrics()
-        self.text_item.setPlainText(self.timeline.get_truncated_text(full_text, available, fm))
+        self.text_item.setPlainText(
+            elided_label(full_text, new_width, self.timeline.content_view))
 
     # --- Hover ------------------------------------------------------------
 
@@ -918,6 +916,8 @@ class AutoSceneClip(QGraphicsObject):
         self._border_color = ink
         self._hatch_color = QColor(ink)
         self._hatch_color.setAlpha(AUTO_CLIP_HATCH_ALPHA)
+        # Its label, full text in data(0) — a zoom re-fits it to the clip.
+        self.text_item = None
         self.setPos(x, y)
         # Ignore all input so it never steals hover/drag/clicks from the empty
         # space behind it or the manual clips painted on top.
@@ -925,6 +925,9 @@ class AutoSceneClip(QGraphicsObject):
         self.setAcceptHoverEvents(False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+
+    def set_text_item(self, text_item):
+        self.text_item = text_item
 
     def boundingRect(self):
         return QRectF(0, 0, self.rect.width(), self.rect.height())
@@ -1319,7 +1322,7 @@ class MidiEventsTrack(BaseTrack):
         self.logger = get_logger("timeline.tracks.midi_events")
 
     def clear_items(self):
-        """Tear down for a patch rebuild / timeline cleanup. The header proxy
+        """Tear down for a patch rebuild. The header proxy
         lives outside header_items (so per-redraw header clears don't destroy
         it), so dispose it explicitly here."""
         super().clear_items()
@@ -1668,10 +1671,7 @@ class MidiEventsTrack(BaseTrack):
 
         brightness = color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
         text_color = QColor(235, 235, 235) if brightness < 128 else QColor(20, 20, 20)
-        zoom = self.timeline_manager.content_view.transform().m11()
-        available_width = (width - 10) * zoom
-        fm = self.timeline_manager.content_view.fontMetrics()
-        text = self.timeline_manager.get_truncated_text(label, available_width, fm)
+        text = elided_label(label, width, self.timeline_manager.content_view)
 
         text_item = QGraphicsTextItem(text)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
@@ -1683,6 +1683,8 @@ class MidiEventsTrack(BaseTrack):
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
         text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         text_item.setAcceptHoverEvents(False)
+        text_item.setData(0, label)
+        clip.set_text_item(text_item)
         if muted:
             text_item.setOpacity(MUTED_CLIP_OPACITY)
         self.content_scene.addItem(text_item)
@@ -1860,10 +1862,8 @@ class MidiEventsTrack(BaseTrack):
                     color = QColor(info.color)
                 brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
                 text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
-                zoom_factor = self.timeline_manager.content_view.transform().m11()
-                available_width = (width - 10) * zoom_factor
-                fm = self.timeline_manager.content_view.fontMetrics()
-                text_to_display = self.timeline_manager.get_truncated_text(label_text, available_width, fm)
+                text_to_display = elided_label(label_text, width,
+                                               self.timeline_manager.content_view)
 
                 text_item = QGraphicsTextItem(text_to_display)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
@@ -1876,7 +1876,6 @@ class MidiEventsTrack(BaseTrack):
                 text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 text_item.setAcceptHoverEvents(False)
                 text_item.setData(0, label_text)
-                text_item.setData(1, rep['id'])
 
                 event_rect.set_text_item(text_item)
 

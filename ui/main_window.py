@@ -23,7 +23,7 @@ from core.io_routing import midi_routing_from_io
 from core.paths import default_shows_dir
 from core.show import store as show_store
 from core.show.model import ShowError
-from timeline import Timeline
+from timeline.manager import Timeline
 from tupperlogger import get_logger
 from ui.widgets import icons
 from ui.about_dialog import AboutDialog

@@ -4,9 +4,7 @@ Timeline manager for TupperDMX Simulator.
 Coordinates multiple timeline tracks and provides the main timeline interface.
 """
 
-import os
 import math
-import copy
 import time
 from typing import Optional, List, Dict
 
@@ -25,7 +23,8 @@ from core.fixture_library import resolve_fixture
 from core.tempo_map import TempoMap
 from .tracks.clip_geometry import uniform_grid
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
-from .tracks.midi_events import build_render_units, DraggableMidiEvent
+from .tracks.base import elided_label
+from .tracks.midi_events import AutoSceneClip, DraggableMidiEvent
 from tupperlogger import get_logger
 
 
@@ -137,10 +136,6 @@ class Timeline(QWidget):
         # (a fixture's index == the MIDI channel that routes to it).
         self.fixtures = list(fixtures or [])
 
-        # Header "TRACKS" counter: fixture count is live; group count is a
-        # placeholder until fixture groups are implemented.
-        self._group_count = 0
-
         self.bpm = 120  # the song's BASE tempo (the .mid's single set_tempo)
         # Where the bar lines actually fall: the base tempo plus the song's
         # tempo markers. The scene's x axis stays SECONDS, so a tempo change
@@ -180,9 +175,6 @@ class Timeline(QWidget):
 
         # Combined header panel proxy (spans the ruler + waveform header band).
         self._master_header_proxy = None
-
-        # Legacy compatibility - populated by tracks
-        self.midi_event_items = []
 
         # Cache for current UI data (refreshed from MidiManager)
         self._cached_events = []
@@ -242,68 +234,30 @@ class Timeline(QWidget):
         
     def _create_control_widgets(self, initial_metronome_volume, initial_audio_volume,
                                 initial_voice_volume=0.8):
-        """Build the combined header panel: a "TRACKS" title + fixture/group
+        """Build the combined header panel: a "TRACKS" title + fixture
         counter over MASTER (audio), CLICK (metronome) and VOICE (TTS guide)
         volume rows."""
         # MASTER = audio output volume, drawn with a green→orange level gradient.
-        self.audio_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.audio_volume_slider.setObjectName("MasterVolumeSlider")
-        self.audio_volume_slider.setRange(0, 100)
-        self.audio_volume_slider.setValue(int(initial_audio_volume * 100))
-        self.audio_volume_slider.valueChanged.connect(self.audio_volume_changed.emit)
-        self.audio_volume_slider.valueChanged.connect(self._update_audio_db)
-
-        self.audio_mute_button = QPushButton("M")
-        self.audio_mute_button.setObjectName("AudioMuteButton")
-        self.audio_mute_button.setCheckable(True)
-        self.audio_mute_button.setFixedSize(18, 18)
-        self.audio_mute_button.toggled.connect(self.on_audio_mute_toggled)
-
-        self._audio_db_label = QLabel()
-        self._audio_db_label.setObjectName("VolumeDbLabel")
-        self._audio_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
-                                          | Qt.AlignmentFlag.AlignVCenter)
+        (self.audio_volume_slider, self.audio_mute_button,
+         self._audio_db_label) = self._volume_controls(
+            initial_audio_volume, "MasterVolumeSlider", "AudioMuteButton",
+            self.audio_volume_changed, self.audio_mute_toggled)
 
         # METRO = metronome volume (kept here so the control isn't lost; the
         # metronome mute also lives on the toolbar).
-        self.metronome_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.metronome_volume_slider.setObjectName("MetroVolumeSlider")
-        self.metronome_volume_slider.setRange(0, 100)
-        self.metronome_volume_slider.setValue(int(initial_metronome_volume * 100))
-        self.metronome_volume_slider.valueChanged.connect(self.metronome_volume_changed.emit)
-        self.metronome_volume_slider.valueChanged.connect(self._update_metro_db)
+        (self.metronome_volume_slider, self.metronome_mute_button,
+         self._metro_db_label) = self._volume_controls(
+            initial_metronome_volume, "MetroVolumeSlider", "MetronomeMuteButton",
+            self.metronome_volume_changed, self.metronome_mute_toggled)
 
-        self.metronome_mute_button = QPushButton("M")
-        self.metronome_mute_button.setObjectName("MetronomeMuteButton")
-        self.metronome_mute_button.setCheckable(True)
-        self.metronome_mute_button.setFixedSize(18, 18)
-        self.metronome_mute_button.toggled.connect(self.on_mute_toggled)
+        # VOICE = TTS guide bus (voice cues + spoken count-in). It borrows the
+        # metronome's object names, so the stylesheet draws it the same way.
+        (self.voice_volume_slider, self.voice_mute_button,
+         self._voice_db_label) = self._volume_controls(
+            initial_voice_volume, "MetroVolumeSlider", "MetronomeMuteButton",
+            self.voice_volume_changed, self.voice_mute_toggled)
 
-        self._metro_db_label = QLabel()
-        self._metro_db_label.setObjectName("VolumeDbLabel")
-        self._metro_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
-                                          | Qt.AlignmentFlag.AlignVCenter)
-
-        # VOICE = TTS guide bus (voice cues + spoken count-in).
-        self.voice_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.voice_volume_slider.setObjectName("MetroVolumeSlider")
-        self.voice_volume_slider.setRange(0, 100)
-        self.voice_volume_slider.setValue(int(initial_voice_volume * 100))
-        self.voice_volume_slider.valueChanged.connect(self.voice_volume_changed.emit)
-        self.voice_volume_slider.valueChanged.connect(self._update_voice_db)
-
-        self.voice_mute_button = QPushButton("M")
-        self.voice_mute_button.setObjectName("MetronomeMuteButton")
-        self.voice_mute_button.setCheckable(True)
-        self.voice_mute_button.setFixedSize(18, 18)
-        self.voice_mute_button.toggled.connect(self.on_voice_mute_toggled)
-
-        self._voice_db_label = QLabel()
-        self._voice_db_label.setObjectName("VolumeDbLabel")
-        self._voice_db_label.setAlignment(Qt.AlignmentFlag.AlignRight
-                                          | Qt.AlignmentFlag.AlignVCenter)
-
-        # "TRACKS" title row with the live fixture / placeholder group counter.
+        # "TRACKS" title row with the live fixture counter.
         tracks_title = QLabel("TRACKS")
         tracks_title.setObjectName("TracksTitle")
         self.track_count_label = QLabel()
@@ -333,10 +287,31 @@ class Timeline(QWidget):
                                          self.voice_volume_slider, self._voice_db_label))
         panel.addStretch(1)
 
-        self._update_audio_db(self.audio_volume_slider.value())
-        self._update_metro_db(self.metronome_volume_slider.value())
-        self._update_voice_db(self.voice_volume_slider.value())
         self._update_track_counts()
+
+    def _volume_controls(self, initial, slider_name, mute_name,
+                         volume_signal, mute_signal):
+        """One bus's (slider, mute toggle, dB readout), wired to its signals."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setObjectName(slider_name)
+        slider.setRange(0, 100)
+        slider.setValue(int(initial * 100))
+
+        mute_button = QPushButton("M")
+        mute_button.setObjectName(mute_name)
+        mute_button.setCheckable(True)
+        mute_button.setFixedSize(18, 18)
+
+        db_label = QLabel(self._format_db(slider.value()))
+        db_label.setObjectName("VolumeDbLabel")
+        db_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                              | Qt.AlignmentFlag.AlignVCenter)
+
+        slider.valueChanged.connect(volume_signal.emit)
+        slider.valueChanged.connect(
+            lambda value: db_label.setText(self._format_db(value)))
+        mute_button.toggled.connect(mute_signal.emit)
+        return slider, mute_button, db_label
 
     def _volume_row(self, label_text, mute_button, slider, db_label) -> QHBoxLayout:
         """One labeled volume row: title, mute toggle, slider, dB readout."""
@@ -360,39 +335,25 @@ class Timeline(QWidget):
         db = 20.0 * math.log10(percent / 100.0)
         return "0dB" if db >= -0.5 else f"{round(db)}dB"
 
-    def _update_audio_db(self, value: int) -> None:
-        self._audio_db_label.setText(self._format_db(value))
-
-    def _update_metro_db(self, value: int) -> None:
-        self._metro_db_label.setText(self._format_db(value))
-
-    def _update_voice_db(self, value: int) -> None:
-        self._voice_db_label.setText(self._format_db(value))
-
     def set_volumes(self, audio=None, metronome=None, voice=None) -> None:
         """Move the header sliders to volumes that changed elsewhere (a live
         userprefs reload). Signals are blocked: these values have already been
         applied to the buses, and re-emitting them as user edits would bounce
         straight back out as another save."""
-        for value, slider, update_db in (
-                (audio, self.audio_volume_slider, self._update_audio_db),
-                (metronome, self.metronome_volume_slider, self._update_metro_db),
-                (voice, self.voice_volume_slider, self._update_voice_db)):
+        for value, slider, db_label in (
+                (audio, self.audio_volume_slider, self._audio_db_label),
+                (metronome, self.metronome_volume_slider, self._metro_db_label),
+                (voice, self.voice_volume_slider, self._voice_db_label)):
             if value is None:
                 continue
             blocked = slider.blockSignals(True)
             slider.setValue(int(round(float(value) * 100)))
             slider.blockSignals(blocked)
-            update_db(slider.value())
+            db_label.setText(self._format_db(slider.value()))
 
     def _update_track_counts(self) -> None:
-        """Refresh the TRACKS counter (live fixtures · placeholder groups)."""
-        self.track_count_label.setText(f"{len(self.fixtures)} · {self._group_count} grp")
-
-    def set_group_count(self, count: int) -> None:
-        """Set the group count shown in the TRACKS header (groups TBD)."""
-        self._group_count = max(0, int(count))
-        self._update_track_counts()
+        """Refresh the TRACKS counter (live fixture count)."""
+        self.track_count_label.setText(str(len(self.fixtures)))
 
     def _layout_master_header(self) -> None:
         """Create/position the combined header panel so it spans the ruler and
@@ -1102,8 +1063,7 @@ class Timeline(QWidget):
         self._draw_song_sections()
 
         # Playhead height + grid lines span the full scene
-        if hasattr(self, 'playhead') and self.playhead is not None:
-            self.playhead.setLine(0, 0, 0, self.scene_height)
+        self.playhead.setLine(0, 0, 0, self.scene_height)
         self.draw_time_grid()
         self.draw_lane_bands()
 
@@ -1269,11 +1229,11 @@ class Timeline(QWidget):
         self._draw_song_sections()
 
         # Detect BPM from first event if available (load-time only).
-        if detect_bpm and self._cached_events:
-            # Try to get BPM from MIDI data
-            duration = self.midi_manager.get_duration()
-            if duration > 0:
-                self._detect_bpm_from_data()
+        if (detect_bpm and self._cached_events
+                and self.midi_manager.get_duration() > 0):
+            bpm = self.midi_manager.detect_bpm()
+            if bpm is not None:
+                self.bpm_detected.emit(bpm)
 
     def _schedule_refresh(self) -> None:
         """Request a deferred refresh on the next event-loop tick.
@@ -1314,7 +1274,7 @@ class Timeline(QWidget):
 
     def _on_selection_changed(self):
         """Keep the persisted id set + multi-select affordances in sync."""
-        if self._applying_selection or not hasattr(self, 'midi_events_tracks'):
+        if self._applying_selection:
             return
         clips = self.selected_clip_items()
         self._selected_event_ids = {c.event_id for c in clips}
@@ -1399,8 +1359,6 @@ class Timeline(QWidget):
         """
         if not self.midi_manager or not self.midi_manager.has_clipboard():
             return
-        if not hasattr(self, 'playhead') or self.playhead is None:
-            return
         time_seconds = max(0.0, self.playhead.x() / self.PIXELS_PER_SECOND)
         chained = (self._paste_chain_from is not None
                    and abs(time_seconds - self._paste_chain_from) < 1e-4)
@@ -1416,14 +1374,6 @@ class Timeline(QWidget):
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
         self.update_playhead(time_seconds)
         self.seek_requested.emit(time_seconds)
-
-    def _detect_bpm_from_data(self) -> None:
-        """Detect BPM from MIDI data structure."""
-        if not self.midi_manager:
-            return
-        bpm = self.midi_manager.detect_bpm()
-        if bpm is not None:
-            self.bpm_detected.emit(bpm)
 
     def set_bpm(self, bpm):
         """Update BPM and redraw ruler and time grid to match new tempo."""
@@ -1504,92 +1454,21 @@ class Timeline(QWidget):
         self.ruler_track.update_ruler_labels()
 
     def update_midi_text_truncation(self):
-        """Update text truncation for all MIDI event labels based on current zoom level."""
-        if not self._cached_events:
-            return
+        """Re-fit every clip's label — manual and auto — to its clip at the
+        current zoom level.
 
-        zoom_factor = self.content_view.transform().m11()
-        font_metrics = self.content_view.fontMetrics()
-        sorted_events = sorted(self._cached_events, key=lambda x: x['time'])
-        song_length = self.midi_manager.song_end_time() if self.midi_manager else 240
-        extended_end = song_length * 1.05
-
-        from PyQt6.QtWidgets import QGraphicsTextItem
-        # Each track has its own filtered slice — so end-times must be
-        # recomputed per track or the blinder text would inherit gaps from
-        # ledbar neighbors (and vice-versa). Iterate over render units (which
-        # collapse 7-event scene groups into a single visual clip) so a
-        # group's text gets the full clip width, not the ~0 gap between two
-        # group members at the same time.
+        Each label is sized from the width its clip was drawn at, rather than
+        this re-deriving an extent from the events: a derived one drifts from
+        the track's (it missed a song-part marker cutting a clip short, so a
+        zoom sized that label for the uncut clip and it ran past the end)."""
         for track in self.midi_events_tracks:
-            if not track.items:
-                continue
-            track_events = [e for e in sorted_events if track.matches_filter(e)]
-            units = build_render_units(track_events)
-            rep_id_to_end = {}
-            for i, unit in enumerate(units):
-                end = units[i + 1]["time"] if i + 1 < len(units) else extended_end
-                rep_id_to_end[unit["representative"]["id"]] = (unit["time"], end)
-
             for item in track.items:
-                if not isinstance(item, QGraphicsTextItem):
+                if not isinstance(item, (DraggableMidiEvent, AutoSceneClip)):
                     continue
-                full_text = item.data(0)
-                if not full_text:
-                    continue
-                event_id = item.data(1)
-                if event_id not in rep_id_to_end:
-                    continue
-                start, end = rep_id_to_end[event_id]
-                duration = max(0.01, end - start)
-                width = max(duration * self.PIXELS_PER_SECOND, 20)
-                available_width = (width - 10) * zoom_factor
-                item.setPlainText(self.get_truncated_text(full_text, available_width, font_metrics))
-
-    def get_truncated_text(self, text, available_width, font_metrics):
-        """Return text truncated to fit within available width, with ellipsis if needed."""
-        if available_width <= 0:
-            return ""
-            
-        # If the text fits entirely, return it as-is
-        text_width = font_metrics.horizontalAdvance(text)
-        if text_width <= available_width:
-            return text
-            
-        # Calculate available width for ellipsis (3 dots)
-        ellipsis = "..."
-        ellipsis_width = font_metrics.horizontalAdvance(ellipsis)
-        available_for_text = available_width - ellipsis_width
-        
-        if available_for_text <= 0:
-            return ellipsis
-            
-        # Binary search to find the maximum characters that fit
-        left, right = 0, len(text)
-        best_length = 0
-        
-        while left <= right:
-            mid = (left + right) // 2
-            substring = text[:mid]
-            substring_width = font_metrics.horizontalAdvance(substring)
-            
-            if substring_width <= available_for_text:
-                best_length = mid
-                left = mid + 1
-            else:
-                right = mid - 1
-                
-        return text[:best_length] + ellipsis if best_length > 0 else ellipsis
-
-    # Event handlers
-    def on_mute_toggled(self, checked):
-        self.metronome_mute_toggled.emit(checked)
-
-    def on_audio_mute_toggled(self, checked):
-        self.audio_mute_toggled.emit(checked)
-
-    def on_voice_mute_toggled(self, checked):
-        self.voice_mute_toggled.emit(checked)
+                label = item.text_item
+                if label is not None and label.data(0):
+                    label.setPlainText(elided_label(
+                        label.data(0), item.rect.width(), self.content_view))
 
     # MIDI event management methods (event-id based)
     def _find_cached_event(self, event_id: str):
@@ -1607,7 +1486,7 @@ class Timeline(QWidget):
     def refresh_auto_buttons(self) -> None:
         """Re-sync every fixture track's header toggles (auto/mute/lock) from the
         controller + document."""
-        for track in getattr(self, 'midi_events_tracks', []):
+        for track in self.midi_events_tracks:
             track.sync_header_state()
 
     def _draw_song_sections(self) -> None:
@@ -1646,75 +1525,49 @@ class Timeline(QWidget):
         if self.midi_manager.delete_event(event_id):
             self._schedule_refresh()
 
-    def on_midi_event_moved(self, event_id: str, new_time: float):
-        """Whole-clip MOVE drag committed.
+    def _commit_clip_drag(self, event_id: str, value: float, scene_op: str,
+                          event_op: str, refresh: bool = True) -> None:
+        """Apply a committed clip drag through the MidiManager method named
+        `scene_op` when the event is part of a scene group — so all 7
+        channel-control events change atomically — else `event_op`.
 
-        Routes to scene API when the event is part of a scene group so that
-        all 7 channel-control events move atomically. Always refreshes — even
-        on rejected commits — so the clip snaps back to its data-derived
-        position instead of leaving a ghost preview at the dragged x.
-        """
+        Refreshes even when the manager rejects the commit, so the clip snaps
+        back to its data-derived position instead of leaving a ghost preview
+        at the dragged x. Fades pass refresh=False: their setters emit
+        data_changed, which already drives the redraw."""
         if not self.midi_manager or not event_id:
             return
         group_id = self._group_id_for_event(event_id)
         if group_id:
-            self.midi_manager.move_scene(group_id, new_time)
+            getattr(self.midi_manager, scene_op)(group_id, value)
         else:
-            self.midi_manager.move_event(event_id, new_time)
-        self._schedule_refresh()
+            getattr(self.midi_manager, event_op)(event_id, value)
+        if refresh:
+            self._schedule_refresh()
+
+    def on_midi_event_moved(self, event_id: str, new_time: float):
+        """Whole-clip MOVE drag committed."""
+        self._commit_clip_drag(event_id, new_time, "move_scene", "move_event")
 
     def on_midi_event_left_edge(self, event_id: str, new_time: float):
-        """Left-edge resize drag committed.
-
-        Always refreshes (see on_midi_event_moved for rationale).
-        """
-        if not self.midi_manager or not event_id:
-            return
-        group_id = self._group_id_for_event(event_id)
-        if group_id:
-            self.midi_manager.set_scene_left_edge(group_id, new_time)
-        else:
-            self.midi_manager.set_event_left_edge(event_id, new_time)
-        self._schedule_refresh()
+        """Left-edge resize drag committed."""
+        self._commit_clip_drag(event_id, new_time, "set_scene_left_edge",
+                               "set_event_left_edge")
 
     def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
-        """Right-edge resize drag committed.
-
-        Always refreshes (see on_midi_event_moved for rationale).
-        """
-        if not self.midi_manager or not event_id:
-            return
-        group_id = self._group_id_for_event(event_id)
-        if group_id:
-            self.midi_manager.set_scene_right_edge(group_id, new_right_time)
-        else:
-            self.midi_manager.set_event_right_edge(event_id, new_right_time)
-        self._schedule_refresh()
+        """Right-edge resize drag committed."""
+        self._commit_clip_drag(event_id, new_right_time, "set_scene_right_edge",
+                               "set_event_right_edge")
 
     def on_midi_event_fade_in(self, event_id: str, seconds: float):
-        """Fade-IN handle drag committed.
-
-        Routes to scene API for grouped clips so all members carry a uniform
-        fade. The manager's setters emit data_changed which already drives
-        the redraw — no explicit refresh_from_manager() needed here.
-        """
-        if not self.midi_manager or not event_id:
-            return
-        group_id = self._group_id_for_event(event_id)
-        if group_id:
-            self.midi_manager.set_scene_fade_in(group_id, seconds)
-        else:
-            self.midi_manager.set_event_fade_in(event_id, seconds)
+        """Fade-IN handle drag committed."""
+        self._commit_clip_drag(event_id, seconds, "set_scene_fade_in",
+                               "set_event_fade_in", refresh=False)
 
     def on_midi_event_fade_out(self, event_id: str, seconds: float):
-        """Fade-OUT handle drag committed. See on_midi_event_fade_in."""
-        if not self.midi_manager or not event_id:
-            return
-        group_id = self._group_id_for_event(event_id)
-        if group_id:
-            self.midi_manager.set_scene_fade_out(group_id, seconds)
-        else:
-            self.midi_manager.set_event_fade_out(event_id, seconds)
+        """Fade-OUT handle drag committed."""
+        self._commit_clip_drag(event_id, seconds, "set_scene_fade_out",
+                               "set_event_fade_out", refresh=False)
 
     def on_midi_event_edit_by_id(self, event_id: str):
         """Edit dialog request for the event with `event_id`.
@@ -1733,23 +1586,11 @@ class Timeline(QWidget):
             self._edit_scene(group_id)
             return
 
-        channel = event_data.get('channel')
-        dialog = ClipEditDialog.for_clip(
-            fdef=self._fdef(channel),
-            type_name=self._fixture_type(channel) or "",
-            channel=channel, dmx_start=self._dmx_start(channel),
+        result = self._run_clip_dialog(ClipEditDialog.for_clip(
+            **self._clip_dialog_fixture(event_data.get('channel')),
             note=int(event_data.get('note', 0)),
             velocity=int(event_data.get('velocity', 0)),
-            time=float(event_data.get('time', 0.0)),
-            song_duration=self.midi_manager.song_end_time(),
-            locked=self._is_locked(channel))
-        self._wire_clip_dialog(dialog)
-        try:
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            result = dialog.get_values()
-        finally:
-            dialog.close()
+            time=float(event_data.get('time', 0.0))))
         if result is None:
             return
         if self.midi_manager.edit_event(event_id, note=result.note,
@@ -1779,21 +1620,10 @@ class Timeline(QWidget):
         current_name = (members[0].get('scene_name')
                         or f"Scene @ {members[0]['time']:.2f}s")
 
-        dialog = ClipEditDialog.for_scene(
-            fdef=self._fdef(channel),
-            type_name=self._fixture_type(channel) or "",
-            channel=channel, dmx_start=self._dmx_start(channel),
+        result = self._run_clip_dialog(ClipEditDialog.for_scene(
+            **self._clip_dialog_fixture(channel),
             name=current_name, channels=channels, present=present,
-            time=float(members[0]['time']),
-            song_duration=self.midi_manager.song_end_time(),
-            locked=self._is_locked(channel))
-        self._wire_clip_dialog(dialog)
-        try:
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            result = dialog.get_values()
-        finally:
-            dialog.close()
+            time=float(members[0]['time'])))
         if result is None:
             return
         if self.midi_manager.update_scene(group_id, channels=result.channels,
@@ -1805,11 +1635,27 @@ class Timeline(QWidget):
                 f"Scene '{result.name}' updated (group_id={group_id})"
             )
 
-    def _wire_clip_dialog(self, dialog):
-        """Connect a clip dialog's outward signals."""
+    def _clip_dialog_fixture(self, channel) -> dict:
+        """The ClipEditDialog arguments that describe the lane on `channel`:
+        its fixture, the song's length and whether the lane is locked."""
+        return dict(fdef=self._fdef(channel),
+                    type_name=self._fixture_type(channel) or "",
+                    channel=channel, dmx_start=self._dmx_start(channel),
+                    song_duration=self.midi_manager.song_end_time(),
+                    locked=self._is_locked(channel))
+
+    def _run_clip_dialog(self, dialog):
+        """Connect a clip dialog's outward signals, run it modally and return
+        its values — None when it was cancelled or produced nothing."""
         dialog.library_changed.connect(self.library_changed)
         dialog.live_messages.connect(self._on_clip_edit_live)
         dialog.set_transport_playing(self._transport_playing)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            return dialog.get_values()
+        finally:
+            dialog.close()
 
     def set_transport_playing(self, playing: bool) -> None:
         """Told by MainWindow. A clip dialog's live output is locked out while
@@ -1934,10 +1780,6 @@ class Timeline(QWidget):
             return False
         return bool(self.midi_manager.is_fixture_locked(channel))
 
-    def _note_is_song_part(self, note: int) -> bool:
-        return bool(self.midi_manager
-                    and self.midi_manager.is_song_part({"note": int(note)}))
-
     def can_accept_clip_drop(self, note: int, scene_y: float,
                              fixture_type: Optional[str] = None) -> bool:
         """Return True if a clip carrying `note` may land at `scene_y`.
@@ -1953,7 +1795,7 @@ class Timeline(QWidget):
         scene drop is gated."""
         if not self.midi_manager:
             return False
-        if self._note_is_song_part(note):
+        if note_layout.is_song_part(note):
             return self._in_waveform_band(scene_y)
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
@@ -1982,7 +1824,7 @@ class Timeline(QWidget):
         # Song parts stay global (channel=None) and land on the waveform
         # arrangement overlay; fixture notes land on the exact fixture instance
         # they were dropped on.
-        is_song_part = self._note_is_song_part(note)
+        is_song_part = note_layout.is_song_part(note)
         target_idx = None if is_song_part else self.fixture_at_y(scene_y)
         channel = None if is_song_part else target_idx
         event_id = self.midi_manager.add_event(note, time_seconds,
@@ -2042,19 +1884,9 @@ class Timeline(QWidget):
         if self._is_locked(fixture_index):
             return
 
-        dialog = ClipEditDialog.for_clip(
-            fdef=self._fdef(fixture_index),
-            type_name=self._fixture_type(fixture_index) or "",
-            channel=fixture_index, dmx_start=self._dmx_start(fixture_index),
-            note=None, velocity=0, time=time_seconds,
-            song_duration=self.midi_manager.song_end_time(), is_new=True)
-        self._wire_clip_dialog(dialog)
-        try:
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            result = dialog.get_values()
-        finally:
-            dialog.close()
+        result = self._run_clip_dialog(ClipEditDialog.for_clip(
+            **self._clip_dialog_fixture(fixture_index),
+            note=None, velocity=0, time=time_seconds, is_new=True))
         if result is None:
             return
 
@@ -2070,7 +1902,7 @@ class Timeline(QWidget):
             return
 
         # Route to the lane's fixture unless it's a global song part.
-        channel = (None if self._note_is_song_part(result.note)
+        channel = (None if note_layout.is_song_part(result.note)
                    else fixture_index)
         event_id = self.midi_manager.add_event(result.note, result.time,
                                                result.velocity, channel)
@@ -2088,14 +1920,10 @@ class Timeline(QWidget):
             self.logger.error(
                 f"Failed to add clip: note {result.note} has no meaning here")
 
-    # Legacy compatibility methods
-    def set_files(self, audio_file, midi_file=None):
+    def set_files(self, audio_file):
         """Set audio file (None = the song has no monitored track).
         MIDI files should be loaded via MidiManager."""
         self.audio_file = audio_file
-
-        # Clear existing items
-        self.midi_event_items.clear()
 
         # Redraw the waveform for the new file, or drop the old one
         if audio_file:
@@ -2166,8 +1994,7 @@ class Timeline(QWidget):
         self.content_scene.setSceneRect(0, 0, self.content_width, self.scene_height)
         self.draw_time_grid()
         self.draw_lane_bands()
-        if hasattr(self, 'ruler_track'):
-            self.ruler_track.redraw()
+        self.ruler_track.redraw()
     
     def set_audio_source(self, source) -> None:
         """Install the waveform band's sample source: a callable taking an
@@ -2223,36 +2050,12 @@ class Timeline(QWidget):
         """
         self.zoom_changed.emit(self.content_view.transform().m11())
 
-    def get_modified_midi_data(self):
-        """Get the modified MIDI data from MidiManager."""
-        if self.midi_manager and self.midi_manager.midi_data:
-            return self.midi_manager.midi_data
-        return None
-
-    def get_time_from_pos(self, x_pos):
-        """Convert X position to time in seconds."""
-        scene_x = self.content_view.mapToScene(x_pos, 0).x()
-        return scene_x / self.PIXELS_PER_SECOND if self.PIXELS_PER_SECOND > 0 else 0
-
     def mousePressEvent(self, event):
         """Handle mouse press for seeking."""
         if event.button() == Qt.MouseButton.LeftButton:
             view_pos = self.content_view.mapFrom(self, event.pos())
             if self.content_view.rect().contains(view_pos):
-                time_seconds = self.get_time_from_pos(view_pos.x())
-                self.update_playhead(time_seconds)
-                self.seek_requested.emit(time_seconds)
+                self._seek_to_scene_x(
+                    self.content_view.mapToScene(view_pos.x(), 0).x())
         else:
             super().mousePressEvent(event)
-
-    def cleanup(self):
-        """Cleanup all tracks when timeline is destroyed."""
-        if (self._master_header_proxy is not None
-                and self._master_header_proxy.scene()):
-            self.header_scene.removeItem(self._master_header_proxy)
-        if hasattr(self, 'ruler_track'):
-            self.ruler_track.cleanup()
-        if hasattr(self, 'waveform_track'):
-            self.waveform_track.clear_items()
-        for track in getattr(self, 'midi_events_tracks', []):
-            track.clear_items()

@@ -584,16 +584,6 @@ class RulerTrack(BaseTrack):
         
         # Don't clear permanent_header_items - they persist for the lifetime of the track
 
-    def cleanup(self):
-        """Cleanup permanent header items when track is destroyed."""
-        for item in self.permanent_header_items:
-            if item.scene():
-                item.scene().removeItem(item)
-        self.permanent_header_items.clear()
-        
-        # Call parent cleanup for regular items
-        self.clear_items()
-
     def redraw(self):
         """Redraw the ruler track."""
         self.draw_ruler()

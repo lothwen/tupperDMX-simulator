@@ -10,7 +10,7 @@ from PyQt6.QtGui import QColor, QBrush, QPen, QPixmap, QPainter
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QLine
 from PyQt6.QtWidgets import QGraphicsObject, QGraphicsItem
 
-from .base import BaseTrack
+from .base import BaseTrack, elided_label
 from .song_sections import SongSectionItem
 from core.waveform import bin_extremes
 from tupperlogger import get_logger
@@ -289,9 +289,7 @@ class WaveformTrack(BaseTrack):
             self._section_items.append(box)
 
             # Unscaled label, repositioned by the box during a drag.
-            available = (width - 10) * tm.content_view.transform().m11()
-            fm = tm.content_view.fontMetrics()
-            label = QGraphicsTextItem(tm.get_truncated_text(part, available, fm))
+            label = QGraphicsTextItem(elided_label(part, width, tm.content_view))
             label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             label.setDefaultTextColor(QColor(25, 25, 25))
             label_font = label.font()
