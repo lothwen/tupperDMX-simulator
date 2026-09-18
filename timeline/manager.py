@@ -2,33 +2,39 @@
 Timeline manager for TupperDMX Simulator.
 
 Coordinates multiple timeline tracks and provides the main timeline interface.
+
+`Timeline` keeps the scenes, the lane layout, redraws, zoom and the song's
+extent. The rest of it lives beside it:
+
+- `clip_commands` — what editing a clip does (drags, the editor, deletes, drops)
+- `selection` — the multi-selection and the clip clipboard
+- `lane_reorder` — carrying a lane to a new row by its header grip
+- `master_header` — the TRACKS counter and the three bus volume rows
+- `lanes` — Qt-free patch lookups (labels, row order, channel -> fixture)
 """
 
-import time
-from typing import Optional
-
-from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QGraphicsView,
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QGraphicsView,
                              QGraphicsScene, QSizePolicy, QGraphicsLineItem,
-                             QGraphicsRectItem, QGraphicsProxyWidget, QDialog,
-                             QMessageBox)
+                             QGraphicsRectItem, QGraphicsProxyWidget)
 from PyQt6.QtGui import QBrush, QColor, QPen
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from .widgets import (ContentView, TrackResizeHandle,
                       HeaderResizeHandle, CustomTooltip)
-from .widgets.clip_edit import ClipEditDialog
-from core import note_layout
 from core.tempo_map import TempoMap
 from .tracks.clip_geometry import uniform_grid
 from . import lanes
+from .clip_commands import ClipCommandsMixin
+from .lane_reorder import LaneReorder
 from .master_header import MasterHeaderPanel
+from .selection import SelectionMixin
 from .tracks import WaveformTrack, MidiEventsTrack, RulerTrack
 from .tracks.base import elided_label
 from .tracks.midi_events import AutoSceneClip, DraggableMidiEvent
 from tupperlogger import get_logger
 
 
-class Timeline(QWidget):
+class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
     """Main timeline widget coordinating multiple tracks."""
     
     # Signals
@@ -164,10 +170,9 @@ class Timeline(QWidget):
         # empty so the layout helpers work during pre-track scene setup.
         self.midi_events_tracks = []
 
-        # In-flight reorder drag (a track-header grip is held), or None, plus
-        # the watchdog that ends one whose release never arrived.
-        self._reorder_drag = None
-        self._reorder_watchdog = None
+        # The header-grip drag that carries a lane to another row. It owns
+        # the gesture's whole state; the timeline only lends it the strip.
+        self.lane_reorder = LaneReorder(self)
 
         # Resize handle items (created in _init_tracks)
         self.waveform_resize_handle = None
@@ -642,247 +647,20 @@ class Timeline(QWidget):
             track.set_collapsed(collapsed)
         self.reflow_tracks()
 
-    # --- Lane reordering (header-grip drag) -------------------------------
+    # --- Lane reordering: the gesture lives in `lane_reorder`; these three
+    # are what a track header calls -----------------------------------------
 
     def begin_track_reorder(self, track):
-        """A header grip was pressed: lift that lane's header off the strip.
-
-        The gesture is anchored on the first MOVE rather than here: a press and
-        a move at the same cursor position arrive through the graphics proxy a
-        pixel apart, and that pixel would show up as the lane starting the drag
-        already displaced."""
-        if track not in self.midi_events_tracks:
-            return
-        row = self.midi_events_tracks.index(track)
-        self._reorder_drag = {
-            "track": track,
-            "row_at_press": row,
-            "top_at_press": float(self._midi_track_y(row)),
-            "grab_offset": None,
-            # The strip is pinned for the duration: nothing about this gesture
-            # scrolls it, so anything that does is moving the ground under a
-            # lane whose position is measured against the scene.
-            "scroll_at_press": self.header_view.verticalScrollBar().value(),
-            "moves": 0,
-            "crossings": 0,
-            "anomalies": [],
-            "busy": False,
-            "last_move_at": time.monotonic(),
-        }
-        track.set_header_lifted(True)
-        # A release that lands anywhere else in the app still ends the drag: the
-        # scene hands the grab back the moment a move arrives with no button
-        # held, so the grip cannot be relied on to see its own release.
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-        if self._reorder_watchdog is None:
-            self._reorder_watchdog = QTimer(self)
-            self._reorder_watchdog.setInterval(250)
-            self._reorder_watchdog.timeout.connect(self._check_reorder_alive)
-        self._reorder_watchdog.start()
-
-    def eventFilter(self, obj, event):
-        """Drive and end a reorder drag from the header view's own events.
-
-        The carry rides the VIEWPORT's mouse moves, whose `position()` is
-        surface-local — the only kind of coordinate a Wayland client can trust.
-        The viewport keeps the widget-level grab for the whole gesture, so its
-        events follow the cursor even outside the strip.
-
-        Two things end the drag, because the grip may see neither: the release
-        itself, wherever in the app it lands, and any mouse MOVEMENT with the
-        button no longer held. The scene hands the grab back as soon as a move
-        arrives unpressed — it becomes a hover, the grip is never told, and the
-        lane would go on following the cursor with nothing held down. Hover
-        events are their own type, so a live drag never trips that."""
-        if self._reorder_drag is not None:
-            kind = event.type()
-            if kind == QEvent.Type.MouseButtonRelease:
-                self.end_track_reorder()
-            elif kind == QEvent.Type.MouseMove:
-                if not (event.buttons() & Qt.MouseButton.LeftButton):
-                    self._note_reorder_anomaly(
-                        self._reorder_drag, "unpressed-move",
-                        "the mouse moved with no button held — ending a drag "
-                        "whose release never reached the grip")
-                    self.end_track_reorder()
-                elif obj is self.header_view.viewport():
-                    self.update_track_reorder(event.position().y())
-        return super().eventFilter(obj, event)
-
-    def _check_reorder_alive(self) -> None:
-        """Drop a carried lane whose release the application never saw at all —
-        the button came up over another window, or the grab was taken away.
-
-        Both conditions are needed: the button being up is not enough on its own
-        (a synthetic drag never sets the global button state), and neither is
-        the silence (a drag can rest on a row without moving)."""
-        drag = self._reorder_drag
-        if drag is None:
-            return
-        held = QApplication.mouseButtons() & Qt.MouseButton.LeftButton
-        if held or time.monotonic() - drag["last_move_at"] < 0.4:
-            return
-        self._note_reorder_anomaly(
-            drag, "lost-release",
-            "no button held and no movement — ending a drag whose release "
-            "never arrived")
-        self.end_track_reorder()
+        """A header grip was pressed: start carrying that lane."""
+        self.lane_reorder.begin(track)
 
     def update_track_reorder(self, viewport_y: float):
-        """Carry the lifted header with the cursor, restacking the lanes it
-        passes. `viewport_y` is measured inside the header view's viewport.
-
-        The restack is the whole visual: the tracks list is the layout, so
-        moving the dragged lane inside it slides every other header, its clips
-        and its lane tint into the new stacking — leaving a gap exactly where
-        the carried lane will land. Only a crossing restacks; the frames
-        between just move one proxy.
-
-        The position is resolved against the scene on every move, so the lane
-        stays under the cursor even if the strip scrolls mid-drag."""
-        drag = self._reorder_drag
-        if drag is None:
-            return
-        if drag["busy"]:
-            # A restack moves proxies and items under the cursor; if Qt turns
-            # that into another mouse event we would recurse into our own
-            # layout, each level restacking again.
-            self._note_reorder_anomaly(drag, "reentry", "re-entered mid-restack")
-            return
-        drag["busy"] = True
-        try:
-            self._carry_track(drag, viewport_y)
-        finally:
-            drag["busy"] = False
-
-    def _carry_track(self, drag, viewport_y: float) -> None:
-        """One frame of the carry: hold the strip still, place the lane, and
-        restack if it has changed rows."""
-        drag["moves"] += 1
-        drag["last_move_at"] = time.monotonic()
-        bar = self.header_view.verticalScrollBar()
-        if bar.value() != drag["scroll_at_press"]:
-            self._note_reorder_anomaly(
-                drag, "scrolled",
-                f"the strip scrolled under the drag "
-                f"({drag['scroll_at_press']} -> {bar.value()})")
-            bar.setValue(drag["scroll_at_press"])
-
-        scene_y = self._header_scene_y(viewport_y)
-        if drag["grab_offset"] is None:
-            drag["grab_offset"] = scene_y - drag["top_at_press"]
-        track = drag["track"]
-        height = track.get_track_height()
-        top = scene_y - drag["grab_offset"]
-        # The carried lane stays inside the strip (the total height is the same
-        # whatever the order, so the floor doesn't move as the lanes restack).
-        top = max(float(self._midi_tracks_top()),
-                  min(float(self._midi_tracks_bottom() - height), top))
-
-        target = self._reorder_target_row(track, top)
-        if target != self.midi_events_tracks.index(track):
-            drag["crossings"] += 1
-            self.midi_events_tracks.insert(
-                target, self.midi_events_tracks.pop(
-                    self.midi_events_tracks.index(track)))
-            self._reorder_reflow()
-        # After the restack, which puts every header back on the row grid.
-        track.float_header_to(top)
-
-    def _note_reorder_anomaly(self, drag, kind: str, detail: str) -> None:
-        """Record something a reorder drag should never see, once per kind per
-        drag. These are the symptoms of the strip 'going crazy', and the log is
-        the only witness when it happens on a machine we can't drive.
-
-        Only conditions that cannot happen in normal use live here — a lane
-        moving a long way in one event is NOT one of them, since a fast flick
-        does exactly that. The end-of-drag line's crossing count is the honest
-        signal for a carry that is not tracking the cursor."""
-        if kind in drag["anomalies"]:
-            return
-        drag["anomalies"].append(kind)
-        self.logger.warning(f"Track reorder anomaly [{kind}]: {detail}")
-
-    def _reorder_reflow(self):
-        """Restack the lanes mid-drag: the cheap half of `_reflow_layout`.
-
-        Nothing about a clip changes when lanes swap rows — only the y its lane
-        sits at — and the scene height is the same whatever the order, so the
-        rects, the grid, the ruler, the waveform and the scroll ranges are all
-        already right. What is left is moving each lane's header and content,
-        and repainting the lane tints that say which row belongs to whom.
-
-        The full pass runs once, on release. Doing it per crossing instead cost
-        ~65ms a time on a 240-clip song, which is several mouse events' worth:
-        the drag then lurched from one compressed position to the next."""
-        for row, track in enumerate(self.midi_events_tracks):
-            track.move_content_to(self._midi_track_y(row))
-        self.draw_lane_bands()
-
-    def _header_scene_y(self, viewport_y: float) -> float:
-        """Where a y inside the header viewport lands in the header scene.
-
-        Viewport coordinates in, deliberately: a screen position would have to
-        be mapped back through the window's origin, and under Wayland that
-        origin is a guess — the round trip is not the identity, and when it
-        shifted mid-drag the lane jumped the height of the whole strip.
-
-        Resolved through the view on every move rather than as a delta from the
-        press, because the strip scrolls: its scrollbar is hidden, but it is
-        driven by the content view's."""
-        return self.header_view.mapToScene(
-            QPoint(0, int(round(viewport_y)))).y()
-
-    def _reorder_target_row(self, track, top: float) -> int:
-        """The row `track` belongs in with its header carried to `top`: the
-        insertion slot whose own top the carried one is nearest.
-
-        Slots are the tops the lanes would have with the dragged one taken out
-        (they close up behind it), so slot k lands exactly where the lane
-        rested before it was picked up — which is what stops a lane from
-        swapping with its neighbour the moment it is grabbed. Nearest-slot then
-        puts the swap at half the height of the lane being passed, the same
-        coming back up as going down; measuring the carried lane's CENTRE
-        against those closed-up neighbours instead puts a lane at rest exactly
-        on the next slot's tie point, and one pixel of travel restacks it.
-
-        Heights are walked rather than multiplied, since a collapsed lane is
-        shorter than the rest — so passing one only costs half of ITS height.
-        The answer can't flap: the carried top follows the cursor, and the slots
-        don't depend on the row the dragged lane currently sits in."""
-        tops = [float(self._midi_tracks_top())]
-        for other in self.midi_events_tracks:
-            if other is not track:
-                tops.append(tops[-1] + other.get_track_height())
-        return min(range(len(tops)), key=lambda row: abs(top - tops[row]))
+        """Carry the lifted lane to `viewport_y`, in header-viewport coords."""
+        self.lane_reorder.update(viewport_y)
 
     def end_track_reorder(self):
-        """The grip was released: settle the header back onto the row grid and,
-        if the lane actually moved, announce the new order for persistence."""
-        drag = self._reorder_drag
-        if drag is None:
-            return
-        self._reorder_drag = None
-        if self._reorder_watchdog is not None:
-            self._reorder_watchdog.stop()
-        app = QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(self)
-        track = drag["track"]
-        track.set_header_lifted(False)
-        self._reflow_layout()
-        self.logger.info(
-            f"Track reorder ended: {drag['moves']} moves, "
-            f"{drag['crossings']} crossings, row {drag['row_at_press']} -> "
-            f"{self.midi_events_tracks.index(track)}"
-            + (f", ANOMALIES {drag['anomalies']}" if drag["anomalies"] else ""))
-        if self.midi_events_tracks.index(track) == drag["row_at_press"]:
-            return
-        order = [t.fixture_index for t in self.midi_events_tracks]
-        self.logger.info(f"Timeline track order changed (channels): {order}")
-        self.track_order_changed.emit(order)
+        """The grip was released: settle the lane and announce the order."""
+        self.lane_reorder.end()
 
     def _reflow_layout(self, redraw_waveform: bool = False):
         """Reposition headers, content, and overlays after a height change."""
@@ -1111,122 +889,6 @@ class Timeline(QWidget):
         self._refresh_pending = False
         self.refresh_from_manager()
 
-    # --- Multi-selection --------------------------------------------------
-
-    def selected_clip_items(self):
-        """All currently-selected non-BLACKOUT clip items in the scene."""
-        if self.content_scene is None:
-            return []
-        return [it for it in self.content_scene.selectedItems()
-                if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
-
-    def _expanded_selected_event_ids(self):
-        """Selected clips expanded to underlying event ids (scene members too)."""
-        ids = set()
-        for clip in self.selected_clip_items():
-            if clip.group_event_ids:
-                ids.update(clip.group_event_ids)
-            else:
-                ids.add(clip.event_id)
-        return list(ids)
-
-    def _on_selection_changed(self):
-        """Keep the persisted id set + multi-select affordances in sync."""
-        if self._applying_selection:
-            return
-        clips = self.selected_clip_items()
-        self._selected_event_ids = {c.event_id for c in clips}
-        multi = len(clips) >= 2
-        for track in self.midi_events_tracks:
-            for item in track.items:
-                if isinstance(item, DraggableMidiEvent) and not item.is_blackout_clip:
-                    item.set_multi_selected(multi and item.isSelected())
-
-    def _reapply_selection(self):
-        """Re-select clips by id after a redraw rebuilt every clip item."""
-        if not self._selected_event_ids:
-            return
-        self._applying_selection = True
-        try:
-            restored = []
-            for track in self.midi_events_tracks:
-                for item in track.items:
-                    if (isinstance(item, DraggableMidiEvent)
-                            and not item.is_blackout_clip
-                            and item.event_id in self._selected_event_ids):
-                        item.setSelected(True)
-                        restored.append(item)
-            # Drop ids that no longer exist (merged / deleted clips).
-            self._selected_event_ids = {it.event_id for it in restored}
-            multi = len(restored) >= 2
-            for it in restored:
-                it.set_multi_selected(multi)
-        finally:
-            self._applying_selection = False
-
-    def selection_move_bounds_px(self):
-        """(min_dx, max_dx) in scene pixels for moving the current selection."""
-        ids = self._expanded_selected_event_ids()
-        if not self.midi_manager or not ids:
-            return (0.0, 0.0)
-        lo, hi = self.midi_manager.selection_move_bounds(ids)
-        return (lo * self.PIXELS_PER_SECOND, hi * self.PIXELS_PER_SECOND)
-
-    def on_selection_moved(self, delta_sec: float):
-        """Group-move drag committed — shift the whole selection by delta."""
-        if not self.midi_manager:
-            return
-        ids = self._expanded_selected_event_ids()
-        if not ids:
-            return
-        if self.midi_manager.move_selection(ids, delta_sec):
-            self._schedule_refresh()
-
-    def delete_selected(self):
-        """Delete every selected clip outright — Ctrl+Z undoes it."""
-        if not self.midi_manager:
-            return
-        clips = self.selected_clip_items()
-        if not clips:
-            return
-        ids = [c.event_id for c in clips]
-        self._selected_event_ids = set()
-        if self.midi_manager.delete_selection(ids):
-            self._paste_chain_from = None
-            self._schedule_refresh()
-
-    def copy_selected(self):
-        """Copy the current clip selection into the clip clipboard."""
-        if not self.midi_manager:
-            return
-        ids = self._expanded_selected_event_ids()
-        if not ids:
-            return
-        self.midi_manager.copy_selection(ids)
-        self._paste_chain_from = None
-
-    def paste_at_playhead(self):
-        """Paste clipboard clips at the playhead — or after the previous paste.
-
-        Consecutive pastes with the playhead left alone chain: each block lands
-        one block-length after the last, which is how a copied section is
-        looped. Moving the playhead, copying again or deleting a clip breaks
-        the chain, so the next paste starts over at the playhead. A block with
-        no measurable length (every clip running to the song end) cannot chain,
-        so it keeps pasting at the playhead.
-        """
-        if not self.midi_manager or not self.midi_manager.has_clipboard():
-            return
-        time_seconds = max(0.0, self.playhead.x() / self.PIXELS_PER_SECOND)
-        chained = (self._paste_chain_from is not None
-                   and abs(time_seconds - self._paste_chain_from) < 1e-4)
-        target = self._paste_chain_next if chained else time_seconds
-        if self.midi_manager.paste(target):
-            span = self.midi_manager.clipboard_span()
-            self._paste_chain_from = time_seconds
-            self._paste_chain_next = target + span if span > 0 else target
-            self._schedule_refresh()
-
     def _seek_to_scene_x(self, scene_x: float):
         """Move the playhead + request a seek for a plain empty-lane click."""
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
@@ -1328,19 +990,6 @@ class Timeline(QWidget):
                     label.setPlainText(elided_label(
                         label.data(0), item.rect.width(), self.content_view))
 
-    # MIDI event management methods (event-id based)
-    def _find_cached_event(self, event_id: str):
-        """Look up a cached event by id."""
-        for e in self._cached_events:
-            if e.get('id') == event_id:
-                return e
-        return None
-
-    def _group_id_for_event(self, event_id: str):
-        """Return the scene group_id for an event_id, or None for singles."""
-        evt = self._find_cached_event(event_id)
-        return evt.get('group_id') if evt else None
-
     def refresh_auto_buttons(self) -> None:
         """Re-sync every fixture track's header toggles (auto/mute/lock) from the
         controller + document."""
@@ -1354,234 +1003,6 @@ class Timeline(QWidget):
         song_parts = [e for e in self._cached_events
                       if self.midi_manager.is_song_part(e)]
         self.waveform_track.draw_song_sections(song_parts, self._waveform_y())
-
-    def on_song_section_moved(self, event_id: str, new_time: float):
-        """A song-section box MOVE committed. A song part is a point-in-time
-        global marker (no BLACKOUT extent machinery), so set its time directly
-        and let the overlay recompute contiguous spans by sorted time."""
-        if not self.midi_manager or not event_id:
-            return
-        self.midi_manager.update_event_timing(event_id, new_time)
-        self._schedule_refresh()
-
-    def on_song_section_delete(self, event_id: str):
-        """Delete a song-section marker outright (no blackout conversion — that
-        is fixture-lane behaviour; song parts are a global arrangement)."""
-        if not self.midi_manager or not event_id:
-            return
-        event_data = self._find_cached_event(event_id)
-        part = (getattr(event_data.get('info'), 'part', None)
-                if event_data else None) or "section"
-        reply = QMessageBox.question(
-            None, "Delete Song Section",
-            f"Delete the '{part}' section marker?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        if self.midi_manager.delete_event(event_id):
-            self._schedule_refresh()
-
-    def _commit_clip_drag(self, event_id: str, value: float, scene_op: str,
-                          event_op: str, refresh: bool = True) -> None:
-        """Apply a committed clip drag through the MidiManager method named
-        `scene_op` when the event is part of a scene group — so all 7
-        channel-control events change atomically — else `event_op`.
-
-        Refreshes even when the manager rejects the commit, so the clip snaps
-        back to its data-derived position instead of leaving a ghost preview
-        at the dragged x. Fades pass refresh=False: their setters emit
-        data_changed, which already drives the redraw."""
-        if not self.midi_manager or not event_id:
-            return
-        group_id = self._group_id_for_event(event_id)
-        if group_id:
-            getattr(self.midi_manager, scene_op)(group_id, value)
-        else:
-            getattr(self.midi_manager, event_op)(event_id, value)
-        if refresh:
-            self._schedule_refresh()
-
-    def on_midi_event_moved(self, event_id: str, new_time: float):
-        """Whole-clip MOVE drag committed."""
-        self._commit_clip_drag(event_id, new_time, "move_scene", "move_event")
-
-    def on_midi_event_left_edge(self, event_id: str, new_time: float):
-        """Left-edge resize drag committed."""
-        self._commit_clip_drag(event_id, new_time, "set_scene_left_edge",
-                               "set_event_left_edge")
-
-    def on_midi_event_right_edge(self, event_id: str, new_right_time: float):
-        """Right-edge resize drag committed."""
-        self._commit_clip_drag(event_id, new_right_time, "set_scene_right_edge",
-                               "set_event_right_edge")
-
-    def on_midi_event_fade_in(self, event_id: str, seconds: float):
-        """Fade-IN handle drag committed."""
-        self._commit_clip_drag(event_id, seconds, "set_scene_fade_in",
-                               "set_event_fade_in", refresh=False)
-
-    def on_midi_event_fade_out(self, event_id: str, seconds: float):
-        """Fade-OUT handle drag committed."""
-        self._commit_clip_drag(event_id, seconds, "set_scene_fade_out",
-                               "set_event_fade_out", refresh=False)
-
-    def on_midi_event_edit_by_id(self, event_id: str):
-        """Edit dialog request for the event with `event_id`.
-
-        Scene groups get the console; everything else is one clip on one
-        fixture.
-        """
-        if not self.midi_manager or not event_id:
-            return
-        event_data = self._find_cached_event(event_id)
-        if not event_data:
-            return
-
-        group_id = event_data.get('group_id')
-        if group_id:
-            self._edit_scene(group_id)
-            return
-
-        result = self._run_clip_dialog(ClipEditDialog.for_clip(
-            **self._clip_dialog_fixture(event_data.get('channel')),
-            note=int(event_data.get('note', 0)),
-            velocity=int(event_data.get('velocity', 0)),
-            time=float(event_data.get('time', 0.0))))
-        if result is None:
-            return
-        if self.midi_manager.edit_event(event_id, note=result.note,
-                                        velocity=result.velocity):
-            self._retime_clip(event_id, event_data, result.time)
-            self._schedule_refresh()
-            self.logger.info(
-                f"Clip edited: note={result.note}, velocity={result.velocity}, "
-                f"time={result.time:.3f}s"
-            )
-
-    def _edit_scene(self, group_id: str):
-        """Open the console for the scene group with `group_id`."""
-        members = [e for e in self._cached_events
-                   if e.get('group_id') == group_id]
-        if not members:
-            return
-        channel = members[0].get('channel')
-        # Channel value = velocity * 2 (the controller's convention). A channel
-        # with no member is NOT part of this scene — it is shown at the
-        # fixture's default and dimmed, and only joins if the user moves it.
-        velocity_by_note = {m['note']: m['velocity'] for m in members}
-        field_note = self.midi_manager.channel_note_map(channel)
-        channels = {ch_name: min(255, velocity_by_note[note] * 2)
-                    for ch_name, note in field_note if note in velocity_by_note}
-        present = set(channels)
-        current_name = (members[0].get('scene_name')
-                        or f"Scene @ {members[0]['time']:.2f}s")
-
-        result = self._run_clip_dialog(ClipEditDialog.for_scene(
-            **self._clip_dialog_fixture(channel),
-            name=current_name, channels=channels, present=present,
-            time=float(members[0]['time'])))
-        if result is None:
-            return
-        if self.midi_manager.update_scene(group_id, channels=result.channels,
-                                          name=result.name,
-                                          remove=result.removed):
-            self._retime_scene(group_id, float(members[0]['time']), result.time)
-            self._schedule_refresh()
-            self.logger.info(
-                f"Scene '{result.name}' updated (group_id={group_id})"
-            )
-
-    def _clip_dialog_fixture(self, channel) -> dict:
-        """The ClipEditDialog arguments that describe the lane on `channel`:
-        its fixture, the song's length and whether the lane is locked."""
-        return dict(fdef=self._fdef(channel),
-                    type_name=self._fixture_type(channel) or "",
-                    channel=channel, dmx_start=self._dmx_start(channel),
-                    song_duration=self.midi_manager.song_end_time(),
-                    locked=self._is_locked(channel))
-
-    def _run_clip_dialog(self, dialog):
-        """Connect a clip dialog's outward signals, run it modally and return
-        its values — None when it was cancelled or produced nothing."""
-        dialog.library_changed.connect(self.library_changed)
-        dialog.live_messages.connect(self._on_clip_edit_live)
-        dialog.set_transport_playing(self._transport_playing)
-        try:
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return None
-            return dialog.get_values()
-        finally:
-            dialog.close()
-
-    def set_transport_playing(self, playing: bool) -> None:
-        """Told by MainWindow. A clip dialog's live output is locked out while
-        the sequencer runs — the worker's own note_ons would fight it."""
-        self._transport_playing = bool(playing)
-
-    def _on_clip_edit_live(self, messages):
-        """Forward a clip dialog's live values, unless something says not to."""
-        if self._transport_playing or not messages:
-            return
-        channel = messages[0][0]
-        if self.midi_manager and (self.midi_manager.is_fixture_muted(channel)
-                                  or self.midi_manager.is_fixture_locked(channel)):
-            return
-        self.preview_requested.emit(messages)
-
-    def _retime_clip(self, event_id: str, event_data: dict,
-                     new_time: float) -> None:
-        """Move a clip to the time the dialog asked for, if it changed.
-
-        Deliberately `move_event` rather than `edit_event(time=...)`: only the
-        former searches for a free slot and keeps the BLACKOUT gap markers
-        honest. It can refuse, and then the clip simply stays where it was.
-        """
-        if abs(new_time - float(event_data.get('time', 0.0))) < 1e-4:
-            return
-        if not self.midi_manager.move_event(event_id, new_time):
-            self.logger.info(
-                f"Clip kept at {event_data.get('time', 0.0):.3f}s — no room at "
-                f"{new_time:.3f}s"
-            )
-
-    def _retime_scene(self, group_id: str, old_time: float,
-                      new_time: float) -> None:
-        """Same for a scene group."""
-        if abs(new_time - old_time) < 1e-4:
-            return
-        if not self.midi_manager.move_scene(group_id, new_time):
-            self.logger.info(
-                f"Scene kept at {old_time:.3f}s — no room at {new_time:.3f}s"
-            )
-
-    def on_midi_event_delete_by_id(self, event_id: str):
-        """Delete request for the event with `event_id`.
-
-        BLACKOUT clips are removed outright (the user is clearing a gap).
-        Regular clips are converted into a fixture-matching BLACKOUT instead
-        of being deleted, so the time slot remains accounted for and adjacent
-        clips don't visually expand into the freed space.
-
-        Not confirmed — Ctrl+Z undoes it.
-        """
-        if not self.midi_manager or not event_id:
-            return
-        event_data = self._find_cached_event(event_id)
-        if not event_data:
-            return
-
-        group_id = event_data.get('group_id')
-        if group_id:
-            ok = self.midi_manager.delete_scene(group_id)
-        elif self.midi_manager.is_blackout(event_data):
-            ok = self.midi_manager.delete_event(event_id)
-        else:
-            ok = self.midi_manager.replace_with_blackout(event_id)
-        if ok:
-            self._paste_chain_from = None
-            self._schedule_refresh()
 
     def fixture_at_y(self, scene_y: float):
         """Return the MIDI channel of the fixture whose lane owns `scene_y`, or
@@ -1615,153 +1036,6 @@ class Timeline(QWidget):
     def _dmx_start(self, channel) -> int:
         """First DMX address of the fixture with stable `channel` (1 if none)."""
         return lanes.dmx_start(self.fixtures, channel)
-
-    def _is_locked(self, channel) -> bool:
-        """Whether the lane is read-only. Drops already check this; editing
-        did not, which was the one door left open."""
-        if channel is None or not self.midi_manager:
-            return False
-        return bool(self.midi_manager.is_fixture_locked(channel))
-
-    def can_accept_clip_drop(self, note: int, scene_y: float,
-                             fixture_type: Optional[str] = None) -> bool:
-        """Return True if a clip carrying `note` may land at `scene_y`.
-
-        A note is droppable on a fixture lane when it is a meaningful verb for
-        that fixture (channel offsets within range, scene/bank/chase verbs when
-        the fixture defines them, global/utility verbs anywhere). Song parts
-        drop onto the waveform band, where they form the arrangement overlay.
-
-        When the payload names a `fixture_type` — the clip library tags its
-        channel clips, whose meaning is the SOURCE fixture's channel list, not a
-        slot number — the target lane's fixture must be that type, exactly as a
-        scene drop is gated."""
-        if not self.midi_manager:
-            return False
-        if note_layout.is_song_part(note):
-            return self._in_waveform_band(scene_y)
-        target_idx = self.fixture_at_y(scene_y)
-        if target_idx is None:
-            return False
-        # A locked track rejects new clips.
-        if self.midi_manager.is_fixture_locked(target_idx):
-            return False
-        if (fixture_type is not None
-                and fixture_type != self._fixture_type(target_idx)):
-            return False
-        return note_layout.note_applies_to(note, self._fdef(target_idx))
-
-    def handle_clip_drop(self, note: int, velocity: int, scene_x: float,
-                         scene_y: float,
-                         fixture_type: Optional[str] = None) -> bool:
-        """Validate and insert a dropped clip. Returns True on success."""
-        if not self.can_accept_clip_drop(note, scene_y, fixture_type):
-            return False
-        time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
-        # Velocity 0 is floored to 1 so a plain verb's note_on is never mistaken
-        # for a note_off — but on a value-bearing note the velocity IS the
-        # value, and flooring it silently drops a chase clip onto the SECOND
-        # chase (or a channel set onto 2 instead of 0).
-        floor = 0 if note in note_layout.VALUE_BEARING_NOTES else 1
-        clamped_velocity = max(floor, min(127, int(velocity)))
-        # Song parts stay global (channel=None) and land on the waveform
-        # arrangement overlay; fixture notes land on the exact fixture instance
-        # they were dropped on.
-        is_song_part = note_layout.is_song_part(note)
-        target_idx = None if is_song_part else self.fixture_at_y(scene_y)
-        channel = None if is_song_part else target_idx
-        event_id = self.midi_manager.add_event(note, time_seconds,
-                                               clamped_velocity, channel)
-        if not event_id:
-            return False
-        self._schedule_refresh()
-        where = "arrangement" if is_song_part else f"fixture #{target_idx}"
-        self.logger.info(
-            f"Clip dropped: note={note} at {time_seconds:.3f}s on {where}"
-        )
-        return True
-
-    def can_accept_scene_drop(self, scene_y: float,
-                              fixture_type: Optional[str] = None) -> bool:
-        """A scene targets a track whose fixture defines scene banks, and whose
-        type matches the scene's owning fixture (when the payload names one)."""
-        if not self.midi_manager:
-            return False
-        target_idx = self.fixture_at_y(scene_y)
-        # A locked track rejects new clips.
-        if target_idx is not None and self.midi_manager.is_fixture_locked(target_idx):
-            return False
-        target_type = self._fixture_type(target_idx)
-        fdef = self._fdef(target_idx)
-        if not (fdef and fdef.banks):
-            return False
-        return fixture_type is None or fixture_type == target_type
-
-    def handle_scene_drop(self, name: str, channels: dict,
-                          scene_x: float, scene_y: float,
-                          fixture_type: Optional[str] = None) -> bool:
-        """Validate and insert a dropped scene. Returns True on success."""
-        if not self.can_accept_scene_drop(scene_y, fixture_type):
-            return False
-        time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
-        target_idx = self.fixture_at_y(scene_y)
-        group_id = self.midi_manager.add_scene(time_seconds, channels, name,
-                                               target_idx)
-        if not group_id:
-            return False
-        self._schedule_refresh()
-        self.logger.info(
-            f"Scene dropped: '{name}' at {time_seconds:.3f}s on fixture "
-            f"#{target_idx} (group_id={group_id})"
-        )
-        return True
-
-    def on_add_event_requested(self, time_seconds, fixture_index=None):
-        """Add a new clip at `time_seconds`.
-
-        `fixture_index` (the lane the request came from) targets that exact
-        fixture; song parts ignore it and stay global.
-        """
-        if not self.midi_manager:
-            return
-        if self._is_locked(fixture_index):
-            return
-
-        result = self._run_clip_dialog(ClipEditDialog.for_clip(
-            **self._clip_dialog_fixture(fixture_index),
-            note=None, velocity=0, time=time_seconds, is_new=True))
-        if result is None:
-            return
-
-        if result.kind == "new_scene":
-            group_id = self.midi_manager.add_scene(
-                result.time, result.channels, result.name, fixture_index)
-            if group_id:
-                self._schedule_refresh()
-                self.logger.info(
-                    f"Scene added: '{result.name}' at {result.time:.3f}s "
-                    f"on fixture #{fixture_index} (group_id={group_id})"
-                )
-            return
-
-        # Route to the lane's fixture unless it's a global song part.
-        channel = (None if note_layout.is_song_part(result.note)
-                   else fixture_index)
-        event_id = self.midi_manager.add_event(result.note, result.time,
-                                               result.velocity, channel)
-        if event_id:
-            self._schedule_refresh()
-            info = note_layout.describe_note(result.note,
-                                             self._fdef(fixture_index),
-                                             result.velocity)
-            name = info.part if info else f"Note {result.note}"
-            self.logger.info(
-                f"Clip added: {name} at {result.time:.3f}s, "
-                f"velocity={result.velocity}"
-            )
-        else:
-            self.logger.error(
-                f"Failed to add clip: note {result.note} has no meaning here")
 
     def set_files(self, audio_file):
         """Set audio file (None = the song has no monitored track).

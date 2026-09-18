@@ -623,7 +623,7 @@ def test_the_carry_ignores_screen_coordinates():
     _, tl = _make()
     viewport = tl.header_view.viewport()
 
-    _assert(abs(tl._header_scene_y(40.0)
+    _assert(abs(tl.lane_reorder._scene_y(40.0)
                 - tl.header_view.mapToScene(QPoint(0, 40)).y()) < 0.001,
             "a viewport y resolves through the view, with no global round trip")
 
@@ -638,10 +638,10 @@ def test_the_carry_ignores_screen_coordinates():
     anchor = tl.header_view.mapFromScene(QPointF(0.0, tl._midi_track_y(0))).y()
 
     tl.begin_track_reorder(track)
-    tl.eventFilter(viewport, move_at(anchor))
+    tl.lane_reorder.eventFilter(viewport, move_at(anchor))
     _assert([t.fixture_index for t in tl.midi_events_tracks] == [0, 1, 2],
             "the anchor move leaves the order alone")
-    tl.eventFilter(viewport, move_at(anchor + 1.6 * height))
+    tl.lane_reorder.eventFilter(viewport, move_at(anchor + 1.6 * height))
     _assert([t.fixture_index for t in tl.midi_events_tracks] == [1, 2, 0],
             "the viewport position alone carries the lane to the bottom row")
     tl.end_track_reorder()
@@ -668,22 +668,22 @@ def test_a_drag_cannot_outlive_its_gesture():
 
     tl.begin_track_reorder(track)
     tl.update_track_reorder(500.0)
-    tl.eventFilter(tl, move(Qt.MouseButton.LeftButton))
-    _assert(tl._reorder_drag is not None,
+    tl.lane_reorder.eventFilter(tl, move(Qt.MouseButton.LeftButton))
+    _assert(tl.lane_reorder.drag is not None,
             "a move with the button held keeps the drag alive")
 
-    tl.eventFilter(tl, move(Qt.MouseButton.NoButton))
-    _assert(tl._reorder_drag is None,
+    tl.lane_reorder.eventFilter(tl, move(Qt.MouseButton.NoButton))
+    _assert(tl.lane_reorder.drag is None,
             "a move with no button held ends the drag")
 
     # And the release, wherever it lands in the app.
     tl.begin_track_reorder(track)
     tl.update_track_reorder(500.0)
-    tl.eventFilter(tl, QMouseEvent(
+    tl.lane_reorder.eventFilter(tl, QMouseEvent(
         QEvent.Type.MouseButtonRelease, QPointF(0, 0), QPointF(0, 0),
         Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier))
-    _assert(tl._reorder_drag is None, "a release anywhere in the app ends it")
+    _assert(tl.lane_reorder.drag is None, "a release anywhere in the app ends it")
 
 
 def test_grip_drag_stays_inside_the_strip():
