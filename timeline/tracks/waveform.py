@@ -16,6 +16,10 @@ from tupperlogger import get_logger
 
 # Dimmed so the song sections' tints read cleanly over it.
 WAVEFORM_OPACITY = 0.90
+# Screen px of travel under which a press on the waveform is a CLICK (which
+# seeks) rather than a drag (which slides the offset) — the threshold the
+# lanes' own click-or-rubber-band rule uses, in the same view.
+CLICK_SLOP_PX = 4
 
 
 def render_waveform_pixmap(pcm, width: int, height: int) -> QPixmap:
@@ -61,10 +65,17 @@ class DraggableWaveform(QGraphicsObject):
     for a drag that actually moved the item: it carries where the drag STARTED
     as well as where it ended, which is the only moment the app knows by how
     much the audio just slid under the show.
+
+    A press that goes nowhere is the third: `clicked` seeks, the way a click on
+    empty lane space or on a section's header bar does. It takes CLICK_SLOP_PX
+    of travel to be a drag instead, because Qt moves a movable item on the
+    first pixel — without the slop a click with a shake in it would ask to move
+    the show rather than place the playhead.
     """
 
     position_changed = pyqtSignal(QPointF)
     offset_committed = pyqtSignal(float, float)   # old_x, new_x (scene px)
+    clicked = pyqtSignal(float)                   # scene x pressed
 
     def __init__(self, pixmap, parent=None):
         super().__init__(parent)
@@ -73,6 +84,7 @@ class DraggableWaveform(QGraphicsObject):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
         self.y_pos = 0
         self._press_x = None
+        self._press_screen = None
         # [(scene_x0, scene_x1, QColor)]: the song sections' colours. Kept in
         # SCENE x, because sections are anchored in timeline time — an offset
         # drag slides the audio under them, and the colours stay put.
@@ -126,13 +138,23 @@ class DraggableWaveform(QGraphicsObject):
 
     def mousePressEvent(self, event):
         self._press_x = self.x()
+        self._press_screen = event.screenPos()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         # Let the base class land the move first, then report the whole drag.
         super().mouseReleaseEvent(event)
         press_x, self._press_x = self._press_x, None
-        if press_x is not None and self.x() != press_x:
+        press_screen, self._press_screen = self._press_screen, None
+        if press_x is None:
+            return
+        if (event.screenPos() - press_screen).manhattanLength() < CLICK_SLOP_PX:
+            # A click: undo the pixel or two Qt may have slid the item under a
+            # shaky hand (the preview follows it back), then seek instead.
+            if self.x() != press_x:
+                self.setX(press_x)
+            self.clicked.emit(event.scenePos().x())
+        elif self.x() != press_x:
             self.offset_committed.emit(press_x, self.x())
 
 
@@ -249,6 +271,8 @@ class WaveformTrack(BaseTrack):
             self.waveform_item.position_changed.connect(self._on_waveform_moved)
             self.waveform_item.offset_committed.connect(
                 self._on_waveform_committed)
+            self.waveform_item.clicked.connect(
+                self.timeline_manager._seek_to_scene_x)
             self.content_scene.addItem(self.waveform_item)
             self.items.append(self.waveform_item)
 

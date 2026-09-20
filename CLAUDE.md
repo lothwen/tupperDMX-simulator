@@ -351,7 +351,8 @@ which is what stops `timeline/` importing `ui/`), and the web remote resolves th
   drop splits the section it lands in or retypes the one starting there. **A lone box's body never moves** (the audio
   under it doesn't); only a 2+ selection drags as a group. **The bar is the section, the waveform below it is the
   audio**: a box spans the whole band (its tooltip, menu and boundary grips reach down it) but IGNORES a plain left
-  press below the bar, so the scene hands it to the waveform item and the drag slides the offset — otherwise a song
+  press below the bar, so the scene hands it to the waveform item, where a drag slides the offset and a CLICK (under
+  `CLICK_SLOP_PX` of travel, since Qt moves a movable item on the first pixel) seeks — otherwise a song
   sectioned end to end has nothing left to grab, and the drag is what opens the offset dialog (the band menus' "Set
   audio offset…" is the only other way in). They snap to BEATS (Shift = whole bars, Snap off = none — the tempo map's grid in either
   ruler mode); Alt+←/→ nudges them, since bare arrows seek.

@@ -5,7 +5,8 @@ The waveform drag edits `song.offset`, which slides the AUDIO alone — every
 clip, song part and marker is anchored in timeline seconds. This locks the
 ripple that keeps them together:
 
-  * the waveform drag commits ONCE, on release, carrying where it started;
+  * the waveform drag commits ONCE, on release, carrying where it started, and
+    a press that travels less than the slop is a CLICK, which seeks;
   * `MidiManager.shift_all` slides the whole sequence rigidly, as one undo;
   * `core.markers.shift_markers` does the same for the marker track;
   * both refuse (never clamp) a shift that would cross t=0, and MainWindow
@@ -1016,16 +1017,35 @@ def test_drag_commits_once_on_release():
     _assert(not _close(old, new), "which is not where it started")
 
 
-def test_a_click_that_moves_nothing_commits_nothing():
-    print("test_a_click_that_moves_nothing_commits_nothing")
+def test_a_click_seeks_instead_of_committing():
+    print("test_a_click_seeks_instead_of_committing")
     _ensure_app()
     view, item = _drag_rig()
-    committed = []
+    committed, clicked = [], []
     item.offset_committed.connect(lambda o, n: committed.append((o, n)))
+    item.clicked.connect(clicked.append)
     _drag(view, [(60, 20)])
     _assert(item.x() == 10.0, "the item did not move")
     _assert(committed == [],
             "a press and release with no movement is not an edit")
+    _assert([round(x) for x in clicked] == [60],
+            f"it is a click, at the scene x pressed ({clicked})")
+
+
+def test_a_shaky_click_is_still_a_click():
+    print("test_a_shaky_click_is_still_a_click")
+    _ensure_app()
+    view, item = _drag_rig()
+    committed, clicked = [], []
+    item.offset_committed.connect(lambda o, n: committed.append((o, n)))
+    item.clicked.connect(clicked.append)
+    # Qt moves a movable item on the very first pixel, so a click with a
+    # tremor in it must not ask to move the show.
+    _drag(view, [(60, 20), (62, 20), (61, 20)])
+    _assert(committed == [], f"no offset was committed ({committed})")
+    _assert(len(clicked) == 1, f"it seeks like any other click ({clicked})")
+    _assert(item.x() == 10.0,
+            f"and the item is put back where it was ({item.x()})")
 
 
 def test_a_programmatic_offset_previews_but_never_commits():
@@ -1101,7 +1121,8 @@ def main():
     test_an_empty_song_with_one_track_is_never_asked()
     test_an_empty_song_with_two_tracks_is_still_asked_about_the_other()
     test_drag_commits_once_on_release()
-    test_a_click_that_moves_nothing_commits_nothing()
+    test_a_click_seeks_instead_of_committing()
+    test_a_shaky_click_is_still_a_click()
     test_a_programmatic_offset_previews_but_never_commits()
     test_the_track_commits_in_seconds()
     print("\nALL TESTS PASSED")
