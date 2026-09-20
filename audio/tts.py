@@ -19,7 +19,10 @@ logger = get_logger("audio.tts")
 VOICES = (
     "es_ES-davefx-medium",
     "es_ES-sharvard-medium",
+    "es_ES-carlfm-x_low",
+    "eu_ES-maider-medium",
     "en_US-lessac-medium",
+    "en_US-libritts_r-medium"
 )
 DEFAULT_VOICE = VOICES[0]
 
@@ -27,6 +30,7 @@ DEFAULT_VOICE = VOICES[0]
 COUNT_WORDS = {
     "es": ("uno", "dos", "tres", "cuatro"),
     "en": ("one", "two", "three", "four"),
+    "eu": ("bat", "bi", "hiru", "lau")
 }
 
 # Loaded piper voice models, kept warm per process (onnx load is ~1s).
