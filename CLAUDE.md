@@ -352,6 +352,14 @@ which is what stops `timeline/` importing `ui/`), and the web remote resolves th
   under it doesn't); only a 2+ selection drags as a group. `WAVE_GRIP_*` decides how much of the band's bottom is left
   to the waveform's offset drag (none at 0). They snap to BEATS (Shift = whole bars, Snap off = none — the tempo map's grid in either
   ruler mode); Alt+←/→ nudges them, since bare arrows seek.
+- **The selection is ONE selection across both halves of the scene.** The rubber band, started on empty lane space and
+  dragged up into the strip, catches section boxes alongside the clips it crossed, and `timeline/selection.py` then owns
+  what has to hold for the pair: Delete removes both, and a group move is **one delta from either grip** — grab a clip or
+  grab a box, everything selected travels the same distance, clamped by the INTERSECTION of the clips' room and the
+  sections' (both contain 0, so the intersection does). Each grip keeps its own feel for that delta — a box snaps its own
+  start to the grid, a clip does not — and the whole thing commits in one `history_batch`, so one Ctrl+Z. Alt+←/→ is the
+  keyboard's group move and follows the same rule. What counts as "2+" is therefore `Timeline.selection_size()`, both
+  halves, which is also what keeps a LONE box inert.
 
 **A clip is edited against the fixture it lives on, never against a table.** Its note is a *verb*, its MIDI channel
 selects the fixture, its velocity is that verb's parameter — so `Timeline._fdef(channel)` resolves the patch entry first

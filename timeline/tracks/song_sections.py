@@ -21,6 +21,9 @@ A lone box never moves, because the audio under it doesn't either:
 * a click selects (Ctrl toggles, Shift extends) and a plain one also seeks;
 * a drag across the boxes sweeps a selection, and once two or more are
   selected, dragging any selected box moves them all by one delta;
+* the timeline's rubber band reaches the strip too (`select_in_rect`): dragged
+  up out of a lane it catches boxes alongside the clips it crossed, and Delete
+  then takes both halves as one undo step;
 * a double-click picks the part; right-click is the section menu.
 
 `SongSectionOverlay` owns every item and gesture, since one boundary or group
@@ -260,7 +263,9 @@ class _Gesture:
     boundary: Optional[int] = None       # edge: the start being dragged
     base: FrozenSet[str] = frozenset()   # sweep: the selection it adds to
     started: bool = False
-    proposed: List[float] = field(default_factory=list)
+    proposed: List[float] = field(default_factory=list)   # edge: the new starts
+    delta: float = 0.0                   # group: how far the selection travels
+    clip_peers: list = field(default_factory=list)        # group: clips riding along
 
 
 class SongSectionOverlay:
@@ -479,6 +484,43 @@ class SongSectionOverlay:
         for box in self.boxes:
             box.setSelected(True)
 
+    def select_in_rect(self, scene_rect, keep_ids=frozenset()):
+        """Select the boxes the timeline's rubber band covers, plus `keep_ids`
+        (what a Ctrl+band keeps). The band is one gesture over one scene, so a
+        drag that reaches the strip picks sections up alongside the clips it
+        crossed; one confined to the lanes touches no box and clears it."""
+        for box in self.boxes:
+            box.setSelected(box.sceneBoundingRect().intersects(scene_rect)
+                            or box.event_id in keep_ids)
+        selected = self.selected_boxes()
+        if not any(b.event_id == self._anchor_id for b in selected):
+            # A later Shift+click extends from inside the band's catch, not
+            # from whatever was clicked before it.
+            self._anchor_id = selected[0].event_id if selected else None
+
+    def selection_move_bounds(self):
+        """(min, max) seconds the selected boxes may travel together, or None
+        with none selected. The timeline intersects it with the clips' room —
+        a group move is one delta for both halves of the selection."""
+        moving = [b.index for b in self.selected_boxes()]
+        if not moving:
+            return None
+        return arrangement.move_bounds(self._starts, moving, self._song_end,
+                                       self._min_gap())
+
+    def selection_moves(self, delta: float):
+        """{event_id: new_time} for the selected boxes shifted by `delta`."""
+        return {b.event_id: self._starts[b.index] + delta
+                for b in self.selected_boxes()}
+
+    def preview_shift(self, delta: float):
+        """Lay the strip out with every SELECTED box shifted by `delta`
+        seconds — the strip's half of a live group move, whichever grip is
+        driving it. `delta` 0 restores the committed strip."""
+        moving = {b.index for b in self.selected_boxes()}
+        self._layout([t + delta if i in moving else t
+                      for i, t in enumerate(self._starts)])
+
     def _select_only(self, box: SongSectionItem):
         self.scene.clearSelection()
         box.setSelected(True)
@@ -525,6 +567,13 @@ class SongSectionOverlay:
             return box.index + 1
         return None
 
+    def _is_group_grip(self, box: SongSectionItem) -> bool:
+        """True when dragging `box`'s body moves the selection rather than
+        nothing. A LONE box still never moves — but the count is the whole
+        timeline selection's, so a box caught by a rubber band alongside some
+        clips drags the lot."""
+        return box.isSelected() and self.tm.selection_size() >= 2
+
     def hover(self, box: Optional[SongSectionItem], local_x: float):
         # Set the cursor on the view (not the viewport) to match the MIDI clips
         # / fade handles. Touching viewport().setCursor() would give the
@@ -536,7 +585,7 @@ class SongSectionOverlay:
         if box is not None:
             if self._boundary_at(box, local_x) is not None:
                 cursor = Qt.CursorShape.SizeHorCursor
-            elif box.isSelected() and len(self.selected_boxes()) >= 2:
+            elif self._is_group_grip(box):
                 cursor = Qt.CursorShape.OpenHandCursor
         self.tm.content_view.setCursor(cursor)
 
@@ -552,12 +601,15 @@ class SongSectionOverlay:
         boundary = self._boundary_at(box, event.pos().x())
         if boundary is not None:
             kind = "edge"
-        elif box.isSelected() and len(self.selected_boxes()) >= 2:
+        elif self._is_group_grip(box):
             kind = "group"
         else:
             kind = "click"
         self._gesture = _Gesture(kind, box, event.scenePos().x(),
                                  event.screenPos(), event.modifiers(), boundary)
+        if kind == "group":
+            # Where the clips riding along sit now, before any preview.
+            self._gesture.clip_peers = self.tm.capture_selected_clip_positions()
 
     def move(self, event):
         g = self._gesture
@@ -604,16 +656,17 @@ class SongSectionOverlay:
                              f" · {_clock(t)}")
 
     def _drag_group(self, g: _Gesture, dx: float, whole_bar: bool, event):
-        moving = [b.index for b in self.selected_boxes()]
+        """One delta for everything selected: the grabbed box snaps to the
+        grid and the clips caught with it travel the same distance, clamped by
+        whichever half runs out of room first."""
         t0 = self._starts[g.box.index]
-        lo, hi = arrangement.move_bounds(self._starts, moving, self._song_end,
-                                         self._min_gap())
-        delta = min(max(self._snap(t0 + dx, whole_bar) - t0, lo), hi)
-        g.proposed = [t + delta if i in moving else t
-                      for i, t in enumerate(self._starts)]
-        self._layout(g.proposed)
-        self._readout(event, f"{len(moving)} sections · {g.box.part} → bar "
-                             f"{self._bar_beat(t0 + delta)} ({delta:+.2f} s)")
+        lo, hi = self.tm.selection_move_bounds()
+        g.delta = min(max(self._snap(t0 + dx, whole_bar) - t0, lo), hi)
+        self.tm.preview_selection_shift(g.clip_peers,
+                                        g.delta * self.tm.PIXELS_PER_SECOND)
+        moved = len(self.selected_boxes()) + len(g.clip_peers)
+        self._readout(event, f"{moved} selected · {g.box.part} → bar "
+                             f"{self._bar_beat(t0 + g.delta)} ({g.delta:+.2f} s)")
 
     def _readout(self, event, text: str):
         pos = event.screenPos() + QPoint(12, 20)
@@ -630,6 +683,14 @@ class SongSectionOverlay:
             return
         if g.kind == "sweep":
             self._anchor_id = g.box.event_id
+            return
+        if g.kind == "group":
+            # The clips go with the sections, through the timeline's one
+            # group-move commit — one undo step for the whole selection.
+            if abs(g.delta) > 1e-6:
+                self.tm.on_selection_moved(g.delta)
+            else:
+                self.tm.preview_selection_shift(g.clip_peers, 0.0)
             return
         moves = {self.boxes[i].event_id: t
                  for i, t in enumerate(g.proposed)
@@ -658,9 +719,10 @@ class SongSectionOverlay:
             self.tm.on_song_sections_deleted(ids)
 
     def nudge_selected(self, direction: int, fine: bool = False) -> bool:
-        """Move every selected start one bar (a beat with `fine`) the way
-        `direction` points — all of it, or not at all when a neighbour is in the
-        way. False when no section is selected."""
+        """Move the selection one bar (a beat with `fine`) the way `direction`
+        points — all of it, or not at all when a neighbour is in the way. The
+        clips selected with the sections travel too, since a nudge is the
+        keyboard's group move. False when no section is selected."""
         moving = [b.index for b in self.selected_boxes()]
         if not moving:
             return False
@@ -668,12 +730,9 @@ class SongSectionOverlay:
         t0 = self._starts[moving[0]]
         step = 1 if fine else BEATS_PER_BAR
         delta = tmap.seconds_at_beat(tmap.beat_at(t0) + direction * step) - t0
-        lo, hi = arrangement.move_bounds(self._starts, moving, self._song_end,
-                                         self._min_gap())
+        lo, hi = self.tm.selection_move_bounds()
         if lo - 1e-9 <= delta <= hi + 1e-9:
-            self.tm.on_song_sections_moved(
-                {self.boxes[i].event_id: self._starts[i] + delta
-                 for i in moving})
+            self.tm.on_selection_moved(delta)
         return True
 
     # --- Menus ------------------------------------------------------------

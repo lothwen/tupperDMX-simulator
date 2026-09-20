@@ -104,6 +104,10 @@ class ContentView(QGraphicsView):
     def _selected_clips(self):
         return [it for it in self._all_clips() if it.isSelected()]
 
+    def _sections(self):
+        """The song-section overlay on the waveform band."""
+        return self.timeline.waveform_track.sections
+
     def _clip_at(self, scene_pos):
         """Topmost non-BLACKOUT clip under a scene position, or None."""
         from ..tracks.midi_events import DraggableMidiEvent
@@ -126,7 +130,11 @@ class ContentView(QGraphicsView):
                 self._rubber_ctrl = bool(
                     event.modifiers() & Qt.KeyboardModifier.ControlModifier)
                 if self._rubber_ctrl:
-                    self._rubber_base_ids = {c.event_id for c in self._selected_clips()}
+                    # Clips and sections are events of one document, so one id
+                    # set carries both halves of the selection being added to.
+                    self._rubber_base_ids = (
+                        {c.event_id for c in self._selected_clips()}
+                        | {b.event_id for b in self._sections().selected_boxes()})
                 else:
                     self._rubber_base_ids = set()
                     self.scene().clearSelection()
@@ -174,22 +182,27 @@ class ContentView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def _update_rubber_selection(self, viewport_rect):
-        """Select clips intersecting the band (plus the additive-mode base)."""
+        """Select the clips AND the song sections intersecting the band (plus
+        the additive-mode base). The band starts in a lane, so it reaches the
+        sections only once it is dragged up into the waveform strip."""
         scene_rect = self.mapToScene(viewport_rect).boundingRect()
         for clip in self._all_clips():
             inside = clip.sceneBoundingRect().intersects(scene_rect)
             clip.setSelected(inside or clip.event_id in self._rubber_base_ids)
+        self._sections().select_in_rect(scene_rect, self._rubber_base_ids)
 
     def keyPressEvent(self, event):
-        """Delete / copy / paste selected MIDI clips.
+        """Delete / copy / paste the timeline selection.
 
         Delete and copy route through Timeline so the selection logic, BLACKOUT
         conversion, and clipboard live in one place (shared with the right-click
         menu); paste drops the clipboard at the current playhead. Scoped to the
-        timeline view so text fields keep their native copy/paste.
+        timeline view so text fields keep their native copy/paste. Delete takes
+        the song sections the band caught with it; copy/paste are the clips'
+        alone — a section is a point in the arrangement, not a clip to repeat.
         """
         if event.key() == Qt.Key.Key_Delete:
-            if self._selected_clips():
+            if self._selected_clips() or self._sections().selected_boxes():
                 self.timeline.delete_selected()
                 event.accept()
                 return

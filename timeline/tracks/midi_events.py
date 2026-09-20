@@ -575,6 +575,14 @@ class DraggableMidiEvent(QGraphicsObject):
         return [it for it in scene.selectedItems()
                 if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
 
+    def _selection_size(self):
+        """How much is selected across the whole timeline — these clips plus
+        the song sections a rubber band caught with them, which a group drag
+        from here moves too."""
+        if self.timeline is None:
+            return len(self._selected_sibling_clips())
+        return self.timeline.selection_size()
+
     def set_multi_selected(self, value: bool):
         """Toggle multi-selection mode: hide fade handles, disable resize.
 
@@ -591,23 +599,20 @@ class DraggableMidiEvent(QGraphicsObject):
         """Capture peer positions + clamp range for a whole-selection move."""
         self._mode = self.MODE_GROUP_MOVE
         self._press_scene_pos = press_scene_pos
-        self._group_move_peers = []
-        for clip in self._selected_sibling_clips():
-            text_pos = clip.text_item.pos() if clip.text_item is not None else None
-            self._group_move_peers.append((clip, clip.pos(), text_pos))
         if self.timeline is not None:
+            self._group_move_peers = self.timeline.capture_selected_clip_positions()
             self._group_min_dx, self._group_max_dx = \
                 self.timeline.selection_move_bounds_px()
         else:
+            self._group_move_peers = []
             self._group_min_dx, self._group_max_dx = 0.0, 0.0
 
     def _apply_group_move_preview(self, delta_x: float):
-        """Slide every selected clip (and its label) by a clamped delta."""
+        """Slide the whole selection by a clamped delta — the selected clips
+        and the song sections riding with them."""
         clamped = max(self._group_min_dx, min(delta_x, self._group_max_dx))
-        for clip, start_pos, text_start in self._group_move_peers:
-            clip.setPos(start_pos.x() + clamped, start_pos.y())
-            if clip.text_item is not None and text_start is not None:
-                clip.text_item.setPos(text_start.x() + clamped, text_start.y())
+        if self.timeline is not None:
+            self.timeline.preview_selection_shift(self._group_move_peers, clamped)
 
     def mousePressEvent(self, event):
         if self.locked:
@@ -632,7 +637,7 @@ class DraggableMidiEvent(QGraphicsObject):
                 event.accept()
                 return
 
-            if self.isSelected() and len(self._selected_sibling_clips()) >= 2:
+            if self.isSelected() and self._selection_size() >= 2:
                 # Drag the whole multi-selection as a rigid block.
                 self._begin_group_move(event.scenePos())
                 event.accept()
@@ -650,7 +655,7 @@ class DraggableMidiEvent(QGraphicsObject):
         if event.button() == Qt.MouseButton.RightButton:
             # Keep the selection intact when right-clicking a clip that's part
             # of a multi-selection (so "Delete N events" acts on all of them).
-            if not (self.isSelected() and len(self._selected_sibling_clips()) >= 2):
+            if not (self.isSelected() and self._selection_size() >= 2):
                 self._select_exclusive()
             self.last_right_click_scene_pos = event.scenePos()
             self.show_context_menu(event.screenPos())
@@ -718,6 +723,10 @@ class DraggableMidiEvent(QGraphicsObject):
             elif self._mode == self.MODE_RESIZE_RIGHT:
                 new_right_x = self.pos().x() + self.rect.width()
                 self.right_edge_committed.emit(self.event_id, new_right_x / pps)
+        elif self._mode == self.MODE_GROUP_MOVE:
+            # Too short to commit, so nothing refreshes: put the preview back
+            # by hand, or the sections it slid stay where the drag left them.
+            self.timeline.preview_selection_shift(self._group_move_peers, 0.0)
 
         self._mode = self.MODE_IDLE
         self._press_scene_pos = None
@@ -868,10 +877,11 @@ class DraggableMidiEvent(QGraphicsObject):
             main_window = main_window.parent()
         menu = QMenu(main_window)
 
-        selected_clips = self._selected_sibling_clips()
-        if self.isSelected() and len(selected_clips) >= 2:
-            # Multi-selection: a single action that deletes them all at once.
-            delete_action = menu.addAction(f"Delete {len(selected_clips)} events")
+        if self.isSelected() and self._selection_size() >= 2:
+            # Multi-selection: a single action that deletes them all at once —
+            # song sections included, since the same rubber band selects both,
+            # so the count is the selection's and not just the lanes'.
+            delete_action = menu.addAction(f"Delete {self._selection_size()} events")
             if self.timeline is not None:
                 delete_action.triggered.connect(self.timeline.delete_selected)
             menu.exec(global_pos)

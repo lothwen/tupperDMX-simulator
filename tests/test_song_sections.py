@@ -14,6 +14,8 @@ Locks the overlay's contract:
     a 2+ selection moves them all by one delta — one undo step;
   * a dropped part splits the section it lands in, or retypes the one starting
     there, and never lands past the song's end;
+  * the timeline's rubber band catches boxes alongside the clips it crossed,
+    and the pair then moves as one from either grip, clamped by both;
   * Delete removes the selection unconfirmed; the selection survives redraws.
 
 Run with:
@@ -129,6 +131,19 @@ def _drag(tl, from_s, to_s, y=None, mods=Qt.KeyboardModifier.NoModifier,
     if during is not None:
         during()
     _send(tl, QEvent.Type.MouseButtonRelease, to_s, y, mods=mods)
+    _settle(tl)
+
+
+def _rubber_band(tl, from_s, from_y, to_s, to_y,
+                 mods=Qt.KeyboardModifier.NoModifier):
+    """The timeline's own rubber band: press on empty lane space, drag to
+    (to_s, to_y), release."""
+    _send(tl, QEvent.Type.MouseButtonPress, from_s, from_y, mods=mods)
+    for k in range(1, 7):
+        _send(tl, QEvent.Type.MouseMove,
+              from_s + (to_s - from_s) * k / 6, from_y + (to_y - from_y) * k / 6,
+              buttons=Qt.MouseButton.LeftButton, mods=mods)
+    _send(tl, QEvent.Type.MouseButtonRelease, to_s, to_y, mods=mods)
     _settle(tl)
 
 
@@ -410,6 +425,134 @@ def test_delete_removes_the_selection_unconfirmed():
     _assert(len(_starts(m)) == 3, "one Ctrl+Z brings both back")
 
 
+def test_the_rubber_band_catches_sections_with_the_clips():
+    print("test_the_rubber_band_catches_sections_with_the_clips")
+    m, tl = _make()
+    clip_id = m.add_event(24, 12.0, 100, 0)   # a scene-load clip on the ledbar
+    tl.refresh_from_manager()
+    lane_y = tl._midi_track_y(0) + 10
+    view = tl.content_view
+
+    # A band confined to the lanes takes the clip and leaves the strip alone.
+    _rubber_band(tl, 5.0, lane_y, 14.0, lane_y)
+    _assert([c.event_id for c in view._selected_clips()] == [clip_id],
+            "a band across a lane selects the clip it crossed")
+    _assert(not _overlay(tl).selected_boxes(),
+            "and no section, having never reached the strip")
+
+    # Dragged up into the strip it takes the sections over the same span.
+    _rubber_band(tl, 5.0, lane_y, 14.0, _box_y(tl))
+    _assert([c.event_id for c in view._selected_clips()] == [clip_id],
+            "dragged up into the band it keeps the clip")
+    _assert([b.note for b in _overlay(tl).selected_boxes()] == [INTRO, VERSE],
+            f"and adds every section it covers "
+            f"({[b.part for b in _overlay(tl).selected_boxes()]})")
+
+    # Delete acts on the whole catch, as one undo step.
+    view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                                 Qt.KeyboardModifier.NoModifier))
+    _settle(tl)
+    _assert(_starts(m) == [(CHORUS, 20.0)],
+            f"both sections are gone ({_starts(m)})")
+    clip = next(e for e in m.midi_events if e['id'] == clip_id)
+    _assert(m.is_blackout(clip),
+            "and the clip is a BLACKOUT gap, the way a lane delete leaves it")
+    m.undo()
+    tl.refresh_from_manager()
+    clip = next(e for e in m.midi_events if e['id'] == clip_id)
+    _assert(len(_starts(m)) == 3 and not m.is_blackout(clip),
+            "one Ctrl+Z brings the clip and both sections back")
+
+
+def test_a_mixed_selection_moves_as_one_from_either_grip():
+    print("test_a_mixed_selection_moves_as_one_from_either_grip")
+    m, tl = _make()
+    clip_id = m.add_event(24, 12.0, 100, 0)
+    tl.refresh_from_manager()
+    lane_y = tl._midi_track_y(0) + 10
+
+    def clip_time():
+        return round(next(e['time'] for e in m.midi_events
+                          if e['id'] == clip_id), 3)
+
+    def catch():
+        """A band over VERSE + CHORUS and the clip under them."""
+        _rubber_band(tl, 11.0, lane_y, 25.0, _box_y(tl))
+
+    catch()
+    _assert([b.part for b in _overlay(tl).selected_boxes()]
+            == ["VERSE", "CHORUS"] and clip_time() == 12.0,
+            "the band holds two sections and a clip")
+
+    # Grabbed by a section box.
+    _drag(tl, 15.0, 17.0)
+    _assert(_starts(m) == [(INTRO, 2.0), (VERSE, 12.0), (CHORUS, 22.0)]
+            and clip_time() == 14.0,
+            f"a section grip moves the clip the same +2 s "
+            f"({_starts(m)}, clip at {clip_time()})")
+    m.undo()
+    tl.refresh_from_manager()
+    _assert(_starts(m)[1] == (VERSE, 10.0) and clip_time() == 12.0,
+            "and one Ctrl+Z puts the sections and the clip back together")
+
+    # Grabbed by the clip.
+    catch()
+    _drag(tl, 13.0, 16.0, y=lane_y)
+    _assert(_starts(m) == [(INTRO, 2.0), (VERSE, 13.0), (CHORUS, 23.0)]
+            and clip_time() == 15.0,
+            f"a clip grip moves the sections the same +3 s "
+            f"({_starts(m)}, clip at {clip_time()})")
+    m.undo()
+    tl.refresh_from_manager()
+    _assert(_starts(m)[1] == (VERSE, 10.0) and clip_time() == 12.0,
+            "one Ctrl+Z again, from the other grip")
+
+
+def test_a_mixed_move_is_clamped_by_whichever_half_runs_out_first():
+    print("test_a_mixed_move_is_clamped_by_whichever_half_runs_out_first")
+    m, tl = _make()
+    m.add_event(24, 12.0, 100, 0)     # the only clip on the lane: free to the end
+    tl.refresh_from_manager()
+    lane_y = tl._midi_track_y(0) + 10
+    _rubber_band(tl, 11.0, lane_y, 14.0, _box_y(tl))
+    _assert([b.part for b in _overlay(tl).selected_boxes()] == ["VERSE"],
+            "VERSE and the clip under it are selected")
+    sections = _overlay(tl).selection_move_bounds()
+    _assert(tl.selection_move_bounds()[1] == sections[1],
+            f"a clip with the lane to itself leaves VERSE's own room standing "
+            f"({sections[1]:.2f}s)")
+    _drag(tl, 15.0, 40.0)
+    _assert(_starts(m) == [(INTRO, 2.0), (VERSE, 19.5), (CHORUS, 20.0)],
+            f"so the drag stops a beat short of CHORUS ({_starts(m)})")
+
+    # Now box the clip in: its neighbour, not the strip, becomes the limit.
+    m.undo()
+    m.add_event(25, 30.0, 100, 0)
+    tl.refresh_from_manager()
+    _rubber_band(tl, 11.0, lane_y, 14.0, _box_y(tl))
+    lo, hi = tl.selection_move_bounds()
+    _assert(hi < sections[1],
+            f"the clip's neighbour now bounds the pair tighter than VERSE "
+            f"would ({hi:.2f}s vs {sections[1]:.2f}s)")
+    _drag(tl, 15.0, 40.0)
+    _assert(_starts(m)[1][1] <= 10.0 + hi + 1e-6,
+            f"and the section stops where the clip must ({_starts(m)})")
+
+
+def test_ctrl_holds_the_rubber_band_selection_open():
+    print("test_ctrl_holds_the_rubber_band_selection_open")
+    _, tl = _make()
+    lane_y = tl._midi_track_y(0) + 10
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    _rubber_band(tl, 3.0, lane_y, 5.0, _box_y(tl))
+    _assert([b.note for b in _overlay(tl).selected_boxes()] == [INTRO],
+            "the first band takes INTRO")
+    _rubber_band(tl, 22.0, lane_y, 25.0, _box_y(tl), mods=ctrl)
+    _assert([b.note for b in _overlay(tl).selected_boxes()] == [INTRO, CHORUS],
+            f"a Ctrl+band adds to it rather than replacing it "
+            f"({[b.part for b in _overlay(tl).selected_boxes()]})")
+
+
 def test_a_drop_splits_retypes_and_snaps():
     print("test_a_drop_splits_retypes_and_snaps")
     m, tl = _make()
@@ -549,6 +692,10 @@ def main():
     test_a_body_drag_moves_a_multi_selection_together()
     test_a_click_selects_and_seeks()
     test_delete_removes_the_selection_unconfirmed()
+    test_the_rubber_band_catches_sections_with_the_clips()
+    test_a_mixed_selection_moves_as_one_from_either_grip()
+    test_a_mixed_move_is_clamped_by_whichever_half_runs_out_first()
+    test_ctrl_holds_the_rubber_band_selection_open()
     test_a_drop_splits_retypes_and_snaps()
     test_snap_is_a_beat_shift_a_bar_and_off_is_off()
     test_nudge_moves_a_whole_bar_or_nothing()
