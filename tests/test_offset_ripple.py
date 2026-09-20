@@ -16,6 +16,9 @@ ripple that keeps them together:
   * a drag in progress touches nothing but the SETLIST chip;
   * Advanced overrides the offset the drag landed on, and everything that
     follows — headline, checkbox, the show shift — follows the typed value;
+  * the band menu's "Set audio offset…" asks the same question with no drag
+    behind it: opened on the offset field, at the offset in force, and asked
+    even where a drag would have kept quiet;
   * Advanced also takes the move in beats, and the two fields write each other;
   * a show that cannot follow names the item in the way and the lowest offset
     it can follow to;
@@ -284,7 +287,7 @@ RIPPLE_METHODS = ("_show_start", "_describe_event",
                   "move_show_with_audio", "on_waveform_offset_committed",
                   "on_waveform_offset_changed", "_ask_offset_ripple",
                   "_monitoring_guide", "_other_track",
-                  "_move_other_track")
+                  "_move_other_track", "open_offset_editor")
 
 
 class FakeMediaController:
@@ -358,6 +361,8 @@ class DialogDriver:
                 "checked": (dialog._other_check.isChecked()
                             if dialog._other_check is not None else None),
                 "advanced_open": dialog.advanced.isChecked(),
+                "was": (dialog._was_label.text()
+                        if dialog._was_label.isVisibleTo(dialog) else ""),
                 "spin": dialog.offset_spin.value(),
                 "beats": dialog.beats_spin.value(),
             }
@@ -897,6 +902,43 @@ def test_the_checkbox_is_absent_with_only_one_track():
             "a song with no guide is offered no other track")
 
 
+def test_the_menu_asks_the_same_question_with_no_drag_behind_it():
+    print("test_the_menu_asks_the_same_question_with_no_drag_behind_it")
+    w, m = _window()
+    w.media_controller.audio_offset_sec = 1.5
+    with DialogDriver("Audio only", override=3.0) as driver:
+        w.open_offset_editor()
+    opened, driven = driver.dialog, driver.after
+    _assert(opened["advanced_open"],
+            "the field the offset is typed in opens with the dialog")
+    _assert(_close(opened["spin"], 1.5),
+            f"at the offset in force ({opened['spin']})")
+    _assert(opened["headline"]
+            == "Backing track offset: +1.500 s → +1.500 s",
+            f"quoted from -> to like any other ({opened['headline']})")
+    _assert(driven["was"] == "",
+            f"and no drag is claimed to have landed ({driven['was']!r})")
+    _assert(_close(w._song.offset, 3.0),
+            f"the typed offset is what gets kept ({w._song.offset})")
+
+    # The same dialog after a real drag still says where it landed.
+    with DialogDriver("Audio only", override=3.0) as driver:
+        w.on_waveform_offset_committed(3.0, 4.0)
+    _assert(driver.after["was"] == "The drag landed on +4.000 s.",
+            f"({driver.after['was']!r})")
+
+
+def test_the_menu_asks_even_where_a_drag_would_not():
+    print("test_the_menu_asks_even_where_a_drag_would_not")
+    w = FakeWindow(_make_midi(), SongConfig())
+    with DialogDriver("Keep the new offset", override=2.0) as driver:
+        w.open_offset_editor()
+    _assert(len(driver.seen) == 1,
+            "an empty song with one track is asked anyway — the offset is "
+            "what the menu was picked for")
+    _assert(_close(w._song.offset, 2.0), "and the typed offset is kept")
+
+
 def test_an_empty_song_with_one_track_is_never_asked():
     print("test_an_empty_song_with_one_track_is_never_asked")
     w = FakeWindow(_make_midi(), SongConfig())
@@ -1054,6 +1096,8 @@ def main():
     test_beats_and_seconds_write_each_other()
     test_a_move_in_beats_moves_the_show_by_those_beats()
     test_the_checkbox_is_absent_with_only_one_track()
+    test_the_menu_asks_the_same_question_with_no_drag_behind_it()
+    test_the_menu_asks_even_where_a_drag_would_not()
     test_an_empty_song_with_one_track_is_never_asked()
     test_an_empty_song_with_two_tracks_is_still_asked_about_the_other()
     test_drag_commits_once_on_release()

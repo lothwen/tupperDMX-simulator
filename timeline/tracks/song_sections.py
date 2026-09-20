@@ -11,16 +11,25 @@ does — are Qt-free in `timeline.arrangement`.
 Each box is a solid header bar carrying the part's name and its length in bars
 — so no text sits on the waveform's peaks — with a 1px edge where it starts;
 the waveform itself, and not the band behind it, takes the part's colour
-(`WaveformTrack.set_waveform_tints`). WAVE_GRIP_* sets how much of the
-band's bottom the boxes leave to the waveform, where a drag slides the audio
-offset.
+(`WaveformTrack.set_waveform_tints`).
+
+**The bar is the section, the waveform below it is the audio.** A box spans the
+whole band — its tooltip, its menu and its boundary grips reach the waveform
+under it, which is what keeps a section's reach honest — but a plain LEFT press
+below the bar is not the strip's: it is IGNORED, so the scene offers it to the
+waveform item beneath and the drag slides the audio offset. Without that the
+hit area lies about the painting, and a song sectioned end to end has no
+waveform left to grab (the offset dialog has no other way in). WAVE_GRIP_* can
+shorten the boxes on top of that, leaving the band's bottom to the waveform
+alone.
 
 A lone box never moves, because the audio under it doesn't either:
 
-* an EDGE drags that one boundary; both neighbours follow live;
-* a click selects (Ctrl toggles, Shift extends) and a plain one also seeks;
-* a drag across the boxes sweeps a selection, and once two or more are
-  selected, dragging any selected box moves them all by one delta;
+* an EDGE drags that one boundary, from anywhere down the band's height;
+* a click on the bar selects (Ctrl toggles, Shift extends) and a plain one
+  also seeks;
+* a drag across the bars sweeps a selection, and once two or more are
+  selected, dragging any selected bar moves them all by one delta;
 * the timeline's rubber band reaches the strip too (`select_in_rect`): dragged
   up out of a lane it catches boxes alongside the clips it crossed, and Delete
   then takes both halves as one undo step;
@@ -193,6 +202,11 @@ class SongSectionItem(QGraphicsObject):
     def boundingRect(self):
         return QRectF(0, 0, self.rect.width(), self.rect.height())
 
+    def in_header(self, local_y: float) -> bool:
+        """Whether `local_y` is in the header bar — the part of the box that
+        is actually drawn, and so the part a left press belongs to."""
+        return local_y < self._header
+
     def paint(self, painter, option, widget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         rect = self.boundingRect()
@@ -221,8 +235,12 @@ class SongSectionItem(QGraphicsObject):
         painter.drawRect(rect)
 
     def mousePressEvent(self, event):
-        self.overlay.press(self, event)
-        event.accept()
+        if self.overlay.press(self, event):
+            event.accept()
+        else:
+            # Not the strip's press: ignoring it is what makes the scene offer
+            # it to the waveform underneath, whose drag is the audio offset.
+            event.ignore()
 
     def mouseMoveEvent(self, event):
         self.overlay.move(event)
@@ -237,11 +255,11 @@ class SongSectionItem(QGraphicsObject):
         event.accept()
 
     def hoverMoveEvent(self, event):
-        self.overlay.hover(self, event.pos().x())
+        self.overlay.hover(self, event.pos())
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
-        self.overlay.hover(None, 0.0)
+        self.overlay.hover(None, QPointF())
         super().hoverLeaveEvent(event)
 
     def keyPressEvent(self, event):
@@ -574,7 +592,7 @@ class SongSectionOverlay:
         clips drags the lot."""
         return box.isSelected() and self.tm.selection_size() >= 2
 
-    def hover(self, box: Optional[SongSectionItem], local_x: float):
+    def hover(self, box: Optional[SongSectionItem], pos: QPointF):
         # Set the cursor on the view (not the viewport) to match the MIDI clips
         # / fade handles. Touching viewport().setCursor() would give the
         # viewport its own cursor and stop it inheriting the view's, silently
@@ -583,24 +601,30 @@ class SongSectionOverlay:
             return
         cursor = Qt.CursorShape.ArrowCursor
         if box is not None:
-            if self._boundary_at(box, local_x) is not None:
+            # An edge is grabbable down the whole band; a group grip is the
+            # bar's, since below it the press goes to the waveform.
+            if self._boundary_at(box, pos.x()) is not None:
                 cursor = Qt.CursorShape.SizeHorCursor
-            elif self._is_group_grip(box):
+            elif box.in_header(pos.y()) and self._is_group_grip(box):
                 cursor = Qt.CursorShape.OpenHandCursor
         self.tm.content_view.setCursor(cursor)
 
-    def press(self, box: SongSectionItem, event):
+    def press(self, box: SongSectionItem, event) -> bool:
+        """Take `box`'s press, or False for one that belongs to the waveform
+        beneath (see SongSectionItem.mousePressEvent)."""
         if event.button() == Qt.MouseButton.RightButton:
             if not box.isSelected():
                 self._select_only(box)
             self._section_menu(box, event.scenePos().x(),
                                event.screenPos())
-            return
+            return True
         if event.button() != Qt.MouseButton.LeftButton:
-            return
+            return False
         boundary = self._boundary_at(box, event.pos().x())
         if boundary is not None:
             kind = "edge"
+        elif not box.in_header(event.pos().y()):
+            return False
         elif self._is_group_grip(box):
             kind = "group"
         else:
@@ -610,6 +634,7 @@ class SongSectionOverlay:
         if kind == "group":
             # Where the clips riding along sit now, before any preview.
             self._gesture.clip_peers = self.tm.capture_selected_clip_positions()
+        return True
 
     def move(self, event):
         g = self._gesture
@@ -677,7 +702,7 @@ class SongSectionOverlay:
         if g is None:
             return
         self.tm.hide_clip_tooltip()
-        self.hover(g.box, event.pos().x())
+        self.hover(g.box, event.pos())
         if not g.started:
             self._click(g.box, g.modifiers, g.press_x)
             return
@@ -748,6 +773,15 @@ class SongSectionOverlay:
                 action.setCheckable(True)
                 action.setChecked(note == checked_note)
 
+    def _add_offset(self, menu: QMenu):
+        """Type the audio offset instead of dragging for it. It belongs on
+        both band menus because the pixels under them are the waveform's, and
+        a drag is otherwise the only way to reach the offset dialog at all."""
+        if not self.tm.audio_file:
+            return      # no waveform in the band, nothing to offset
+        menu.addSeparator()
+        menu.addAction("Set audio offset…").setData(("offset", None))
+
     def _section_menu(self, box: SongSectionItem, scene_x: float,
                       global_pos: QPoint):
         """Everything is read off `box` BEFORE exec(): the menu's event loop can
@@ -776,12 +810,15 @@ class SongSectionOverlay:
             delete_text = (f"Delete '{box.part}' "
                            f"({self.boxes[box.index - 1].part} extends)")
         menu.addAction(delete_text).setData(("delete", None))
+        self._add_offset(menu)
 
         chosen = menu.exec(global_pos)
         if chosen is None or chosen.data() is None:
             return
         verb, note = chosen.data()
-        if verb == "retype":
+        if verb == "offset":
+            self.tm.offset_edit_requested.emit()
+        elif verb == "retype":
             self.tm.on_song_sections_retyped(ids, note)
         elif verb == "split":
             self.tm.add_song_section(note, split_at)
@@ -807,11 +844,14 @@ class SongSectionOverlay:
                             "retype", self.boxes[i].note)
         else:
             self._add_parts(menu.addMenu("Add section here"), "split")
+        self._add_offset(menu)
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
-        _verb, note = chosen.data()
-        if kind == "retype":
+        verb, note = chosen.data()
+        if verb == "offset":
+            self.tm.offset_edit_requested.emit()
+        elif kind == "retype":
             self.tm.on_song_sections_retyped([event_id], note)
         else:
             self.tm.add_song_section(note, at)

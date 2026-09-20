@@ -46,6 +46,9 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
     waveform_offset_changed = pyqtSignal(float)
     # Drag finished: (offset the drag started at, offset it ended at).
     waveform_offset_committed = pyqtSignal(float, float)
+    # The waveform band's "Set audio offset…": ask for the offset instead of
+    # dragging for it (a band covered in song sections has little to grab).
+    offset_edit_requested = pyqtSignal()
     metronome_volume_changed = pyqtSignal(int)
     metronome_mute_toggled = pyqtSignal(bool)
     audio_volume_changed = pyqtSignal(int)

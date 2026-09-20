@@ -331,6 +331,7 @@ class MainWindow(QMainWindow):
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
         self.timeline.waveform_offset_committed.connect(
             self.on_waveform_offset_committed)
+        self.timeline.offset_edit_requested.connect(self.open_offset_editor)
         # The header's sliders run 0–100; the core takes 0.0–1.0, applies it
         # to the bus and persists it.
         self.timeline.metronome_volume_changed.connect(
@@ -595,9 +596,24 @@ class MainWindow(QMainWindow):
         if not self._monitoring_guide():
             self.toolbar_manager.update_offset_display(offset_sec)
 
-    def on_waveform_offset_committed(self, old_sec, new_sec):
+    def open_offset_editor(self) -> None:
+        """Set the offset by typing it: the waveform band's "Set audio
+        offset…", which asks the drag's own question with the offset where it
+        already is and the field it is typed in already open.
+
+        The band's menus are the only other way in, and they need to be: a
+        song sectioned end to end leaves the waveform little to grab, and a
+        drag is otherwise what opens this dialog at all.
+        """
+        mc = self.media_controller
+        offset = (mc.guide_offset_sec if self._monitoring_guide()
+                  else mc.audio_offset_sec)
+        self.on_waveform_offset_committed(offset, offset, typed=True)
+
+    def on_waveform_offset_committed(self, old_sec, new_sec, typed=False):
         """A waveform drag finished: ask what should follow the audio, then
-        persist that decision.
+        persist that decision. `typed` for the menu's way in, where the offset
+        has not moved yet and the dialog is the whole edit.
 
         The offset moves ONE audio track (`audio_time = timeline_time -
         active_offset()`); every clip, song part and marker is anchored in
@@ -611,7 +627,7 @@ class MainWindow(QMainWindow):
         mc = self.media_controller
         moved_guide = self._monitoring_guide()
         choice, move_other, offset = self._ask_offset_ripple(
-            old_sec, new_sec, moved_guide)
+            old_sec, new_sec, moved_guide, typed)
 
         if choice == CHOICE_CANCEL:
             # The controller never saw the drag, so putting the item back (which
@@ -714,17 +730,18 @@ class MainWindow(QMainWindow):
         return f"{what}{where} (MIDI channel {channel})"
 
     def _ask_offset_ripple(self, old_sec: float, new_sec: float,
-                           moved_guide: bool):
+                           moved_guide: bool, typed: bool = False):
         """Ask what follows the track a drag moved. Returns
         `(choice, move_other_track, offset)`.
 
         Silent — and AUDIO_ONLY at the dragged offset — when there is nothing
         to offer: aligning a lone track on a song with no clips or markers is
-        the normal first step and must not nag.
+        the normal first step and must not nag. `typed` is asked anyway, since
+        the offset itself is what it came for.
         """
         start = self._show_start()
         other_label, other_offset = self._other_track(moved_guide)
-        if start is None and other_label is None:
+        if start is None and other_label is None and not typed:
             return CHOICE_AUDIO_ONLY, False, new_sec
 
         start_time, start_item = start if start is not None else (None, None)
@@ -735,7 +752,8 @@ class MainWindow(QMainWindow):
             old_offset=old_sec, new_offset=new_sec,
             show_start=start_time, show_start_item=start_item,
             # Beats are counted at the tempo sounding where the track started.
-            bpm=self.bpm_state.tempo_map().bpm_at(old_sec))
+            bpm=self.bpm_state.tempo_map().bpm_at(old_sec),
+            advanced=typed)
         dialog.exec()
         return dialog.choice(), dialog.move_other(), dialog.offset()
 

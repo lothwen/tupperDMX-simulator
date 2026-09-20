@@ -349,8 +349,11 @@ which is what stops `timeline/` importing `ui/`), and the web remote resolves th
 - **Song sections (notes 61-69) are START markers**: each box on the waveform band runs to the next start, so every edit
   moves a BOUNDARY. `timeline/arrangement.py` holds the Qt-free rules — starts never reorder or stack (a beat apart), a
   drop splits the section it lands in or retypes the one starting there. **A lone box's body never moves** (the audio
-  under it doesn't); only a 2+ selection drags as a group. `WAVE_GRIP_*` decides how much of the band's bottom is left
-  to the waveform's offset drag (none at 0). They snap to BEATS (Shift = whole bars, Snap off = none — the tempo map's grid in either
+  under it doesn't); only a 2+ selection drags as a group. **The bar is the section, the waveform below it is the
+  audio**: a box spans the whole band (its tooltip, menu and boundary grips reach down it) but IGNORES a plain left
+  press below the bar, so the scene hands it to the waveform item and the drag slides the offset — otherwise a song
+  sectioned end to end has nothing left to grab, and the drag is what opens the offset dialog (the band menus' "Set
+  audio offset…" is the only other way in). They snap to BEATS (Shift = whole bars, Snap off = none — the tempo map's grid in either
   ruler mode); Alt+←/→ nudges them, since bare arrows seek.
 - **The selection is ONE selection across both halves of the scene.** The rubber band, started on empty lane space and
   dragged up into the strip, catches section boxes alongside the clips it crossed, and `timeline/selection.py` then owns

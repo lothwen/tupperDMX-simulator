@@ -61,13 +61,15 @@ class OffsetRippleDialog(QDialog):
     `other_label`/`other_offset` name the track the drag did not move and where
     it sits now; `other_label` is None when the song has only one.
     `bpm` is the tempo the Advanced beats field counts in.
+    `advanced` opens the dialog on the offset field, for the band menu's "Set
+    audio offset…" — there was no drag, so typing the offset IS the question.
     """
 
     def __init__(self, parent, *, moved_label: str,
                  other_label: Optional[str], other_offset: float = 0.0,
                  old_offset: float, new_offset: float,
                  show_start: Optional[float], show_start_item: Optional[str],
-                 bpm: int):
+                 bpm: int, advanced: bool = False):
         super().__init__(parent)
         self.setWindowTitle("Move show with audio")
         self._old_offset = float(old_offset)
@@ -123,6 +125,7 @@ class OffsetRippleDialog(QDialog):
         (self._move_button or self._keep_button).setDefault(True)
         layout.addWidget(self.button_box)
 
+        self.advanced.setChecked(advanced)
         self._refresh()
 
     # --- construction -----------------------------------------------------
@@ -174,9 +177,13 @@ class OffsetRippleDialog(QDialog):
         grid.setColumnStretch(3, 1)
         body.addLayout(grid)
 
+        # Only a drag has a landing point to go back to: opened from the
+        # band menu the offset starts where it already is, and a line saying
+        # a drag landed there would be a drag that never happened.
         self._was_label = QLabel(
             f"The drag landed on {self._dragged_offset:+.3f} s.")
         self._was_label.setWordWrap(True)
+        self._was_label.setVisible(self._dragged_offset != self._old_offset)
         body.addWidget(self._was_label)
 
         box.addWidget(self._advanced_body)

@@ -97,13 +97,19 @@ def _box_y(tl):
     return tl._waveform_y() + 10
 
 
+def _wave_y(tl):
+    """Inside the waveform itself, below the sections' header bar."""
+    return tl._waveform_y() + _overlay(tl).header_height() + 20
+
+
 def _send(tl, kind, seconds, y, buttons=None,
-          mods=Qt.KeyboardModifier.NoModifier):
+          mods=Qt.KeyboardModifier.NoModifier, button=None):
     view = tl.content_view
     local = QPointF(view.mapFromScene(
         QPointF(seconds * tl.PIXELS_PER_SECOND, y)))
-    button = (Qt.MouseButton.NoButton if kind == QEvent.Type.MouseMove
-              else Qt.MouseButton.LeftButton)
+    if button is None:
+        button = (Qt.MouseButton.NoButton if kind == QEvent.Type.MouseMove
+                  else Qt.MouseButton.LeftButton)
     if buttons is None:
         buttons = (Qt.MouseButton.LeftButton
                    if kind == QEvent.Type.MouseButtonPress
@@ -679,6 +685,68 @@ def test_the_section_menu_splits_where_it_was_opened():
             f"Split here ▸ BRIDGE starts a section on the beat ({_starts(m)})")
 
 
+def test_a_press_below_the_bar_drags_the_waveform():
+    print("test_a_press_below_the_bar_drags_the_waveform")
+    m, tl = _make()
+    tl.set_files("/tmp/backing.wav")
+    tl.refresh_from_manager()
+    committed = []
+    tl.waveform_offset_committed.connect(
+        lambda old, new: committed.append((round(old, 3), round(new, 3))))
+    before = _starts(m)
+
+    # Squarely inside CHORUS, which runs 20 s -> the song's end: the box is
+    # over these pixels, and they are the waveform's all the same.
+    _drag(tl, 30.0, 33.0, y=_wave_y(tl))
+
+    _assert(committed == [(0.0, 3.0)],
+            f"a drag below the bar slides the audio offset ({committed})")
+    _assert(_starts(m) == before,
+            f"and moves no section ({_starts(m)} vs {before})")
+    _assert(not _overlay(tl).selected_boxes(),
+            "nor selects the box it was drawn over")
+
+    # The bar over the very same section still belongs to the strip.
+    _click(tl, 30.0)
+    _assert([b.note for b in _overlay(tl).selected_boxes()] == [CHORUS],
+            "while a click on the bar selects the section")
+
+
+def test_the_band_menus_offer_the_audio_offset():
+    print("test_the_band_menus_offer_the_audio_offset")
+    _, tl = _make()
+    tl.set_files("/tmp/backing.wav")
+    tl.refresh_from_manager()
+    asked = []
+    tl.offset_edit_requested.connect(lambda: asked.append(True))
+    shown = []
+
+    class PickingMenu(song_sections.QMenu):
+        def exec(self, *_):
+            shown.append([a.text() for a in self.actions()])
+            return next((a for a in self.actions()
+                         if a.text() == "Set audio offset…"), None)
+
+    real, song_sections.QMenu = song_sections.QMenu, PickingMenu
+    try:
+        # A RIGHT press below the bar is still the section's: the body keeps
+        # its menu, only the left drag went to the waveform.
+        _send(tl, QEvent.Type.MouseButtonPress, 15.0, _wave_y(tl),
+              button=Qt.MouseButton.RightButton,
+              buttons=Qt.MouseButton.RightButton)
+        # And the band beside the boxes (before the first section) has it too.
+        _overlay(tl).band_menu(1.0 * tl.PIXELS_PER_SECOND, None)
+    finally:
+        song_sections.QMenu = real
+
+    _assert(any("Delete 'VERSE' (INTRO extends)" in items for items in shown),
+            f"right-clicking under the bar opens the section menu ({shown})")
+    _assert(all("Set audio offset…" in items for items in shown),
+            f"and both band menus offer the audio offset ({shown})")
+    _assert(len(asked) == 2,
+            f"each one asks for the offset dialog ({len(asked)})")
+
+
 def main():
     test_spans_run_to_the_next_start()
     test_move_bounds_hold_a_boundary_between_its_neighbours()
@@ -701,6 +769,8 @@ def main():
     test_nudge_moves_a_whole_bar_or_nothing()
     test_labels_pin_to_the_visible_part_of_a_long_section()
     test_the_section_menu_splits_where_it_was_opened()
+    test_a_press_below_the_bar_drags_the_waveform()
+    test_the_band_menus_offer_the_audio_offset()
     print("all song-section tests passed")
 
 
