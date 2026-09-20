@@ -83,12 +83,17 @@ def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
 
 
 class _OneShot:
-    """A mono clip being played once on a bus."""
-    __slots__ = ("samples", "pos")
+    """A mono clip being played once on a bus, starting at an absolute OUTPUT
+    FRAME. That frame is what makes a click exact: the beep is placed inside
+    the block rather than at whatever moment the Qt thread got round to asking
+    for it. A clip spanning two blocks re-points `at_frame` at the next block's
+    start, so the same field carries 'begins here' and 'continues here'."""
+    __slots__ = ("samples", "pos", "at_frame")
 
-    def __init__(self, samples: np.ndarray):
+    def __init__(self, samples: np.ndarray, at_frame: int):
         self.samples = samples
         self.pos = 0
+        self.at_frame = at_frame
 
 
 class Mixer:
@@ -110,6 +115,10 @@ class Mixer:
         self._backing_ended = False      # latched when the cursor crosses the end
         self._oneshots: Dict[str, List[_OneShot]] = {BUS_CLICK: [], BUS_VOICE: []}
         self._levels = {bus: 0.0 for bus in BUSES}
+        # Monotonic count of frames this mixer has rendered: the output's own
+        # clock, and the only timebase a one-shot is scheduled against. It
+        # never resets — a seek moves the backing cursor, not the output.
+        self._frames_rendered = 0
 
     # ------------------------------------------------------------------
     # Configuration
@@ -194,16 +203,49 @@ class Mixer:
     # ------------------------------------------------------------------
     # One-shots (click beeps, voice clips)
     # ------------------------------------------------------------------
-    def trigger(self, bus: str, samples: np.ndarray) -> None:
-        """Queue a mono float32 clip for immediate playback on click/voice."""
+    def frames_rendered(self) -> int:
+        """Frames of output produced so far — the anchor a caller schedules
+        against. Read from the Qt thread while the audio thread advances it,
+        hence the lock."""
         with self._lock:
-            self._oneshots[bus].append(_OneShot(samples))
+            return self._frames_rendered
+
+    def trigger(self, bus: str, samples: np.ndarray) -> None:
+        """Queue a mono float32 clip to start in the NEXT rendered block."""
+        with self._lock:
+            self._oneshots[bus].append(
+                _OneShot(samples, self._frames_rendered))
+
+    def schedule(self, bus: str, samples: np.ndarray, at_frame: int) -> int:
+        """Queue a clip to start at absolute output frame `at_frame`.
+
+        Returns how many frames LATE the request was: 0 when the frame is
+        still ahead of the output (the normal case, and the clip then lands
+        exactly there), positive when the playhead has already passed it, in
+        which case the clip starts as soon as possible rather than being
+        dropped — a late click is still better than a missing one, and the
+        number is what tells the caller its lookahead was not enough."""
+        with self._lock:
+            late = max(0, self._frames_rendered - int(at_frame))
+            self._oneshots[bus].append(
+                _OneShot(samples, max(int(at_frame), self._frames_rendered)))
+            return late
 
     def clear_oneshots(self, bus: Optional[str] = None) -> None:
         with self._lock:
             for name in self._oneshots:
                 if bus is None or name == bus:
                     self._oneshots[name] = []
+
+    def clear_scheduled(self, bus: str) -> None:
+        """Drop the clips queued for the FUTURE, keeping any already sounding.
+
+        A stop invalidates the beats placed ahead of the playhead, but cutting
+        the beep that is half-way out of the speaker turns a clean stop into a
+        pop — so a clip that has started is allowed to finish."""
+        with self._lock:
+            self._oneshots[bus] = [shot for shot in self._oneshots[bus]
+                                   if shot.pos > 0]
 
     # ------------------------------------------------------------------
     # Levels
@@ -220,6 +262,7 @@ class Mixer:
         """Mix `frames` frames of stereo float32 output."""
         with self._lock:
             out = np.zeros((frames, 2), dtype=np.float32)
+            block_start = self._frames_rendered
 
             # Backing bus
             backing_level = 0.0
@@ -247,17 +290,25 @@ class Mixer:
                 self._cursor = start + frames
             self._levels[BUS_BACKING] = backing_level
 
-            # One-shot buses
+            # One-shot buses, each clip placed at its own frame within the
+            # block — that sub-block offset IS the click's accuracy.
             for bus in (BUS_CLICK, BUS_VOICE):
                 volume = 0.0 if self._muted[bus] else self._volume[bus]
                 buf = np.zeros(frames, dtype=np.float32)
                 alive: List[_OneShot] = []
                 for shot in self._oneshots[bus]:
-                    take = min(frames, len(shot.samples) - shot.pos)
+                    offset = shot.at_frame - block_start
+                    if offset >= frames:
+                        alive.append(shot)     # still in the future
+                        continue
+                    start = max(0, offset)
+                    take = min(frames - start, len(shot.samples) - shot.pos)
                     if take > 0:
-                        buf[:take] += shot.samples[shot.pos:shot.pos + take]
+                        buf[start:start + take] += (
+                            shot.samples[shot.pos:shot.pos + take])
                         shot.pos += take
                     if shot.pos < len(shot.samples):
+                        shot.at_frame = block_start + frames   # resumes there
                         alive.append(shot)
                 self._oneshots[bus] = alive
                 buf *= volume
@@ -266,6 +317,7 @@ class Mixer:
                 out[:, 1] += buf * gain_r
                 self._levels[bus] = _rms(buf)
 
+            self._frames_rendered = block_start + frames
             np.clip(out, -1.0, 1.0, out)
             return out
 

@@ -336,37 +336,57 @@ def test_metronome_across_a_tempo_change():
     controller = AudioController(engine)
     controller.set_tempo_map(TempoMap(120, [(8.0, 60)]))
 
+    scheduled = []      # (beat number, timeline time, output frame)
+    controller.beat_scheduled.connect(
+        lambda n, t, f: scheduled.append((n, t, f)))
+
     # Start on the first count-in beat of a 2-bar count-in at 120 BPM.
     controller.start_metronome(-4.0)
     _assert(engine.clicks == [True],
             "a count-in starts ON the downbeat, not mid-bar")
 
-    beats = [controller.beat_count]
-    for _ in range(7):
-        controller._play_metronome_beep()
-        beats.append(controller.beat_count)
-    _assert(beats == [2, 3, 4, 1, 2, 3, 4, 1],
+    # Run the output forward; the pump queues each beat as it enters the
+    # lookahead, which is the real mechanism.
+    for _ in range(20):          # 5 s of output: two full count-in bars on
+        engine.advance(0.25)     # from -4 s, and into the song past t=0
+        controller._pump()
+    _assert([n for n, _t, _f in scheduled][:8] == [1, 2, 3, 4, 1, 2, 3, 4],
             "the 1-2-3-4 cycle runs unbroken from negative time into the song")
 
     tempo_map = controller.tempo_map
     before = tempo_map.seconds_at_beat(16) - tempo_map.seconds_at_beat(15)
     after = tempo_map.seconds_at_beat(17) - tempo_map.seconds_at_beat(16)
     _assert(_close(before, 0.5) and _close(after, 1.0),
-            "the beat interval the scheduler adds changes at the marker")
+            "the beat interval the scheduler reads changes at the marker")
 
     # The scheduler needs no nudging at the marker: the map it reads already
     # carries the change, which is why nothing restarts it there.
+    scheduled.clear()
     engine.clicks.clear()
     controller.start_metronome(0.0)
-    landed = [0.0]
-    for _ in range(20):
-        controller._play_metronome_beep()
-        landed.append(controller.tempo_map.seconds_at_beat(controller._beat_index))
-    intervals = [round(landed[i + 1] - landed[i], 3) for i in range(14, 19)]
-    _assert(intervals == [0.5, 1.0, 1.0, 1.0, 1.0],
-            "beats retime themselves at the marker with no restart")
-    _assert(len(engine.clicks) == 21,
-            "and no beat is played twice on the way through it")
+    for _ in range(50):          # 12.5 s, well past the 8 s marker
+        engine.advance(0.25)
+        controller._pump()
+
+    # Beats 0-15 fill the first 8 s at 0.5 s each; beat 16 sits on the marker
+    # and every beat after it is 1.0 s.
+    times = [t for _n, t, _f in scheduled]
+    intervals = [round(times[i + 1] - times[i], 3) for i in range(14, 19)]
+    _assert(intervals == [0.5, 0.5, 1.0, 1.0, 1.0],
+            f"beats retime themselves at the marker with no restart ({intervals})")
+    _assert(len(times) == len(set(times)),
+            "and no beat is queued twice on the way through it")
+
+    # Each beat's FRAME matches its time exactly, measured from the grid's
+    # anchor (the playhead where the click was started) — that is the whole
+    # point of scheduling rather than timing.
+    rate = engine.rate()
+    worst = max(
+        abs((f - controller._anchor_frame)
+            - round((t - controller._anchor_time) * rate))
+        for _n, t, f in scheduled)
+    _assert(worst <= 1,
+            f"every beat is placed on its exact sample (worst off by {worst})")
 
     controller.stop_metronome()
     _assert(controller.beat_count == 0, "stopping resets the beat")

@@ -4,11 +4,13 @@
 from typing import Dict, Optional
 
 import numpy as np
-from PyQt6.QtCore import QIODevice, QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import (QIODevice, QMetaObject, QObject, Qt, QThread,
+                          QTimer, pyqtSignal, pyqtSlot)
 from PyQt6.QtMultimedia import (QAudio, QAudioDevice, QAudioFormat, QAudioSink,
                                 QMediaDevices)
 
 from audio.decode import ThreadedAudioDecoder
+from audio.diagnostics import TimingMonitor, maybe_start_attributor
 from audio.mixer import (BUS_CLICK, BUS_VOICE, METRONOME_HIGH_PITCH_HZ,
                          METRONOME_LOW_PITCH_HZ, SAMPLE_RATE, Mixer, make_beep,
                          resample)
@@ -72,116 +74,127 @@ def device_id_str(device: QAudioDevice) -> str:
     return bytes(device.id()).decode("utf-8", errors="replace")
 
 
-class AudioEngine(QObject):
-    """Single audio output for the whole app. Owns the Mixer (backing / click /
-    voice buses), a push-mode QAudioSink on the configured output device and
-    the async file decoder. The sink runs continuously so click beeps and voice
-    previews work while transport is stopped.
+class _FeedWorker(QObject):
+    """Owns the QAudioSink and the feed loop, on the AUDIO thread.
 
-    Push mode on purpose: a Qt-thread timer tops up the sink's own device, so
-    NO Python code ever runs on the audio callback thread — a pull-mode
-    QIODevice implemented in Python deadlocks/aborts inside QAudioSink.stop()
-    (the audio thread blocks on the GIL while stop() waits for it)."""
+    This exists because the stage can block the Qt thread. Measured on a real
+    rig: 46-129 ms at a stretch, inside Qt/GL C++ with no Python frame above
+    `app.exec()` — long enough to empty an 80 ms buffer, and it produced a
+    dropout roughly every 1.2 s of playback. A feed that shares that thread
+    cannot win; one that does not is untouched, because the code doing the
+    blocking is C++ and holds no GIL while it runs.
 
-    backing_loaded = pyqtSignal(str)         # path
-    backing_failed = pyqtSignal(str, str)    # error message, path
-    finished = pyqtSignal()                  # backing ran past its end while playing
+    Open and close are BLOCKING queued calls from the Qt thread, so the old
+    synchronous ordering survives intact: the sink is up before the pipeline
+    retunes to its rate, and feeding starts only afterwards. Only the periodic
+    top-up is concurrent, which is the whole point.
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.logger = get_logger("audio.engine")
-        self.mixer = Mixer()
+    The sink is created, written, read and stopped here and nowhere else —
+    QAudioSink has thread affinity, and split ownership is how it crashes."""
 
-        self._decoder = ThreadedAudioDecoder(self)
-        self._decoder.decoded.connect(self._on_decoded)
-        self._decoder.failed.connect(self._on_decode_failed)
-
+    def __init__(self, mixer: Mixer, monitor: TimingMonitor, logger):
+        super().__init__()          # no parent: it is moved to another thread
+        self.mixer = mixer
+        self.monitor = monitor
+        self.logger = logger
+        self.device_id = ""         # written by the Qt thread before an open
+        self.rate = SAMPLE_RATE
+        self.use_float = True
+        self.bytes_per_frame = 8
+        self.buffer_bytes = 0
+        self.opened = False
         self._sink: Optional[QAudioSink] = None
-        self._sink_device: Optional[QIODevice] = None  # push-mode target
-        self._rate = SAMPLE_RATE   # the whole pipeline's rate; the sink picks it
-        self._use_float = True
-        self._bytes_per_frame = 8
-        self._device_id = ""
-        self._loaded_path: Optional[str] = None
-        self._loading_path: Optional[str] = None
+        self._sink_device: Optional[QIODevice] = None
+        self._timer: Optional[QTimer] = None
 
-        # Push feed: keeps the sink buffer topped up from the Qt thread.
-        self._feed_timer = QTimer(self)
-        self._feed_timer.setInterval(_FEED_INTERVAL_MS)
-        self._feed_timer.timeout.connect(self._on_feed)
-
-        self._click_high = make_beep(METRONOME_HIGH_PITCH_HZ)
-        self._click_low = make_beep(METRONOME_LOW_PITCH_HZ)
-
-        # End-of-backing watchdog: polls the mixer latch from the Qt thread
-        # (render() runs on the audio thread and must not emit signals).
-        self._watchdog = QTimer(self)
-        self._watchdog.setInterval(100)
-        self._watchdog.timeout.connect(self._on_watchdog)
-        self._watchdog.start()
-
-        self._start_sink()
-
-    # ------------------------------------------------------------------
-    # Output device / routing
-    # ------------------------------------------------------------------
-    def set_output_device(self, device_id: str) -> None:
-        """Select the output device by id string ('' = system default)."""
-        if device_id == self._device_id and self._sink is not None:
-            return
-        self._device_id = device_id or ""
-        self._start_sink()
-
-    def set_routing(self, routing: str) -> None:
-        self.mixer.set_routing(routing)
-
-    def _resolve_device(self) -> QAudioDevice:
-        if self._device_id:
-            for device in QMediaDevices.audioOutputs():
-                if device_id_str(device) == self._device_id:
-                    return device
-            self.logger.warning(
-                f"Audio output '{self._device_id}' not found, using default")
-        return QMediaDevices.defaultAudioOutput()
-
-    def _start_sink(self) -> None:
-        """Open the sink on the configured device with the first format that
-        device actually accepts, and retune the pipeline to its rate."""
-        self._stop_sink()
+    # -- called on the audio thread (blocking queued from the Qt thread) --
+    @pyqtSlot()
+    def open_sink(self) -> None:
+        """Open the configured device at the first format it really accepts."""
+        self.close_sink()
+        self.opened = False
         try:
             device = self._resolve_device()
             if device.isNull():
                 self.logger.warning("No audio output device available")
                 return
-
             for fmt in candidate_formats(device):
-                sink, sink_device = self._open_sink(device, fmt)
+                sink, sink_device = self._try_format(device, fmt)
                 if sink is None:
                     continue
-                self._sink = sink
-                self._sink_device = sink_device
-                self._use_float = (
+                self._sink, self._sink_device = sink, sink_device
+                self.use_float = (
                     fmt.sampleFormat() == QAudioFormat.SampleFormat.Float)
-                self._bytes_per_frame = 8 if self._use_float else 4
-                self._apply_rate(fmt.sampleRate())
-                self._feed_timer.start()
-                self._on_feed()  # prime the buffer immediately
+                self.bytes_per_frame = 8 if self.use_float else 4
+                self.rate = fmt.sampleRate()
+                self.buffer_bytes = sink.bufferSize()
+                self.opened = True
+                buffer_ms = (self.buffer_bytes / self.bytes_per_frame
+                             / max(1, self.rate) * 1000)
                 self.logger.info(
                     f"Audio sink started on '{device.description()}' "
-                    f"({fmt.sampleRate()} Hz, "
-                    f"{'float32' if self._use_float else 'int16'}, "
-                    f"buffer {sink.bufferSize()} bytes)")
+                    f"({self.rate} Hz, "
+                    f"{'float32' if self.use_float else 'int16'}, "
+                    f"buffer {buffer_ms:.0f} ms / {self.buffer_bytes} bytes)")
+                # A backend may grant less than asked (Qt/PulseAudio commonly
+                # does). The buffer IS the headroom against a stall, so a short
+                # one is worth saying out loud rather than leaving the 120 ms
+                # in the source to be believed.
+                if buffer_ms < _BUFFER_SECONDS * 1000 * 0.9:
+                    self.logger.warning(
+                        f"Audio buffer is {buffer_ms:.0f} ms of the "
+                        f"{_BUFFER_SECONDS * 1000:.0f} ms requested — less "
+                        "headroom before a stall becomes a dropout")
                 return
-
             self.logger.error(
                 f"Device '{device.description()}' started at no stereo format "
                 f"(it reports {device.minimumSampleRate()}-"
                 f"{device.maximumSampleRate()} Hz); audio disabled")
         except Exception as e:
             self.logger.error(f"Failed to start audio sink: {e}")
-            self._stop_sink()
+            self.close_sink()
 
-    def _open_sink(self, device: QAudioDevice, fmt: QAudioFormat):
+    @pyqtSlot()
+    def begin_feeding(self) -> None:
+        """Prime the buffer and start the top-up timer (audio thread)."""
+        if not self.opened:
+            return
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.setInterval(_FEED_INTERVAL_MS)
+            self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self._timer.timeout.connect(self._on_feed)
+        # Unrecorded: a sink that has never been written to is legitimately
+        # empty, and calling that an underrun would put a false dropout in the
+        # log at every start — the one thing that teaches an operator to stop
+        # trusting these warnings.
+        self._on_feed(record=False)
+        self._timer.start()
+
+    @pyqtSlot()
+    def close_sink(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+        self._sink_device = None
+        self.opened = False
+        if self._sink is not None:
+            try:
+                self._sink.stop()
+            except Exception as e:
+                self.logger.warning(f"Error stopping audio sink: {e}")
+            self._sink = None
+
+    # -- internals, all on the audio thread ------------------------------
+    def _resolve_device(self) -> QAudioDevice:
+        if self.device_id:
+            for device in QMediaDevices.audioOutputs():
+                if device_id_str(device) == self.device_id:
+                    return device
+            self.logger.warning(
+                f"Audio output '{self.device_id}' not found, using default")
+        return QMediaDevices.defaultAudioOutput()
+
+    def _try_format(self, device: QAudioDevice, fmt: QAudioFormat):
         """Start one QAudioSink, or (None, None). Tried rather than trusted:
         isFormatSupported() both over- and under-reports depending on the
         backend, so only start() settles it."""
@@ -205,6 +218,132 @@ class AudioEngine(QObject):
                 f"Failed to open audio sink at {fmt.sampleRate()} Hz: {e}")
         return None, None
 
+    def _on_feed(self, record: bool = True) -> None:
+        """Top up the sink buffer with freshly mixed audio (AUDIO thread)."""
+        if self._sink is None or self._sink_device is None:
+            return
+        free = self._sink.bytesFree()
+        # The sink's own verdict on whether it ran dry. Idle in push mode means
+        # the buffer emptied — Qt reports it that way rather than as an error
+        # on some backends, so both are asked. This is the ONE place a dropout
+        # is observable at all; nothing else in the app ever looked.
+        if record:
+            self.monitor.record_feed(
+                underrun=(self._sink.error() == QAudio.Error.UnderrunError
+                          or self._sink.state() == QAudio.State.IdleState),
+                fill_sec=(max(0, self.buffer_bytes - free)
+                          / self.bytes_per_frame / max(1, self.rate)))
+        frames = free // self.bytes_per_frame
+        if frames <= 0:
+            return
+        block = self.mixer.render(frames)
+        if self.use_float:
+            payload = block.astype(np.float32).tobytes()
+        else:
+            payload = (block * 32767.0).astype(np.int16).tobytes()
+        self._sink_device.write(payload)
+
+
+class AudioEngine(QObject):
+    """Single audio output for the whole app. Owns the Mixer (backing / click /
+    voice buses), a push-mode QAudioSink on the configured output device and
+    the async file decoder. The sink runs continuously so click beeps and voice
+    previews work while transport is stopped.
+
+    Push mode on purpose: a Qt-thread timer tops up the sink's own device, so
+    NO Python code ever runs on the audio callback thread — a pull-mode
+    QIODevice implemented in Python deadlocks/aborts inside QAudioSink.stop()
+    (the audio thread blocks on the GIL while stop() waits for it)."""
+
+    backing_loaded = pyqtSignal(str)         # path
+    backing_failed = pyqtSignal(str, str)    # error message, path
+    finished = pyqtSignal()                  # backing ran past its end while playing
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.logger = get_logger("audio.engine")
+        self.mixer = Mixer()
+        # Timing flight recorder: the feed reports here every top-up, the
+        # metronome every beat. Reading the sink is this class's job, so the
+        # monitor is handed a verdict rather than the device.
+        self.monitor = TimingMonitor()
+        # Opt-in (TUPPERDMX_STALL_TRACE=1): names whatever blocks the Qt thread
+        # by watching the feed's heartbeat from a thread of its own.
+        self._attributor = maybe_start_attributor(self.monitor.last_feed)
+
+        self._decoder = ThreadedAudioDecoder(self)
+        self._decoder.decoded.connect(self._on_decoded)
+        self._decoder.failed.connect(self._on_decode_failed)
+
+        self._rate = SAMPLE_RATE   # the whole pipeline's rate; the sink picks it
+        self._device_id = ""
+        self._loaded_path: Optional[str] = None
+        self._loading_path: Optional[str] = None
+
+        # The sink and its top-up loop live on their own thread, above every
+        # other priority in the app: the click is the one thing a show cannot
+        # do without, and the stage must never be able to starve it.
+        self._thread = QThread()
+        self._thread.setObjectName("audio-feed")
+        self._worker = _FeedWorker(self.mixer, self.monitor, self.logger)
+        self._worker.moveToThread(self._thread)
+        # Destroy the worker ON its own thread: its QTimer belongs there, and
+        # a QObject torn down from elsewhere gets "Timers cannot be stopped
+        # from another thread" and leaks the timer.
+        self._thread.finished.connect(self._worker.deleteLater)
+        self._thread.start(QThread.Priority.TimeCriticalPriority)
+
+        self._click_high = make_beep(METRONOME_HIGH_PITCH_HZ)
+        self._click_low = make_beep(METRONOME_LOW_PITCH_HZ)
+
+        # End-of-backing watchdog: polls the mixer latch from the Qt thread
+        # (render() runs on the audio thread and must not emit signals).
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(100)
+        self._watchdog.timeout.connect(self._on_watchdog)
+        self._watchdog.start()
+
+        self._start_sink()
+
+    # ------------------------------------------------------------------
+    # Output device / routing
+    # ------------------------------------------------------------------
+    def set_output_device(self, device_id: str) -> None:
+        """Select the output device by id string ('' = system default)."""
+        if device_id == self._device_id and self._worker.opened:
+            return
+        self._device_id = device_id or ""
+        self._start_sink()
+
+    def set_routing(self, routing: str) -> None:
+        self.mixer.set_routing(routing)
+
+    def _call_worker(self, slot: str) -> None:
+        """Run one of the worker's slots ON the audio thread and wait for it.
+
+        Blocking on purpose: opening, retuning and feeding have to stay in that
+        order, and a queued-but-not-waited call would let the pipeline retune
+        underneath a sink that is already running."""
+        if not self._thread.isRunning():
+            return      # after cleanup: blocking on a dead loop would hang
+        QMetaObject.invokeMethod(
+            self._worker, slot, Qt.ConnectionType.BlockingQueuedConnection)
+
+    def _start_sink(self) -> None:
+        """Open the sink (on the audio thread), retune the pipeline to the rate
+        it negotiated, then let it start feeding."""
+        self._worker.device_id = self._device_id
+        self._call_worker("open_sink")
+        if not self._worker.opened:
+            return
+        # Safe to read the worker's fields here: it is idle between the two
+        # blocking calls, and each one is a full memory barrier.
+        self._apply_rate(self._worker.rate)
+        self._call_worker("begin_feeding")
+
+    def _stop_sink(self) -> None:
+        self._call_worker("close_sink")
+
     def _apply_rate(self, rate: int) -> None:
         """Retune the whole mixing chain to the sink's rate.
 
@@ -212,7 +351,7 @@ class AudioEngine(QObject):
         the decoder is re-targeted and a loaded song is resampled where it
         stands, keeping its position — the transport asks the mixer for
         seconds, so a rate switch mid-song stays inaudible beyond the sink
-        restart. Called with the sink stopped."""
+        restart. Called with the sink open but NOT yet feeding."""
         if rate == self._rate or rate <= 0:
             return
         previous, self._rate = self._rate, rate
@@ -229,29 +368,13 @@ class AudioEngine(QObject):
             self.mixer.set_position_seconds(position)
         self.logger.info(f"Audio pipeline retuned {previous} Hz -> {rate} Hz")
 
-    def _stop_sink(self) -> None:
-        self._feed_timer.stop()
-        self._sink_device = None
-        if self._sink is not None:
-            try:
-                self._sink.stop()
-            except Exception as e:
-                self.logger.warning(f"Error stopping audio sink: {e}")
-            self._sink = None
+    def rate(self) -> int:
+        """The pipeline's sample rate — the sink's, once it has negotiated."""
+        return self._rate
 
-    def _on_feed(self) -> None:
-        """Top up the sink buffer with freshly mixed audio (Qt thread)."""
-        if self._sink is None or self._sink_device is None:
-            return
-        frames = self._sink.bytesFree() // self._bytes_per_frame
-        if frames <= 0:
-            return
-        block = self.mixer.render(frames)
-        if self._use_float:
-            payload = block.astype(np.float32).tobytes()
-        else:
-            payload = (block * 32767.0).astype(np.int16).tobytes()
-        self._sink_device.write(payload)
+    def is_running(self) -> bool:
+        """Whether an output sink is open and being fed."""
+        return self._worker.opened
 
     # ------------------------------------------------------------------
     # Backing track
@@ -307,8 +430,33 @@ class AudioEngine(QObject):
     # ------------------------------------------------------------------
     # Click / voice buses
     # ------------------------------------------------------------------
+    def frames_rendered(self) -> int:
+        """The output's own clock — what a caller schedules against."""
+        return self.mixer.frames_rendered()
+
     def trigger_click(self, downbeat: bool) -> None:
+        """Sound a beep as soon as possible (previews, tests)."""
         self.mixer.trigger(BUS_CLICK, self._click_high if downbeat else self._click_low)
+
+    def schedule_click(self, downbeat: bool, at_frame: int) -> int:
+        """Place a beep at an exact output frame; returns frames LATE (0 = on
+        time). This is what makes the click deterministic: the beep's position
+        stops depending on when the Qt thread got round to asking for it."""
+        return self.mixer.schedule(
+            BUS_CLICK, self._click_high if downbeat else self._click_low,
+            at_frame)
+
+    def clear_clicks(self) -> None:
+        """Drop the clicks queued ahead of the playhead — a stop or a seek
+        invalidates that grid. A beep already sounding finishes, so stopping
+        does not chop one in half."""
+        self.mixer.clear_scheduled(BUS_CLICK)
+
+    def schedule_voice(self, samples: np.ndarray, at_frame: int) -> int:
+        """Place a voice clip at an exact output frame (the spoken count-in,
+        which has to land ON its beat rather than near it)."""
+        return self.mixer.schedule(
+            BUS_VOICE, resample(samples, SAMPLE_RATE, self._rate), at_frame)
 
     def play_voice(self, samples: np.ndarray) -> None:
         """Queue a mono float32 clip on the voice bus (TTS cues, spoken count).
@@ -351,7 +499,18 @@ class AudioEngine(QObject):
             self.finished.emit()
 
     def cleanup(self) -> None:
+        """Idempotent shutdown. The sink is closed ON the audio thread and
+        waited for before that thread is asked to quit: a queued close would
+        race the quit, and the sink would be torn down by whichever got there
+        first."""
         self.logger.info("Cleaning up audio engine")
+        if self._attributor is not None:
+            self._attributor.stop()
+            self._attributor = None
         self._watchdog.stop()
         self._decoder.shutdown()
-        self._stop_sink()
+        if self._thread.isRunning():
+            self._stop_sink()
+            self._thread.quit()
+            if not self._thread.wait(2000):
+                self.logger.warning("Audio thread did not stop in 2 s")

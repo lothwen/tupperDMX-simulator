@@ -118,7 +118,7 @@ class AppCore(QObject):
 
         self.audio_controller = AudioController(
             self.audio_engine, config.volume.metronome)
-        self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
+        self.audio_controller.beat_scheduled.connect(self._on_beat_scheduled)
         self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
 
         # Core half of a BPM change first, then the autosave arming.
@@ -308,20 +308,36 @@ class AppCore(QObject):
             if metronome_was_running:
                 self.audio_controller.stop_metronome()
             if not stopped:
-                self.audio_controller.start_metronome(time_seconds)
+                # The anchor, not "now": seek_to_position() has just run a
+                # whole transport tick, and the click would start that far
+                # behind the music if it phased itself here.
+                self.audio_controller.start_metronome(
+                    time_seconds,
+                    self.media_controller.monotonic_at(time_seconds))
 
     def _on_playback_state_changed(self, is_playing):
-        """Keep the metronome locked to the transport."""
+        """Keep the metronome locked to the transport.
+
+        Also the natural pair of edges for the timing record: armed when the
+        transport starts, reported when it stops. One line per pass is what
+        makes a glitch at a show answerable the next morning."""
         if is_playing:
             # Start metronome synchronized to current timeline position —
             # unless a stop-click marker already silenced it there.
             current_position = self.media_controller.get_current_position()
+            self.audio_engine.monitor.reset()
             if self._click_stopped_at(current_position):
                 self.audio_controller.stop_metronome()
             else:
-                self.audio_controller.start_metronome(current_position)
+                self.audio_controller.start_metronome(
+                    current_position,
+                    self.media_controller.monotonic_at(current_position))
         else:
             self.audio_controller.stop_metronome()
+            monitor = self.audio_engine.monitor
+            if monitor.had_activity():
+                self.logger.info(monitor.summary())
+                monitor.reset()
 
     def _on_bpm_changed(self, value):
         """Core half of a base-BPM change. The metronome and the count-in read
@@ -344,7 +360,8 @@ class AppCore(QObject):
 
         if was_running:
             self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(position)
+            self.audio_controller.start_metronome(
+                position, self.media_controller.monotonic_at(position))
 
         self.tempo_map_changed.emit(tempo_map)
 
@@ -400,20 +417,23 @@ class AppCore(QObject):
             song.precount if song else False, bars)
         self.save_config()
 
-    def _on_metronome_beat(self, beat_number):
+    def _on_beat_scheduled(self, beat_number, beat_time, frame):
         """During the LAST count-in bar, speak the beat number on the voice bus
-        so the musician hears the song coming ("uno, dos, tres, cuatro")."""
-        if not self.media_controller.is_counting_in():
-            return
+        so the musician hears the song coming ("uno, dos, tres, cuatro").
+
+        Scheduled at the beat's OWN output frame, so the word lands on the beep
+        rather than near it, and keyed off the beat's own time rather than a
+        sampled transport position — which is what makes it impossible for a
+        late reading to speak a count into the song."""
+        if beat_time >= 0:
+            return                       # count-in beats are the negative ones
         if not self.config.audio.count_in_voice or not self._count_words:
             return
-        # Which count-in beat is this? Derived from the position, not the beat
-        # counter, so timer jitter around t=0 can never speak into the song.
-        position = self.media_controller.get_current_position()
-        beat_len = self.audio_controller.tempo_map.beat_seconds_at(position)
-        beats_remaining = round(-position / beat_len)
+        beat_len = self.audio_controller.tempo_map.beat_seconds_at(beat_time)
+        beats_remaining = round(-beat_time / beat_len)
         if 1 <= beats_remaining <= 4:
-            self.audio_engine.play_voice(self._count_words[4 - beats_remaining])
+            self.audio_engine.schedule_voice(
+                self._count_words[4 - beats_remaining], frame)
 
     def _refresh_count_words(self):
         """Pre-render the spoken count-in numbers in the background (cache-first;

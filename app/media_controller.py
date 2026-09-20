@@ -23,9 +23,14 @@ class MediaController(QObject):
     """Handles media playback control (backing audio + MIDI synchronization).
 
     The backing track plays through the shared AudioEngine (decoded PCM mixed
-    with the click/voice buses); the master clock stays time.time()-based
+    with the click/voice buses); the master clock is time.monotonic()-based
     timeline time, with the engine's sample clock slaved to it exactly like
     the old QMediaPlayer was (pause while not yet entered, resync on drift).
+
+    MONOTONIC, not time.time(): the wall clock steps and slews when NTP
+    corrects it, and a rack SBC with no RTC gets exactly that correction some
+    seconds after boot — mid-show, it would move the timeline (and with it
+    every light cue) by however far the clock was wrong.
 
     Count-in (Fase 4): when enabled for the song, start_playback() begins at a
     NEGATIVE timeline time (-bars of 4 beats); audio/MIDI wait for t >= 0 while
@@ -350,7 +355,7 @@ class MediaController(QObject):
 
         # Start playback immediately
         self.is_playing = True
-        self.playback_start_time = time.time() - self.current_timeline_time
+        self.playback_start_time = time.monotonic() - self.current_timeline_time
         self.playback_timer.start()
         self._sync_audio_playback()
         self.playback_state_changed.emit(True)
@@ -381,11 +386,11 @@ class MediaController(QObject):
             return
 
         # Capture the current timeline position
-        self.current_timeline_time = time.time() - self.playback_start_time
+        self.current_timeline_time = time.monotonic() - self.playback_start_time
 
         self.logger.info(f"Pausing playback at {self.current_timeline_time:.2f}s")
         self.is_playing = False
-        self.last_pause_time = time.time()
+        self.last_pause_time = time.monotonic()
         self.playback_timer.stop()
         self.engine.pause()
         self.playback_state_changed.emit(False)
@@ -412,14 +417,14 @@ class MediaController(QObject):
 
         if self.last_pause_time > 0:
             # Resume from pause - adjust start time to account for pause duration
-            self.playback_start_time = time.time() - self.current_timeline_time
+            self.playback_start_time = time.monotonic() - self.current_timeline_time
             self.logger.debug(f"Resuming from pause at {self.current_timeline_time:.2f}s")
         else:
             # First play - start from beginning or current position
             if self.current_timeline_time == 0:
-                self.playback_start_time = time.time()
+                self.playback_start_time = time.monotonic()
             else:
-                self.playback_start_time = time.time() - self.current_timeline_time
+                self.playback_start_time = time.monotonic() - self.current_timeline_time
             self.logger.debug(f"Starting playback from {self.current_timeline_time:.2f}s")
 
         # Position MIDI if available
@@ -473,7 +478,7 @@ class MediaController(QObject):
         """Seek to a specific time position (cancels a running count-in)."""
         self.logger.debug(f"Seeking to {time_seconds:.2f}s")
         self.current_timeline_time = time_seconds
-        self.playback_start_time = time.time() - time_seconds
+        self.playback_start_time = time.monotonic() - time_seconds
 
         # Seek MIDI
         self.midi_manager.seek(time_seconds)
@@ -488,6 +493,19 @@ class MediaController(QObject):
     def get_current_position(self) -> float:
         """Get current playback position in seconds."""
         return self.current_timeline_time
+
+    def monotonic_at(self, timeline_time: float):
+        """The monotonic instant at which `timeline_time` falls, or None when
+        the transport is not running.
+
+        This is what the metronome phases its beat grid against. Reading a
+        position and then treating it as "now" is wrong by however long the
+        reading took, and on a seek that is a whole transport tick — the
+        position signal reaching the timeline and the MIDI dispatch both run
+        before the metronome is restarted."""
+        if not self.is_playing:
+            return None
+        return self.playback_start_time + timeline_time
 
     def get_playback_state(self) -> bool:
         """Get current playback state."""
@@ -519,7 +537,7 @@ class MediaController(QObject):
             return
 
         # Update timeline position
-        self.current_timeline_time = time.time() - self.playback_start_time
+        self.current_timeline_time = time.monotonic() - self.playback_start_time
         self.position_changed.emit(self.current_timeline_time)
 
         # Send MIDI data if available (nothing fires while counting in: all

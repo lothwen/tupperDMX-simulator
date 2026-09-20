@@ -20,6 +20,8 @@ import tempfile
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
+from audio.diagnostics import TimingMonitor
+
 
 def _assert(cond, msg):
     if not cond:
@@ -40,6 +42,36 @@ class FakeEngine(QObject):
         self.active = False
         self.clicks = []
         self.voices = []
+        # AudioController reports every beat here; the real engine owns one.
+        self.monitor = TimingMonitor()
+        # The output's frame clock. Tests move it with advance() and then pump
+        # the controller, which is exactly how the real engine drives it.
+        self.frames = 0
+        self.scheduled = []     # (at_frame, downbeat)
+
+    RATE = 44100
+
+    def rate(self):
+        return self.RATE
+
+    def frames_rendered(self):
+        return self.frames
+
+    def advance(self, seconds):
+        """Render `seconds` of output, as the audio thread would."""
+        self.frames += int(seconds * self.RATE)
+
+    def schedule_click(self, downbeat, at_frame):
+        self.scheduled.append((at_frame, downbeat))
+        self.clicks.append(downbeat)
+        return max(0, self.frames - at_frame)
+
+    def clear_clicks(self):
+        self.scheduled = []
+
+    def schedule_voice(self, samples, at_frame):
+        self.voices.append(samples)
+        return 0
 
     def set_bus_volume(self, bus, volume): pass
     def set_bus_muted(self, bus, muted): pass
@@ -173,22 +205,35 @@ def test_metronome_beat_numbering_at_negative_positions():
     audio.start_metronome(-4.0)  # exactly 8 beats before 0 → downbeat
     _assert(engine.clicks and engine.clicks[0] is True,
             "count-in starts on a downbeat click")
-    _assert(audio.get_beat_count() == 2, "next beat after the downbeat is 2")
+    _assert(engine.scheduled[0][0] == 0,
+            "…placed at the playhead itself, so it sounds in the next block")
     audio.stop_metronome()
 
     engine.clicks.clear()
     # Bar boundaries fall at -4.0/-2.0/0.0; at -1.9 the next boundary (-1.5)
     # is beat 2 of the final bar, so beat 1 lands exactly at t=0.
+    numbers = []
+    audio.beat_scheduled.connect(lambda n, t, f: numbers.append(n))
     audio.start_metronome(-1.9)
-    _assert(engine.clicks == [], "off-boundary start does not click immediately")
-    _assert(audio.get_beat_count() == 2,
+    _assert(engine.scheduled[0][0] == int(0.4 * FakeEngine.RATE),
+            "an off-boundary start queues the beat 0.4 s ahead, not now")
+    _assert(numbers[0] == 2,
             "beat numbering at negative positions counts toward beat 1 at t=0")
+
+    # Run out the count-in and into the song.
+    for _ in range(8):
+        engine.advance(0.25)
+        audio._pump()
+    _assert(numbers[:5] == [2, 3, 4, 1, 2],
+            f"the 1-2-3-4 cycle crosses t=0 unbroken (got {numbers[:5]})")
     audio.stop_metronome()
 
     engine.clicks.clear()
     audio.start_metronome(0.0)  # song start
     _assert(engine.clicks and engine.clicks[0] is True, "t=0 is a downbeat")
     audio.stop_metronome()
+    _assert(engine.scheduled == [],
+            "stopping un-queues the beats placed ahead of the playhead")
 
 
 def main():

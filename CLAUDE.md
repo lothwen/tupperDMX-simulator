@@ -66,12 +66,21 @@ autosave, forced on song switch/close/Save; opening snapshot + at most one autom
 **ONE stereo QAudioSink feeds every path.** The Qt-free mixer carries backing/click/voice buses with per-bus
 volume/mute/RMS and the L/R modes `stereo` | `split_backing_left` | `split_backing_right`. The engine is a **push-mode**
 sink, a 15 ms timer topping up a ~120 ms buffer — push on purpose, since a Python pull-QIODevice deadlocks inside
-`QAudioSink.stop()` on the GIL. `load_backing` dedupes an in-flight decode of the same path (restarting QAudioDecoder
+`QAudioSink.stop()` on the GIL. **That sink and its feed live on their own `TimeCriticalPriority` QThread**
+(`_FeedWorker`), because the stage blocks the Qt thread for 46–129 ms at a time — measured, inside Qt/GL C++ with no
+Python frame above `app.exec()` — which emptied an 80 ms buffer and cost a dropout roughly every 1.2 s of playback. The
+GIL is free during those blocks, which is exactly why another thread escapes them. Open and close are **BLOCKING** queued
+calls so the old order (open → retune → feed) survives; only the periodic top-up is concurrent, and the sink is created,
+written and stopped on that thread and nowhere else. What the device grants is often less than `_BUFFER_SECONDS` asks
+(80 ms of 120 here), so the negotiated size is logged in ms and warned about. `load_backing` dedupes an in-flight decode of the same path (restarting QAudioDecoder
 mid-decode aborts). **Decoding runs on its own QThread and must**: it costs one `bufferReady` slot call per buffer —
 thousands per song **The pipeline rate is the device's, not ours**: `SAMPLE_RATE` (44.1 kHz) is only the *reference* — what the
 TTS cache is written at and what the pipeline starts at. Stereo formats are offered to the device best-first and
 the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing synthesizes during playback — cache-first always**.
-`app/media_controller.py` owns the timeline position (`time.time()` master clock, engine slaved with 150 ms drift resync).
+`app/media_controller.py` owns the timeline position (`time.monotonic()` master clock — **never `time.time()`**, which
+steps when NTP corrects an SBC that has no RTC; engine slaved with 150 ms drift resync). `monotonic_at()` is that clock's
+public face: the metronome phases its grid on the instant a position was TRUE, not on "now", because a seek runs a whole
+transport tick in between.
 
 - **An offset moves ONE audio track** (`audio_time = timeline_time - active_offset()`) — clips, song parts and markers
   are anchored in timeline seconds, and the other track has its own offset, so nothing else follows on its own. The drag
@@ -96,12 +105,32 @@ the first that actually **starts** wins. TTS is piper + a WAV cache: **nothing s
 - **Backing and guide are equal citizens**: either, both or neither. The timeline spans the **longest** of backing, guide
   and MIDI, declared once per load (`Timeline.set_song_tracks`); the web remote takes the same maximum
   (`webremote.state.song_duration`).
-- **Metronome sync**: on start/resume compute beats elapsed and the remainder to the next boundary — play immediately if
-  within `0.001s`, else a single-shot timer to the next beat, then regular intervals. Always restart on
-  seek-during-playback or BPM change. Alignment is floor-based, so negative count-in positions number correctly toward
-  beat 1 at t=0. **WHEN a beat falls is the tempo map's answer, not `60/bpm`** — the scheduler stays drift-anchored, but
-  the interval it accumulates comes from `seconds_at_beat(n+1) - seconds_at_beat(n)`, and the downbeat comes from the beat
-  INDEX rather than a free-running counter, so the accent survives a tempo change.
+- **The click is SCHEDULED INTO THE OUTPUT, never played by a timer.** Beat times come from the tempo map, convert to
+  absolute output frames against one anchor (`_anchor_time` ↔ `_anchor_frame`, taken at start/seek), and are queued up to
+  `LOOKAHEAD_S` = 0.5 s ahead of the playhead; `Mixer.schedule()` places each beep at its exact sample. That inversion is
+  the whole design: a timer-driven beep lands wherever the Qt thread happened to be free, and this app's stage takes that
+  thread away for up to 129 ms, so the beat used to move with the graphics load. A scheduled beep is already in the
+  buffer before the stall begins — **the pump's own jitter never reaches a beat**, which is why it may run on the Qt
+  thread at all. **WHEN a beat falls is the tempo map's answer, not `60/bpm`**, and the downbeat comes from the beat
+  INDEX rather than a free-running counter, so the accent survives a tempo change; a tempo marker needs no restart
+  because the queued frames were already computed from the map that carries it. The anchor is taken with
+  `MediaController.monotonic_at()`, since a position read plus "now" is wrong by however long the read took — a whole
+  transport tick, on a seek. **A beat the playhead has already passed is DROPPED, never crowded in behind it**: what
+  survives a stall is the GRID, so a 1.5 s block costs whole beats and moves none. `stop_metronome` un-queues the beats
+  placed ahead but lets a beep already sounding finish, or a clean stop becomes a pop. The spoken count-in rides
+  `beat_scheduled` (number, timeline time, frame) and is placed at the beat's OWN frame; `beat_occurred` still fires when
+  the output *reaches* a beat, which is what keeps the web remote's indicator honest.
+- **`audio/diagnostics.py` records the click's own timing** — `TimingMonitor`, armed on play and summarised in one log
+  line per pass, is the only reason a glitch at a show is answerable afterwards. The metronome reports every beat's
+  scheduling error, the audio feed every top-up and the sink's own underrun verdict (`UnderrunError`/`IdleState` — the
+  ONE place a dropout is observable at all). Two constraints: **aggregates, not history** (the feed runs ~66×/s for a
+  whole show) and **warnings are rate-limited**, because the thread whose starvation is being reported is the thread that
+  would write the line, and on the SBC that line goes to flash. Since the click is scheduled, the health metric is
+  **`min lead`** — the smallest margin any beat was queued with — not the beat's error, which is 0 by construction; the
+  opening beat is excluded from it, being placed AT the playhead by design. `StallAttributor`
+  (`TUPPERDMX_STALL_TRACE=1`, opt-in because its sampler competes for the GIL it measures) names what blocks the Qt
+  thread and, from its OWN lateness per wake against Python's 5 ms switch interval, says whether the GIL was held
+  (Python — threading cannot help) or free (C++ — it can).
 
 ## The marker track (`core/markers.py`, `core/tempo_map.py`, `ui/markers_dialog.py`)
 
@@ -397,6 +426,15 @@ with a shutter it selects a strobe, so use `_lit_frame()`.
 ## Common Debugging
 
 ```bash
+# Measure THIS box's click timing (timer accuracy, click->output latency, card
+# clock ppm, stall recovery). Silent; runs on the rack box under plain python3.
+uv run python scripts/click_probe.py all
+
+# Name whatever is blocking the Qt thread (audio feed late / underruns). Opt-in:
+# the sampler competes for the GIL it measures. Each report says whether the GIL
+# was HELD (Python — threading the audio would not help) or free (C++ — it would).
+TUPPERDMX_STALL_TRACE=1 uv run python main.py
+
 # Tail today's log (in `logs/` unless userprefs' logging.log_dir names another folder)
 tail -f logs/tupperDMX_$(date +%Y%m%d).log
 

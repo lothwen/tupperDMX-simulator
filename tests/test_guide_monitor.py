@@ -108,7 +108,7 @@ def _make_controller(tmp):
 
 def _advance(controller, seconds):
     """Move the transport's master clock to `seconds` and tick it once."""
-    controller.playback_start_time = time.time() - seconds
+    controller.playback_start_time = time.monotonic() - seconds
     controller._on_playback_tick()
 
 
