@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         # The decode the song change kicked off lands after the band is drawn.
         self.audio_engine.backing_loaded.connect(self._on_backing_decoded)
         self.timeline.seek_requested.connect(self.seek_playback)
+        self.timeline.play_from_requested.connect(self._play_from)
         self.timeline.bpm_detected.connect(self.bpm_state.set_bpm)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
         self.timeline.waveform_offset_committed.connect(
@@ -1919,6 +1920,12 @@ class MainWindow(QMainWindow):
         """Seek to position via the core (which resyncs the metronome)."""
         self.app_core.seek_playback(time_seconds)
 
+    def _play_from(self, time_seconds):
+        """Seek, then start the transport unless it is already running."""
+        self.seek_playback(time_seconds)
+        if not self.media_controller.is_playing:
+            self.play_pause_playback()
+
     def update_window_title(self):
         """Update window title with the open show and loaded file names."""
         title = "TupperDMX Simulator"
@@ -2081,6 +2088,16 @@ class MainWindow(QMainWindow):
                 return True  # Event handled, don't pass to widget
             if key == Qt.Key.Key_Escape and self._escape_backs_out():
                 self._back_out_one_level()
+                return True
+            if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
+                    and event.modifiers() & Qt.KeyboardModifier.AltModifier
+                    and self._arrow_seeks_playhead()
+                    and self.timeline.waveform_track.sections.nudge_selected(
+                        1 if key == Qt.Key.Key_Right else -1,
+                        fine=bool(event.modifiers()
+                                  & Qt.KeyboardModifier.ShiftModifier))):
+                # Alt+←/→ nudge the selected song sections a bar (Shift: a
+                # beat); with none selected they seek like the bare arrows.
                 return True
             if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
                     and self._arrow_seeks_playhead()):

@@ -138,7 +138,6 @@ def test_add_event_stamps_channel():
 
 def test_song_parts_render_on_waveform_overlay():
     print("test_song_parts_render_on_waveform_overlay")
-    from timeline.tracks.song_sections import SongSectionItem
     m, tl = _make()
     m.add_event(CHORUS, 5.0, 100)  # global song parts -> no channel
     m.add_event(INTRO, 1.0, 100)
@@ -152,8 +151,7 @@ def test_song_parts_render_on_waveform_overlay():
 
     # They render as contiguous boxes on the waveform arrangement overlay.
     tl.refresh_from_manager()
-    boxes = [it for it in tl.waveform_track._section_items
-             if isinstance(it, SongSectionItem)]
+    boxes = tl.waveform_track.sections.boxes
     _assert(len(boxes) == 2, "two markers -> two section boxes")
     xs = sorted(b.pos().x() for b in boxes)
     _assert(xs[0] < xs[1], "boxes laid out left-to-right by time")

@@ -346,6 +346,12 @@ which is what stops `timeline/` importing `ui/`), and the web remote resolves th
   deleting a regular clip converts it to a fixture-matching BLACKOUT, not a hole.
 - Scene clips are 7 simultaneous `note_on` events sharing a `group_id`, rendered as one clip; drags route to the scene
   API.
+- **Song sections (notes 61-69) are START markers**: each box on the waveform band runs to the next start, so every edit
+  moves a BOUNDARY. `timeline/arrangement.py` holds the Qt-free rules — starts never reorder or stack (a beat apart), a
+  drop splits the section it lands in or retypes the one starting there. **A lone box's body never moves** (the audio
+  under it doesn't); only a 2+ selection drags as a group. `WAVE_GRIP_*` decides how much of the band's bottom is left
+  to the waveform's offset drag (none at 0). They snap to BEATS (Shift = whole bars, Snap off = none — the tempo map's grid in either
+  ruler mode); Alt+←/→ nudges them, since bare arrows seek.
 
 **A clip is edited against the fixture it lives on, never against a table.** Its note is a *verb*, its MIDI channel
 selects the fixture, its velocity is that verb's parameter — so `Timeline._fdef(channel)` resolves the patch entry first

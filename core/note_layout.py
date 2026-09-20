@@ -80,12 +80,11 @@ COLOR_MACROS = ['WHITE', 'ORANGE', 'CYAN', 'PINK']
 _NEUTRAL = '#555555'
 _BLACKOUT_COLOR = '#363636'
 
-# Curated per-song-part marker colours (carried over from the old config.json
-# midi_note_map so existing timelines keep their familiar palette).
+# Curated per-song-part marker colours.
 _SONG_PART_COLORS = {
     'INTRO': '#c77f37', 'VERSE': '#c6c737', 'CHORUS': '#37c737',
     'BREAK': '#3737c7', 'BRIDGE': '#461c64', 'INST': '#802da4',
-    'SOLO': '#ffffff', 'OUTRO': '#c79337', 'END': '#808080',
+    'SOLO': '#ffffff', 'OUTRO': '#7a4030', 'END': '#808080',
 }
 
 # Floor on a scene swatch's brightness, so a near-black scene still reads

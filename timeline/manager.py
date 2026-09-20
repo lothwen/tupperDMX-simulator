@@ -39,6 +39,8 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
     
     # Signals
     seek_requested = pyqtSignal(float)
+    # A song section's "Play from" menu: seek to this time, then play.
+    play_from_requested = pyqtSignal(float)
     bpm_detected = pyqtSignal(int)
     # Live preview during a waveform drag (and on a programmatic set).
     waveform_offset_changed = pyqtSignal(float)
@@ -693,7 +695,7 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
             self.waveform_track.draw_waveform(self.audio_file, self._waveform_y())
         elif self.waveform_track.waveform_item is not None:
             # Keep existing pixmap visible at the new track top while dragging
-            self.waveform_track.waveform_item.setYPos(self._waveform_y())
+            self.waveform_track.place_waveform(self._waveform_y())
 
         # Song-structure overlay follows the (possibly resized) waveform band.
         self._draw_song_sections()
@@ -989,6 +991,8 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
                 if label is not None and label.data(0):
                     label.setPlainText(elided_label(
                         label.data(0), item.rect.width(), self.content_view))
+        # Every zoom path calls this, so the song sections' labels ride it too.
+        self.waveform_track.sections.refit_labels()
 
     def refresh_auto_buttons(self) -> None:
         """Re-sync every fixture track's header toggles (auto/mute/lock) from the
@@ -1112,6 +1116,17 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
         self.draw_time_grid()
         self.draw_lane_bands()
         self.ruler_track.redraw()
+        # The last song section runs to the song's end, which just moved.
+        self._draw_song_sections()
+
+    def song_length(self) -> float:
+        """The song's true length — the longest of its audio tracks and its
+        MIDI sequence, the extent apply_song_extent pads by 5% — or the
+        default window when nothing is loaded."""
+        midi_length = (self.midi_manager.get_duration()
+                       if self.midi_manager is not None else 0.0)
+        length = max(self._longest_audio(), midi_length or 0.0)
+        return length if length > 0 else self.content_width / self.PIXELS_PER_SECOND
     
     def set_audio_source(self, source) -> None:
         """Install the waveform band's sample source: a callable taking an

@@ -9,11 +9,12 @@ MidiManager and ends in `_schedule_refresh()` — never a synchronous redraw,
 because the caller is usually a scene item still on the call stack.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Iterable, Optional
 
-from PyQt6.QtWidgets import QDialog, QMessageBox
+from PyQt6.QtWidgets import QDialog
 
 from core import note_layout
+from core.clips import DEFAULT_DROP_VELOCITY
 from .widgets.clip_edit import ClipEditDialog
 
 
@@ -30,10 +31,10 @@ class ClipCommandsMixin:
         _transport_playing: bool
         library_changed: object      # pyqtSignal()
         preview_requested: object    # pyqtSignal(list)
+        waveform_track: object
 
         def _schedule_refresh(self) -> None: ...
         def fixture_at_y(self, scene_y: float): ...
-        def _in_waveform_band(self, scene_y: float) -> bool: ...
         def _fixture_type(self, channel): ...
         def _fdef(self, channel): ...
         def _dmx_start(self, channel) -> int: ...
@@ -52,35 +53,64 @@ class ClipCommandsMixin:
         evt = self._find_cached_event(event_id)
         return evt.get('group_id') if evt else None
 
-    # --- Song-section markers: the arrangement overlay on the waveform band ------
+    # --- Song sections: the arrangement overlay on the waveform band ------------
+    # The overlay (tracks/song_sections.py) owns the gestures and the rules that
+    # keep sections from reordering or stacking; these are its writes, each one
+    # undo step. A song part is a global point-in-time marker, so none of the
+    # fixture lanes' BLACKOUT gap machinery applies.
 
-    def on_song_section_moved(self, event_id: str, new_time: float):
-        """A song-section box MOVE committed. A song part is a point-in-time
-        global marker (no BLACKOUT extent machinery), so set its time directly
-        and let the overlay recompute contiguous spans by sorted time."""
-        if not self.midi_manager or not event_id:
+    def on_song_sections_moved(self, moves: Dict[str, float]):
+        """Retime song-part markers, {event_id: new_time}, as one edit.
+
+        Applied in the direction of travel: update_event_timing finds a
+        marker's mirrored note by note number and OLD time, so a marker must
+        never land on a time another of the same part still holds."""
+        if not self.midi_manager or not moves:
             return
-        self.midi_manager.update_event_timing(event_id, new_time)
+        old = {e['id']: e['time'] for e in self._cached_events
+               if e.get('id') in moves}
+        forward = any(moves[i] > old.get(i, moves[i]) for i in moves)
+        order = sorted(moves, key=lambda i: old.get(i, 0.0), reverse=forward)
+        with self.midi_manager.history_batch():
+            for event_id in order:
+                self.midi_manager.update_event_timing(event_id, moves[event_id])
         self._schedule_refresh()
 
-    def on_song_section_delete(self, event_id: str):
-        """Delete a song-section marker outright (no blackout conversion — that
-        is fixture-lane behaviour; song parts are a global arrangement)."""
-        if not self.midi_manager or not event_id:
+    def on_song_sections_retyped(self, event_ids: Iterable[str], note: int):
+        """Make each marker in `event_ids` a different part, keeping its time."""
+        if not self.midi_manager:
             return
-        event_data = self._find_cached_event(event_id)
-        part = (getattr(event_data.get('info'), 'part', None)
-                if event_data else None) or "section"
-        reply = QMessageBox.question(
-            None, "Delete Song Section",
-            f"Delete the '{part}' section marker?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ids = [i for i in event_ids
+               if (self._find_cached_event(i) or {}).get('note') != note]
+        if not ids:
             return
-        if self.midi_manager.delete_event(event_id):
+        with self.midi_manager.history_batch():
+            for event_id in ids:
+                self.midi_manager.edit_event(event_id, note=note)
+        self._schedule_refresh()
+
+    def on_song_sections_deleted(self, event_ids: Iterable[str]):
+        """Delete markers outright, so the section before each one extends.
+        Not confirmed — Ctrl+Z undoes it, as it does a clip delete."""
+        if not self.midi_manager:
+            return
+        ids = list(event_ids)
+        if not ids:
+            return
+        with self.midi_manager.history_batch():
+            for event_id in ids:
+                self.midi_manager.delete_event(event_id)
+        self._schedule_refresh()
+
+    def add_song_section(self, note: int, time_seconds: float,
+                         velocity: int = DEFAULT_DROP_VELOCITY):
+        """Start a `note` section at `time_seconds` (global: no channel)."""
+        if not self.midi_manager:
+            return
+        if self.midi_manager.add_event(note, time_seconds, velocity, None):
             self._schedule_refresh()
+            self.logger.info(
+                f"Song section added: note={note} at {time_seconds:.3f}s")
 
     # --- Clip drags, committed on release ----------------------------------------
 
@@ -303,8 +333,9 @@ class ClipCommandsMixin:
 
         A note is droppable on a fixture lane when it is a meaningful verb for
         that fixture (channel offsets within range, scene/bank/chase verbs when
-        the fixture defines them, global/utility verbs anywhere). Song parts
-        drop onto the waveform band, where they form the arrangement overlay.
+        the fixture defines them, global/utility verbs anywhere). A song part
+        is global, so it lands on the arrangement from anywhere on the timeline
+        — WHEN it lands is the section overlay's call (see preview_drop).
 
         When the payload names a `fixture_type` — the clip library tags its
         channel clips, whose meaning is the SOURCE fixture's channel list, not a
@@ -313,7 +344,7 @@ class ClipCommandsMixin:
         if not self.midi_manager:
             return False
         if note_layout.is_song_part(note):
-            return self._in_waveform_band(scene_y)
+            return True
         target_idx = self.fixture_at_y(scene_y)
         if target_idx is None:
             return False
@@ -327,8 +358,16 @@ class ClipCommandsMixin:
 
     def handle_clip_drop(self, note: int, velocity: int, scene_x: float,
                          scene_y: float,
-                         fixture_type: Optional[str] = None) -> bool:
-        """Validate and insert a dropped clip. Returns True on success."""
+                         fixture_type: Optional[str] = None,
+                         whole_bar: bool = False) -> bool:
+        """Validate and insert a dropped clip. Returns True on success.
+
+        A song part goes to the section overlay, which snaps it to a beat (a
+        whole bar with `whole_bar`, i.e. Shift) and splits or retypes the
+        section it lands in."""
+        if note_layout.is_song_part(note):
+            return self.waveform_track.sections.apply_drop(
+                note, velocity, scene_x, whole_bar)
         if not self.can_accept_clip_drop(note, scene_y, fixture_type):
             return False
         time_seconds = max(0.0, scene_x / self.PIXELS_PER_SECOND)
@@ -338,20 +377,16 @@ class ClipCommandsMixin:
         # chase (or a channel set onto 2 instead of 0).
         floor = 0 if note in note_layout.VALUE_BEARING_NOTES else 1
         clamped_velocity = max(floor, min(127, int(velocity)))
-        # Song parts stay global (channel=None) and land on the waveform
-        # arrangement overlay; fixture notes land on the exact fixture instance
-        # they were dropped on.
-        is_song_part = note_layout.is_song_part(note)
-        target_idx = None if is_song_part else self.fixture_at_y(scene_y)
-        channel = None if is_song_part else target_idx
+        # The note lands on the exact fixture instance it was dropped on.
+        target_idx = self.fixture_at_y(scene_y)
         event_id = self.midi_manager.add_event(note, time_seconds,
-                                               clamped_velocity, channel)
+                                               clamped_velocity, target_idx)
         if not event_id:
             return False
         self._schedule_refresh()
-        where = "arrangement" if is_song_part else f"fixture #{target_idx}"
         self.logger.info(
-            f"Clip dropped: note={note} at {time_seconds:.3f}s on {where}"
+            f"Clip dropped: note={note} at {time_seconds:.3f}s on "
+            f"fixture #{target_idx}"
         )
         return True
 

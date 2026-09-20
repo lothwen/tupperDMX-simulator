@@ -12,6 +12,7 @@ from PyQt6.QtGui import QColor, QPainter, QDrag, QCursor
 from PyQt6.QtCore import Qt, QMimeData, QRect, QSize, QPoint, pyqtSignal
 
 from core import clips as clip_model
+from core import note_layout
 from core.config import Config
 from tupperlogger import get_logger
 from ui.widgets import icons
@@ -306,7 +307,11 @@ class ClipCard(QFrame):
         drag.setMimeData(mime)
         pixmap = self.grab()
         drag.setPixmap(pixmap)
-        drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        # A song part starts where it is dropped, so it is carried by its left
+        # edge — the card's edge is where the section will begin.
+        song_part = note_layout.is_song_part(self._payload.get("note", -1))
+        drag.setHotSpot(QPoint(0 if song_part else pixmap.width() // 2,
+                               pixmap.height() // 2))
         drag.exec(Qt.DropAction.CopyAction)
 
 

@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QGraphicsView, QMenu, QRubberBand
 from PyQt6.QtGui import QPainter, QKeySequence
 from PyQt6.QtCore import Qt, QRect
 
+from core import note_layout
 from core.clips import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
                         SCENE_MIME_TYPE)
 
@@ -52,6 +53,16 @@ class ContentView(QGraphicsView):
 
         # Which fixture lane (if any) is under the cursor? None = ruler/waveform.
         fixture_index = self.timeline.fixture_at_y(scene_pos.y())
+
+        if fixture_index is None and self.timeline._in_waveform_band(scene_pos.y()):
+            # A section box opens its own menu on the press; this is the band
+            # around them — the waveform strip below, the lead-in before.
+            from ..tracks.song_sections import SongSectionItem
+            if not any(isinstance(item, SongSectionItem)
+                       for item in self.scene().items(scene_pos)):
+                self.timeline.waveform_track.sections.band_menu(
+                    scene_pos.x(), self.mapToGlobal(position))
+            return
 
         if fixture_index is not None:
             # Check if we clicked on an empty area (no MIDI event at this position)
@@ -284,6 +295,14 @@ class ContentView(QGraphicsView):
             event.ignore()
             return
         note, _, fixture_type = clip_decoded
+        if note_layout.is_song_part(note):
+            # Global, so any lane will do: the band previews where it lands.
+            if self.timeline.waveform_track.sections.preview_drop(
+                    note, scene_pos.x(), self._whole_bar(event)):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
         if self.timeline.can_accept_clip_drop(note, scene_pos.y(),
                                               fixture_type):
             event.acceptProposedAction()
@@ -300,7 +319,13 @@ class ContentView(QGraphicsView):
         # Wayland, where a spurious leave is delivered when the drag passes over
         # a rejected lane or ends. Accepting here keeps the view's drag handling
         # self-consistent and skips that broken path.
+        self.timeline.waveform_track.sections.clear_drop_preview()
         event.accept()
+
+    @staticmethod
+    def _whole_bar(event) -> bool:
+        """Shift drops a song part on a whole bar rather than a beat."""
+        return bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
     def dropEvent(self, event):
         mime = event.mimeData()
@@ -324,7 +349,7 @@ class ContentView(QGraphicsView):
         note, velocity, fixture_type = clip_decoded
         if self.timeline.handle_clip_drop(note, velocity,
                                           scene_pos.x(), scene_pos.y(),
-                                          fixture_type):
+                                          fixture_type, self._whole_bar(event)):
             event.acceptProposedAction()
         else:
             event.ignore()
