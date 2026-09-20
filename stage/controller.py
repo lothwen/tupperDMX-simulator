@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
@@ -10,6 +11,7 @@ from stage import (
     CLOCK, Atmosphere, BlinderFixture, PixelBarFixture, body_count,
     body_spacing, renderer_for,
 )
+from stage.debug_overlay import StageDebugOverlay
 from core.fixture_library import resolve_fixture
 from core.fixture_state import resolve_state
 
@@ -44,6 +46,7 @@ class StageView(QGraphicsView):
         self._grid_visible = False
         self._background_item: Optional[QGraphicsPixmapItem] = None
         self._light_layer = None
+        self._frame_probe = None
 
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -89,7 +92,8 @@ class StageView(QGraphicsView):
                     reference: str = "viewport", margin: int = 8) -> None:
         """Float a widget over a corner of the view.
 
-        ``anchor`` is ``"top-left"`` / ``"top-right"``; ``reference`` is
+        ``anchor`` names a corner — ``"top-left"`` / ``"top-right"`` /
+        ``"bottom-left"`` / ``"bottom-right"``; ``reference`` is
         ``"viewport"`` (the full widget) or ``"background"`` (the letterboxed
         stage image). The caller controls visibility — repositioning a hidden
         widget is harmless."""
@@ -122,7 +126,12 @@ class StageView(QGraphicsView):
                 x = cursors.get(key, rect.right() - margin) - widget.width()
             else:
                 x = cursors.get(key, rect.left() + margin)
-            widget.move(x, rect.top() + margin)
+            # A bottom-anchored overlay hangs its own height off the bottom
+            # edge, so its size has to be settled before it is placed — which
+            # is why the debug readout re-asks for a layout when its text grows.
+            y = (rect.bottom() - margin - widget.height() if "bottom" in anchor
+                 else rect.top() + margin)
+            widget.move(x, y)
             if widget.isHidden():
                 continue   # placed for when it is shown, but takes no room
             cursors[key] = (x - OVERLAY_GAP if "right" in anchor
@@ -231,6 +240,27 @@ class StageView(QGraphicsView):
         matrix.translate(view.dx(), view.dy())
         matrix.scale(view.m11(), view.m22())
         return matrix
+
+    def set_frame_probe(self, probe) -> None:
+        """Time every repaint of this view, or stop.
+
+        `probe(started_at, ended_at)` — both `time.perf_counter()` — is called
+        once per paint. Installed only while the debug readout is showing, so
+        an app that isn't debugging pays one `is None` test per frame and
+        nothing else: this measures the very thing it must not cost, since a
+        repaint of this view is what takes the Qt thread away from the audio
+        feed for tens of milliseconds at a time.
+        """
+        self._frame_probe = probe
+
+    def paintEvent(self, event):
+        probe = self._frame_probe
+        if probe is None:
+            super().paintEvent(event)
+            return
+        started = time.perf_counter()
+        super().paintEvent(event)
+        probe(started, time.perf_counter())
 
     def set_grid_visible(self, visible: bool) -> None:
         """Show/hide the designer grid drawn over the stage image."""
@@ -380,6 +410,13 @@ class StageController(QObject):
         self._gpu_suspended = False
         if config.window.stage_gpu:
             self._enable_gpu_light()
+
+        # The debug readout, in the stage image's bottom-right corner. It shows
+        # itself whenever logging is at DEBUG and hides again when it isn't, so
+        # there is nothing here to turn it on with.
+        self.debug_overlay = StageDebugOverlay(self)
+        self.stage_view.add_overlay(self.debug_overlay, anchor="bottom-right",
+                                    reference="background")
 
         self.logger.info("Stage controller initialized")
 

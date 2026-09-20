@@ -250,6 +250,14 @@ average. The projection is orthographic — no depth buffer needed; cost follows
   settles **and then stops** — the only thing here that can spin; reset by `_frame_signature()`, **not** by the march
   running.
 
+**`debug_overlay.py` — the stage's own readout**, unboxed text in the stage image's bottom-right corner, shown ONLY
+while logging is at DEBUG. That level IS its switch — re-read every refresh, so Settings ▸ Logging (or an edit to
+`userprefs.json` on a rack box) toggles it live and it holds no preference of its own. It answers the two questions the
+picture cannot: **what one repaint costs the Qt thread**, which is the number the audio feed lives on, and **whether the
+GPU path is really running** — every failure in `gpu/` is soft, so the `draw` line is written only by a layer that is
+actually drawing and its ABSENCE is the raster path (which driver, `_initialise` logs once). `StageView`'s frame probe is
+installed only while the panel shows, and the panel re-renders only when its text changes, so a still stage stays still.
+
 ## Domain layer
 
 - **`core/fixture_state.py`** — the Qt-free photometric model covering **all 43 OFL capability types**. **Emitters** come

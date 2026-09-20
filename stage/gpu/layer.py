@@ -51,6 +51,8 @@ _TEXTURE0 = 0x84C0
 _TEXTURE1 = 0x84C1
 _COLOR_BUFFER_BIT = 0x00004000
 _SCISSOR_TEST = 0x0C11
+_VENDOR = 0x1F00
+_RENDERER = 0x1F01
 
 #: Version-functions objects to try, best first. 4.1 is what a current desktop
 #: driver gives and exactly what macOS caps at; 3.3 is the floor, and a real
@@ -180,6 +182,9 @@ class LightLayer:
         self._fog_texture = None
         self._converge = 0
         self._last_signature = None
+        #: What the driver calls itself, for the debug readout — the one place
+        #: "which GPU is this actually running on" is answerable in the app.
+        self._gl_name = ""
         self.available = False
         self.exposure = 1.0
         self.haze = 0.0
@@ -264,9 +269,26 @@ class LightLayer:
 
         self.available = True
         version = context.format()
-        logger.info("GPU light layer ready (OpenGL %d.%d)",
-                    version.majorVersion(), version.minorVersion())
+        self._gl_name = self._describe(version)
+        logger.info("GPU light layer ready (%s)", self._gl_name)
         return True
+
+    def _describe(self, version) -> str:
+        """`OpenGL 4.6 — AMD Radeon RX 6600 (radeonsi)`, as best the driver says.
+
+        `glGetString` is the only source for the renderer's own name, and it is
+        wrapped because it is the one call here made purely to be read by a
+        person: a binding that returns it as bytes, or a driver that returns
+        nothing at all, must not cost the layer its context.
+        """
+        text = "OpenGL %d.%d" % (version.majorVersion(), version.minorVersion())
+        try:
+            name = self._fns.glGetString(_RENDERER) or self._fns.glGetString(_VENDOR)
+        except Exception:                              # pragma: no cover
+            return text
+        if isinstance(name, bytes):
+            name = name.decode("utf-8", "replace")
+        return f"{text} — {name}" if name else text
 
     def _build(self, program_cls, shader_cls, vert, frag, name,
                optional: bool = False):
@@ -515,6 +537,28 @@ class LightLayer:
         """
         return bool(self._fog_wanted() and self.haze > 0.0
                     and self.fog.light_intensity > 0.0)
+
+    def debug_stats(self) -> dict:
+        """What the stage's debug readout reports about this layer.
+
+        One call rather than loose attributes because half of it lives in the
+        fog pass and the rest is private state the reader has no business
+        reaching into — and because `state` is the only honest answer to "is
+        the GPU running": every failure in here is soft, so a layer that was
+        asked for, built, and then gave up mid-frame looks exactly like one
+        that never started.
+        """
+        fog = self._fog
+        return {
+            "state": ("failed" if self._failed
+                      else "ready" if self.available else "starting"),
+            "surface": self._size,
+            "lights": self._light_count,
+            "media": self._medium_count,
+            "fog": self._fog_wanted(),
+            "fog_size": fog.march_size if fog is not None else (0, 0),
+            "converge": self._converge,
+        }
 
     def air_is_drifting(self) -> bool:
         """Whether the air is a moving picture, and so owed frames of its own.

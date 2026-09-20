@@ -1338,6 +1338,18 @@ QPushButton#StageDockButton {
     min-width: 0;
 }
 
+/* The stage debug readout, bottom-right over the stage image. Shown only at
+   DEBUG log level. No panel behind it: it is text laid straight on the stage,
+   so it reads as an instrument rather than as part of the rig. Monospace so
+   the numbers stay in their columns as they change. */
+QLabel#StageDebugOverlay {
+    background: transparent;
+    color: #9fe0b0;
+    border: none;
+    font-family: "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
 QWidget#StageEditToolbar {
     background-color: rgba(28, 28, 28, 235);
     border: 1px solid rgba(255, 255, 255, 40);
