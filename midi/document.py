@@ -103,14 +103,33 @@ class MidiDocument:
         return part.upper().startswith(BLACKOUT_PART_NAME)
 
     def _event_fixture(self, event: Dict[str, Any]):
-        """Scoping key for the fixture an event belongs to.
+        """Scoping key for the fixture an event belongs to, or None for the
+        global verbs that belong to no lane.
 
         Real-app events carry a MIDI channel (= the fixture instance's index in
         the patch), which scopes each fixture independently. Synthetic / legacy
         events without a channel fall back to the note map's fixture-type hint
         ('ledbar', 'blinder', ...). Either way the value is only ever compared
         against other _event_fixture() results, so the int/str mix is internal.
+
+        A SONG PART is asked of its note, not of its channel, and belongs to no
+        lane — the same answer `MidiEventsTrack.matches_filter` gives, so the
+        document and the timeline agree on who occupies a lane. It has to be
+        asked of the note because the channel lies: a song part is authored
+        global (`add_event(..., channel=None)`), but a .mid can only carry a
+        note on a real channel, so `MidiCodec.rebuild` writes it to 0 and the
+        next load stamps 0 back onto it. Without this every section would claim
+        the lane of whichever fixture is patched at MIDI channel 0 and act as
+        an obstacle there: a clip dragged across the arrangement landed in the
+        sliver between two sections and took its width, while the timeline —
+        which had filtered the sections off the lane — offered the whole song.
+
+        BLACKOUT ALL is global at RUNTIME but not in the timeline: it is
+        dropped on a lane and stamped with that lane's channel, so it stays
+        scoped to it (and keeps working as that lane's gap marker).
         """
+        if event and note_layout.is_song_part(event.get('note', -1)):
+            return None
         if event:
             ch = event.get('channel')
             if ch is not None:
