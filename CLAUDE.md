@@ -283,7 +283,7 @@ installed only while the panel shows, and the panel re-renders only when its tex
   user layer** when the source dir isn't persistable. The OFL document itself is never written. It writes `banks` and
   `chases` **separately** (`save_fixture_chases()` is the chases-only call), because the Scenes and Chases tabs each hold
   their own copy of the block and a write carrying both would put the other's unsaved work on disk.
-- **`software_controller/`** — a pure-Python DMX controller (no hardware) managing a 96-channel universe patched from
+- **`software_controller/`** — a pure-Python DMX controller (no hardware) managing a 512-channel universe patched from
   `config.fixtures`. `handle_note_on` uses a **generalized note map**: the pitch is a universal *verb*, the MIDI **channel
   selects the fixture** (its index in the patch). Layout: 1–23 channel-offset sets (velocity×2), 24–35 scene loaders,
   36–47 bank select, 48 take-manual / 49 manual / 50 blackout-fixture, 51 blackout-all, 52–59 timing/palette/scene step,
