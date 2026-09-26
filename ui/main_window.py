@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         self.dmx_manager = core.dmx_manager
         self.midi_manager = core.midi_manager
         self.media_controller = core.media_controller
-        self.audio_controller = core.audio_controller
+        self.metronome = core.metronome
         self.playlist_core = core.playlist_controller
         self.webremote_manager = core.webremote_manager
 
@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
         self.clip_library.edit_fixture_requested.connect(self.open_fixture_editor)
 
         # The core already logged it; the window only owes the dialog.
-        self.audio_controller.audio_error_occurred.connect(
+        self.metronome.audio_error_occurred.connect(
             partial(ErrorDialogManager.show_audio_hardware_error, self))
 
         self.stage_controller = StageController(self.config)
@@ -337,7 +337,7 @@ class MainWindow(QMainWindow):
         self.timeline.metronome_volume_changed.connect(
             lambda value: self.app_core.set_volume(metronome=value / 100.0))
         self.timeline.metronome_mute_toggled.connect(
-            self.audio_controller.set_metronome_muted)
+            self.metronome.set_metronome_muted)
         self.timeline.audio_volume_changed.connect(
             lambda value: self.app_core.set_volume(audio=value / 100.0))
         self.timeline.audio_mute_toggled.connect(self.media_controller.set_audio_muted)
@@ -842,14 +842,7 @@ class MainWindow(QMainWindow):
         # A clip editor's live output must not fight the sequencer for the
         # same DMX slots, so it is disarmed for the duration.
         self.timeline.set_transport_playing(is_playing)
-        
-        if is_playing:
-            # Start metronome synchronized to current timeline position
-            current_position = self.media_controller.get_current_position()
-            self.audio_controller.start_metronome(current_position)
-        else:
-            self.audio_controller.stop_metronome()
-    
+
     def _on_position_changed(self, position_seconds):
         """Handle position changes from media controller. Negative time is the
         count-in: the playhead waits at 0 and the display counts down."""

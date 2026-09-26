@@ -30,12 +30,6 @@ BUS_CLICK = "click"
 BUS_VOICE = "voice"
 BUSES = (BUS_BACKING, BUS_CLICK, BUS_VOICE)
 
-# Metronome beep frequencies in Hz. Hardcoded by design — tweak here if needed;
-# intentionally not exposed via config or the Settings UI. High = downbeat
-# (beat 1), low = the other beats.
-METRONOME_HIGH_PITCH_HZ = 1200
-METRONOME_LOW_PITCH_HZ = 800
-
 
 def bus_channel_gains(routing: str) -> Dict[str, Tuple[float, float]]:
     """Per-bus (left, right) channel gains for a routing mode.
@@ -47,19 +41,6 @@ def bus_channel_gains(routing: str) -> Dict[str, Tuple[float, float]]:
     if routing == ROUTING_SPLIT_BACKING_RIGHT:
         return {BUS_BACKING: (0.0, 1.0), BUS_CLICK: (1.0, 0.0), BUS_VOICE: (1.0, 0.0)}
     return {BUS_BACKING: (1.0, 1.0), BUS_CLICK: (1.0, 1.0), BUS_VOICE: (1.0, 1.0)}
-
-
-def make_beep(freq_hz: float, duration_sec: float = 0.1,
-              sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Mono float32 sine beep with a short fade to avoid edge clicks."""
-    n_samples = int(duration_sec * sample_rate)
-    t = np.arange(n_samples, dtype=np.float32) / sample_rate
-    wave = np.sin(2 * np.pi * freq_hz * t).astype(np.float32)
-    fade = min(n_samples // 4, int(0.005 * sample_rate))
-    if fade > 0:
-        wave[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
-        wave[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
-    return wave
 
 
 def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:

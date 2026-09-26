@@ -3,7 +3,7 @@ Characterization test: the song marker track (voice cues + control markers).
 
 Covers the TempoMap in both directions, the ControlMarkerConfig model and its
 show-manifest round-trip, core.markers' resolution helpers, MediaController's
-marker/segue firing, and AudioController's beat scheduling across a tempo
+marker/segue firing, and the Metronome's beat scheduling across a tempo
 change — all with fakes: no audio device, no TTS, no GL.
 
 Run with:
@@ -21,6 +21,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 
+from core import click as core_click
 from core import markers as core_markers
 from core.config import (Config, ControlMarkerConfig, PlaylistConfig,
                          SongConfig, VoiceTTSConfig)
@@ -178,13 +179,13 @@ def test_marker_helpers():
                ControlMarkerConfig(10.0, "tempo", 90)]
     _assert(core_markers.tempo_changes(markers) == [(10.0, 90), (96.0, 132)],
             "tempo_changes is what a TempoMap is built from")
-    _assert(core_markers.click_stop_time(markers) == 188.0,
+    _assert(core_click.click_stop_time(markers) == 188.0,
             "the EARLIEST stop-click wins (the marker is one-way)")
-    _assert(not core_markers.click_stopped_at(markers, 187.9),
+    _assert(not core_click.click_stopped_at(markers, 187.9),
             "the click runs before the marker")
-    _assert(core_markers.click_stopped_at(markers, 188.0),
+    _assert(core_click.click_stopped_at(markers, 188.0),
             "and is stopped from the marker on")
-    _assert(core_markers.click_stop_time([]) is None,
+    _assert(core_click.click_stop_time([]) is None,
             "no marker means the click never stops")
 
     song = SongConfig(control_markers=markers, segue=True, segue_time=210.5)
@@ -331,9 +332,9 @@ def test_count_in_uses_the_tempo_map():
 
 def test_metronome_across_a_tempo_change():
     print("test_metronome_across_a_tempo_change")
-    from app.audio_controller import AudioController
+    from app.metronome import Metronome
     engine = FakeEngine()
-    controller = AudioController(engine)
+    controller = Metronome(engine)
     controller.set_tempo_map(TempoMap(120, [(8.0, 60)]))
 
     scheduled = []      # (beat number, timeline time, output frame)
@@ -392,6 +393,21 @@ def test_metronome_across_a_tempo_change():
     _assert(controller.beat_count == 0, "stopping resets the beat")
 
 
+def test_the_window_leaves_the_click_to_the_core():
+    print("test_the_window_leaves_the_click_to_the_core")
+    # AppCore owns the click's start/stop: it asks the stop-click marker and
+    # phases on the transport's anchor. The window reacting to the same signal
+    # ran AFTER it, and its bare restart undid both — pressing play past a
+    # stop-click brought the click back.
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    window = MagicMock()
+    for playing in (True, False):
+        MainWindow._on_playback_state_changed(window, playing)
+    _assert(window.metronome.mock_calls == [],
+            "the window's transport slot never touches the metronome")
+
+
 def main():
     app = QApplication.instance() or QApplication(sys.argv)
     test_tempo_map_constant()
@@ -406,6 +422,7 @@ def main():
     test_segue_arming()
     test_count_in_uses_the_tempo_map()
     test_metronome_across_a_tempo_change()
+    test_the_window_leaves_the_click_to_the_core()
     print("\nALL TESTS PASSED")
 
 

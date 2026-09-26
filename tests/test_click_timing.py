@@ -33,9 +33,9 @@ def _assert(cond, msg):
 
 
 def _controller(bpm=120):
-    from app.audio_controller import AudioController
+    from app.metronome import Metronome
     engine = FakeEngine()
-    controller = AudioController(engine)
+    controller = Metronome(engine)
     controller.set_bpm(bpm)
     return controller, engine
 

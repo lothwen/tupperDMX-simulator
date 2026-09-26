@@ -48,7 +48,7 @@ class WebRemoteManager(QObject):
         w.media_controller.media_loaded.connect(self._publish_full)
         w.midi_manager.data_changed.connect(self._publish_full)
         w.bpm_state.bpm_changed.connect(self._publish_full)
-        w.audio_controller.beat_occurred.connect(self._on_beat)
+        w.metronome.beat_occurred.connect(self._on_beat)
         show_manager = getattr(w, "show_manager", None)
         if show_manager is not None:
             show_manager.favorites_changed.connect(self._publish_full)

@@ -7,9 +7,9 @@ import threading
 import mido
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from app.audio_controller import AudioController
 from app.bpm import BpmState
 from app.media_controller import MediaController
+from app.metronome import Metronome
 from app.playlist import PlaylistCore
 from app.prefs_watcher import PrefsWatcher
 from app.show_manager import ShowManager
@@ -30,7 +30,7 @@ from webremote.manager import WebRemoteManager
 class AppCore(QObject):
     """Owns and wires every widget-free collaborator, exposing the façade the
     web remote (and the desktop window) consume: media_controller,
-    midi_manager, audio_controller, audio_engine, playlist_controller,
+    midi_manager, metronome, audio_engine, playlist_controller,
     show_manager, software_controller, bpm_state, the transport methods and
     preview_clip. Widget-facing halves of its work ride the signals below."""
 
@@ -61,9 +61,6 @@ class AppCore(QObject):
         self.logger = get_logger("app.core")
         self._shutdown_done = False
         self._prefs_watcher = None
-        # The current song's control markers — the state a stop-click leaves
-        # behind, which a seek has to re-resolve rather than replay.
-        self._control_markers = []
         self._voice_tts_rendered.connect(self._on_voice_tts_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
@@ -116,10 +113,9 @@ class AppCore(QObject):
             self._on_control_marker_fired)
         self.media_controller.segue_reached.connect(self._on_segue_reached)
 
-        self.audio_controller = AudioController(
-            self.audio_engine, config.volume.metronome)
-        self.audio_controller.beat_scheduled.connect(self._on_beat_scheduled)
-        self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
+        self.metronome = Metronome(self.audio_engine, config.volume.metronome)
+        self.metronome.beat_scheduled.connect(self._on_beat_scheduled)
+        self.metronome.audio_error_occurred.connect(self._on_audio_error)
 
         # Core half of a BPM change first, then the autosave arming.
         self.bpm_state.bpm_changed.connect(self._on_bpm_changed)
@@ -193,7 +189,7 @@ class AppCore(QObject):
     def apply_volume_config(self):
         """Apply config.volume to the three live buses."""
         self.media_controller.set_audio_volume(self.config.volume.audio)
-        self.audio_controller.set_metronome_volume(self.config.volume.metronome)
+        self.metronome.set_metronome_volume(self.config.volume.metronome)
         self.audio_engine.set_bus_volume(BUS_VOICE, self.config.volume.voice)
 
     def set_volume(self, **volumes):
@@ -296,24 +292,17 @@ class AppCore(QObject):
     def seek_playback(self, time_seconds):
         """Seek to position using media controller."""
         was_playing = self.media_controller.get_playback_state()
-        metronome_was_running = self.audio_controller.is_metronome_running()
 
         self.media_controller.seek_to_position(time_seconds)
 
-        # Resynchronize the metronome. A stop-click marker outlives its own
-        # crossing, so the seek target decides whether the click runs at all —
-        # landing before the marker brings it back, landing past it does not.
+        # Resynchronize the metronome on the seek target (which also decides
+        # whether a stop-click has silenced it there).
         if was_playing:
-            stopped = self._click_stopped_at(time_seconds)
-            if metronome_was_running:
-                self.audio_controller.stop_metronome()
-            if not stopped:
-                # The anchor, not "now": seek_to_position() has just run a
-                # whole transport tick, and the click would start that far
-                # behind the music if it phased itself here.
-                self.audio_controller.start_metronome(
-                    time_seconds,
-                    self.media_controller.monotonic_at(time_seconds))
+            # The anchor, not "now": seek_to_position() has just run a whole
+            # transport tick, and the click would start that far behind the
+            # music if it phased itself here.
+            self.metronome.follow(
+                time_seconds, self.media_controller.monotonic_at(time_seconds))
 
     def _on_playback_state_changed(self, is_playing):
         """Keep the metronome locked to the transport.
@@ -326,14 +315,11 @@ class AppCore(QObject):
             # unless a stop-click marker already silenced it there.
             current_position = self.media_controller.get_current_position()
             self.audio_engine.monitor.reset()
-            if self._click_stopped_at(current_position):
-                self.audio_controller.stop_metronome()
-            else:
-                self.audio_controller.start_metronome(
-                    current_position,
-                    self.media_controller.monotonic_at(current_position))
+            self.metronome.follow(
+                current_position,
+                self.media_controller.monotonic_at(current_position))
         else:
-            self.audio_controller.stop_metronome()
+            self.metronome.stop_metronome()
             monitor = self.audio_engine.monitor
             if monitor.had_activity():
                 self.logger.info(monitor.summary())
@@ -351,16 +337,15 @@ class AppCore(QObject):
         Restarting a running metronome is what re-phases the beat: the map may
         have changed under the playhead (a tempo marker edited mid-playback),
         and its beat grid no longer lines up with the one being counted."""
-        was_running = self.audio_controller.is_metronome_running()
+        was_running = self.metronome.is_metronome_running()
         position = (self.media_controller.get_current_position()
                     if was_running else 0.0)
 
-        self.audio_controller.set_tempo_map(tempo_map)
+        self.metronome.set_tempo_map(tempo_map)
         self.media_controller.set_tempo_map(tempo_map)
 
         if was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(
+            self.metronome.follow(
                 position, self.media_controller.monotonic_at(position))
 
         self.tempo_map_changed.emit(tempo_map)
@@ -429,7 +414,7 @@ class AppCore(QObject):
             return                       # count-in beats are the negative ones
         if not self.config.audio.count_in_voice or not self._count_words:
             return
-        beat_len = self.audio_controller.tempo_map.beat_seconds_at(beat_time)
+        beat_len = self.metronome.tempo_map.beat_seconds_at(beat_time)
         beats_remaining = round(-beat_time / beat_len)
         if 1 <= beats_remaining <= 4:
             self.audio_engine.schedule_voice(
@@ -483,17 +468,13 @@ class AppCore(QObject):
         consumer reads), the rest straight onto the transport. Called on every
         song load and after every edit in the markers dialog."""
         markers = list(getattr(song, "control_markers", []))
-        self._control_markers = markers
+        self.metronome.set_control_markers(markers)
         self.bpm_state.set_tempo_changes(core_markers.tempo_changes(markers))
         self.media_controller.set_control_markers(
             [(m.time, m.kind, m.bpm) for m in markers])
         self.media_controller.set_segue(
             bool(getattr(song, "segue", False)),
             float(getattr(song, "segue_time", 0.0)))
-
-    def _click_stopped_at(self, position) -> bool:
-        """Whether a stop-click marker has already silenced the click there."""
-        return core_markers.click_stopped_at(self._control_markers, position)
 
     def _on_control_marker_fired(self, kind, bpm):
         """Act on a marker the transport just crossed.
@@ -504,7 +485,7 @@ class AppCore(QObject):
         time it played past the marker."""
         if kind == core_markers.KIND_CLICK_STOP:
             self.logger.info("Stop-click marker — click off for the rest of the song")
-            self.audio_controller.stop_metronome()
+            self.metronome.stop_metronome()
         elif kind == core_markers.KIND_TEMPO:
             # Nothing to DO: the metronome schedules each beat off the tempo
             # map, which already carries this change, so the interval after the
@@ -707,7 +688,7 @@ class AppCore(QObject):
         for name, cleanup in (
             ("webremote_manager", self.webremote_manager.cleanup),
             ("media_controller", self.media_controller.cleanup),
-            ("audio_controller", self.audio_controller.cleanup),
+            ("metronome", self.metronome.cleanup),
             ("audio_engine", self.audio_engine.cleanup),
             ("dmx_manager", self.dmx_manager.cleanup),
             ("midi_manager", self.midi_manager.cleanup),

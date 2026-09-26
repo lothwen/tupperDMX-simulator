@@ -1,10 +1,12 @@
-import math
+# ABOUTME: Metronome — schedules the click into the output: beats from
+# ABOUTME: core/click.py, placed at exact output frames ahead of the playhead.
 import time
 from PyQt6.QtCore import QObject, Qt, pyqtSignal, QTimer
 
 from audio.engine import AudioEngine
 from audio.mixer import BUS_CLICK
-from core.tempo_map import BEATS_PER_BAR, TempoMap
+from core import click
+from core.tempo_map import TempoMap
 from tupperlogger import get_logger
 
 # How far ahead of the output playhead beats are queued. It only has to exceed
@@ -25,8 +27,8 @@ PUMP_MS = 25
 START_GRACE_S = 0.02
 
 
-class AudioController(QObject):
-    """Metronome engine: the click is SCHEDULED INTO THE OUTPUT, not played by
+class Metronome(QObject):
+    """The click's scheduler: the click is SCHEDULED INTO THE OUTPUT, not played by
     a timer. Beat times come from the song's TempoMap, are converted to
     absolute output frames, and are handed to the mixer up to LOOKAHEAD_S
     ahead of the playhead; the mixer places each beep at its exact sample.
@@ -44,10 +46,11 @@ class AudioController(QObject):
     rather than played late, because a click that resumes late misleads a
     musician where a missing one merely disappoints.
 
-    Supports negative timeline positions (the Fase-4 count-in): beat math uses
-    floor()/ceil(), so a metronome started at -N beats runs seamlessly through
-    t=0 into the song, and the beat INDEX (not a free-running counter) decides
-    the downbeat, so the accent survives a tempo change."""
+    WHAT each beat is — its time, its 1-4 number, the kind of sound it takes —
+    is `core.click`'s answer, and whether the click runs at a position at all
+    is `follow()`'s, so this class only has to get beats to the output on time.
+    Negative timeline positions (the count-in) need no casing: the beat index
+    runs seamlessly through t=0 into the song."""
 
     # Signals
     metronome_volume_changed = pyqtSignal(float)  # volume 0.0-1.0
@@ -63,7 +66,7 @@ class AudioController(QObject):
 
     def __init__(self, engine: AudioEngine, initial_volume: float = 0.5):
         super().__init__()
-        self.logger = get_logger("app.audio")
+        self.logger = get_logger("app.metronome")
         self.engine = engine
         # Shared with the audio feed: one record of the whole timing picture.
         self.monitor = engine.monitor
@@ -77,6 +80,9 @@ class AudioController(QObject):
         self.is_metronome_enabled = False
         self.metronome_last_volume = initial_volume
         self.metronome_is_muted = False
+        # The current song's control markers — the state a stop-click leaves
+        # behind, which follow() re-resolves rather than replays.
+        self._control_markers = []
         # The grid's anchor: timeline time `_anchor_time` falls at output frame
         # `_anchor_frame`. Every beat's frame is derived from this pair, so the
         # click rides the sound card's clock rather than the system's.
@@ -100,7 +106,7 @@ class AudioController(QObject):
         self.metronome_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.metronome_timer.timeout.connect(self._pump)
 
-        self.logger.info("Audio controller initialized")
+        self.logger.info("Metronome initialized")
 
     @property
     def bpm(self) -> int:
@@ -119,6 +125,23 @@ class AudioController(QObject):
         self.logger.debug(
             f"Tempo map set: base {tempo_map.bpm_at(0.0)} BPM, "
             f"{len(tempo_map.changes())} change(s)")
+
+    def set_control_markers(self, markers) -> None:
+        """Install the current song's control markers (what follow() asks)."""
+        self._control_markers = list(markers)
+
+    def follow(self, position: float, anchor_monotonic: float = None) -> None:
+        """Put the click where the transport is: running from `position`,
+        unless a stop-click marker has already silenced it there.
+
+        Every start, seek and retime goes through here, because a stop-click
+        outlives its own crossing — landing before the marker brings the click
+        back, landing past it does not. `anchor_monotonic` is as for
+        start_metronome()."""
+        if click.click_stopped_at(self._control_markers, position):
+            self.stop_metronome()
+        else:
+            self.start_metronome(position, anchor_monotonic)
 
     def start_metronome(self, timeline_position_sec: float = 0.0,
                         anchor_monotonic: float = None) -> None:
@@ -139,11 +162,10 @@ class AudioController(QObject):
         self._anchor_time = timeline_position_sec + lag
         self._anchor_frame = self.engine.frames_rendered()
 
-        # The first beat at or after the anchor, less the grace — ceil() so a
-        # beat genuinely behind the playhead is not sounded late, the grace so
-        # the beat the transport is sitting ON still counts as due.
-        self._set_beat_index(
-            math.ceil(self.tempo_map.beat_at(self._anchor_time - START_GRACE_S)))
+        # The first beat at or after the anchor, less the grace — so the beat
+        # the transport is sitting ON still counts as due.
+        self._set_beat_index(click.first_index_at(
+            self.tempo_map, self._anchor_time - START_GRACE_S))
         self._opening_beat = True
 
         self._pump()   # queue the opening beats before returning
@@ -167,20 +189,16 @@ class AudioController(QObject):
             self.logger.info("Metronome stopped")
 
     def _set_beat_index(self, index: int) -> None:
-        """Move to a continuous beat index, deriving the 1-4 count from it.
-
-        Python's % is floor-based, so a count-in's negative indices land on the
-        same 1-4 cycle the song continues with — no separate count-in casing."""
+        """Move to a continuous beat index, deriving the 1-4 count from it."""
         self._beat_index = int(index)
-        self.beat_count = (self._beat_index % BEATS_PER_BAR) + 1
+        self.beat_count = click.beat_number(self._beat_index)
 
-    def _beat_frame(self, index: int) -> int:
-        """The output frame beat `index` falls on.
+    def _frame_at(self, seconds: float) -> int:
+        """The output frame timeline time `seconds` falls on.
 
-        Asked of the tempo map, so a tempo marker retimes the click from that
-        marker on, and expressed in frames, so the answer rides the sound
-        card's clock instead of the system's."""
-        seconds = self.tempo_map.seconds_at_beat(index)
+        The beat's time comes from the tempo map, so a tempo marker retimes
+        the click from that marker on; expressed in frames, the answer rides
+        the sound card's clock instead of the system's."""
         return self._anchor_frame + round(
             (seconds - self._anchor_time) * self.engine.rate())
 
@@ -195,25 +213,25 @@ class AudioController(QObject):
 
         grace = int(START_GRACE_S * self.engine.rate())
         dropped = 0
-        while self._beat_frame(self._beat_index) < horizon:
-            frame = self._beat_frame(self._beat_index)
+        while True:
+            event = click.event_at(self.tempo_map, self._beat_index)
+            frame = self._frame_at(event.seconds)
+            if frame >= horizon:
+                break
             if frame < rendered - grace:
                 # The playhead is well past it. Dropping keeps the grid;
                 # sounding it now would put a beat between two beats.
                 dropped += 1
             else:
-                late = self.engine.schedule_click(
-                    downbeat=(self.beat_count == 1), at_frame=frame)
+                late = self.engine.schedule_click(event.kind, at_frame=frame)
                 if self._opening_beat:
                     self._opening_beat = False
                 else:
                     self.monitor.record_lead(
                         (frame - rendered) / max(1, self.engine.rate()))
                 self.monitor.record_beat(late / max(1, self.engine.rate()))
-                self.beat_scheduled.emit(
-                    self.beat_count,
-                    self.tempo_map.seconds_at_beat(self._beat_index), frame)
-                self._pending.append((frame, self.beat_count))
+                self.beat_scheduled.emit(event.number, event.seconds, frame)
+                self._pending.append((frame, event.number))
             self._set_beat_index(self._beat_index + 1)
 
         if dropped:
@@ -278,5 +296,5 @@ class AudioController(QObject):
 
     def cleanup(self) -> None:
         """Clean up audio resources."""
-        self.logger.info("Cleaning up audio controller")
+        self.logger.info("Cleaning up metronome")
         self.stop_metronome()

@@ -120,6 +120,11 @@ transport tick in between.
   placed ahead but lets a beep already sounding finish, or a clean stop becomes a pop. The spoken count-in rides
   `beat_scheduled` (number, timeline time, frame) and is placed at the beat's OWN frame; `beat_occurred` still fires when
   the output *reaches* a beat, which is what keeps the web remote's indicator honest.
+  **The click is three layers**: `core/click.py` (Qt-free) says WHAT each beat is — time, 1-4 number, sound *kind* —
+  and whether the click is on at a position (stop-click); `audio/click.py` (Qt-free) says what each kind SOUNDS like
+  at the output rate; `app/metronome.py` says WHEN, and `Metronome.follow()` is the ONE start/seek/retime entry, so
+  AppCore never asks the stop-click rule itself. **The window never starts or stops the click** — it once did, after
+  AppCore on the same signal, and its bare restart undid both the stop-click and the anchor.
 - **`audio/diagnostics.py` records the click's own timing** — `TimingMonitor`, armed on play and summarised in one log
   line per pass, is the only reason a glitch at a show is answerable afterwards. The metronome reports every beat's
   scheduling error, the audio feed every top-up and the sink's own underrun verdict (`UnderrunError`/`IdleState` — the

@@ -69,22 +69,6 @@ def tempo_changes(markers: Sequence) -> List[Tuple[float, int]]:
                   if m.kind == KIND_TEMPO and m.bpm)
 
 
-def click_stop_time(markers: Sequence) -> Optional[float]:
-    """When the click stops, or None if it never does.
-
-    The EARLIEST stop-click wins: the marker is one-way (there is no
-    start-click), so a second one further down the song changes nothing."""
-    stops = [float(m.time) for m in markers if m.kind == KIND_CLICK_STOP]
-    return min(stops) if stops else None
-
-
-def click_stopped_at(markers: Sequence, position: float) -> bool:
-    """Whether the click is silent at `position` — the question every seek,
-    resume and song load asks, since the marker's effect outlives its crossing."""
-    stop = click_stop_time(markers)
-    return stop is not None and position >= stop
-
-
 def marker_at(markers: Sequence, time_sec: float, kind: Optional[str] = None):
     """The marker nearest `time_sec`, optionally restricted to one kind.
 

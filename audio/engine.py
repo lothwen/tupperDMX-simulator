@@ -11,9 +11,8 @@ from PyQt6.QtMultimedia import (QAudio, QAudioDevice, QAudioFormat, QAudioSink,
 
 from audio.decode import ThreadedAudioDecoder
 from audio.diagnostics import TimingMonitor, maybe_start_attributor
-from audio.mixer import (BUS_CLICK, BUS_VOICE, METRONOME_HIGH_PITCH_HZ,
-                         METRONOME_LOW_PITCH_HZ, SAMPLE_RATE, Mixer, make_beep,
-                         resample)
+from audio.click import ClickSounds
+from audio.mixer import BUS_CLICK, BUS_VOICE, SAMPLE_RATE, Mixer, resample
 from tupperlogger import get_logger
 
 # Target sink buffer: latency shared equally by backing/click/voice, so their
@@ -293,8 +292,7 @@ class AudioEngine(QObject):
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.start(QThread.Priority.TimeCriticalPriority)
 
-        self._click_high = make_beep(METRONOME_HIGH_PITCH_HZ)
-        self._click_low = make_beep(METRONOME_LOW_PITCH_HZ)
+        self._clicks = ClickSounds()
 
         # End-of-backing watchdog: polls the mixer latch from the Qt thread
         # (render() runs on the audio thread and must not emit signals).
@@ -355,8 +353,7 @@ class AudioEngine(QObject):
         if rate == self._rate or rate <= 0:
             return
         previous, self._rate = self._rate, rate
-        self._click_high = make_beep(METRONOME_HIGH_PITCH_HZ, sample_rate=rate)
-        self._click_low = make_beep(METRONOME_LOW_PITCH_HZ, sample_rate=rate)
+        self._clicks.set_rate(rate)
         self._decoder.set_target_rate(rate)
 
         pcm = self.mixer.backing_samples()
@@ -434,17 +431,16 @@ class AudioEngine(QObject):
         """The output's own clock — what a caller schedules against."""
         return self.mixer.frames_rendered()
 
-    def trigger_click(self, downbeat: bool) -> None:
-        """Sound a beep as soon as possible (previews, tests)."""
-        self.mixer.trigger(BUS_CLICK, self._click_high if downbeat else self._click_low)
+    def trigger_click(self, kind: str) -> None:
+        """Sound a click kind as soon as possible (previews, tests)."""
+        self.mixer.trigger(BUS_CLICK, self._clicks.sample(kind))
 
-    def schedule_click(self, downbeat: bool, at_frame: int) -> int:
+    def schedule_click(self, kind: str, at_frame: int) -> int:
         """Place a beep at an exact output frame; returns frames LATE (0 = on
         time). This is what makes the click deterministic: the beep's position
         stops depending on when the Qt thread got round to asking for it."""
         return self.mixer.schedule(
-            BUS_CLICK, self._click_high if downbeat else self._click_low,
-            at_frame)
+            BUS_CLICK, self._clicks.sample(kind), at_frame)
 
     def clear_clicks(self) -> None:
         """Drop the clicks queued ahead of the playhead — a stop or a seek

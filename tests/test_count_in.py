@@ -3,7 +3,7 @@ Characterization test: the count-in (precuenta) behaviour.
 
 MediaController with a fake engine + fake MIDI manager (offscreen Qt, no audio
 device): count-in start offset, pause-during-count-in resets, seek cancels,
-and AudioController's beat numbering at negative timeline positions.
+and the Metronome's beat numbering at negative timeline positions.
 
 Run with:
     uv run python tests/test_count_in.py
@@ -21,6 +21,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from audio.diagnostics import TimingMonitor
+from core.click import KIND_ACCENT
 
 
 def _assert(cond, msg):
@@ -42,7 +43,7 @@ class FakeEngine(QObject):
         self.active = False
         self.clicks = []
         self.voices = []
-        # AudioController reports every beat here; the real engine owns one.
+        # The Metronome reports every beat here; the real engine owns one.
         self.monitor = TimingMonitor()
         # The output's frame clock. Tests move it with advance() and then pump
         # the controller, which is exactly how the real engine drives it.
@@ -61,7 +62,8 @@ class FakeEngine(QObject):
         """Render `seconds` of output, as the audio thread would."""
         self.frames += int(seconds * self.RATE)
 
-    def schedule_click(self, downbeat, at_frame):
+    def schedule_click(self, kind, at_frame):
+        downbeat = kind == KIND_ACCENT
         self.scheduled.append((at_frame, downbeat))
         self.clicks.append(downbeat)
         return max(0, self.frames - at_frame)
@@ -101,8 +103,8 @@ class FakeEngine(QObject):
     def is_active(self):
         return self.active
 
-    def trigger_click(self, downbeat):
-        self.clicks.append(downbeat)
+    def trigger_click(self, kind):
+        self.clicks.append(kind == KIND_ACCENT)
 
     def play_voice(self, samples):
         self.voices.append(samples)
@@ -197,9 +199,9 @@ def test_seek_cancels_count_in():
 
 def test_metronome_beat_numbering_at_negative_positions():
     print("test_metronome_beat_numbering_at_negative_positions")
-    from app.audio_controller import AudioController
+    from app.metronome import Metronome
     engine = FakeEngine()
-    audio = AudioController(engine)
+    audio = Metronome(engine)
     audio.set_bpm(120)  # beat = 0.5 s
 
     audio.start_metronome(-4.0)  # exactly 8 beats before 0 → downbeat

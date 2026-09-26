@@ -260,7 +260,7 @@ def probe_stall(args):
     engine = _engine(app)
     if engine is None:
         return
-    from app.audio_controller import AudioController
+    from app.metronome import Metronome
     from audio.mixer import BUS_CLICK
 
     # Where each beep was PLACED in the output. With a scheduled click this is
@@ -275,7 +275,7 @@ def probe_stall(args):
 
     engine.mixer.schedule = schedule
 
-    controller = AudioController(engine, 0.0)
+    controller = Metronome(engine, 0.0)
     controller.set_bpm(120)
     engine.monitor.reset()
     controller.start_metronome(0.0)

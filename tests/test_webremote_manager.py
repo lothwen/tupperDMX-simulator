@@ -85,7 +85,7 @@ class FakeBpmState:
         return 128
 
 
-class FakeAudioController:
+class FakeMetronome:
     beat_occurred = FakeSignal()
 
 
@@ -114,7 +114,7 @@ class FakeWindow:
         self.media_controller = FakeMediaController()
         self.midi_manager = FakeMidiManager()
         self.bpm_state = FakeBpmState()
-        self.audio_controller = FakeAudioController()
+        self.metronome = FakeMetronome()
         self.playlist_controller = FakePlaylistController(self)
         self.software_controller = FakeController()
 
