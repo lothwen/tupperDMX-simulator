@@ -10,7 +10,9 @@ Run it:
 Every model is built here from a handful of primitives — rounded boxes,
 surfaces of revolution, tubes swept along paths, bevelled extrusions — and every
 texture is procedural (brick, floorboards, velour, tolex, grille cloth, hammered
-bronze), so the assets can be regenerated, diffed and tuned like code. No
+bronze, a guitar's sunburst), so the assets can be regenerated, diffed and tuned
+like code. The guitar's outlines are the one thing measured rather than made up:
+spline points traced off a product photograph of a Stratocaster. No
 Blender, no glTF library: numpy builds the arrays and `GLB` below writes the
 container, because the format is small enough that a dependency would be the
 larger thing.
@@ -373,34 +375,50 @@ def circle_path(radius: float, count: int = 48, start: float = 0.0, stop: float 
     return np.stack([radius * np.cos(ts), radius * np.sin(ts), np.zeros_like(ts)], 1)
 
 
-def rounded_slab(outline, half_thickness: float, bevel: float, rings: int = 5, arc_seg: int = 3):
-    """Extrude a star-shaped outline (XY, anticlockwise) into a slab along Z
-    with rounded edges. Returns (front cap, back cap, sides) so each can take
-    its own material; the caps are concentric rings, fine enough to carry a
-    vertex-colour gradient."""
+def ear_clip(outline) -> np.ndarray:
+    """Triangulate a simple polygon (XY, anticlockwise) by clipping ears."""
+    pts = np.asarray(outline, float)
+    remaining = list(range(len(pts)))
+    triangles = []
+    k = stall = 0
+    while len(remaining) > 3:
+        n = len(remaining)
+        i0, i1, i2 = remaining[(k - 1) % n], remaining[k % n], remaining[(k + 1) % n]
+        a, b, c = pts[i0], pts[i1], pts[i2]
+        if (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 1e-15:
+            others = pts[[j for j in remaining if j not in (i0, i1, i2)]]
+            inside = np.ones(len(others), bool)
+            for p, q in ((a, b), (b, c), (c, a)):
+                inside &= (q[0] - p[0]) * (others[:, 1] - p[1]) - (q[1] - p[1]) * (others[:, 0] - p[0]) >= 0
+            if not inside.any():
+                triangles.append((i0, i1, i2))
+                remaining.pop(k % n)
+                stall = 0
+                continue
+        k += 1
+        stall += 1
+        if stall > n:
+            raise ValueError("ear_clip: the outline is not a simple anticlockwise polygon")
+    triangles.append(tuple(remaining))
+    return np.array(triangles)
+
+
+def rounded_slab(outline, half_thickness: float, bevel: float, arc_seg: int = 3):
+    """Extrude a simple outline (XY, anticlockwise) into a slab along Z with
+    rounded edges. Returns (front cap, back cap, sides) so each can take its
+    own material; the caps are the outline ear-clipped, UVs its XY in metres."""
     outline = np.asarray(outline, float)
     tangent = np.roll(outline, -1, 0) - np.roll(outline, 1, 0)
     outward = np.stack([tangent[:, 1], -tangent[:, 0]], 1)
     outward /= np.linalg.norm(outward, axis=1, keepdims=True)
     inner = outline - outward * bevel
-    centre = inner.mean(axis=0)
     count = len(outline)
+    triangles = ear_clip(inner)
 
     def cap(z: float, facing: float) -> Mesh:
-        scales = np.linspace(1.0, 0.0, rings + 1)[:-1]
-        ring_pts = [centre + (inner - centre) * s for s in scales]
-        pts2 = np.concatenate(ring_pts + [centre[None, :]])
-        p = np.concatenate([pts2, np.full((len(pts2), 1), z)], 1)
-        n = np.tile([0.0, 0.0, facing], (len(p), 1))
-        idx = []
-        for k in range(rings - 1):
-            a, b = k * count, (k + 1) * count
-            for j in range(count):
-                jn = (j + 1) % count
-                idx += [[a + j, b + j, b + jn], [a + j, b + jn, a + jn]]
-        last, tip = (rings - 1) * count, rings * count
-        idx += [[last + j, tip, last + (j + 1) % count] for j in range(count)]
-        return oriented(Mesh(p, n, pts2, None, idx))
+        p = np.concatenate([inner, np.full((count, 1), z)], 1)
+        n = np.tile([0.0, 0.0, facing], (count, 1))
+        return oriented(Mesh(p, n, inner, None, triangles))
 
     flat = half_thickness - bevel
     angles = np.concatenate([np.linspace(-np.pi / 2, 0, arc_seg + 1),
@@ -421,6 +439,33 @@ def rounded_slab(outline, half_thickness: float, bevel: float, rings: int = 5, a
     sides = oriented(Mesh(pos_arr.reshape(-1, 3), nrm_arr.reshape(-1, 3), uv.reshape(-1, 2), None,
                           grid_indices(len(angles), count + 1)))
     return cap(half_thickness, 1.0), cap(-half_thickness, -1.0), sides
+
+
+def rounded_rect(hx: float, hy: float, r: float, seg: int = 4) -> np.ndarray:
+    """An anticlockwise rectangle outline with its corners rounded to r."""
+    out = []
+    for cx, cy, start in ((hx - r, -hy + r, -np.pi / 2), (hx - r, hy - r, 0.0),
+                          (-hx + r, hy - r, np.pi / 2), (-hx + r, -hy + r, np.pi)):
+        for t in np.linspace(start, start + np.pi / 2, seg + 1):
+            out.append((cx + r * math.cos(t), cy + r * math.sin(t)))
+    return np.array(out)
+
+
+def outline_mm(points, samples: int = 5) -> np.ndarray:
+    """A closed spline through control points given in millimetres: metres,
+    anticlockwise."""
+    p = catmull_rom(np.asarray(points, float) / 1000.0, samples, closed=True)
+    area = np.sum(p[:, 0] * np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1) * p[:, 1])
+    return p if area > 0 else p[::-1].copy()
+
+
+def tapered(mesh: Mesh, y0: float, y1: float, k0: float, k1: float) -> Mesh:
+    """Scale X by a factor running linearly from k0 at y0 to k1 at y1."""
+    k = np.interp(mesh.p[:, 1], [y0, y1], [k0, k1])
+    p, n = mesh.p.copy(), mesh.n.copy()
+    p[:, 0] *= k
+    n[:, 0] /= k
+    return Mesh(p, n, mesh.uv, mesh.c, mesh.i)
 
 
 def plane(origin, u_axis, v_axis, nu: int, nv: int, normal) -> Mesh:
@@ -598,12 +643,47 @@ def tex_small():
     return out
 
 
+# The guitar's burst covers the body's outline in its own frame (see
+# `build_guitar`), the image's top-left corner at BURST_ORIGIN.
+BURST_PIXELS = (512, 512)
+BURST_ORIGIN = (-0.1666, 0.47)
+BURST_SIZE = (0.3332, 0.476)
+
+
+def tex_guitar():
+    """A three-tone sunburst: black at the edge, through red, to an amber
+    centre with the alder's grain in it. The burst follows the outline, so it
+    is painted by distance from the body's edge; the stops are read off the
+    photograph the outline came from."""
+    w, h = BURST_PIXELS
+    rng = np.random.default_rng(13)
+    x = BURST_ORIGIN[0] + (np.arange(w) + 0.5) * BURST_SIZE[0] / w
+    y = BURST_ORIGIN[1] - (np.arange(h) + 0.5) * BURST_SIZE[1] / h
+    X, Y = np.meshgrid(x, y)
+    edge = strat_body()
+    dist = np.full(X.shape, np.inf)
+    inside = np.zeros(X.shape, bool)
+    for (ax, ay), (bx, by) in zip(edge, np.roll(edge, -1, 0)):
+        ex, ey = bx - ax, by - ay
+        t = np.clip(((X - ax) * ex + (Y - ay) * ey) / (ex * ex + ey * ey), 0.0, 1.0)
+        dist = np.minimum(dist, np.hypot(X - ax - t * ex, Y - ay - t * ey))
+        inside ^= ((ay > Y) != (by > Y)) & (X < ax + (Y - ay) * ex / (ey if ey else 1e-12))
+    d = np.where(inside, dist, 0.0)
+    black, red, amber = (np.array(c) for c in ((0.008, 0.005, 0.004), (0.3, 0.004, 0.002), (0.49, 0.094, 0.004)))
+    to_red = smoothstep(0.018, 0.042, d)[..., None]
+    to_amber = smoothstep(0.036, 0.075, d)[..., None]
+    col = (black * (1 - to_red) + red * to_red) * (1 - to_amber) + amber * to_amber
+    grain = 0.7 * tile_noise(h, w, 4, 44, rng) + 0.3 * tile_noise(h, w, 12, 130, rng)
+    col = col * (1.0 + to_amber * (0.14 * grain[..., None] - 0.07))
+    return {"strat_burst": png(to_srgb8(col))}
+
+
 _TEXTURES: Dict[str, bytes] = {}
 
 
 def texture(name: str) -> bytes:
     if not _TEXTURES:
-        for build in (tex_brick, tex_planks, tex_small):
+        for build in (tex_brick, tex_planks, tex_small, tex_guitar):
             _TEXTURES.update(build())
     return _TEXTURES[name]
 
@@ -647,10 +727,12 @@ MATERIALS: Dict[str, dict] = {
     "hammered": dict(base=(0.4, 0.3, 0.18), rough=0.32, metal=0.8, normal_tex="hammered_normal", tile=0.2),
     "hoop_wood": dict(base=(0.3, 0.16, 0.07), rough=0.3),
     "port": dict(base=(0.004, 0.004, 0.004), rough=0.9),
-    "guitar_top": dict(base=(1, 1, 1), rough=0.12),           # the sunburst is in COLOR_0
-    "guitar_back": dict(base=(0.03, 0.012, 0.006), rough=0.15),
-    "maple": dict(base=(0.4, 0.25, 0.11), rough=0.4),
-    "rosewood": dict(base=(0.05, 0.03, 0.02), rough=0.5),
+    "guitar_top": dict(base=(1, 1, 1), rough=0.12, base_tex="strat_burst", tile=BURST_SIZE),
+    "guitar_back": dict(base=(0.01, 0.006, 0.005), rough=0.15),   # the burst's black, round the edge
+    "maple": dict(base=(0.66, 0.32, 0.11), rough=0.35),
+    "rosewood": dict(base=(0.054, 0.029, 0.024), rough=0.5),
+    "parchment": dict(base=(0.74, 0.7, 0.62), rough=0.3),
+    "cream": dict(base=(0.72, 0.56, 0.34), rough=0.35),
     "fixture_body": dict(base=(0.025, 0.025, 0.025), rough=0.45),
     "lens": dict(base=(0.02, 0.02, 0.02), rough=0.05),       # lit by the renderer
     "chair_wood": dict(base=(0.075, 0.037, 0.018), rough=0.35),
@@ -1032,37 +1114,93 @@ def build_bass_cab() -> List[Node]:
     return [root]
 
 
-def guitar_outline(count: int = 120) -> np.ndarray:
-    """The body's silhouette: a squat lower bout, a smaller upper bout and a
-    soft waist, found as the zero crossing of their smooth union along rays
-    from a point in the waist."""
-    def field_at(x, y):
-        lower = (np.hypot(x, (y - 0.19) * 1.12) - 0.19) * 0.89
-        upper = np.hypot(x, y - 0.43) - 0.148
-        k = 0.06
-        h = np.clip(0.5 + 0.5 * (upper - lower) / k, 0.0, 1.0)
-        return upper * (1 - h) + lower * h - k * h * (1 - h)
+# The guitar is a Stratocaster — HSS, three-tone sunburst, rosewood board —
+# traced off a product photograph at 0.837 mm a pixel, the scale at which its
+# frets fall for a 648 mm scale length. Its own frame: upright, face +Z, +X to
+# the treble side, origin on the bottom edge of the body. Outlines are spline
+# control points in millimetres.
+STRAT_BODY = [
+    (-1.8, 0.8), (15.1, 1.7), (43.9, 1.9), (67.5, 3.6), (91.9, 8.5), (114.1, 17.3), (133.2, 30.9),
+    (146.5, 46.9), (156.4, 67.1), (161.3, 90.7), (161.0, 115.8), (156.9, 140.2), (149.3, 166.0),
+    (140.9, 186.9), (129.9, 210.2), (119.7, 231.9), (114.0, 253.8), (115.5, 277.0), (123.8, 298.9),
+    (131.9, 320.1), (137.4, 344.8), (137.4, 369.3), (131.1, 389.7), (120.4, 399.9), (108.4, 400.5),
+    (100.2, 392.8), (95.3, 373.5), (87.2, 355.6), (72.2, 344.6), (52.8, 341.6), (35.0, 344.9), (26.1, 344.2),
+    (8.3, 355.7), (-13.1, 369.4), (-25.0, 378.5), (-36.0, 386.2), (-45.2, 387.6), (-64.4, 390.9),
+    (-79.4, 401.8), (-89.5, 418.5), (-92.9, 440.3), (-96.3, 458.0), (-99.8, 463.2), (-105.0, 465.6),
+    (-111.0, 465.4), (-117.2, 462.4), (-122.5, 458.0), (-128.1, 451.2), (-136.5, 431.1), (-138.9, 409.3),
+    (-137.4, 383.2), (-132.3, 359.9), (-124.9, 332.9), (-117.0, 307.3), (-113.0, 282.9), (-115.1, 259.0),
+    (-122.6, 236.4), (-131.9, 214.7), (-141.2, 193.1), (-149.7, 171.5), (-156.8, 147.6), (-161.2, 123.5),
+    (-161.8, 101.0), (-158.7, 78.2), (-149.2, 57.5), (-134.1, 39.2), (-113.8, 24.3), (-92.0, 13.5),
+    (-66.8, 6.9), (-42.2, 3.8), (-17.6, 2.5),
+]
+STRAT_GUARD = [
+    (137.5, 101.1), (146.9, 108.4), (148.0, 125.4), (141.2, 151.2), (132.1, 174.8), (121.6, 198.6),
+    (110.5, 223.5), (103.4, 247.3), (103.4, 271.6), (110.1, 295.0), (119.5, 318.3), (126.3, 344.1),
+    (126.3, 368.2), (118.4, 387.9), (114.4, 389.8), (110.6, 384.9), (105.7, 362.2), (94.8, 343.8),
+    (88.6, 340.9), (81.7, 341.7), (62.5, 335.1), (59.0, 330.1), (52.9, 329.1), (43.9, 335.2), (32.7, 338.1),
+    (21.4, 340.3), (-1.3, 355.2), (-23.6, 369.7), (-30.9, 369.9), (-36.7, 365.9), (-47.1, 367.6),
+    (-54.2, 362.2), (-52.7, 347.4), (-48.1, 320.2), (-48.1, 293.3), (-54.0, 266.6), (-62.6, 243.4),
+    (-71.3, 219.5), (-75.3, 194.2), (-72.3, 171.3), (-62.4, 154.4), (-47.6, 146.6), (-41.4, 147.8),
+    (-39.5, 158.4), (-35.0, 161.3), (-5.0, 161.5), (28.5, 161.5), (45.6, 160.3), (47.9, 150.9),
+    (50.9, 146.3), (72.5, 142.8), (91.0, 133.7), (111.4, 117.2), (126.8, 103.3),
+]
+STRAT_HEAD = [
+    (21.2, 803.2), (22.0, 811.0), (24.0, 820.6), (31.2, 832.6), (39.9, 839.8), (46.4, 844.1), (46.1, 856.4),
+    (44.3, 868.7), (40.4, 884.1), (37.0, 899.1), (34.2, 915.6), (34.4, 924.9), (42.6, 931.7), (52.5, 941.9),
+    (55.2, 953.3), (53.0, 968.6), (46.0, 976.8), (37.5, 981.6), (24.5, 981.6), (14.0, 976.1), (6.7, 964.2),
+    (3.2, 952.6), (-2.7, 932.0), (-12.0, 900.0), (-21.3, 868.0), (-30.5, 836.5), (-34.2, 822.7),
+    (-31.6, 815.4), (-23.0, 809.0), (-21.5, 803.4), (-19.8, 800.8), (-16.8, 799.4), (-12.0, 799.0),
+    (-6.0, 799.0), (0.0, 799.0), (6.0, 799.0), (12.0, 799.0), (16.8, 799.4), (19.8, 800.8),
+]
+GUARD_SCREWS = [(-45.6, 358.4), (115.7, 375.2), (111.6, 315.5), (35.6, 329.8), (-50.1, 257.0),
+                (-66.4, 205.7), (-51.2, 153.3), (102.7, 220.4), (124.9, 169.8), (136.1, 111.3)]
+KNOBS = [(54.8, 177.4), (92.1, 157.4), (124.3, 126.4)]            # volume, tone, tone
+SCALE_LENGTH = 0.648
+NUT_Y = 0.798
+BODY_HALF = 0.0225                                                # 45 mm of alder
+STRING_RADII = (0.0006, 0.0005, 0.0004, 0.00032, 0.00026, 0.00022)  # low E to high E
 
-    centre = np.array([0.0, 0.3])
-    angles = np.linspace(0.0, 2 * np.pi, count, endpoint=False)
-    out = []
-    for a in angles:
-        d = np.array([math.cos(a), math.sin(a)])
-        lo, hi = 0.0, 0.6
-        for _ in range(40):
-            mid = 0.5 * (lo + hi)
-            if field_at(*(centre + d * mid)) < 0:
-                lo = mid
-            else:
-                hi = mid
-        out.append(centre + d * lo)
-    return np.array(out)
+
+def strat_body() -> np.ndarray:
+    return outline_mm(STRAT_BODY)
 
 
-def sunburst(p):
-    r = np.hypot(p[:, 0], (p[:, 1] - 0.25) * 0.75) / 0.2
-    t = smoothstep(0.45, 1.05, r)[:, None]
-    return np.array([0.5, 0.28, 0.07]) * (1 - t) + np.array([0.04, 0.014, 0.004]) * t
+def strat_knob() -> Mesh:
+    """A skirted, flat-topped control knob standing on +Z."""
+    r = 0.0118
+    knob = lathe([[(r, 0.0), (r, 0.0016)], [(r, 0.0016), (0.011, 0.0022)], [(0.011, 0.0022), (0.0101, 0.0158)],
+                  [(0.0101, 0.0158), (0.0097, 0.0166), (0.0092, 0.017), (0.0, 0.0172)]], 28)
+    return knob.transform(Rx(math.pi / 2))
+
+
+def screw_head(radius: float = 0.0021) -> Mesh:
+    """A domed screw head standing on +Z."""
+    return lathe([[(radius, 0.0), (radius * 0.96, radius * 0.25), (radius * 0.6, radius * 0.5),
+                   (0.0, radius * 0.55)]], 12).transform(Rx(math.pi / 2))
+
+
+def strap_button() -> Mesh:
+    """A strap button standing on +Y."""
+    return lathe([[(0.0036, 0.0), (0.0036, 0.0055)],
+                  [(0.0036, 0.0055), (0.0066, 0.0062), (0.0068, 0.0084), (0.0055, 0.0104), (0.0, 0.011)]], 16)
+
+
+def c_neck(y0: float, y1: float, w0: float, w1: float, d0: float, d1: float, top: float,
+           stations: int = 16, seg: int = 18) -> Mesh:
+    """A neck's back: at each station along Y a half-ellipse hanging from the
+    plane z = top, its width and depth running linearly from (w0, d0) at y0 to
+    (w1, d1) at y1; capped flat at y0, where the neck ends in the body."""
+    s = np.linspace(0.0, 1.0, stations)[:, None]
+    t = np.linspace(0.0, np.pi, seg + 1)[None, :]
+    a = (w0 + (w1 - w0) * s) / 2
+    b = d0 + (d1 - d0) * s
+    y = np.broadcast_to(y0 + (y1 - y0) * s, (stations, seg + 1))
+    pos = np.stack([a * np.cos(t), y, top - b * np.sin(t)], -1).reshape(-1, 3)
+    nrm = np.stack([np.cos(t) / a, np.zeros_like(y), -np.sin(t) / b], -1).reshape(-1, 3)
+    back = Mesh(pos, nrm, None, None, grid_indices(stations, seg + 1))
+    heel = Mesh(np.concatenate([[(0.0, y0, top)], pos[:seg + 1]]), np.tile([0.0, -1.0, 0.0], (seg + 2, 1)),
+                None, None, [[0, k + 1, k + 2] for k in range(seg)])
+    return oriented(merge([back, heel]))
 
 
 def build_guitar() -> List[Node]:
@@ -1075,27 +1213,143 @@ def build_guitar() -> List[Node]:
         stand.append(rod((sx * 0.13, 0.13, 0.07), (sx * 0.13, 0.17, 0.08), 0.011))
         stand.append(rod((sx * 0.05, 0.84, -0.16), (0, 0.8, -0.18), 0.007))
     root.add(merge(stand), "black")
-    # The guitar in its own frame — upright, face +Z, origin at the bottom of
-    # the body — tipped back 0.25 rad onto the stand.
-    body = Node("guitar_body", T(0, 0.12, 0.02) @ Rx(-0.25))
-    front, back, sides = rounded_slab(guitar_outline(), 0.024, 0.008)
-    body.add(front.painted(sunburst), "guitar_top")
-    body.add(merge([back, sides]), "guitar_back")
-    body.add(rounded_box((0.023, 0.235, 0.012), 0.008, center=(0, 0.8, 0.008)), "maple")
-    body.add(rounded_box((0.024, 0.235, 0.003), 0.001, center=(0, 0.8, 0.022)), "rosewood")
-    body.add(rounded_box((0.042, 0.085, 0.009), 0.012, center=(0, 1.105, 0.003)), "maple")
-    for k in range(3):
-        for sx in (-1, 1):
-            body.add(rod((sx * 0.042, 1.06 + 0.035 * k, 0.003), (sx * 0.062, 1.06 + 0.035 * k, 0.003),
-                         0.004, 8), "chrome")
-    for y in (0.28, 0.4):
-        body.add(rounded_box((0.042, 0.018, 0.006), 0.004, center=(0, y, 0.028)), "black")
-    body.add(rounded_box((0.04, 0.01, 0.006), 0.003, center=(0, 0.16, 0.028)), "chrome")
-    for x, y in ((0.1, 0.12), (0.125, 0.2)):
-        body.add(cylinder(0.011, 0.007, 16, 0.003).transform(T(x, y, 0.029) @ Rx(math.pi / 2)), "panel")
-    strings = [rod((-0.025 + 0.01 * k, 0.16, 0.036), (-0.02 + 0.008 * k, 1.03, 0.027), 0.0006, 5)
-               for k in range(6)]
-    body.add(merge(strings), "chrome")
+    # The guitar in its own frame, tipped back onto the stand: the lower bout
+    # on the cradle arms, the neck in the yoke.
+    body = Node("guitar_body", T(-0.004, 0.1255, 0.02) @ Rx(-0.29))
+    face = Rx(math.pi / 2)                          # a lathe's +Y, turned to face +Z
+    top_z = BODY_HALF
+    guard_top = top_z + 0.0023                      # three-ply, 2.3 mm
+    plate_top = top_z + 0.0018                      # the bridge's base plate
+    maple_top = top_z + 0.0035                      # the neck's face, under the board
+    board_top = maple_top + 0.005
+    nut_z, saddle_z = board_top + 0.0018, board_top + 0.005     # string centres
+    saddle_y = NUT_Y - SCALE_LENGTH
+    chrome, cream, parchment, black = [], [], [], []
+
+    # The body: rounded over, the burst on both faces, its black round the edge.
+    edge = strat_body()
+    front, back, sides = rounded_slab(edge, BODY_HALF, 0.006)
+    for cap in (front, back):
+        uv = np.stack([cap.p[:, 0] - BURST_ORIGIN[0], BURST_ORIGIN[1] - cap.p[:, 1]], 1)
+        body.add(Mesh(cap.p, cap.n, uv, None, cap.i), "guitar_top")
+    body.add(sides, "guitar_back")
+    for k in (int(np.argmax(edge[:, 1])), int(np.argmin(edge[:, 1]))):      # horn tip and tail
+        t = edge[(k + 1) % len(edge)] - edge[k - 1]
+        chrome.append(strap_button().transform(T(*edge[k], 0.0) @ align((0, 1, 0), (t[1], -t[0], 0.0))))
+
+    # The pickguard, its bevel showing the black middle ply, and its screws.
+    guard, _, guard_edge = rounded_slab(outline_mm(STRAT_GUARD), 0.00115, 0.0009)
+    parchment.append(guard.transform(T(0, 0, top_z + 0.00115)))
+    black.append(guard_edge.transform(T(0, 0, top_z + 0.00115)))
+    chrome += [screw_head().transform(T(x / 1000, y / 1000, guard_top)) for x, y in GUARD_SCREWS]
+
+    # Pickups: single coils at the neck and middle, a humbucker at the bridge.
+    cover = 0.0034
+    single = rounded_slab(rounded_rect(0.0342, 0.0091, 0.0065), cover, 0.0024)
+    bobbin = rounded_slab(rounded_rect(0.0325, 0.0085, 0.0045), cover, 0.0022)
+    pole = lathe([[(0.0024, 0.0), (0.0024, 0.0003)], [(0.0024, 0.0003), (0.0016, 0.0007), (0.0, 0.0008)]],
+                 10).transform(face)
+    for y in (0.307, 0.2465):
+        cream += [m.transform(T(0, y, guard_top + cover)) for m in (single[0], single[2])]
+        chrome += [pole.transform(T((k - 2.5) * 0.0104, y, guard_top + 2 * cover - 0.0003)) for k in range(6)]
+        chrome += [screw_head(0.0018).transform(T(sx * 0.038, y, guard_top)) for sx in (-1, 1)]
+    hb_y = 0.1938
+    ring = rounded_slab(rounded_rect(0.035, 0.0192, 0.005), 0.0008, 0.0005)
+    black += [m.transform(T(0, hb_y, guard_top + 0.0008)) for m in (ring[0], ring[2])]
+    for y in (hb_y - 0.0087, hb_y + 0.0087):
+        cream += [m.transform(T(0, y, guard_top + cover)) for m in (bobbin[0], bobbin[2])]
+        chrome += [pole.transform(T((k - 2.5) * 0.0097, y, guard_top + 2 * cover - 0.0003)) for k in range(6)]
+    chrome += [screw_head(0.0018).transform(T(x, y, guard_top))
+               for x, y in ((-0.0402, 0.2), (-0.0402, 0.1883), (0.0385, 0.1942))]
+
+    # Controls: three knobs, the five-way switch in its slot, the jack's cup.
+    cream += [strat_knob().transform(T(x / 1000, y / 1000, guard_top)) for x, y in KNOBS]
+    switch = T(0.0957, 0.2023, guard_top) @ Rz(math.radians(-49.0))
+    black.append(rounded_box((0.0115, 0.0016, 0.0002), 0.0002).transform(switch))
+    cream.append(rounded_box((0.003, 0.0045, 0.005), 0.0025, center=(0.003, 0.0, 0.005)).transform(switch))
+    chrome += [screw_head(0.0018).transform(switch @ T(sx * 0.0215, 0, 0)) for sx in (-1, 1)]
+    jack = T(0.0942, 0.0873, top_z) @ Rz(math.radians(-36.6))
+    a = np.linspace(0.0, 2 * np.pi, 40, endpoint=False)
+    cup = rounded_slab(np.stack([0.0405 * np.cos(a), 0.0158 * np.sin(a)], 1), 0.0007, 0.0005)
+    chrome += [m.transform(jack @ T(0, 0, 0.0007)) for m in (cup[0], cup[2])]
+    chrome.append(cylinder(0.0062, 0.002, 20, 0.0007).transform(jack @ T(0, 0, 0.0034) @ face))
+    black.append(disc(0.0036, 16).transform(jack @ T(0, 0, 0.0055) @ face))
+    chrome += [screw_head(0.0018).transform(jack @ T(sx * 0.0345, 0, 0.0014)) for sx in (-1, 1)]
+
+    # The tremolo: base plate, its turned-up back edge, six saddles, the arm.
+    plate = rounded_slab(rounded_rect(0.038, 0.0214, 0.004), 0.0009, 0.0006)
+    chrome += [m.transform(T(0, 0.1385, top_z + 0.0009)) for m in (plate[0], plate[2])]
+    chrome.append(rounded_box((0.037, 0.0012, 0.0045), 0.001, center=(0, 0.1183, plate_top + 0.0045)))
+    for i, r in enumerate(STRING_RADII):
+        height = saddle_z - r - plate_top
+        chrome.append(rounded_box((0.0047, 0.014, height / 2), 0.0015,
+                                  center=((i - 2.5) * 0.0105, saddle_y - 0.014, plate_top + height / 2)))
+    chrome += [screw_head().transform(T(sx * 0.0293, 0.1567, plate_top)) for sx in (-1, 1)]
+    arm = [(0.035, 0.1281, plate_top - 0.002), (0.0352, 0.1286, plate_top + 0.008),
+           (0.037, 0.1335, plate_top + 0.016), (0.046, 0.155, plate_top + 0.0215),
+           (0.0572, 0.1811, plate_top + 0.023), (0.06, 0.2313, plate_top + 0.0235)]
+    chrome.append(tube(arm, 0.0024, 10, smooth=5))
+    tip_end = (0.0608, 0.2676, plate_top + 0.0235)
+    cream.append(tube([arm[-1], tip_end], 0.0033, 12))
+    cream.append(sphere(0.0033, 12).transform(T(*tip_end)))
+
+    # The neck: a C-shaped maple back under a rosewood board, 22 frets, dots.
+    board_end = 0.3215
+    widths = (0.0557, 0.0427)                       # at the board's end, at the nut
+    body.add(c_neck(board_end, NUT_Y, widths[0], widths[1], 0.0185, 0.0145, maple_top), "maple")
+    board = rounded_box((0.025, (NUT_Y - board_end) / 2, 0.0025), 0.0008,
+                        center=(0, (NUT_Y + board_end) / 2, maple_top + 0.0025))
+    body.add(tapered(board, board_end, NUT_Y, widths[0] / 0.05, widths[1] / 0.05), "rosewood")
+
+    def fret_y(n: int) -> float:
+        return NUT_Y - SCALE_LENGTH * (1.0 - 2.0 ** (-n / 12.0))
+
+    for n in range(1, 23):
+        half = float(np.interp(fret_y(n), [board_end, NUT_Y], widths)) / 2 - 0.0004
+        chrome.append(rod((-half, fret_y(n), board_top), (half, fret_y(n), board_top), 0.0011, 8))
+    for n in (3, 5, 7, 9, 12, 15, 17, 19, 21):
+        y = (fret_y(n - 1) + fret_y(n)) / 2
+        cream += [disc(0.003, 16).transform(T(x, y, board_top + 0.0001) @ face)
+                  for x in ((-0.0115, 0.0115) if n == 12 else (0.0,))]
+    parchment.append(rounded_box((0.0213, 0.0024, 0.0036), 0.0008, center=(0, NUT_Y + 0.0024, maple_top + 0.0036)))
+
+    # The headstock, the truss rod's slot at its root, six tuners in line down
+    # the bass edge: bushing and post on the face, the gear box behind, its
+    # shaft and button reaching out past the edge.
+    head_half = 0.00725
+    body.add(merge(rounded_slab(outline_mm(STRAT_HEAD), head_half, 0.0015))
+             .transform(T(0, 0, maple_top - head_half)), "maple")
+    head_back = maple_top - 2 * head_half
+    black.append(rounded_box((0.0026, 0.0064, 0.0003), 0.0003, center=(0, 0.8186, maple_top)))
+    reach = np.array([-0.0191, 0.0099])
+    turn = Rz(math.atan2(reach[1], reach[0]))
+    posts = [np.array([0.0151 - 0.007 * k, 0.9556 - 0.02364 * k]) for k in range(6)]   # high E first
+    for px, py in posts:
+        bx, by = (px, py) + reach
+        chrome.append(cylinder(0.0052, 0.0008, 16, 0.0003).transform(T(px, py, maple_top + 0.0008) @ face))
+        chrome.append(cylinder(0.0029, 0.0045, 12, 0.0005).transform(T(px, py, maple_top + 0.0061) @ face))
+        chrome.append(rounded_box((0.0085, 0.0075, 0.0055), 0.002)
+                      .transform(T(px, py, head_back - 0.0055) @ turn @ T(0.002, 0, 0)))
+        chrome.append(rod((px, py, head_back - 0.005), (bx, by, head_back - 0.005), 0.0016, 8))
+        parchment.append(sphere(1.0, 16).transform(T(bx, by, head_back - 0.005) @ turn @ S(0.0062, 0.0056, 0.0026)))
+    tree_x, tree_y, tree_z = 0.0145, 0.8709, maple_top + 0.0045
+    chrome.append(rod((tree_x - 0.006, tree_y, tree_z), (tree_x + 0.006, tree_y, tree_z), 0.0018, 10))
+    chrome.append(cylinder(0.0012, 0.0014, 8).transform(T(tree_x, tree_y, maple_top + 0.0014) @ face))
+
+    # Strings: through the plate, over the saddles and the nut to the posts,
+    # the B and top E under the string tree on the way.
+    for i, r in enumerate(STRING_RADII):
+        at_saddle, at_nut = (i - 2.5) * 0.0105, (i - 2.5) * 0.0071
+        px, py = posts[5 - i]                       # the low E winds nearest the nut
+        path = [(at_saddle, saddle_y - 0.024, plate_top), (at_saddle, saddle_y, saddle_z), (at_nut, NUT_Y, nut_z)]
+        if i >= 4:
+            x = at_nut + (px - at_nut) * (tree_y - NUT_Y) / (py - NUT_Y)
+            path.append((x, tree_y, tree_z - 0.0018 - r))
+        path.append((px, py, maple_top + 0.0045))
+        chrome.append(tube(path, r, 5))
+
+    for material, parts in (("chrome", chrome), ("cream", cream), ("parchment", parchment), ("black", black)):
+        body.add(merge(parts), material)
     root.children.append(body)
     return [root]
 

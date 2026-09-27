@@ -45,11 +45,15 @@ source of (P, N, albedo) changes:
   * **a depth prepass, then one lit pass**, so each pixel is shaded once: GGX
     and Lambert, the shadowed spots, one bounce of each pool's light, velour
     sheen, and a dim room for metal to reflect.
-  * **post.** The haze march and the lamps' glow read the lit frame and its
-    per-pixel distance; the shafts are shadowed through the same atlas.
+  * **fog.** The room is full of it, and it is a medium, not an overlay: it
+    dims what lies behind it and the light on its way to a surface, and every
+    lamp scatters in it by its own optics — a par a soft wide cone, a head a
+    hard shaft — shadowed through the same atlas. It thins with height, rolls
+    in billows that drift, and glows faintly with the room's bounced light.
   * **progressive accumulation.** Each frame is jittered by a sub-pixel and
     averaged while nothing changes, so a still view converges to a clean,
-    anti-aliased image and then stops costing the GPU anything.
+    anti-aliased image and then stops costing the GPU anything — unless the
+    air is drifting, when the average becomes a short moving one instead.
 
 What it deliberately is NOT: gobos, prisms, strobe, per-cell emitters or
 anything read from a show. The house look is fixed in `Rig`; the only
@@ -60,7 +64,8 @@ Controls
     wheel           dolly in and out
     W/S/A/D         walk the focus point around the room
     Q / E           lower / raise the focus point
-    [ / ]           less / more haze
+    [ / ]           thinner / thicker fog
+    F               show / hide the fog panel
     - / =           exposure
     space           start / stop the heads' sweep
     R               back to the photograph's viewpoint
@@ -84,7 +89,7 @@ sys.path.insert(0, ROOT)
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QImage, QMatrix4x4, QOpenGLContext, QSurfaceFormat, QVector3D, QVector4D
-from PyQt6.QtWidgets import QApplication, QLabel
+from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QSlider, QWidget
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
 from core.fixture_library import resolve_fixture
@@ -129,6 +134,10 @@ HEAD_OUTPUT = 40.0
 # `bounce_lights`).
 BOUNCE_GAIN = 0.8
 
+# Haze is droplets: of the light it stops, it scatters nearly all (mirrored
+# in the shaders).
+AIR_ALBEDO = 0.9
+
 MAX_LIGHTS = 18             # mirrored in the shaders, as are the three below
 MAX_SHADOWS = 16            # one atlas tile each: the first 16 lights that want one
 MAX_BOUNCES = 12            # only the patched fixtures' pools bounce
@@ -139,6 +148,15 @@ ATLAS_TILES = 4
 # stops being re-rendered. Anti-aliasing is clean by ~16; the haze's dither
 # and the shadow filter's rotation by ~64.
 MAX_SAMPLES = 96
+
+# While the fog drifts the picture never holds still, so the running average
+# becomes a moving one over this many frames: long enough to hide the march's
+# noise, short enough (a fifth of a second) that the drift does not smear.
+DRIFT_HISTORY = 12
+
+# Which way the air moves: a draught across the stage, rising a little off
+# the lamps. The fog panel sets how fast.
+WIND = (0.94, 0.12, -0.32)
 
 # See `stage3d_draft.SLEW_TAU`: an 8-bit pan channel steps 2.1 degrees at a
 # time, and a head with no mass would teleport its beam across the deck.
@@ -464,8 +482,20 @@ class Emitter:
     cos_outer: float
     cos_inner: float
     radius: float            # the lens, in metres: sets shadow softness
-    air: float               # how much of a shaft this makes, 0..1
     shadows: bool = True
+
+
+@dataclass(frozen=True)
+class Fog:
+    """The air in the room, as the fog panel sets it."""
+    density: float = 0.08    # extinction at deck level, per metre: 0.08 veils ~40% of the drape from the photo's view
+    height: float = 3.5      # metres over which it thins to 1/e: low lies on the deck, high fills the room
+    texture: float = 0.5     # 0 an even hazer's haze .. 1 a smoke machine's banks with clear air between
+    drift: float = 0.12      # metres per second the air moves; 0 freezes it, so a still view converges
+    forward: float = 0.6     # Henyey-Greenstein g: how much brighter a beam is looking into it
+
+    def drifting(self) -> bool:
+        return self.drift > 0.0 and self.density > 0.0
 
 
 @dataclass(frozen=True)
@@ -483,17 +513,20 @@ class Frame:
     emitters: List[Emitter]
     bounces: List[Bounce]
     heads: List[Tuple[List[np.ndarray], int]]  # each head's node matrices, and its light
-    haze: float
-    time: float
+    fog: Fog
+    air_ambient: Vec3                          # the room's bounced light, as the fog sees it
+    drifted: Vec3                              # how far the air has moved, in metres
     exposure: float
 
     def signature(self) -> tuple:
         """Everything that changes the picture before the tonemap — rounded,
         because a `Slew` approaches its target geometrically and never quite
-        arrives. Exposure is applied after the average, so it is left out."""
+        arrives. Exposure is applied after the average, so it is left out;
+        so is the drift, which `Fog.drifting` answers for instead (a moving
+        average rather than a restart). The ambient follows the emitters."""
         heads = tuple(tuple(np.round(m, 4).ravel()) for matrices, _ in self.heads for m in matrices)
         return _quantise((self.camera, self.tan_half_fov, self.emitters, self.bounces,
-                          self.haze, self.time)) + heads
+                          self.fog)) + heads
 
 
 def _quantise(value):
@@ -644,7 +677,6 @@ class Fixture:
             cos_outer=math.cos(math.radians(half)),
             cos_inner=math.cos(math.radians(half * inner_scale)),
             radius=lens_radius * self.scale,
-            air={BeamKind.HARD: 1.0, BeamKind.WASH: 0.55}.get(self.kind, 0.0),
         )
 
 
@@ -850,7 +882,7 @@ class Stage:
                     direction=tuple(vnorm(worlds[index][:3, :3] @ np.array([0.0, 0.0, -1.0]))),
                     rgb=tuple(c * light.get("intensity", 1.0) for c in light.get("color", (1, 1, 1))),
                     cos_outer=math.cos(outer), cos_inner=math.cos(inner),
-                    radius=node.extras.get("lens_radius", 0.05), air=0.0,
+                    radius=node.extras.get("lens_radius", 0.05),
                     shadows=node.extras.get("cast_shadows", True))
                 (lit if emitter.shadows else unshadowed).append(emitter)
         return lit + unshadowed
@@ -866,6 +898,8 @@ ALBEDO_DECK = (0.1, 0.068, 0.05)
 ALBEDO_FLOOR = (0.045, 0.035, 0.028)
 ALBEDO_BRICK = (0.18, 0.105, 0.07)
 ALBEDO_BLACK = (0.014, 0.013, 0.013)
+# ... and all of them together, by area: mostly black drape and dark wood.
+ROOM_REFLECTANCE = 0.06
 
 
 def first_surface(venue: Venue, origin, direction):
@@ -913,6 +947,31 @@ def bounce_lights(venue: Venue, emitters: Sequence[Emitter]) -> List[Bounce]:
         # A little off the surface: it stands for a whole pool, not a point.
         bounces.append(Bounce(tuple(point + np.asarray(normal) * 0.35), normal, rgb))
     return bounces
+
+
+def air_ambient(venue: Venue, fog: Fog, emitters: Sequence[Emitter]) -> Vec3:
+    """The light filling the room once it has bounced or scattered at least
+    once, as a radiance the fog can scatter again: the integrating-sphere
+    estimate, every lamp's flux times the reflectance's geometric series,
+    spread over every wall. It is what the air glows with outside the beams,
+    so a blackout darkens it too.
+
+    The fog is part of that sphere. Light the air catches crossing the room
+    is not lost but scattered on, so thick fog reflects the room's light back
+    into itself far better than black drape does — which is why a heavily
+    fogged stage turns milky rather than dark."""
+    width = 2.0 * venue.half_width
+    height = venue.ceiling + venue.deck_height
+    depth = venue.rear_wall - venue.curtain_z
+    area = 2.0 * (width * height + width * depth + height * depth)
+    chord = 4.0 * width * height * depth / area      # Cauchy: the mean path across the room
+    # The profile's mean over the room's height (see `fog_profile`, y = 0 at the deck).
+    mean_profile = fog.height * (math.exp(venue.deck_height / fog.height)
+                                 - math.exp(-venue.ceiling / fog.height)) / height
+    caught = 1.0 - math.exp(-fog.density * mean_profile * chord)
+    reflectance = ROOM_REFLECTANCE * (1.0 - caught) + AIR_ALBEDO * caught
+    flux = sum((2.0 * math.pi * (1.0 - e.cos_outer) * np.asarray(e.rgb) for e in emitters), np.zeros(3))
+    return tuple(flux * reflectance / (math.pi * area * (1.0 - reflectance)))
 
 
 # ==========================================================================
@@ -993,21 +1052,26 @@ void main() {
 }
 """
 
-# The lighting both mesh and post passes share: the light list and its atlas.
+# The lighting both mesh and post passes share: the light list, its atlas, and
+# the fog the light has to get through.
 LIGHTS_COMMON = """
 const float PI = 3.14159265359;
+const float NEAR_FIELD = 0.05;             // m²: keeps the inverse square finite at the lens
 
 uniform int   u_light_count;
 uniform vec3  u_light_pos[MAX_LIGHTS];
 uniform vec3  u_light_dir[MAX_LIGHTS];
 uniform vec3  u_light_rgb[MAX_LIGHTS];
-uniform vec4  u_light_shape[MAX_LIGHTS];   // cos_outer, cos_inner, lens radius, air
+uniform vec3  u_light_shape[MAX_LIGHTS];   // cos_outer, cos_inner, lens radius
 
 uniform int   u_shadow_count;              // lights [0, count) have an atlas tile
 uniform mat4  u_light_vp[MAX_SHADOWS];
 uniform float u_light_tan[MAX_SHADOWS];    // tan of each tile's half field
 uniform sampler2D u_atlas;
 uniform float u_seed;
+
+uniform float u_fog_density;               // extinction at deck level, per metre
+uniform float u_fog_height;                // metres over which it thins to 1/e
 
 float hash12(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -1025,7 +1089,27 @@ float spot(int i, vec3 p, out vec3 to_light, out float dist) {
     float cone = smoothstep(u_light_shape[i].x, u_light_shape[i].y, c);
     if (cone <= 0.0) { return 0.0; }
     cone *= 0.55 + 0.45 * smoothstep(u_light_shape[i].x, 1.0, c);   // hotter in the middle
-    return cone / (dist * dist + 0.05);
+    return cone / (dist * dist + NEAR_FIELD);
+}
+
+// The fog's smooth part, thinning upward from the deck (y = 0) — where the
+// show is, so a low fog lies on it — and denser still down in the house,
+// which is where fog poured on a stage runs off to.
+float fog_profile(float y) {
+    return exp(-y / u_fog_height);
+}
+
+// What fraction of light gets `t` metres from `p` along `d` through the fog.
+// The billows average out over any real distance, so only the profile counts,
+// and that integrates in closed form.
+float transmittance(vec3 p, vec3 d, float t) {
+    if (u_fog_density <= 0.0) { return 1.0; }
+    float here = fog_profile(p.y);
+    float rise = d.y * t;
+    float depth = abs(rise) < 1e-3 * u_fog_height
+        ? t * here * (1.0 - 0.5 * rise / u_fog_height)
+        : t * (here - fog_profile(p.y + rise)) * u_fog_height / rise;
+    return exp(-u_fog_density * depth);
 }
 
 // Where `p` lands in light `i`'s tile, and how far that tile says it is.
@@ -1205,7 +1289,8 @@ void main() {
         if (fall <= 0.0) { continue; }
         float nl = dot(n, l);
         if (nl <= 0.0) { continue; }
-        vec3 lit = u_light_rgb[i] * (fall * nl) * brdf(base.rgb, rough, metal, u_sheen, n, v, l);
+        vec3 lit = u_light_rgb[i] * (fall * nl * transmittance(v_world, l, dist))
+                 * brdf(base.rgb, rough, metal, u_sheen, n, v, l);
         // Worth a shadow lookup only if the light would show here at all.
         if (max(lit.r, max(lit.g, lit.b)) < 2e-4) { continue; }
         total += lit * soft_shadow(i, v_world, normalize(v_normal) * (gl_FrontFacing ? 1.0 : -1.0));
@@ -1268,9 +1353,11 @@ out vec4 fragColor;
 //@CONSTANTS@
 //@LIGHTS@
 
-const int MARCH_STEPS = 40;
-const float AIR_GAIN = 0.55;
-const float BEAM_REACH = 14.0;      // bounds the shaft solve; the room is 12 m long
+const int AIR_STEPS = 16;           // per light, along the stretch of ray inside its cone
+const int VEIL_STEPS = 8;           // along the whole ray, for the room's glow
+const float BEAM_REACH = 14.0;      // bounds each cone; the room is 12 m long
+const float BILLOW = 1.3;           // metres across the fog's largest features
+const float SIGHT = 60.0;           // no ray in the room is longer
 
 uniform sampler2D u_frame;          // lit colour, and distance from the camera in alpha
 uniform vec2  u_resolution;
@@ -1280,9 +1367,10 @@ uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
 uniform vec3  u_cam_fwd;
 uniform float u_tan_half_fov;
-uniform float u_haze;
-uniform float u_time;
-uniform float u_floor_y;
+uniform float u_fog_texture;        // 0 even .. 1 banks with clear air between
+uniform float u_fog_g;              // Henyey-Greenstein anisotropy
+uniform vec3  u_fog_drift;          // how far the air has moved, metres
+uniform vec3  u_fog_ambient;        // the room's bounced light, as the air sees it
 
 float hash13(vec3 p3) {
     p3 = fract(p3 * 0.1031);
@@ -1301,85 +1389,136 @@ float vnoise3(vec3 x) {
                f.z);
 }
 
-// Henyey-Greenstein, normalised to its broadside value, as in the draft.
-float scatter_gain(float cosine, float g) {
-    float denom = 1.0 + g * g - 2.0 * g * cosine;
-    return pow(1.0 + g * g, 1.5) / pow(max(denom, 1e-4), 1.5);
+// How far the local air strays from its smooth profile: billows about a metre
+// across with finer curls inside them. Each octave drifts its own way, so the
+// fog churns rather than sliding past as one rigid block. The noise swings
+// only about 0.12 either side of a half, so it is stretched into banks and
+// clear air (0..2, still averaging 1) before the texture control mixes it in.
+float billows(vec3 p) {
+    vec3 q = p / BILLOW;
+    vec3 w = u_fog_drift / BILLOW;
+    float n = 0.55 * vnoise3(q - w)
+            + 0.30 * vnoise3(q * 2.1 - vec3(w.z, 1.6 * w.y, -w.x) * 1.7 + 11.3)
+            + 0.15 * vnoise3(q * 4.3 + w.zxy * 2.9 - 5.7);
+    return mix(1.0, 2.0 * smoothstep(0.38, 0.62, n), u_fog_texture);
 }
 
-// The union of every shaft-throwing cone along this ray — solved, not swept.
-bool air_segment(vec3 origin, vec3 dir, float t_end, out float t0, out float t1) {
-    t0 = t_end;
-    t1 = 0.0;
-    bool found = false;
-    for (int i = 0; i < MAX_LIGHTS; ++i) {
-        if (i >= u_light_count) { break; }
-        if (u_light_shape[i].w <= 0.25) { continue; }
-        vec3 apex = u_light_pos[i];
-        vec3 axis = u_light_dir[i];
-        vec3 co = origin - apex;
-        float along = -dot(co, dir);
-        float perp = dot(co, co) - along * along;
-        if (perp > BEAM_REACH * BEAM_REACH) { continue; }
-        float chord = sqrt(BEAM_REACH * BEAM_REACH - perp);
-        float enter = along - chord;
-        float leave = along + chord;
-        float kk = u_light_shape[i].x * u_light_shape[i].x;
-        float dv = dot(dir, axis);
-        float cv = dot(co, axis);
-        float qa = dv * dv - kk;
-        float qb = 2.0 * (dv * cv - kk * dot(dir, co));
-        float qc = cv * cv - kk * dot(co, co);
-        if (abs(qa) > 1e-5) {
-            float disc = qb * qb - 4.0 * qa * qc;
-            if (disc <= 0.0) { continue; }
+// Henyey-Greenstein: the share of light reaching a droplet that leaves it at
+// `cosine` to its travel. Forward (g > 0) is why a beam aimed at you is
+// blinding and the same beam crossing the room is a shaft.
+float phase(float cosine) {
+    float g = u_fog_g;
+    float denom = max(1.0 + g * g - 2.0 * g * cosine, 1e-4);
+    return (1.0 - g * g) / (4.0 * PI * denom * sqrt(denom));
+}
+
+// The stretch of this ray inside light i's cone — solved, not swept. Only the
+// nappe in front of the lamp is light, and one nappe is convex, so it is a
+// single interval even when the ray runs along the beam into the lens.
+bool cone_segment(int i, vec3 origin, vec3 dir, float t_end, out float t0, out float t1) {
+    vec3 co = origin - u_light_pos[i];
+    vec3 axis = u_light_dir[i];
+    float along = -dot(co, dir);
+    float perp = dot(co, co) - along * along;
+    if (perp > BEAM_REACH * BEAM_REACH) { return false; }
+    float chord = sqrt(BEAM_REACH * BEAM_REACH - perp);
+    t0 = max(along - chord, 0.0);
+    t1 = min(along + chord, t_end);
+    // In front of the lens: (p - apex) . axis >= 0.
+    float dv = dot(dir, axis);
+    float cv = dot(co, axis);
+    if (abs(dv) < 1e-6) {
+        if (cv < 0.0) { return false; }
+    } else if (dv > 0.0) {
+        t0 = max(t0, -cv / dv);
+    } else {
+        t1 = min(t1, -cv / dv);
+    }
+    // Inside the cone: ((p - apex) . axis)^2 >= cos^2 |p - apex|^2.
+    float kk = u_light_shape[i].x * u_light_shape[i].x;
+    float qa = dv * dv - kk;
+    float qb = 2.0 * (dv * cv - kk * dot(dir, co));
+    float qc = cv * cv - kk * dot(co, co);
+    if (abs(qa) < 1e-6) {
+        // Parallel to the cone's wall: one crossing.
+        if (abs(qb) < 1e-9) {
+            if (qc < 0.0) { return false; }
+        } else if (qb > 0.0) {
+            t0 = max(t0, -qc / qb);
+        } else {
+            t1 = min(t1, -qc / qb);
+        }
+    } else {
+        float disc = qb * qb - 4.0 * qa * qc;
+        if (disc >= 0.0) {
             float root = sqrt(disc);
             float ta = (-qb - root) / (2.0 * qa);
             float tb = (-qb + root) / (2.0 * qa);
-            enter = max(enter, min(ta, tb));
-            leave = min(leave, max(ta, tb));
+            if (qa < 0.0) {
+                // Across the beam: inside between the crossings.
+                t0 = max(t0, min(ta, tb));
+                t1 = min(t1, max(ta, tb));
+            } else if (dv > 0.0) {
+                // Along it, going the light's way: inside past the far crossing...
+                t0 = max(t0, max(ta, tb));
+            } else {
+                // ...or toward the lens: inside until the near one.
+                t1 = min(t1, min(ta, tb));
+            }
+        } else if (qa < 0.0) {
+            return false;
         }
-        enter = max(enter, 0.0);
-        leave = min(leave, t_end);
-        if (leave <= enter) { continue; }
-        vec3 middle = origin + dir * (0.5 * (enter + leave)) - apex;
-        if (dot(middle, axis) <= 0.0) { continue; }
-        t0 = min(t0, enter);
-        t1 = max(t1, leave);
-        found = true;
     }
-    return found && t1 > t0;
+    return t1 > t0;
 }
 
-vec3 march_air(vec3 origin, vec3 dir, float t_end) {
-    if (u_haze <= 0.001) { return vec3(0.0); }
+// Light i scattered once into this ray, shadowed through its atlas tile — a
+// cymbal cuts a wedge out of the beam. The samples are spread evenly in the
+// angle the lens subtends ("equiangular"), which puts them where the inverse
+// square puts the light and cancels it out of the estimate: a head's shaft and
+// the glare looking up into a par converge from the same handful of samples.
+vec3 light_in_air(int i, vec3 origin, vec3 dir, float t_end, float jitter) {
     float t0;
     float t1;
-    if (!air_segment(origin, dir, t_end, t0, t1)) { return vec3(0.0); }
-    float dt = (t1 - t0) / float(MARCH_STEPS);
-    float jitter = hash12(gl_FragCoord.xy + vec2(u_seed * 17.31, u_seed * 3.7));
-    vec3 total = vec3(0.0);
-    for (int k = 0; k < MARCH_STEPS; ++k) {
-        vec3 p = origin + dir * (t0 + (float(k) + jitter) * dt);
-        float height = exp(-max(p.y - u_floor_y, 0.0) / 3.5);
-        float texture_ = 0.55 + 0.9 * vnoise3(p * 0.7 + vec3(0.0, 0.0, u_time * 0.05));
-        float density = u_haze * height * texture_;
-        vec3 radiance = vec3(0.0);
-        for (int i = 0; i < MAX_LIGHTS; ++i) {
-            if (i >= u_light_count) { break; }
-            float air = u_light_shape[i].w;
-            if (air <= 0.25) { continue; }
-            vec3 l;
-            float dist;
-            float fall = spot(i, p, l, dist);
-            if (fall <= 0.0) { continue; }
-            // The shaft is shadowed too: a cymbal cuts a wedge out of the beam.
-            radiance += u_light_rgb[i] * (fall * air * scatter_gain(dot(dir, -l), 0.45)
-                                          * hard_shadow(i, p));
-        }
-        total += density * radiance * dt;
+    if (!cone_segment(i, origin, dir, t_end, t0, t1)) { return vec3(0.0); }
+    vec3 to_lamp = u_light_pos[i] - origin;
+    float nearest = dot(to_lamp, dir);
+    vec3 miss = to_lamp - dir * nearest;
+    // `spot` falls off as 1 / (dist^2 + NEAR_FIELD), so that is what is matched.
+    float reach = sqrt(dot(miss, miss) + NEAR_FIELD);
+    float a0 = atan((t0 - nearest) / reach);
+    float a1 = atan((t1 - nearest) / reach);
+    float total = 0.0;
+    for (int k = 0; k < AIR_STEPS; ++k) {
+        float u = (float(k) + jitter) / float(AIR_STEPS);
+        float s = reach * tan(mix(a0, a1, u));
+        float t = nearest + s;
+        vec3 p = origin + dir * t;
+        vec3 l;
+        float dist;
+        float fall = spot(i, p, l, dist);
+        if (fall <= 0.0) { continue; }
+        float inverse_pdf = (a1 - a0) * (reach * reach + s * s) / reach;
+        float scatter = AIR_ALBEDO * u_fog_density * fog_profile(p.y) * billows(p);
+        total += fall * inverse_pdf * scatter * phase(dot(dir, l))
+               * transmittance(p, l, dist)            // from the lens to here
+               * transmittance(origin, dir, t)        // from here to the eye
+               * hard_shadow(i, p);
     }
-    return total * AIR_GAIN;
+    return u_light_rgb[i] * (total / float(AIR_STEPS));
+}
+
+// The rest of the room's light, bounced off every wall, scattered by the air:
+// what makes the fog visible outside the beams, billows and all.
+vec3 veil(vec3 origin, vec3 dir, float t_end, float jitter) {
+    float dt = t_end / float(VEIL_STEPS);
+    float total = 0.0;
+    for (int k = 0; k < VEIL_STEPS; ++k) {
+        float t = (float(k) + jitter) * dt;
+        vec3 p = origin + dir * t;
+        total += fog_profile(p.y) * billows(p) * transmittance(origin, dir, t);
+    }
+    return u_fog_ambient * (AIR_ALBEDO * u_fog_density * total * dt);
 }
 
 // A lamp seen down its barrel blooms in the lens of whoever is looking.
@@ -1394,7 +1533,7 @@ vec3 lamp_glow(vec3 origin, vec3 dir, float t_hit) {
         float angle = across / along;
         float facing = max(dot(-dir, u_light_dir[i]), 0.0);
         float halo = 0.3 * exp(-angle * angle / 0.00008) + 0.012 * exp(-angle / 0.03);
-        total += u_light_rgb[i] * halo * facing * facing * facing;
+        total += u_light_rgb[i] * halo * facing * facing * facing * transmittance(origin, dir, along);
     }
     return total;
 }
@@ -1405,7 +1544,18 @@ void main() {
     float aspect = u_resolution.x / u_resolution.y;
     vec3 dir = normalize(u_cam_fwd + u_cam_right * (ndc.x * aspect * u_tan_half_fov)
                          + u_cam_up * (ndc.y * u_tan_half_fov));
-    vec3 hdr = lit.rgb + march_air(u_cam_pos, dir, lit.a) + lamp_glow(u_cam_pos, dir, lit.a);
+    float t_end = min(lit.a, SIGHT);
+    vec3 hdr = lit.rgb * transmittance(u_cam_pos, dir, t_end) + lamp_glow(u_cam_pos, dir, lit.a);
+    if (u_fog_density > 0.0) {
+        float jitter = hash12(gl_FragCoord.xy + vec2(u_seed * 17.31, u_seed * 3.7));
+        hdr += veil(u_cam_pos, dir, t_end, jitter);
+        for (int i = 0; i < MAX_LIGHTS; ++i) {
+            if (i >= u_light_count) { break; }
+            if (max(u_light_rgb[i].r, max(u_light_rgb[i].g, u_light_rgb[i].b)) <= 0.0) { continue; }
+            // Each light's samples offset differently, or their noise lines up.
+            hdr += light_in_air(i, u_cam_pos, dir, t_end, fract(jitter + 0.618034 * float(i)));
+        }
+    }
     if (any(isnan(hdr)) || any(isinf(hdr))) { hdr = vec3(0.0); }
     fragColor = vec4(clamp(hdr, 0.0, 64.0), 1.0);
 }
@@ -1472,6 +1622,7 @@ def shader_constants() -> str:
         f"const int MAX_BOUNCES = {MAX_BOUNCES};",
         f"const float SHADOW_TILE = {float(SHADOW_TILE)};",
         f"const float ATLAS_TILES = {float(ATLAS_TILES)};",
+        f"const float AIR_ALBEDO = {float(AIR_ALBEDO)};",
     ])
 
 
@@ -1728,7 +1879,7 @@ class BarRenderer:
             self._signature = signature
             self.samples = 0
 
-        if self.samples < MAX_SAMPLES:
+        if self.samples < MAX_SAMPLES or frame.fog.drifting():
             self.samples += 1
             light_views = self._update_atlas(frame)
             self._scene_pass(frame, width, height, light_views)
@@ -1812,14 +1963,16 @@ class BarRenderer:
             vec3(f"u_light_pos[{i}]", emitter.position)
             vec3(f"u_light_dir[{i}]", emitter.direction)
             vec3(f"u_light_rgb[{i}]", emitter.rgb)
-            program.setUniformValue(self._loc(program_name, f"u_light_shape[{i}]"),
-                                    QVector4D(float(emitter.cos_outer), float(emitter.cos_inner),
-                                              float(emitter.radius), float(emitter.air)))
+            vec3(f"u_light_shape[{i}]", (emitter.cos_outer, emitter.cos_inner, emitter.radius))
         program.setUniformValue(self._loc(program_name, "u_shadow_count"), len(light_views))
         for i, (vp, tan_half) in enumerate(light_views):
             program.setUniformValue(self._loc(program_name, f"u_light_vp[{i}]"), qmatrix(vp))
             program.setUniformValue(self._loc(program_name, f"u_light_tan[{i}]"), float(tan_half))
-        program.setUniformValue(self._loc(program_name, "u_seed"), float(self.samples))
+        # Wrapped: while the air drifts `samples` never stops counting, and a
+        # hash fed ever larger floats loses its low bits and turns to pattern.
+        program.setUniformValue(self._loc(program_name, "u_seed"), float(self.samples % 1024))
+        program.setUniformValue(self._loc(program_name, "u_fog_density"), float(frame.fog.density))
+        program.setUniformValue(self._loc(program_name, "u_fog_height"), float(frame.fog.height))
 
     def _jitter(self) -> Tuple[float, float]:
         # Halton (2, 3) over the pixel: sample 1 is the pixel centre, so a view
@@ -1905,13 +2058,17 @@ class BarRenderer:
         gl = self.gl
         self.accum_fbo.bind()
         gl.glViewport(0, 0, width, height)
-        # Running average: the n-th sample weighs 1/n against what is there.
+        # Running average: the n-th sample weighs 1/n against what is there,
+        # or never less than 1/DRIFT_HISTORY while the air moves under it.
         # The first is written, not blended: a new float buffer is whatever
         # memory it was given, and 0 x NaN is still NaN.
         if self.samples > 1:
+            weight = 1.0 / self.samples
+            if frame.fog.drifting():
+                weight = max(weight, 1.0 / DRIFT_HISTORY)
             gl.glEnable(_GL_BLEND)
             gl.glBlendFunc(_GL_CONSTANT_ALPHA, _GL_ONE_MINUS_CONSTANT_ALPHA)
-            gl.glBlendColor(0.0, 0.0, 0.0, 1.0 / self.samples)
+            gl.glBlendColor(0.0, 0.0, 0.0, weight)
         program = self.programs["post"]
         program.bind()
         gl.glActiveTexture(_GL_TEXTURE0)
@@ -1929,9 +2086,10 @@ class BarRenderer:
         program.setUniformValue(self._loc("post", "u_resolution"), float(width), float(height))
         program.setUniformValue(self._loc("post", "u_jitter"), float(jx), float(jy))
         program.setUniformValue(self._loc("post", "u_tan_half_fov"), float(frame.tan_half_fov))
-        program.setUniformValue(self._loc("post", "u_haze"), float(frame.haze))
-        program.setUniformValue(self._loc("post", "u_time"), float(frame.time))
-        program.setUniformValue(self._loc("post", "u_floor_y"), float(-self.stage.venue.deck_height))
+        program.setUniformValue(self._loc("post", "u_fog_texture"), float(frame.fog.texture))
+        program.setUniformValue(self._loc("post", "u_fog_g"), float(frame.fog.forward))
+        for name, value in (("u_fog_drift", frame.drifted), ("u_fog_ambient", frame.air_ambient)):
+            program.setUniformValue(self._loc("post", name), QVector3D(*[float(c) for c in value]))
         self._draw_quad()
         program.release()
         gl.glActiveTexture(_GL_TEXTURE0)
@@ -1943,9 +2101,9 @@ class BarRenderer:
         self.quad.release()
 
 
-def build_frame(stage: Stage, camera: OrbitCamera, haze: float, exposure: float,
-                show_time: float) -> Frame:
-    """What the renderer needs from the rig and the camera, this instant."""
+def build_frame(stage: Stage, camera: OrbitCamera, fog: Fog, drifted: Vec3,
+                exposure: float) -> Frame:
+    """What the renderer needs from the rig, the camera and the air, this instant."""
     rig = stage.rig
     patched = rig.emitters()
     emitters = (patched + stage.house)[:MAX_LIGHTS]
@@ -1953,12 +2111,71 @@ def build_frame(stage: Stage, camera: OrbitCamera, haze: float, exposure: float,
     heads = [(head.pose(), first_head + index) for index, head in enumerate(rig.heads)]
     return Frame(camera=camera.basis(), tan_half_fov=math.tan(math.radians(FOV_VERTICAL_DEG) * 0.5),
                  emitters=emitters, bounces=bounce_lights(stage.venue, patched), heads=heads,
-                 haze=haze, time=show_time, exposure=exposure)
+                 fog=fog, air_ambient=air_ambient(stage.venue, fog, emitters), drifted=drifted,
+                 exposure=exposure)
 
 
 # ==========================================================================
 # The view
 # ==========================================================================
+
+HUD_STYLE = ("color: #e8ecf4; background: rgba(0,0,0,150); padding: 8px 10px;"
+             "font-family: monospace; font-size: 11px; border-radius: 4px;")
+
+# One slider per `Fog` field: its range, and how its value reads.
+FOG_CONTROLS = (
+    ("density", 0.0, 0.4, "{:.3f} /m"),
+    ("height", 0.3, 8.0, "{:.1f} m"),
+    ("texture", 0.0, 1.0, "{:.2f}"),
+    ("drift", 0.0, 0.6, "{:.2f} m/s"),
+    ("forward", 0.0, 0.9, "{:.2f}"),
+)
+
+
+class FogPanel(QWidget):
+    """The air's controls. Every move of a slider is a new `Fog`."""
+
+    STEPS = 400
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.fog = Fog()
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setStyleSheet(f"FogPanel {{ {HUD_STYLE} }} QLabel {{ color: #e8ecf4;"
+                           " font-family: monospace; font-size: 11px; }")
+        grid = QGridLayout(self)
+        grid.setContentsMargins(10, 8, 10, 8)
+        grid.addWidget(QLabel("fog    [F] hides"), 0, 0, 1, 3)
+        self._rows = {}
+        for row, (name, low, high, form) in enumerate(FOG_CONTROLS, start=1):
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, self.STEPS)
+            slider.setFixedWidth(140)
+            # Keys stay with the view: WASD walks, it does not nudge a slider.
+            slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            readout = QLabel(form.format(getattr(self.fog, name)))
+            readout.setMinimumWidth(72)
+            grid.addWidget(QLabel(name), row, 0)
+            grid.addWidget(slider, row, 1)
+            grid.addWidget(readout, row, 2)
+            self._rows[name] = (slider, readout, low, high, form)
+            slider.setValue(self._step(name, getattr(self.fog, name)))
+            slider.valueChanged.connect(lambda step, name=name: self._moved(name, step))
+        self.adjustSize()
+
+    def nudge(self, name: str, delta: float) -> None:
+        self._rows[name][0].setValue(self._step(name, getattr(self.fog, name) + delta))
+
+    def _step(self, name: str, value: float) -> int:
+        _slider, _readout, low, high, _form = self._rows[name]
+        return round((min(high, max(low, value)) - low) / (high - low) * self.STEPS)
+
+    def _moved(self, name: str, step: int) -> None:
+        _slider, readout, low, high, form = self._rows[name]
+        value = low + (high - low) * step / self.STEPS
+        self.fog = dataclasses.replace(self.fog, **{name: value})
+        readout.setText(form.format(value))
+
 
 class BarView(QOpenGLWidget):
     """The window: a camera, a stage, a renderer and a read-out."""
@@ -1972,17 +2189,19 @@ class BarView(QOpenGLWidget):
         self._drag = None
 
         self.exposure = 1.0
-        self.haze = 0.02
         self.show_time = 0.0
         self._sweep_started: Optional[float] = None
+        # Where the drift has carried the air: integrated, not speed x time,
+        # so moving the drift slider changes the pace without a jump.
+        self.drifted: Vec3 = (0.0, 0.0, 0.0)
+        self._last_tick = time.monotonic()
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(720, 460)
         self.hud = QLabel(self)
-        self.hud.setStyleSheet(
-            "color: #e8ecf4; background: rgba(0,0,0,150); padding: 8px 10px;"
-            "font-family: monospace; font-size: 11px; border-radius: 4px;")
+        self.hud.setStyleSheet(HUD_STYLE)
         self.hud.move(12, 12)
+        self.fog_panel = FogPanel(self)
 
         self._last_paint: Optional[float] = None
         self.fps = 0.0
@@ -1994,25 +2213,37 @@ class BarView(QOpenGLWidget):
         self.timer.start(16)
 
     def _tick(self) -> None:
+        now = time.monotonic()
         if self._sweep_started is not None:
-            self.show_time = time.monotonic() - self._sweep_started
+            self.show_time = now - self._sweep_started
+        step = self.fog_panel.fog.drift * (now - self._last_tick)
+        self.drifted = tuple(d + w * step for d, w in zip(self.drifted, WIND))
+        self._last_tick = now
         self.stage.rig.tick(self.show_time)
         self._update_hud()
         self.update()
 
     def _update_hud(self) -> None:
         rig = self.stage.rig
-        converged = self.renderer.samples >= MAX_SAMPLES
+        fog = self.fog_panel.fog
+        if fog.drifting():
+            state = f"last {DRIFT_HISTORY} (air drifting)"
+        else:
+            samples = self.renderer.samples
+            state = f"{samples:3d}/{MAX_SAMPLES}{' (still)' if samples >= MAX_SAMPLES else ''}"
         self.hud.setText(
-            f"{self.fps:5.1f} fps   samples {self.renderer.samples:3d}/{MAX_SAMPLES}"
-            f"{' (still)' if converged else ''}"
-            f"   haze {self.haze:.2f}   exposure {self.exposure:.2f}\n"
+            f"{self.fps:5.1f} fps   samples {state}"
+            f"   fog {fog.density:.3f}/m   exposure {self.exposure:.2f}\n"
             f"rig   5 x par-rgbw overhead, 2 on the walls, 2 front of house [{rig.front[0].kind.value}]"
             f"   2 x {rig.heads[0].key} backlight [{rig.heads[0].kind.value}]"
             f"   sweep {'on' if rig.sweeping else 'off'}\n"
-            f"drag orbit | wheel dolly | WASD walk | Q/E down/up | [ ] haze | - = exposure"
-            f" | space sweep | R photo view")
+            f"drag orbit | wheel dolly | WASD walk | Q/E down/up | [ ] fog | F fog panel"
+            f" | - = exposure | space sweep | R photo view")
         self.hud.adjustSize()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.fog_panel.move(self.width() - self.fog_panel.width() - 12, 12)
 
     def initializeGL(self) -> None:
         why = self.renderer.initialize(QOpenGLContext.currentContext())
@@ -2035,7 +2266,7 @@ class BarView(QOpenGLWidget):
         ratio = self.devicePixelRatioF()
         width = max(1, int(self.width() * ratio))
         height = max(1, int(self.height() * ratio))
-        frame = build_frame(self.stage, self.camera, self.haze, self.exposure, self.show_time)
+        frame = build_frame(self.stage, self.camera, self.fog_panel.fog, self.drifted, self.exposure)
         self.renderer.render(frame, width, height, self.defaultFramebufferObject())
 
     # -- interaction ----------------------------------------------------
@@ -2069,9 +2300,11 @@ class BarView(QOpenGLWidget):
         elif key == Qt.Key.Key_R:
             self.camera.reset()
         elif key == Qt.Key.Key_BracketLeft:
-            self.haze = max(0.0, self.haze - 0.03)
+            self.fog_panel.nudge("density", -0.01)
         elif key == Qt.Key.Key_BracketRight:
-            self.haze = min(1.0, self.haze + 0.03)
+            self.fog_panel.nudge("density", 0.01)
+        elif key == Qt.Key.Key_F:
+            self.fog_panel.setVisible(not self.fog_panel.isVisible())
         elif key == Qt.Key.Key_Minus:
             self.exposure = max(0.1, self.exposure - 0.1)
         elif key in (Qt.Key.Key_Equal, Qt.Key.Key_Plus):
