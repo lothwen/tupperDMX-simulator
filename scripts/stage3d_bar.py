@@ -1,11 +1,50 @@
 #!/usr/bin/env python3
 # ABOUTME: Second 3D-stage prototype — the bar in assets/images/stage_background.png as
-# ABOUTME: a room of GLB assets you can walk around, lit by real DMX-driven fixtures.
+# ABOUTME: a room of GLB assets you can walk around, lit by a show's patch from live DMX.
 """The 2D stage's backdrop photograph, rebuilt as a place.
 
 Run it:
 
-    uv run python scripts/stage3d_bar.py
+    uv run python scripts/stage3d_bar.py                    # the app's last show, Art-Net
+    uv run python scripts/stage3d_bar.py --dmx local        # no app: its controller in here
+    uv run python scripts/stage3d_bar.py --show ~/Documents/TupperDMX/demo.show
+
+**The patch.** The rig on stage is the show's own patch (`stage3d_patch.load_patch`):
+the show named, else the one the app last opened, else `config.json`'s seed.
+Every fixture is placed where the 2D stage has it, on ONE plane: the upstage
+rig line, the back pipe's plane just clear of the drape that covers the back
+wall, each body backed onto it. Across, the picture's full width spans the
+room between its side walls — the 2D patch uses the photograph's whole width,
+which is wider than the room — and up, a row lands at the height the
+photograph's own camera (`PHOTO_VIEW`) sees it at on that plane, so what
+stands on the deck in the picture stands on the deck here. Each body is then
+kept inside the room. Hung fixtures grip a short pipe on a wall arm; the rest
+are bracketed off the wall. The model is chosen by the fixture's 2D profile —
+its OFL category — never by its name: a mover gets `moving_head.glb`, a lamp
+`par_can.glb`, and pixel bars, panels, strobes, blinders and machines get a
+body built at their definition's size (`stage3d_models`).
+
+**The DMX.** A whole universe at a time, on the Qt thread, sliced per fixture
+at its `dmx_start` and resolved once for all its bodies — as
+`StageController.update_fixtures_with_dmx` does. From Art-Net (the app's own
+listener, receiving what a running TupperDMX sends once its controller's DMX
+output goes to Art-Net), or with `--dmx local` from the app's software
+controller run in here, stepped through every fixture's scenes with N.
+
+  * a pixel bar's or blinder's **face** is lit cell by cell from a small
+    texture: the running effect's artwork tinted by the DMX colour (an LED
+    bar's GIFs are exactly 8 x 40 — a column per bar, a row per LED), else
+    each emitter's own colour, as `MatrixCells` and `BulbArray` paint them;
+  * **light into the room**: a blinder is one shadowed spot; each pixel body
+    one wide unshadowed light that neither scatters in the fog nor blooms in
+    the lens (a metre-long tube is not a point), after every shadowed light;
+  * the **shutter** is the app's own `ShutterFeature`, so a blinder strobes
+    at the rate and in the waveform the 2D stage does;
+  * a **smoke machine's** output thickens the fog through the app's
+    `Atmosphere` — its attack and decay — on top of the fog panel's density.
+
+The photograph's own rig — the pars and the two sweeping heads — is still
+here as the house rig, off unless asked for (H, or `--house-rig`).
 
 The next iteration of `scripts/stage3d_draft.py`. That draft proved the pipeline
 in an empty white box; this one stands in for the picture the 2D stage is
@@ -18,9 +57,9 @@ Still standalone, and for the same reason: it owns its window and its GL context
 and touches nothing in `ui/` or `stage/controller.py`. What it borrows is what
 the draft borrowed —
 
-  * `core.fixture_library.resolve_fixture` for the **real** `par-rgbw` and
-    `moving-head` definitions, and `core.fixture_state.resolve_state` to turn
-    **real** DMX frames into colour, intensity, pan, tilt and zoom;
+  * `core.fixture_library.resolve_fixture` for the **real** definitions, and
+    `core.fixture_state.resolve_state` to turn **real** DMX frames into colour,
+    intensity, cells, shutter, program, pan, tilt and zoom;
   * `stage.optics.beam_kind` / `resting_half_angle` to decide who throws a shaft
     and how wide, and `stage.registry.renderer_for` for the category fallback;
   * `stage.geometry.Slew` for the heads' inertia;
@@ -36,8 +75,8 @@ source of (P, N, albedo) changes:
     from the lamps that hold them, and each fixture's pivots and lens from its
     own named nodes.
   * **batches.** Everything that does not move is baked into world space once
-    and merged by material, so a frame is a few dozen draw calls. Only the two
-    heads are drawn per part, from their live yoke and head transforms.
+    and merged by material, so a frame is a few dozen draw calls. The patched
+    fixtures and the two heads are drawn per part, from their live transforms.
   * **shadows.** Each shadow-casting spot renders the room's distance from its
     lens into one tile of a float atlas — only when that spot moves — and
     surfaces are filtered against it with a blocker search, so a penumbra
@@ -55,9 +94,10 @@ source of (P, N, albedo) changes:
     anti-aliased image and then stops costing the GPU anything — unless the
     air is drifting, when the average becomes a short moving one instead.
 
-What it deliberately is NOT: gobos, prisms, strobe, per-cell emitters or
-anything read from a show. The house look is fixed in `Rig`; the only
-choreography is a slow sweep of the two heads.
+What it deliberately is NOT: gobos, prisms, frost, a fixture's depth, yaw or
+rake (a patch has none yet), or anything the patch cannot say. A still look
+converges as before; while the DMX keeps changing — a strobe, a running
+effect — every frame starts the average again, so it stays crisp and noisier.
 
 Controls
     drag            orbit the camera
@@ -67,11 +107,15 @@ Controls
     [ / ]           thinner / thicker fog
     F               show / hide the fog panel
     - / =           exposure
-    space           start / stop the heads' sweep
+    H               house rig (the photograph's pars and heads) on / off
+    space           start / stop the house heads' sweep
+    N               local controller: every fixture to its next scene
+    B               local controller: blackout all (toggle)
     R               back to the photograph's viewpoint
     Esc             quit
 """
 
+import argparse
 import dataclasses
 import json
 import math
@@ -84,20 +128,34 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPTS)
 sys.path.insert(0, ROOT)
+sys.path.insert(1, SCRIPTS)
 
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QImage, QMatrix4x4, QOpenGLContext, QSurfaceFormat, QVector3D, QVector4D
 from PyQt6.QtWidgets import QApplication, QGridLayout, QLabel, QSlider, QWidget
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 
-from core.fixture_library import resolve_fixture
+import stage.profiles  # noqa: F401 — registers every profile, or renderer_for misses categories
+from core.config import FixtureInstance, FixturePosition
+from core.fixture_library import effect_asset, resolve_fixture
 from core.fixture_state import FixtureState, resolve_state
+from stage import frame as beam_frame
+from stage.atmosphere import Atmosphere
+from stage.features.level import ShutterFeature
 from stage.geometry import Slew
 from stage.light import linear_rgb
+from stage.metrics import body_count, body_size, declared_cell_count
 from stage.optics import BeamKind, beam_kind, resting_half_angle
+from stage.profiles import (BlinderFixture, FanFixture, HazerFixture, MovingHeadFixture,
+                            PixelBarFixture, SmokeFixture, StandFixture, StrobeFixture)
 from stage.registry import renderer_for
+
+import stage3d_models
+import stage3d_patch
 
 Vec3 = Tuple[float, float, float]
 
@@ -129,6 +187,29 @@ FOV_VERTICAL_DEG = 42.0
 # GLB). Tuned by eye against the photograph at exposure 1.0.
 PAR_OUTPUT = 28.0
 HEAD_OUTPUT = 40.0
+BLINDER_OUTPUT = 60.0       # both cells at full: a blinder is meant to hurt
+PIXEL_OUTPUT = 120.0        # per square metre of lit face: an LED bar's tube is ~6
+
+# How bright a lit cell's face is, next to the linear colour it shows. A lens
+# glows at LENS_GAIN x its light (see the shaders); a cell is its own source.
+CELL_GAIN = 6.0
+
+# A pixel body's light into the room: wide, soft and forward, since an LED
+# face has no optic to gather it.
+PIXEL_HALF_ANGLE = 75.0
+PIXEL_INNER_ANGLE = 30.0
+
+# Extinction a smoke machine adds at full output, per metre, on top of the
+# fog panel's density — through the app's Atmosphere, so it builds in a
+# second and a half and takes twelve to clear.
+SMOKE_DENSITY = 0.25
+
+# Where the patch hangs: every body backs onto the back pipe's plane (just
+# clear of the drape that hides the back wall), no nearer a side wall than
+# this, and the picture's full width is spread across the room inside it.
+WALL_MARGIN = 0.3
+DECK_CLEARANCE = 0.005
+CEILING_CLEARANCE = 0.05
 
 # What fraction of the light landing in a pool comes back off it (see
 # `bounce_lights`).
@@ -138,9 +219,11 @@ BOUNCE_GAIN = 0.8
 # in the shaders).
 AIR_ALBEDO = 0.9
 
-MAX_LIGHTS = 18             # mirrored in the shaders, as are the three below
+# The house rig's 11 and the venue's 7 lamps filled the old 18 exactly; a
+# show's patch comes on top (the seed patch alone is 8 bars and 2 blinders).
+MAX_LIGHTS = 40             # mirrored in the shaders, as are the three below
 MAX_SHADOWS = 16            # one atlas tile each: the first 16 lights that want one
-MAX_BOUNCES = 12            # only the patched fixtures' pools bounce
+MAX_BOUNCES = 16            # only the spots' pools bounce
 SHADOW_TILE = 1024          # texels per tile side; the atlas is 4 x 4 tiles
 ATLAS_TILES = 4
 
@@ -187,6 +270,13 @@ def rot_x(a: float) -> np.ndarray:
     c, s = math.cos(a), math.sin(a)
     m = np.eye(4)
     m[1:3, 1:3] = [[c, -s], [s, c]]
+    return m
+
+
+def rot_z(a: float) -> np.ndarray:
+    c, s = math.cos(a), math.sin(a)
+    m = np.eye(4)
+    m[0:2, 0:2] = [[c, -s], [s, c]]
     return m
 
 
@@ -319,6 +409,15 @@ class Asset:
         for index in self.roots:
             walk(index, root)
         return out
+
+    def bounds(self, root: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """The corners of the box round every mesh at rest under `root`."""
+        worlds = self.world(root)
+        points = [prim.positions @ worlds[index][:3, :3].T + worlds[index][:3, 3]
+                  for index, node in enumerate(self.nodes) if node.mesh is not None
+                  for prim in self.meshes[node.mesh]]
+        stacked = np.concatenate(points)
+        return stacked.min(axis=0), stacked.max(axis=0)
 
     def casts_shadows(self, index: int) -> bool:
         """A node's `cast_shadows` extra, inherited from its ancestors."""
@@ -469,6 +568,50 @@ def load_assets() -> Dict[str, Asset]:
     return assets
 
 
+def asset_from_nodes(name: str, roots: Sequence, materials: Dict[str, dict]) -> Asset:
+    """A model built in memory by `build_bar_assets`' primitives, as an Asset —
+    what `load_glb` would have returned had it gone through a file, UVs
+    included (the GLB writer drops them from untextured materials)."""
+    nodes: List[Optional[GltfNode]] = []
+    meshes: List[List[Primitive]] = []
+    records: List[Material] = []
+    index_of: Dict[str, int] = {}
+
+    def material(key: str) -> int:
+        if key not in index_of:
+            spec = materials[key]
+            index_of[key] = len(records)
+            records.append(Material(key, tuple(spec["base"]) + (1.0,), float(spec.get("metal", 0.0)),
+                                    float(spec.get("rough", 0.5)), tuple(spec.get("emission", (0.0, 0.0, 0.0))),
+                                    tuple(spec.get("sheen", (0.0, 0.0, 0.0)))))
+        return index_of[key]
+
+    def add(node) -> int:
+        index = len(nodes)
+        nodes.append(None)
+        mesh = None
+        if node.parts:
+            grouped: Dict[str, list] = {}
+            for part, key in node.parts:
+                grouped.setdefault(key, []).append(part)
+            primitives = []
+            for key, parts in grouped.items():
+                m = stage3d_models.merge(parts)
+                colors = m.c if m.c is not None else np.ones((len(m.p), 4))
+                primitives.append(Primitive(m.p.astype(np.float32), m.n.astype(np.float32),
+                                            m.uv.astype(np.float32), colors.astype(np.float32),
+                                            m.i.astype(np.int64), material(key)))
+            meshes.append(primitives)
+            mesh = len(meshes) - 1
+        children = [add(child) for child in node.children]
+        nodes[index] = GltfNode(node.name, np.asarray(node.matrix, float), mesh, children,
+                                dict(node.extras or {}))
+        return index
+
+    top = [add(root) for root in roots]
+    return Asset(name, nodes, top, meshes, records, [], [], {})
+
+
 # ==========================================================================
 # What the renderer is handed each frame
 # ==========================================================================
@@ -483,6 +626,7 @@ class Emitter:
     cos_inner: float
     radius: float            # the lens, in metres: sets shadow softness
     shadows: bool = True
+    air: bool = True         # scatters in the fog and blooms in the lens, as a point source does
 
 
 @dataclass(frozen=True)
@@ -507,12 +651,31 @@ class Bounce:
 
 
 @dataclass
+class CellsView:
+    """One body's share of its fixture's cells, as the face shader reads them."""
+    key: str                     # the fixture's texture: every body of it shares one
+    image: np.ndarray            # (rows, columns, 3) linear, the WHOLE fixture's cells
+    origin: Tuple[int, int]      # this body's first cell in it (column, row)
+    grid: Tuple[int, int]        # this body's cells, across and down
+    dot: Tuple[float, float, float]   # LED radius (0 fills the cell), cell aspect x, y
+
+
+@dataclass
+class BodyDraw:
+    """A body drawn part by part from its live node matrices."""
+    asset: str
+    matrices: List[np.ndarray]
+    light: int = -1              # the light its `lens` material shows
+    cells: Optional[CellsView] = None
+
+
+@dataclass
 class Frame:
     camera: Tuple[Vec3, Vec3, Vec3, Vec3]      # position, right, up, forward
     tan_half_fov: float
     emitters: List[Emitter]
     bounces: List[Bounce]
-    heads: List[Tuple[List[np.ndarray], int]]  # each head's node matrices, and its light
+    bodies: List[BodyDraw]                     # everything drawn per part: heads, the patch
     fog: Fog
     air_ambient: Vec3                          # the room's bounced light, as the fog sees it
     drifted: Vec3                              # how far the air has moved, in metres
@@ -524,9 +687,11 @@ class Frame:
         arrives. Exposure is applied after the average, so it is left out;
         so is the drift, which `Fog.drifting` answers for instead (a moving
         average rather than a restart). The ambient follows the emitters."""
-        heads = tuple(tuple(np.round(m, 4).ravel()) for matrices, _ in self.heads for m in matrices)
+        poses = tuple(tuple(np.round(m, 4).ravel()) for body in self.bodies for m in body.matrices)
+        images = {body.cells.key: body.cells.image for body in self.bodies if body.cells is not None}
+        cells = tuple((key, np.round(image, 4).tobytes()) for key, image in sorted(images.items()))
         return _quantise((self.camera, self.tan_half_fov, self.emitters, self.bounces,
-                          self.fog)) + heads
+                          self.fog)) + poses + cells
 
 
 def _quantise(value):
@@ -577,16 +742,27 @@ def slot_index(fdef, cap_type: str, color: Optional[str] = None) -> int:
     return -1
 
 
+def shutter_gate(feature: ShutterFeature, state: FixtureState, now: float) -> float:
+    """How open a fixture's shutter is at `now`, 0..1 — the app's own answer,
+    across all of OFL's shutter effects, on the same clock-phase waveforms."""
+    frame = beam_frame.Frame(state=state, body=None, t=now)
+    feature.apply(frame)
+    return frame.beam.gate
+
+
 @dataclass
 class Fixture:
-    """A patched fixture: its definition, its model, where it hangs, and its
+    """A lamp on a clamp: its definition, its model, where it hangs, and its
     live state. Its pose is the model's own node hierarchy with the yoke
-    panned and the body (or head) tilted — home is straight down."""
+    panned and the body (or head) tilted — home is straight down, or straight
+    up for one standing on its base (`upright`), which is the model turned
+    over."""
     key: str
     mode: str
     asset: Asset
     mount: Vec3                    # where the model's origin (the clamp) is
     anchor: Optional[Vec3] = None  # the wall end of a bracket, if it hangs on one
+    upright: bool = False          # standing on its base: 2D's hanging=False
     fdef: object = None
     state: Optional[FixtureState] = None
     kind: BeamKind = BeamKind.NONE
@@ -594,6 +770,7 @@ class Fixture:
     pan: float = 0.0
     tilt: float = 0.0
     scale: float = 1.0
+    gate: float = 1.0              # the shutter, this instant
 
     def resolve(self) -> None:
         self.fdef = resolve_fixture(self.key, self.mode)
@@ -620,13 +797,43 @@ class Fixture:
         self._yoke = self.asset.find("yoke")
         self._tilter = max(self.asset.find("body"), self.asset.find("head"))
         self._lens = self.asset.find("lens")
+        self._shutter = ShutterFeature(None)
+        # DMX 127/128 is home — straight down for a hung head (CLAUDE.md, "The
+        # render engine") — so that is what an angle is measured from.
+        self.pan_home = self.tilt_home = 0.0
+        if self.slots["pan"] >= 0:
+            self.pan_home = angle_table(self.fdef, self.slots["pan"], "pan")[128]
+        if self.slots["tilt"] >= 0:
+            self.tilt_home = angle_table(self.fdef, self.slots["tilt"], "tilt")[128]
+        self._slews = (Slew(), Slew())
 
     def drive(self, dmx: bytes) -> None:
         self.state = resolve_state(self.fdef, dmx)
 
+    def shade(self, now: float) -> None:
+        """Where the shutter is in its cycle, this instant."""
+        if self.state is not None:
+            self.gate = shutter_gate(self._shutter, self.state, now)
+
+    def follow(self, now: float) -> None:
+        """Pan and tilt to where the DMX says, with a motor's inertia."""
+        if self.state is None or (self.slots["pan"] < 0 and self.slots["tilt"] < 0):
+            return
+        motion = self.state.motion
+        pan_deg = motion.pan_deg if motion.pan_deg is not None else self.pan_home
+        tilt_deg = motion.tilt_deg if motion.tilt_deg is not None else self.tilt_home
+        pan_slew, tilt_slew = self._slews
+        self.pan = math.radians(pan_slew.advance(pan_deg, now, SLEW_TAU) - self.pan_home)
+        self.tilt = math.radians(tilt_slew.advance(tilt_deg, now, SLEW_TAU) - self.tilt_home)
+
     # -- pose ------------------------------------------------------------
+    def orientation(self) -> np.ndarray:
+        """The model's turn and size, about its clamp."""
+        turn = rot_z(math.pi) if self.upright else np.eye(4)
+        return turn @ scale(self.scale, self.scale, self.scale)
+
     def root(self) -> np.ndarray:
-        return translate(*self.mount) @ scale(self.scale, self.scale, self.scale)
+        return translate(*self.mount) @ self.orientation()
 
     def pose(self) -> List[np.ndarray]:
         nodes = self.asset.nodes
@@ -665,8 +872,8 @@ class Fixture:
         pose = self.pose()
         rgb = (0.0, 0.0, 0.0)
         state = self.state
-        if state is not None and state.strobe.effect != "Closed":
-            rgb = tuple(c * output for c in linear_rgb(state.scaled_rgb()))
+        if state is not None and self.gate > 0.0:
+            rgb = tuple(c * output * self.gate for c in linear_rgb(state.scaled_rgb()))
         half = self.half_angle_deg()
         inner_scale = 0.8 if self.kind is BeamKind.HARD else 0.3
         lens_radius = self.asset.nodes[self.asset.roots[0]].extras.get("lens_radius", 0.05)
@@ -738,12 +945,12 @@ class Rig:
         first = self.heads[0]
         self.pan_table = angle_table(first.fdef, first.slots["pan"], "pan")
         self.tilt_table = angle_table(first.fdef, first.slots["tilt"], "tilt")
-        # DMX 127/128 is home — straight down for a hung head (CLAUDE.md, "The
-        # render engine") — so that is what an angle is measured from.
-        self.pan_home = self.pan_table[128]
-        self.tilt_home = self.tilt_table[128]
-        self.slews = [(Slew(), Slew()) for _ in self.heads]
+        self.pan_home = first.pan_home
+        self.tilt_home = first.tilt_home
         self.sweeping = False
+        # Off unless asked for: the show's patch is the rig now, and this one
+        # would light the stage over whatever the show is doing.
+        self.enabled = False
 
     def cans(self) -> List[Fixture]:
         return self.front + self.grazers + self.foh
@@ -762,9 +969,10 @@ class Rig:
             fixture.drive(self._par_dmx(fixture, 225, (255, 172, 98)))
         for fixture in self.foh:
             fixture.drive(self._par_dmx(fixture, 255, (255, 185, 118)))
+        now = time.monotonic()
         for index, head in enumerate(self.heads):
             head.drive(self._head_dmx(index, t))
-            self._slew_head(index)
+            head.follow(now)
 
     def _par_dmx(self, fixture: Fixture, intensity: int, rgb) -> bytes:
         frame = bytearray(fixture.fdef.channel_count)
@@ -799,20 +1007,351 @@ class Rig:
             if 0 <= index < len(frame):
                 frame[index] = max(0, min(255, int(value)))
 
-    def _slew_head(self, index: int) -> None:
-        head = self.heads[index]
-        motion = head.state.motion
-        pan_deg = motion.pan_deg if motion.pan_deg is not None else self.pan_home
-        tilt_deg = motion.tilt_deg if motion.tilt_deg is not None else self.tilt_home
-        now = time.monotonic()
-        pan_slew, tilt_slew = self.slews[index]
-        head.pan = math.radians(pan_slew.advance(pan_deg, now, SLEW_TAU) - self.pan_home)
-        head.tilt = math.radians(tilt_slew.advance(tilt_deg, now, SLEW_TAU) - self.tilt_home)
-
     # -- what the renderer needs ---------------------------------------
     def emitters(self) -> List[Emitter]:
-        return ([f.emitter(PAR_OUTPUT) for f in self.cans()]
-                + [f.emitter(HEAD_OUTPUT) for f in self.heads])
+        """Always all eleven, in `fixtures()` order — the pars' lenses are baked
+        into the room with their light's index — and dark when switched off."""
+        lights = ([f.emitter(PAR_OUTPUT) for f in self.cans()]
+                  + [f.emitter(HEAD_OUTPUT) for f in self.heads])
+        if self.enabled:
+            return lights
+        return [dataclasses.replace(light, rgb=(0.0, 0.0, 0.0)) for light in lights]
+
+
+# ==========================================================================
+# The show's patch
+# ==========================================================================
+
+# A definition without a size still needs a body.
+FALLBACK_DIMS_MM = {"pixel": (500.0, 100.0, 80.0), "blinder": (300.0, 300.0, 150.0),
+                    "machine": (400.0, 250.0, 300.0)}
+
+MODEL_BUILDERS = {"pixel": stage3d_models.build_pixel_panel, "blinder": stage3d_models.build_blinder,
+                  "machine": stage3d_models.build_machine}
+
+
+def family_of(fdef) -> str:
+    """Which body a fixture gets, from its 2D profile — its OFL category (or,
+    failing that, its channels' shape) — and never from its name."""
+    profile = renderer_for(fdef)
+    if issubclass(profile, MovingHeadFixture):
+        return "mover"
+    if issubclass(profile, BlinderFixture):
+        return "blinder"
+    if issubclass(profile, (PixelBarFixture, StrobeFixture)):
+        return "pixel"
+    if issubclass(profile, (SmokeFixture, HazerFixture, FanFixture, StandFixture)):
+        return "machine"
+    return "lamp"
+
+
+class CellFixture:
+    """A fixture whose light is a face of cells: a pixel bar (a body per bar,
+    each showing its own columns), a matrix or LED panel, a strobe, or a
+    blinder (a cell per lamp). Fixed on its bracket, facing the house.
+
+    Each frame it works out every cell's linear colour, as the 2D stage's
+    `MatrixCells` and `BulbArray` paint them: the running effect's artwork
+    tinted by the DMX colour, else each emitter its own colour, else the
+    fixture's one colour everywhere."""
+
+    def __init__(self, fdef, family: str, asset: Asset, roots: List[np.ndarray],
+                 face: Tuple[float, float], face_z: float):
+        self.fdef, self.family, self.asset = fdef, family, asset
+        self.poses = [asset.world(root) for root in roots]
+        self.faces = [root[:3, 3] + (0.0, 0.0, face_z) for root in roots]
+        self.face = face
+        self.key = f"cells:{id(self)}"
+        if family == "blinder":
+            self.columns, self.rows = 1, max(1, declared_cell_count(fdef))
+        elif fdef.matrix is not None:
+            self.columns = max(1, fdef.matrix.pixel_count[0])
+            self.rows = max(1, fdef.matrix.pixel_count[1])
+        else:
+            self.columns = self.rows = 1
+        self.per_body = max(1, self.columns // len(roots))
+        cell_w, cell_h = face[0] / self.per_body, face[1] / self.rows
+        short = min(cell_w, cell_h)
+        # Round LEDs where a cell is roughly square; a long thin cell (a panel
+        # split in strips) is lit edge to edge instead.
+        radius = 0.42 if 0.5 <= cell_w / cell_h <= 2.0 else 0.0
+        self.dot = (radius, cell_w / short, cell_h / short)
+        self.kind = beam_kind(fdef, getattr(renderer_for(fdef), "beam_fallback", BeamKind.NONE))
+        self.image = np.zeros((self.rows, self.columns, 3), np.float32)
+        self.state: Optional[FixtureState] = None
+        self.gate = 1.0
+        self._shutter = ShutterFeature(None)
+        self._effect: Optional[str] = None
+        self._artwork = None
+        self._played = 0.0
+
+    def drive(self, dmx: bytes) -> None:
+        self.state = resolve_state(self.fdef, dmx)
+
+    def _artwork_for(self, effect: str):
+        """The running effect's artwork, memoised on its name — resolving it
+        touches the filesystem, and the effect only changes with the DMX."""
+        if effect != self._effect:
+            self._effect = effect
+            artwork = stage3d_patch.animation(effect_asset(self.fdef, effect) if effect else None)
+            if artwork is not self._artwork:
+                self._artwork, self._played = artwork, 0.0
+        return self._artwork
+
+    def tick(self, now: float, dt: float) -> None:
+        state = self.state
+        if state is None:
+            return
+        self.gate = shutter_gate(self._shutter, state, now)
+        level = state.intensity * self.gate
+        artwork = self._artwork_for(state.program.name)
+        if artwork is not None:
+            self._played += dt * stage3d_patch.speed_factor(state.program.speed_hz)
+            pattern = artwork.at(self._played)
+            rows, columns = min(self.rows, pattern.shape[0]), min(self.columns, pattern.shape[1])
+            srgb = np.zeros((self.rows, self.columns, 3), np.float32)
+            # The artwork is the pattern and the DMX the colour, mixed in sRGB
+            # as the 2D bar mixes them; cells past the artwork's edge stay dark.
+            srgb[:rows, :columns] = pattern[:rows, :columns] * (np.asarray(state.color.rgb, np.float32) / 255.0)
+            self.image = stage3d_patch.srgb_to_linear(srgb) * level
+            return
+        emitters = state.emitters
+        count = self.rows * self.columns
+        if count > 1 and len(emitters) >= count:
+            # A cell per emitter, in the matrix's reading order (X fastest).
+            rgb = stage3d_patch.srgb_to_linear([e.rgb for e in emitters[:count]])
+            weight = np.asarray([e.intensity for e in emitters[:count]], np.float32)[:, None]
+            self.image = (rgb * weight * self.gate).reshape(self.rows, self.columns, 3)
+        else:
+            colour = stage3d_patch.srgb_to_linear(state.color.rgb) * level
+            self.image = np.broadcast_to(colour, (self.rows, self.columns, 3)).astype(np.float32)
+
+    # -- light -----------------------------------------------------------
+    def spot(self) -> Emitter:
+        """A blinder's glare as one lensed light: shadowed, and scattering."""
+        half = resting_half_angle(self.fdef, self.kind) or resting_half_angle(self.fdef, BeamKind.WASH) or 30.0
+        rgb = self.image.reshape(-1, 3).mean(axis=0) * BLINDER_OUTPUT
+        return Emitter(position=tuple(self.faces[0] + (0.0, 0.0, 0.02)), direction=(0.0, 0.0, 1.0),
+                       rgb=tuple(float(c) for c in rgb), cos_outer=math.cos(math.radians(half)),
+                       cos_inner=math.cos(math.radians(half * 0.3)), radius=min(self.face) / 2.0)
+
+    def surface_lights(self) -> List[Emitter]:
+        """A pixel body's spill: one wide light per body, the mean of its
+        cells, that neither shadows nor scatters — it is a face, not a point."""
+        output = PIXEL_OUTPUT * self.face[0] * self.face[1]
+        lights = []
+        for index, centre in enumerate(self.faces):
+            columns = self.image[:, index * self.per_body:(index + 1) * self.per_body]
+            rgb = columns.reshape(-1, 3).mean(axis=0) * output
+            lights.append(Emitter(position=tuple(centre + (0.0, 0.0, 0.03)), direction=(0.0, 0.0, 1.0),
+                                  rgb=tuple(float(c) for c in rgb),
+                                  cos_outer=math.cos(math.radians(PIXEL_HALF_ANGLE)),
+                                  cos_inner=math.cos(math.radians(PIXEL_INNER_ANGLE)),
+                                  radius=min(self.face) / 2.0, shadows=False, air=False))
+        return lights
+
+    def draws(self) -> List[BodyDraw]:
+        return [BodyDraw(self.asset.name, pose, -1,
+                         CellsView(self.key, self.image, (index * self.per_body, 0),
+                                   (self.per_body, self.rows), self.dot))
+                for index, pose in enumerate(self.poses)]
+
+
+class MachineFixture:
+    """A fixture that makes air rather than light — a smoke machine, a hazer.
+    What it puts out thickens the room's fog through the app's Atmosphere."""
+
+    def __init__(self, fdef, asset: Asset, root: np.ndarray):
+        self.fdef, self.asset = fdef, asset
+        self.pose = asset.world(root)
+        self.state: Optional[FixtureState] = None
+
+    def drive(self, dmx: bytes) -> None:
+        self.state = resolve_state(self.fdef, dmx)
+
+    def contribute(self, atmosphere: Atmosphere) -> None:
+        if self.state is not None:
+            output = self.state.atmosphere
+            atmosphere.contribute(id(self), output.output, output.kind or "Fog")
+
+
+class PatchRig:
+    """The show's patch, on the upstage rig line, driven by DMX.
+
+    Placement is the module docstring's: a body's middle goes where the 2D
+    stage has it — across the room by the picture's width, up by the
+    photograph's own camera — with its back on the back pipe's plane, and
+    then inside the room. Nothing here edits the patch."""
+
+    def __init__(self, assets: Dict[str, Asset], venue: Venue, patch: Sequence[FixtureInstance]):
+        self.assets, self.venue = assets, venue
+        self.plane_z = venue.pipes["back"][1]
+        self.lamps: List[Tuple[Fixture, float]] = []      # a clamp, a lens, and its output
+        self.cells: List[CellFixture] = []
+        self.machines: List[MachineFixture] = []
+        self.statics: List[Placement] = []
+        self.skipped: List[str] = []
+        self.atmosphere = Atmosphere(baseline=0.0)
+        self._members: List[Tuple[FixtureInstance, object, int]] = []
+        self._slices: Dict[int, bytes] = {}
+        self._last_tick: Optional[float] = None
+        eye, _right, up, forward = OrbitCamera(venue).basis()
+        self._eye, self._up, self._forward = (np.asarray(v, float) for v in (eye, up, forward))
+        assets.setdefault("pipe_stub", asset_from_nodes("pipe_stub", stage3d_models.build_pipe_stub(),
+                                                        stage3d_models.MATERIALS))
+        for instance in patch:
+            self._add(instance)
+
+    # -- placement -------------------------------------------------------
+    def _across(self, column_px: float) -> float:
+        return (column_px / stage3d_patch.PICTURE_SIZE[0] - 0.5) * 2.0 * (self.venue.half_width - WALL_MARGIN)
+
+    def _height(self, row_px: float) -> float:
+        """Where the photograph's camera sees picture row `row_px` on the rig plane."""
+        ndc = 1.0 - 2.0 * row_px / stage3d_patch.PICTURE_SIZE[1]
+        ray = self._forward + self._up * ndc * math.tan(math.radians(FOV_VERTICAL_DEG) / 2.0)
+        return float(self._eye[1] + ray[1] * (self.plane_z - self._eye[2]) / ray[2])
+
+    def _place(self, centre_px: Tuple[float, float], lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
+        """Where a body whose own box is (lo, hi) goes: its middle where the
+        picture has it, its back on the rig plane, and all of it in the room."""
+        v = self.venue
+        middle = (lo + hi) / 2.0
+        t = np.array([self._across(centre_px[0]) - middle[0], self._height(centre_px[1]) - middle[1],
+                      self.plane_z - lo[2]])
+        side = v.half_width - WALL_MARGIN / 2.0
+        t[0] = min(max(t[0], -side - lo[0]), side - hi[0])
+        # Under the ceiling, and on or over the deck — the deck winning, for a
+        # body taller than the room.
+        t[1] = max(min(t[1], v.ceiling - CEILING_CLEARANCE - hi[1]), DECK_CLEARANCE - lo[1])
+        return t
+
+    def _bracket(self, point) -> None:
+        """A wall arm straight back from `point` to the back wall, through the drape."""
+        anchor = np.array([point[0], point[1], self.venue.back_wall])
+        reach = np.asarray(point, float) - anchor
+        self.statics.append(Placement("wall_arm", translate(*anchor) @ align((1, 0, 0), reach)
+                                      @ scale(float(np.linalg.norm(reach)), 1.0, 1.0)))
+
+    def _model(self, kind: str, dims) -> Asset:
+        name = f"{kind}:{'x'.join(f'{d:g}' for d in dims)}"
+        if name not in self.assets:
+            self.assets[name] = asset_from_nodes(name, MODEL_BUILDERS[kind](dims), stage3d_models.MATERIALS)
+        return self.assets[name]
+
+    # -- building --------------------------------------------------------
+    def _add(self, instance: FixtureInstance) -> None:
+        fdef = resolve_fixture(instance.type, getattr(instance, "mode", ""))
+        if fdef is None:
+            self.skipped.append(instance.type)
+            return
+        family = family_of(fdef)
+        # As `StageController._make_render_objs`: one body per `bars` entry the
+        # definition has bodies for, else the fixture's own position.
+        bars = list(instance.bars[:body_count(fdef)])
+        positions = bars if len(bars) > 1 else [FixturePosition(instance.x, instance.y)]
+        width_px, height_px = body_size(fdef)
+        centres = [(p.x + width_px / 2.0, p.y + height_px / 2.0) for p in positions]
+        if family in ("lamp", "mover"):
+            fixture = self._add_lamp(instance, family, centres[0])
+        elif family == "machine":
+            fixture = self._add_machine(fdef, centres[0])
+        else:
+            fixture = self._add_cells(fdef, family, centres)
+        self._members.append((instance, fixture, fdef.channel_count))
+
+    def _add_lamp(self, instance: FixtureInstance, family: str, centre) -> Fixture:
+        asset = self.assets["moving_head" if family == "mover" else "par_can"]
+        fixture = Fixture(instance.type, getattr(instance, "mode", ""), asset, (0.0, 0.0, 0.0),
+                          upright=not getattr(instance, "hanging", True))
+        fixture.resolve()
+        lo, hi = asset.bounds(fixture.orientation())
+        clamp = self._place(centre, lo, hi)
+        fixture.mount = tuple(float(c) for c in clamp)
+        # The clamp grips a stub of pipe, and the stub is bracketed off the
+        # wall — unless the fixture is standing on the deck, which holds it.
+        if not (fixture.upright and clamp[1] + lo[1] <= DECK_CLEARANCE + 0.01):
+            self.statics.append(Placement("pipe_stub", translate(*clamp)))
+            self._bracket(clamp)
+        self.lamps.append((fixture, HEAD_OUTPUT if family == "mover" else PAR_OUTPUT))
+        return fixture
+
+    def _add_cells(self, fdef, family: str, centres) -> CellFixture:
+        dims = fdef.physical.dimensions_mm or FALLBACK_DIMS_MM[family]
+        asset = self._model(family, dims)
+        lo, hi = asset.bounds(np.eye(4))
+        roots = [translate(*self._place(centre, lo, hi)) for centre in centres]
+        for root in roots:
+            middle = root[:3, 3] + (lo + hi) / 2.0
+            self._bracket((middle[0], middle[1], self.plane_z))
+        fixture = CellFixture(fdef, family, asset, roots, stage3d_models.face_size(family, dims),
+                              float(hi[2]))
+        self.cells.append(fixture)
+        return fixture
+
+    def _add_machine(self, fdef, centre) -> MachineFixture:
+        asset = self._model("machine", fdef.physical.dimensions_mm or FALLBACK_DIMS_MM["machine"])
+        lo, hi = asset.bounds(np.eye(4))
+        t = self._place(centre, lo, hi)
+        if t[1] + lo[1] > DECK_CLEARANCE + 0.01:           # off the deck: on a bracket
+            self._bracket((t[0], t[1] + (lo[1] + hi[1]) / 2.0, self.plane_z))
+        fixture = MachineFixture(fdef, asset, translate(*t))
+        self.machines.append(fixture)
+        return fixture
+
+    # -- live ------------------------------------------------------------
+    def update_dmx(self, universe: bytes) -> None:
+        """A whole universe: each fixture takes its slice, resolved once for all
+        its bodies — and not at all when its bytes have not changed."""
+        for instance, fixture, channels in self._members:
+            start = instance.dmx_start - 1
+            piece = bytes(universe[start:start + channels])
+            if len(piece) < channels or self._slices.get(id(fixture)) == piece:
+                continue
+            self._slices[id(fixture)] = piece
+            fixture.drive(piece)
+
+    def tick(self, now: float) -> None:
+        dt = 0.0 if self._last_tick is None else min(0.25, now - self._last_tick)
+        self._last_tick = now
+        for lamp, _output in self.lamps:
+            lamp.shade(now)
+            lamp.follow(now)
+        for fixture in self.cells:
+            fixture.tick(now, dt)
+        for machine in self.machines:
+            machine.contribute(self.atmosphere)
+        self.atmosphere.advance(now)
+
+    # -- what the renderer needs ---------------------------------------
+    def spots(self) -> List[Emitter]:
+        """Every shadowed light, in a fixed order: the lamps', then the blinders'."""
+        return ([lamp.emitter(output) for lamp, output in self.lamps]
+                + [f.spot() for f in self.cells if f.family == "blinder"])
+
+    def surface_lights(self) -> List[Emitter]:
+        return [light for f in self.cells if f.family == "pixel" for light in f.surface_lights()]
+
+    def draws(self, first_light: int, light_count: int) -> List[BodyDraw]:
+        """Every body, part by part; a lamp's lens shows its light, which is
+        `first_light` onward in `spots()` order — unless the list was cut short."""
+        bodies = []
+        for index, (lamp, _output) in enumerate(self.lamps):
+            light = first_light + index
+            bodies.append(BodyDraw(lamp.asset.name, lamp.pose(), light if light < light_count else -1))
+        for fixture in self.cells:
+            bodies += fixture.draws()
+        bodies += [BodyDraw(m.asset.name, m.pose) for m in self.machines]
+        return bodies
+
+    def summary(self) -> str:
+        blinders = sum(1 for f in self.cells if f.family == "blinder")
+        pixels = sum(len(f.poses) for f in self.cells if f.family == "pixel")
+        parts = [f"{len(self.lamps)} lamps/heads", f"{blinders} blinders", f"{pixels} pixel bodies",
+                 f"{len(self.machines)} machines"]
+        if self.skipped:
+            parts.append(f"skipped {', '.join(self.skipped)}")
+        return ", ".join(parts)
 
 
 # ==========================================================================
@@ -827,12 +1366,14 @@ class Placement:
 
 
 class Stage:
-    """The venue, the set pieces, the audience, the bar and the rig."""
+    """The venue, the set pieces, the audience, the bar, the house rig and the
+    show's patch."""
 
-    def __init__(self):
+    def __init__(self, patch: Sequence[FixtureInstance] = ()):
         self.assets = load_assets()
         self.venue = Venue.from_asset(self.assets["venue"])
         self.rig = Rig(self.assets, self.venue)
+        self.patch = PatchRig(self.assets, self.venue, patch)
         v = self.venue
 
         statics = [Placement("venue", np.eye(4))]
@@ -853,8 +1394,15 @@ class Stage:
                 reach = np.asarray(fixture.mount) - np.asarray(fixture.anchor)
                 statics.append(Placement("wall_arm", translate(*fixture.anchor) @ align((1, 0, 0), reach)
                                          @ scale(float(np.linalg.norm(reach)), 1.0, 1.0)))
+        # The patch's rigging — pipe stubs and wall arms — never moves either.
+        statics += self.patch.statics
         self.statics = statics
         self.house = self._house_lights()
+        lights = (len(self.rig.fixtures()) + len(self.patch.spots()) + len(self.house)
+                  + len(self.patch.surface_lights()))
+        if lights > MAX_LIGHTS:
+            print(f"stage3d_bar: {lights} lights for {MAX_LIGHTS} slots — the last "
+                  f"{lights - MAX_LIGHTS} (pixel spill first) are dropped", file=sys.stderr)
 
     def static_pose(self, placement: Placement) -> List[np.ndarray]:
         if placement.asset == "par_can":
@@ -935,9 +1483,7 @@ def bounce_lights(venue: Venue, emitters: Sequence[Emitter]) -> List[Bounce]:
     cone carries 2π(1 − cos θ) of its intensity as flux, the surface keeps its
     albedo's share, and sends that back as flux / π along its normal."""
     bounces = []
-    for emitter in emitters[:MAX_BOUNCES]:
-        if max(emitter.rgb) <= 0.0:
-            continue
+    for emitter in [e for e in emitters if max(e.rgb) > 0.0][:MAX_BOUNCES]:
         hit = first_surface(venue, emitter.position, emitter.direction)
         if hit is None:
             continue
@@ -1062,7 +1608,8 @@ uniform int   u_light_count;
 uniform vec3  u_light_pos[MAX_LIGHTS];
 uniform vec3  u_light_dir[MAX_LIGHTS];
 uniform vec3  u_light_rgb[MAX_LIGHTS];
-uniform vec3  u_light_shape[MAX_LIGHTS];   // cos_outer, cos_inner, lens radius
+uniform vec4  u_light_shape[MAX_LIGHTS];   // cos_outer, cos_inner, lens radius, 1 if a point
+                                           // source (scatters, blooms); 0 for a lit face
 
 uniform int   u_shadow_count;              // lights [0, count) have an atlas tile
 uniform mat4  u_light_vp[MAX_SHADOWS];
@@ -1169,6 +1716,12 @@ uniform sampler2D u_base_tex;
 uniform sampler2D u_normal_tex;
 uniform sampler2D u_mr_tex;
 
+uniform bool  u_has_cells;          // a face lit cell by cell: a pixel bar, a blinder
+uniform sampler2D u_cells_tex;      // the whole fixture's cells, linear, one texel each
+uniform vec2  u_cells_origin;       // this body's first cell in it
+uniform vec2  u_cells_grid;         // this body's cells, across and down
+uniform vec3  u_cells_dot;          // LED radius (0 fills the cell), cell aspect x, y
+
 uniform int   u_bounce_count;
 uniform vec3  u_bounce_pos[MAX_BOUNCES];
 uniform vec3  u_bounce_nrm[MAX_BOUNCES];
@@ -1238,6 +1791,16 @@ vec3 perturb(vec3 n, vec3 p, vec2 uv, vec3 sampled) {
     return normalize(t * scale * m.x - b * scale * m.y + n * m.z);
 }
 
+// A face of cells: each its fixture's colour for it, as a round LED on a dim
+// diffuser — or edge to edge, for a cell that is a long strip.
+vec3 cells_light(vec2 uv) {
+    vec2 cell = min(floor(uv * u_cells_grid), u_cells_grid - 1.0);
+    vec3 led = texelFetch(u_cells_tex, ivec2(u_cells_origin + cell), 0).rgb;
+    if (u_cells_dot.x <= 0.0) { return led; }
+    float d = length((fract(uv * u_cells_grid) - 0.5) * u_cells_dot.yz);
+    return led * mix(0.12, 1.0, smoothstep(u_cells_dot.x, u_cells_dot.x * 0.7, d));
+}
+
 vec3 brdf(vec3 albedo, float rough, float metal, vec3 sheen, vec3 n, vec3 v, vec3 l) {
     vec3 h = normalize(l + v);
     float nl = max(dot(n, l), 1e-3);
@@ -1278,6 +1841,7 @@ void main() {
     if (dot(n, v) < 0.0) { n = normalize(n - v * dot(n, v) * 1.01); }
 
     vec3 total = u_emission;
+    if (u_has_cells) { total += cells_light(v_uv); }
     int emitter = v_emitter >= 0 ? v_emitter : u_draw_emitter;
     if (emitter >= 0) { total += u_light_rgb[emitter] * LENS_GAIN; }
 
@@ -1526,6 +2090,7 @@ vec3 lamp_glow(vec3 origin, vec3 dir, float t_hit) {
     vec3 total = vec3(0.0);
     for (int i = 0; i < MAX_LIGHTS; ++i) {
         if (i >= u_light_count) { break; }
+        if (u_light_shape[i].w <= 0.0) { continue; }         // a face has no barrel
         vec3 to = u_light_pos[i] - origin;
         float along = dot(to, dir);
         if (along <= 0.0 || along > t_hit + 0.06) { continue; }
@@ -1552,6 +2117,7 @@ void main() {
         for (int i = 0; i < MAX_LIGHTS; ++i) {
             if (i >= u_light_count) { break; }
             if (max(u_light_rgb[i].r, max(u_light_rgb[i].g, u_light_rgb[i].b)) <= 0.0) { continue; }
+            if (u_light_shape[i].w <= 0.0) { continue; }     // a face's spill is not a beam
             // Each light's samples offset differently, or their noise lines up.
             hdr += light_in_air(i, u_cam_pos, dir, t_end, fract(jitter + 0.618034 * float(i)));
         }
@@ -1692,7 +2258,8 @@ class BarRenderer:
         self.gl = None
         self.programs = {}
         self.static_batches: List[Batch] = []
-        self.head_parts: List[Tuple[int, Batch]] = []   # (node index, batch)
+        self._parts: Dict[str, List[Tuple[int, Batch]]] = {}    # asset -> (node index, batch)
+        self._cells: Dict[str, list] = {}                       # key -> [texture, shape, bytes]
         self.casters = None
         self.caster_count = 0
         self.frame_fbo = self.accum_fbo = self.atlas = None
@@ -1801,8 +2368,8 @@ class BarRenderer:
         return Batch(material, textures, vao, None, len(vertices))
 
     def _build_scene(self) -> None:
-        """Bake every static placement into world space, merged by material;
-        keep the heads' parts in their own node space to be posed per frame."""
+        """Bake every static placement into world space, merged by material.
+        What moves is uploaded part by part on first use (`_parts_for`)."""
         stage = self.stage
         merged: Dict[str, Tuple[Asset, Material, List[np.ndarray]]] = {}
         casters: List[np.ndarray] = []
@@ -1825,18 +2392,46 @@ class BarRenderer:
         positions = np.concatenate(casters)
         self.casters = self._upload(positions, [(0, 3, 0)], 12)
         self.caster_count = len(positions)
-
-        head = stage.assets["moving_head"]
-        for index, node in enumerate(head.nodes):
-            if node.mesh is None:
-                continue
-            for prim in head.meshes[node.mesh]:
-                material = head.materials[prim.material]
-                self.head_parts.append((index, self._batch(head, material,
-                                                           expand_primitive(prim, np.eye(4), -1))))
         print(f"stage3d_bar: {len(self.static_batches)} static batches, "
               f"{sum(b.count for b in self.static_batches) // 3} triangles, "
               f"{self.caster_count // 3} shadow casters")
+
+    def _parts_for(self, name: str) -> List[Tuple[int, Batch]]:
+        """A model's parts in their own node space, to be posed per frame."""
+        if name not in self._parts:
+            asset = self.stage.assets[name]
+            self._parts[name] = [(index, self._batch(asset, asset.materials[prim.material],
+                                                     expand_primitive(prim, np.eye(4), -1)))
+                                 for index, node in enumerate(asset.nodes) if node.mesh is not None
+                                 for prim in asset.meshes[node.mesh]]
+        return self._parts[name]
+
+    def _upload_cells(self, frame: Frame) -> None:
+        """Each fixture's cells as a float texture, one texel a cell, sampled
+        exactly (no filtering): re-sent only when a cell has changed."""
+        from PyQt6.QtOpenGL import QOpenGLTexture
+        for body in frame.bodies:
+            cells = body.cells
+            if cells is None:
+                continue
+            rows, columns = cells.image.shape[:2]
+            entry = self._cells.get(cells.key)
+            if entry is None or entry[1] != (rows, columns):
+                texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+                texture.setFormat(QOpenGLTexture.TextureFormat.RGBA32F)
+                texture.setSize(columns, rows)
+                texture.allocateStorage(QOpenGLTexture.PixelFormat.RGBA, QOpenGLTexture.PixelType.Float32)
+                texture.setMinMagFilters(QOpenGLTexture.Filter.Nearest, QOpenGLTexture.Filter.Nearest)
+                texture.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+                entry = [texture, (rows, columns), None]
+                self._cells[cells.key] = entry
+            rgba = np.ones((rows, columns, 4), np.float32)
+            rgba[..., :3] = cells.image * CELL_GAIN
+            raw = rgba.tobytes()
+            if raw != entry[2]:
+                entry[0].setData(QOpenGLTexture.PixelFormat.RGBA, QOpenGLTexture.PixelType.Float32,
+                                 sip.voidptr(raw))
+                entry[2] = raw
 
     def _ensure_targets(self, width: int, height: int) -> None:
         from PyQt6.QtOpenGL import QOpenGLFramebufferObject, QOpenGLFramebufferObjectFormat
@@ -1963,7 +2558,9 @@ class BarRenderer:
             vec3(f"u_light_pos[{i}]", emitter.position)
             vec3(f"u_light_dir[{i}]", emitter.direction)
             vec3(f"u_light_rgb[{i}]", emitter.rgb)
-            vec3(f"u_light_shape[{i}]", (emitter.cos_outer, emitter.cos_inner, emitter.radius))
+            program.setUniformValue(self._loc(program_name, f"u_light_shape[{i}]"),
+                                    QVector4D(float(emitter.cos_outer), float(emitter.cos_inner),
+                                              float(emitter.radius), 1.0 if emitter.air else 0.0))
         program.setUniformValue(self._loc(program_name, "u_shadow_count"), len(light_views))
         for i, (vp, tan_half) in enumerate(light_views):
             program.setUniformValue(self._loc(program_name, f"u_light_vp[{i}]"), qmatrix(vp))
@@ -2003,7 +2600,8 @@ class BarRenderer:
         program.bind()
         program.setUniformValue(self._loc("lit", "u_view_proj"), qmatrix(view_proj))
         program.setUniformValue(self._loc("lit", "u_cam_pos"), QVector3D(*[float(c) for c in position]))
-        for name, unit in (("u_atlas", 0), ("u_base_tex", 1), ("u_normal_tex", 2), ("u_mr_tex", 3)):
+        for name, unit in (("u_atlas", 0), ("u_base_tex", 1), ("u_normal_tex", 2), ("u_mr_tex", 3),
+                           ("u_cells_tex", 4)):
             program.setUniformValue(self._loc("lit", name), unit)
         self._set_lights("lit", frame, light_views)
         program.setUniformValue(self._loc("lit", "u_bounce_count"), len(frame.bounces))
@@ -2014,27 +2612,30 @@ class BarRenderer:
         gl.glActiveTexture(_GL_TEXTURE0)
         gl.glBindTexture(_GL_TEXTURE_2D, self.atlas.texture())
 
-        draws = [(batch, np.eye(4), -1) for batch in self.static_batches]
-        for matrices, light in frame.heads:
-            draws += [(batch, matrices[node], light) for node, batch in self.head_parts]
+        self._upload_cells(frame)
+        draws = [(batch, np.eye(4), -1, None) for batch in self.static_batches]
+        for body in frame.bodies:
+            draws += [(batch, body.matrices[node], body.light, body.cells)
+                      for node, batch in self._parts_for(body.asset)]
 
         # Depth first, then shade what survived: each pixel is lit once.
         gl.glDepthFunc(_GL_LESS)
         gl.glColorMask(False, False, False, False)
         program.setUniformValue(self._loc("lit", "u_depth_only"), True)
-        for batch, model, light in draws:
-            self._draw(program, batch, model, light, textured=False)
+        for batch, model, light, cells in draws:
+            self._draw(program, batch, model, light, cells, textured=False)
         gl.glDepthFunc(_GL_LEQUAL)
         gl.glDepthMask(False)
         gl.glColorMask(True, True, True, True)
         program.setUniformValue(self._loc("lit", "u_depth_only"), False)
-        for batch, model, light in draws:
-            self._draw(program, batch, model, light, textured=True)
+        for batch, model, light, cells in draws:
+            self._draw(program, batch, model, light, cells, textured=True)
         gl.glDepthMask(True)
         gl.glDisable(_GL_DEPTH_TEST)
         program.release()
 
-    def _draw(self, program, batch: Batch, model: np.ndarray, light: int, textured: bool) -> None:
+    def _draw(self, program, batch: Batch, model: np.ndarray, light: int,
+              cells: Optional[CellsView], textured: bool) -> None:
         program.setUniformValue(self._loc("lit", "u_model"), qmatrix(model))
         if textured:
             m = batch.material
@@ -2050,6 +2651,15 @@ class BarRenderer:
                                                        batch.textures), start=1):
                 program.setUniformValue(loc(flag), texture is not None)
                 (texture or self._white).bind(unit)
+            lit_cells = cells is not None and m.name == "cells"
+            program.setUniformValue(loc("u_has_cells"), lit_cells)
+            if lit_cells:
+                self._cells[cells.key][0].bind(4)
+                program.setUniformValue(loc("u_cells_origin"), float(cells.origin[0]), float(cells.origin[1]))
+                program.setUniformValue(loc("u_cells_grid"), float(cells.grid[0]), float(cells.grid[1]))
+                program.setUniformValue(loc("u_cells_dot"), QVector3D(*[float(c) for c in cells.dot]))
+            else:
+                self._white.bind(4)
         batch.vao.bind()
         self.gl.glDrawArrays(_GL_TRIANGLES, 0, batch.count)
         batch.vao.release()
@@ -2103,14 +2713,25 @@ class BarRenderer:
 
 def build_frame(stage: Stage, camera: OrbitCamera, fog: Fog, drifted: Vec3,
                 exposure: float) -> Frame:
-    """What the renderer needs from the rig, the camera and the air, this instant."""
-    rig = stage.rig
-    patched = rig.emitters()
-    emitters = (patched + stage.house)[:MAX_LIGHTS]
+    """What the renderer needs from the rigs, the camera and the air, this instant.
+
+    The light list's order is load-bearing. The house rig comes first and
+    always all of it, because its pars' lenses are baked into the room with
+    their light's index; every shadowed light comes before every unshadowed
+    one, because the atlas hands out tiles from the front until the first
+    light that wants none; and the pixel spill comes last, so it is what a
+    list too long for the shaders loses."""
+    rig, patch = stage.rig, stage.patch
+    house_rig = rig.emitters()
+    spots = patch.spots()
+    emitters = (house_rig + spots + stage.house + patch.surface_lights())[:MAX_LIGHTS]
     first_head = len(rig.cans())
-    heads = [(head.pose(), first_head + index) for index, head in enumerate(rig.heads)]
+    bodies = [BodyDraw("moving_head", head.pose(), first_head + index) for index, head in enumerate(rig.heads)]
+    bodies += patch.draws(len(house_rig), len(emitters))
+    if patch.machines:
+        fog = dataclasses.replace(fog, density=fog.density + patch.atmosphere.level * SMOKE_DENSITY)
     return Frame(camera=camera.basis(), tan_half_fov=math.tan(math.radians(FOV_VERTICAL_DEG) * 0.5),
-                 emitters=emitters, bounces=bounce_lights(stage.venue, patched), heads=heads,
+                 emitters=emitters, bounces=bounce_lights(stage.venue, house_rig + spots), bodies=bodies,
                  fog=fog, air_ambient=air_ambient(stage.venue, fog, emitters), drifted=drifted,
                  exposure=exposure)
 
@@ -2178,11 +2799,16 @@ class FogPanel(QWidget):
 
 
 class BarView(QOpenGLWidget):
-    """The window: a camera, a stage, a renderer and a read-out."""
+    """The window: a camera, a stage, a renderer, a DMX feed and a read-out."""
 
-    def __init__(self, stage: Stage):
+    def __init__(self, stage: Stage, feed: Optional[stage3d_patch.DmxFeed] = None,
+                 patch_source: str = ""):
         super().__init__()
         self.stage = stage
+        self.feed = feed
+        self.patch_source = patch_source
+        if feed is not None:
+            feed.frame.connect(stage.patch.update_dmx)
         self.camera = OrbitCamera(stage.venue)
         self.renderer = BarRenderer(stage)
         self.failed = False
@@ -2220,6 +2846,7 @@ class BarView(QOpenGLWidget):
         self.drifted = tuple(d + w * step for d, w in zip(self.drifted, WIND))
         self._last_tick = now
         self.stage.rig.tick(self.show_time)
+        self.stage.patch.tick(now)
         self._update_hud()
         self.update()
 
@@ -2231,14 +2858,21 @@ class BarView(QOpenGLWidget):
         else:
             samples = self.renderer.samples
             state = f"{samples:3d}/{MAX_SAMPLES}{' (still)' if samples >= MAX_SAMPLES else ''}"
+        patch = self.stage.patch
+        smoke = patch.atmosphere.level * SMOKE_DENSITY if patch.machines else 0.0
+        dmx = self.feed.describe() if self.feed is not None else "none"
+        keys = "drag orbit | wheel dolly | WASD walk | Q/E down/up | [ ] fog | F fog panel | - = exposure"
+        keys += " | H house rig | space sweep | R photo view"
+        if self.feed is not None and self.feed.controller is not None:
+            keys += " | N next scene | B blackout"
         self.hud.setText(
             f"{self.fps:5.1f} fps   samples {state}"
-            f"   fog {fog.density:.3f}/m   exposure {self.exposure:.2f}\n"
-            f"rig   5 x par-rgbw overhead, 2 on the walls, 2 front of house [{rig.front[0].kind.value}]"
-            f"   2 x {rig.heads[0].key} backlight [{rig.heads[0].kind.value}]"
+            f"   fog {fog.density:.3f}/m + smoke {smoke:.3f}   exposure {self.exposure:.2f}\n"
+            f"patch {self.patch_source}: {patch.summary()}, on the upstage rig line\n"
+            f"dmx   {dmx}\n"
+            f"house rig {'on' if rig.enabled else 'off'}: 9 x par-rgbw, 2 x {rig.heads[0].key}"
             f"   sweep {'on' if rig.sweeping else 'off'}\n"
-            f"drag orbit | wheel dolly | WASD walk | Q/E down/up | [ ] fog | F fog panel"
-            f" | - = exposure | space sweep | R photo view")
+            f"{keys}")
         self.hud.adjustSize()
 
     def resizeEvent(self, event) -> None:
@@ -2294,6 +2928,12 @@ class BarView(QOpenGLWidget):
         rig = self.stage.rig
         if key == Qt.Key.Key_Escape:
             self.window().close()
+        elif key == Qt.Key.Key_H:
+            rig.enabled = not rig.enabled
+        elif key == Qt.Key.Key_N and self.feed is not None:
+            self.feed.next_scene()
+        elif key == Qt.Key.Key_B and self.feed is not None:
+            self.feed.blackout()
         elif key == Qt.Key.Key_Space:
             rig.sweeping = not rig.sweeping
             self._sweep_started = time.monotonic() - self.show_time if rig.sweeping else None
@@ -2326,6 +2966,17 @@ class BarView(QOpenGLWidget):
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="The bar, in 3D, lit by a show's patch from DMX.")
+    parser.add_argument("--show", help="a .show folder (default: the one the app last opened)")
+    parser.add_argument("--dmx", choices=("artnet", "local"), default="artnet",
+                        help="artnet: listen for a running TupperDMX; local: run its "
+                             "software controller in here (N steps the scenes)")
+    parser.add_argument("--port", type=int, help="Art-Net port (default: the app's)")
+    parser.add_argument("--universe", type=int, help="Art-Net universe (default: the app's)")
+    parser.add_argument("--house-rig", action="store_true",
+                        help="start with the photograph's own pars and heads on")
+    args = parser.parse_args()
+
     # As stage/gpu/layer.py's configure_surface_format(): force desktop GL or a
     # Wayland/EGL session hands out GL ES, and do NOT ask for a version.
     fmt = QSurfaceFormat()
@@ -2334,14 +2985,21 @@ def main() -> int:
     fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
     QSurfaceFormat.setDefaultFormat(fmt)
 
-    app = QApplication(sys.argv)
-    stage = Stage()
-    rig = stage.rig
-    print(f"stage3d_bar: {rig.front[0].key} -> {rig.front[0].kind.value}, "
-          f"{rig.heads[0].key} ({rig.heads[0].fdef.mode}) -> {rig.heads[0].kind.value}, "
+    app = QApplication(sys.argv[:1])
+    source, patch = stage3d_patch.load_patch(args.show)
+    stage = Stage(patch)
+    stage.rig.enabled = args.house_rig
+    print(f"stage3d_bar: patch from {source}: {stage.patch.summary()}; "
           f"{len(stage.statics)} placements, {len(stage.house)} house lights")
 
-    view = BarView(stage)
+    port, universe = stage3d_patch.artnet_settings()
+    feed = stage3d_patch.DmxFeed(args.dmx, patch, args.port or port,
+                                 universe if args.universe is None else args.universe)
+    app.aboutToQuit.connect(feed.stop)
+    if args.dmx == "local":
+        feed.next_scene()                 # something to look at straight away
+
+    view = BarView(stage, feed, source)
     view.setWindowTitle("TupperDMX — the bar, in 3D")
     view.resize(1280, 800)
     view.show()
