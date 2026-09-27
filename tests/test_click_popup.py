@@ -3,7 +3,8 @@ Characterization test: the timeline toolbar's click panel (ui/click_popup.py).
 
 Tempo and meter are a draft seeded from the song on open; "Set as song tempo"
 only offers itself when the draft differs; free-run follows the draft once the
-edits settle; accent and level are standing settings; TAP averages the taps.
+edits settle; accent and level are standing settings; count-in is the song's
+flag; TAP averages the taps.
 
 Run with:
     uv run python tests/test_click_popup.py
@@ -106,6 +107,23 @@ def test_free_run_follows_the_draft_once_it_settles():
     popup.hide()
 
 
+def test_the_toolbar_button_shows_the_panel_open():
+    print("test_the_toolbar_button_shows_the_panel_open")
+    from PyQt6.QtGui import QIcon
+    from ui.timeline_toolbar import TimelineToolbar
+    bar = TimelineToolbar(QIcon(), QIcon(), QIcon())
+    button = bar.click_button
+    _assert(button.text() == "▴" and not button.property("open"),
+            "closed: the chevron points up, the button is out")
+    button.click()
+    _assert(bar.click_popup.isVisible(), "the button opens the panel")
+    _assert(button.text() == "▾" and button.property("open"),
+            "open: the chevron points down, the button is pressed in")
+    bar.click_popup.hide()
+    _assert(button.text() == "▴" and not button.property("open"),
+            "however it closes, the button comes back out")
+
+
 def test_the_song_owns_the_click_while_it_plays():
     print("test_the_song_owns_the_click_while_it_plays")
     popup = ClickPopup()
@@ -132,6 +150,24 @@ def test_accent_and_level_are_mirrored_without_echo():
     popup.accent_switch.click()
     popup.level_slider.setValue(50)
     _assert(accents == [(True,)] and levels == [(50,)], "user edits are emitted")
+
+
+def test_count_in_is_the_songs_flag():
+    print("test_count_in_is_the_songs_flag")
+    popup = ClickPopup()
+    flips = _record(popup.precount_toggled)
+
+    popup.set_precount(True, has_song=True)
+    _assert(popup.precount_switch.isChecked() and flips == [],
+            "reflecting the song's flag is not an edit")
+    popup.precount_switch.click()
+    _assert(flips == [(False,)], "a flip is emitted")
+
+    popup.set_precount(False, has_song=False)
+    _assert(not popup.precount_switch.isEnabled(), "no song, no switch")
+    popup.set_precount(True)
+    _assert(not popup.precount_switch.isEnabled(),
+            "a flag alone leaves the enabled state as it was")
 
 
 def main():

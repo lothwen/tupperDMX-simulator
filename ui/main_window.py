@@ -264,10 +264,6 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
         self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
-        self.timeline_toolbar.song_precount_toggled.connect(
-            self.app_core.on_song_precount_toggled)
-        self.app_core.precount_changed.connect(
-            self.timeline_toolbar.set_song_precount)
         # Editor monitor (backing | guide): toggle → controller → waveform.
         # The editor re-picks it per song (the guide when the song has one);
         # only the desktop does — headless always plays the backing.
@@ -840,14 +836,16 @@ class MainWindow(QMainWindow):
 
     def _connect_click_popup(self):
         """The toolbar's click panel. Its level IS the header's CLICK slider,
-        so each follows the other; free-run, the song's tempo and the accent
-        are the core's."""
+        so each follows the other; free-run, the song's tempo, the accent and
+        the song's count-in are the core's."""
         popup = self.timeline_toolbar.click_popup
         popup.set_level(round(self.config.volume.metronome * 100))
         popup.set_accent(self.config.audio.click_accent)
         popup.level_changed.connect(self._on_click_popup_level)
         self.timeline.metronome_volume_changed.connect(popup.set_level)
         popup.accent_toggled.connect(self.app_core.set_click_accent)
+        popup.precount_toggled.connect(self.app_core.on_song_precount_toggled)
+        self.app_core.precount_changed.connect(popup.set_precount)
         popup.free_run_requested.connect(self.app_core.start_free_run)
         popup.free_run_stop_requested.connect(self.app_core.stop_free_run)
         popup.apply_requested.connect(self.app_core.set_song_tempo)
@@ -881,8 +879,11 @@ class MainWindow(QMainWindow):
         count-in: the playhead waits at 0 and the display counts down."""
         self.timeline.update_playhead(max(0.0, position_seconds))
         if position_seconds < 0:
+            # One minute digit, not two: the fixed-width box holds nine
+            # characters and the sign takes one.
+            minutes, seconds = divmod(-position_seconds, 60)
             self.timeline_toolbar.update_time_display(
-                f"COUNT-IN −{-position_seconds:04.1f}")
+                f"−{int(minutes)}:{seconds:06.3f}")
             return
         # Update toolbar time display
         minutes = int(position_seconds // 60)

@@ -1,5 +1,6 @@
 # ABOUTME: ClickPopup — the timeline toolbar's click panel, opening upward from
-# ABOUTME: its ♩ button: tempo + TAP, meter, accent, level, free-run / set song.
+# ABOUTME: its ♩ button: tempo + TAP, meter, accent, count-in, level, free-run /
+# ABOUTME: set song.
 """The click panel.
 
 Tempo and meter here are a DRAFT: the panel opens on the song's own values,
@@ -7,7 +8,8 @@ and nothing reaches the song until "Set as song tempo". Free-run plays the
 draft on its own, off the transport, and follows it live while it runs.
 Accent and level are not part of the draft — they are the click's standing
 settings, applied as they move, and the level IS the timeline header's CLICK
-slider (the window keeps the two in step).
+slider (the window keeps the two in step). Count-in is neither: it is the
+current song's own flag, applied as it flips.
 
 A widget only: every action leaves as a signal, and the window hands them to
 AppCore.
@@ -55,7 +57,9 @@ class ClickPopup(QFrame):
     free_run_stop_requested = pyqtSignal()
     apply_requested = pyqtSignal(int, str)      # bpm, meter: "Set as song tempo"
     accent_toggled = pyqtSignal(bool)
+    precount_toggled = pyqtSignal(bool)         # the current song's count-in
     level_changed = pyqtSignal(int)             # 0-100, like the header's slider
+    open_changed = pyqtSignal(bool)             # shown / hidden
 
     # A free-run retime restarts the bar, so it waits for the draft to settle:
     # scrolling through ten tempos should not fire ten downbeats.
@@ -97,8 +101,10 @@ class ClickPopup(QFrame):
         rows.addWidget(self._build_meter_chips(), 0, 1)
         rows.addWidget(self._row_label("ACCENT"), 1, 0)
         rows.addLayout(self._build_accent_row(), 1, 1)
-        rows.addWidget(self._row_label("LEVEL"), 2, 0)
-        rows.addLayout(self._build_level_row(), 2, 1)
+        rows.addWidget(self._row_label("COUNT-IN"), 2, 0)
+        rows.addLayout(self._build_precount_row(), 2, 1)
+        rows.addWidget(self._row_label("LEVEL"), 3, 0)
+        rows.addLayout(self._build_level_row(), 3, 1)
         layout.addLayout(rows)
 
         layout.addLayout(self._build_action_row())
@@ -189,6 +195,20 @@ class ClickPopup(QFrame):
         self.accent_switch.toggled.connect(self.accent_toggled.emit)
         row.addWidget(self.accent_switch)
         hint = QLabel("Beat 1")
+        hint.setObjectName("ClickAccentHint")
+        row.addWidget(hint)
+        row.addStretch(1)
+        return row
+
+    def _build_precount_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.precount_switch = ToggleSwitch()
+        self.precount_switch.setToolTip(
+            "Play a count-in before this song (off = segue from the previous one)")
+        self.precount_switch.toggled.connect(self.precount_toggled.emit)
+        row.addWidget(self.precount_switch)
+        hint = QLabel("This song")
         hint.setObjectName("ClickAccentHint")
         row.addWidget(hint)
         row.addStretch(1)
@@ -306,6 +326,16 @@ class ClickPopup(QFrame):
         self.accent_switch.setChecked(bool(accent))
         self.accent_switch.blockSignals(blocked)
 
+    def set_precount(self, enabled: bool,
+                     has_song: Optional[bool] = None) -> None:
+        """The current song's count-in flag. Pass ``has_song`` to also
+        enable/disable the switch (no song = greyed out)."""
+        blocked = self.precount_switch.blockSignals(True)
+        self.precount_switch.setChecked(bool(enabled))
+        if has_song is not None:
+            self.precount_switch.setEnabled(bool(has_song))
+        self.precount_switch.blockSignals(blocked)
+
     def set_level(self, percent: int) -> None:
         blocked = self.level_slider.blockSignals(True)
         self.level_slider.setValue(int(percent))
@@ -335,6 +365,14 @@ class ClickPopup(QFrame):
             x = max(area.left(), min(x, area.right() - self.width()))
         self.move(x, y)
         self.show()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.open_changed.emit(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.open_changed.emit(False)
 
     def mousePressEvent(self, event):
         """A press on the button that opened the panel just closes it. Qt

@@ -1573,8 +1573,7 @@ QFrame#TTViewPopup {
     border-radius: 4px;
 }
 
-QLabel#TTRowsLabel,
-QLabel#TTCountInLabel {
+QLabel#TTRowsLabel {
     color: #aaa;
     padding: 0 2px;
 }
@@ -2950,28 +2949,44 @@ QLineEdit#SongKeyEdit {
     max-width: 44px;
 }
 
-/* Transport BPM. */
+/* Transport BPM: the time display's readout, a size down. */
 QWidget#TimelineToolbar QSpinBox#TTBpm {
-    min-width: 50px;
-    max-width: 50px;
-    min-height: 30px;
-    max-height: 30px;
+    background-color: #1a1a1a;
+    color: #46e05a;
+    border: 2px solid #333;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: bold;
+    selection-background-color: #2a5a30;
+    selection-color: #46e05a;
+    min-width: 64px;
+    max-width: 64px;
+    min-height: 26px;
+    max-height: 26px;
 }
 
-/* The ♩▴ button next to it, which opens the click panel. */
+/* The ♩▴ button next to it, which opens the click panel: raised like the
+   toolbar's other buttons, pressed in while the panel is open. */
 QWidget#TimelineToolbar QPushButton#TTClickButton {
     color: #cfcfcf;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 4px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
+    border: 1px solid #1d1d1d;
+    border-top: 1px solid #454545;
+    border-radius: 3px;
     font-size: 11px;
     min-height: 30px;
-    padding: 0 6px;
+    padding: 0 8px;
 }
 
 QWidget#TimelineToolbar QPushButton#TTClickButton:hover {
-    background: #3a3a3a;
-    border: 1px solid #1d1d1d;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #464646, stop:1 #3c3c3c);
+}
+
+QWidget#TimelineToolbar QPushButton#TTClickButton:pressed,
+QWidget#TimelineToolbar QPushButton#TTClickButton[open="true"] {
+    background: #2a2a2a;
+    border-top: 1px solid #1d1d1d;
 }
 
 /* Lit while the click free-runs — the one sign of it once the panel closes. */
@@ -2984,7 +2999,7 @@ QWidget#TimelineToolbar QPushButton#TTClickButton[running="true"] {
 /* ============================================================
    CLICK PANEL (ui/click_popup.py)
    Opens upward from the timeline toolbar's ♩ button: tempo + TAP,
-   meter, accent, level, then free-run / set as song tempo.
+   meter, accent, count-in, level, then free-run / set as song tempo.
    ============================================================ */
 QFrame#ClickPopup {
     background: #2b2b2b;
@@ -3022,13 +3037,13 @@ QFrame#ClickTempoBox {
 QSpinBox#ClickBpm {
     background: transparent;
     border: none;
-    color: #f0a830;
+    color: #5aa6ee;
     font-size: 26px;
     font-weight: bold;
     min-width: 56px;
     max-width: 56px;
     padding: 0;
-    selection-background-color: #5a4520;
+    selection-background-color: #1f3d5c;
 }
 
 QLabel#ClickBpmUnit {
@@ -3092,9 +3107,9 @@ QPushButton#ClickMeterChip:hover {
 }
 
 QPushButton#ClickMeterChip:checked {
-    color: #f0a830;
-    background: #332a1c;
-    border: 1px solid #c98a2a;
+    color: #5aa6ee;
+    background: #1c2a38;
+    border: 1px solid #3f78b5;
     font-weight: bold;
 }
 

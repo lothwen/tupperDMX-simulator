@@ -89,7 +89,7 @@ class PlaylistController:
             w.toolbar_manager.update_audio_file_display("")
             w.toolbar_manager.update_guide_file_display("")
             w.toolbar_manager.update_song_info("", "")
-            w.timeline_toolbar.set_song_precount(False, has_song=False)
+            w.timeline_toolbar.click_popup.set_precount(False, has_song=False)
             w.timeline_toolbar.set_monitor_state(w.media_controller.monitor, False)
             w.timeline.set_song_tracks(())
             w.timeline.set_files(None)
@@ -147,7 +147,7 @@ class PlaylistController:
             song.title, song_status(song),
             bpm=w.bpm_state.get_bpm(), offset=song.offset,
             key=song.key)
-        w.timeline_toolbar.set_song_precount(
+        w.timeline_toolbar.click_popup.set_precount(
             song.precount, has_song=bool(song.title))
         w.timeline_toolbar.set_monitor_state(
             w.media_controller.monitor,

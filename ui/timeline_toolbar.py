@@ -10,7 +10,6 @@ from tupperlogger import get_logger
 from ui.click_popup import ClickPopup
 from ui.widgets import icons
 from ui.widgets.segmented import Segment, segmented
-from ui.widgets.toggle_switch import ToggleSwitch
 
 
 class TimelineToolbar(QWidget):
@@ -26,7 +25,6 @@ class TimelineToolbar(QWidget):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     bpm_changed = pyqtSignal(int)  # new_bpm
-    song_precount_toggled = pyqtSignal(bool)  # current song's count-in on/off
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
@@ -70,7 +68,6 @@ class TimelineToolbar(QWidget):
         self.play_pause_button: Optional[QPushButton] = None
         self.time_display: Optional[QLabel] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
-        self.precount_toggle: Optional[ToggleSwitch] = None
         self.monitor_backing_btn: Optional[QPushButton] = None
         self.monitor_guide_btn: Optional[QPushButton] = None
 
@@ -295,18 +292,19 @@ class TimelineToolbar(QWidget):
         row.addWidget(self.time_display)
 
         # BPM cluster: the click button + spinbox. The button opens the click
-        # panel upward (tempo/TAP, meter, accent, level, free-run); metronome
-        # mute stays on the timeline header's CLICK row.
+        # panel upward (tempo/TAP, meter, accent, count-in, level, free-run);
+        # metronome mute stays on the timeline header's CLICK row.
         self.click_button = QPushButton("▴")
         self.click_button.setIcon(icons.icon("note", "#cfcfcf"))
         self.click_button.setIconSize(QSize(18, 18))
         self.click_button.setObjectName("TTClickButton")
         self.click_button.setToolTip(
-            "Click: tempo, meter, accent and level — free-run it, or set it "
-            "as the song's tempo")
+            "Click: tempo, meter, accent, count-in and level — free-run it, or "
+            "set it as the song's tempo")
         self.click_popup = ClickPopup(self)
         self.click_button.clicked.connect(
             lambda: self.click_popup.open_above(self.click_button))
+        self.click_popup.open_changed.connect(self._on_click_popup_open)
         row.addWidget(self.click_button)
 
         self.bpm_spinbox = QSpinBox()
@@ -315,21 +313,6 @@ class TimelineToolbar(QWidget):
         self.bpm_spinbox.setObjectName("TTBpm")
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         row.addWidget(self.bpm_spinbox)
-
-        # Count-in toggle (moved here from the top toolbar's SETLIST footer):
-        # per-song precount flag, shown as an iOS-style switch.
-        precount_tooltip = ("Play a count-in before this song "
-                            "(off = segue from the previous one)")
-        precount_label = QLabel(
-            f'{icons.img_tag("bell", "#aaaaaa", 12)} Count-in')
-        precount_label.setObjectName("TTCountInLabel")
-        precount_label.setToolTip(precount_tooltip)
-        row.addWidget(precount_label)
-
-        self.precount_toggle = ToggleSwitch()
-        self.precount_toggle.setToolTip(precount_tooltip)
-        self.precount_toggle.toggled.connect(self.song_precount_toggled.emit)
-        row.addWidget(self.precount_toggle)
 
         row.addWidget(self._separator())
 
@@ -428,6 +411,14 @@ class TimelineToolbar(QWidget):
             return self.bpm_spinbox.value()
         return 120
 
+    def _on_click_popup_open(self, is_open: bool) -> None:
+        """Press the click button in while its panel is open, the chevron
+        pointing the way it will go."""
+        self.click_button.setText("▾" if is_open else "▴")
+        self.click_button.setProperty("open", bool(is_open))
+        self.click_button.style().unpolish(self.click_button)
+        self.click_button.style().polish(self.click_button)
+
     def set_click_free_running(self, running: bool) -> None:
         """Light the click button while the click free-runs — the panel may be
         closed, and this is the one sign left that the click is its own."""
@@ -435,19 +426,6 @@ class TimelineToolbar(QWidget):
         self.click_button.style().unpolish(self.click_button)
         self.click_button.style().polish(self.click_button)
         self.click_popup.set_free_running(running)
-
-    def set_song_precount(self, enabled: bool,
-                          has_song: Optional[bool] = None) -> None:
-        """Reflect a precount change driven elsewhere (song load, the web
-        remote) without re-emitting song_precount_toggled. Pass ``has_song``
-        to also enable/disable the toggle (no song = greyed out)."""
-        if self.precount_toggle is None:
-            return
-        self.precount_toggle.blockSignals(True)
-        self.precount_toggle.setChecked(bool(enabled))
-        if has_song is not None:
-            self.precount_toggle.setEnabled(bool(has_song))
-        self.precount_toggle.blockSignals(False)
 
     def set_zoom_value(self, factor: float) -> None:
         """Move the zoom slider to reflect a zoom change driven elsewhere

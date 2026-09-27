@@ -426,7 +426,7 @@ class AppCore(QObject):
     # ------------------------------------------------------------------
     def on_song_precount_toggled(self, enabled: bool):
         """Persist the current song's count-in flag and apply it live
-        (triggered by the toolbar chip or the web remote)."""
+        (triggered by the click panel or the web remote)."""
         song = self.config.get_current_song()
         if song is None or song.precount == bool(enabled):
             return
