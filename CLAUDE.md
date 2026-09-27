@@ -125,8 +125,9 @@ transport tick in between.
   at the output rate; `app/metronome.py` says WHEN, and `Metronome.follow()` is the ONE start/seek/retime entry, so
   AppCore never asks the stop-click rule itself. **The window never starts or stops the click** — it once did, after
   AppCore on the same signal, and its bare restart undid both the stop-click and the anchor.
-  **Free-run** (the toolbar's ♩▴ click panel) is the one click that is not the song's: the metronome counts a map of its
-  own, and `follow()` — so every play and seek — ends it; AppCore's retime on `tempo_map_changed` leaves it alone.
+  **Free-run** (the toolbar's ♩▴ click panel, and the web remote's FREE-RUN CLICK card) is the one click that is not the
+  song's: the metronome counts a map of its own, and `follow()` — so every play and seek — ends it, as does a transport
+  stop; AppCore's retime on `tempo_map_changed` leaves it alone.
 - **`audio/diagnostics.py` records the click's own timing** — `TimingMonitor`, armed on play and summarised in one log
   line per pass, is the only reason a glitch at a show is answerable afterwards. The metronome reports every beat's
   scheduling error, the audio feed every top-up and the sink's own underrun verdict (`UnderrunError`/`IdleState` — the
@@ -313,7 +314,10 @@ installed only while the panel shows, and the panel re-renders only when its tex
   loaded. `scripts/migrate_start_note.py` converted existing shows once; **the app carries no migration code**.
 - **`webremote/`** — embedded tablet remote, off by default; plain HTTP on the stage LAN, no auth. aiohttp HTTP+WS on its
   own asyncio loop in a QThread; inbound commands execute on the Qt thread, cues/blackout/panic through `preview_clip` so
-  `config.io` routing applies. Panic sends note 51 only when `blackout_all_state` is off (blackout is a toggle).
+  `config.io` routing applies. Panic sends note 51 only when `blackout_all_state` is off (blackout is a toggle). The
+  manager **polls** two things on its tick rather than trusting signals: the blackout toggle and the free-run's map (a
+  retime from the desktop panel emits nothing). The page's free-run tempo/meter is a client-side DRAFT that follows the
+  current song until edited and mirrors the running click; it reaches the app only while the click runs, as a retime.
 
 ## Configuration & persistence (`core/config.py` + `core/show/`)
 

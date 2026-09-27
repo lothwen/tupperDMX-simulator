@@ -185,10 +185,13 @@ def test_free_run_counts_its_own_map_until_the_transport_takes_over():
     metronome.start_free_run(TempoMap(90))
     _assert(changes == [True], "a retime is not a new start")
     _assert(metronome.bpm == 120, "and the song's map is untouched")
+    _assert(metronome.free_run_map().bpm_at(0.0) == 90,
+            "the retimed map is the one on show (the web remote reads it)")
 
     metronome.follow(0.0)
     _assert(not metronome.is_free_running() and changes == [True, False],
             "following the transport ends free-run")
+    _assert(metronome.free_run_map() is None, "and leaves no map on show")
     _assert(metronome.is_metronome_running(), "and runs the song's click instead")
     metronome.stop_metronome()
     _assert(changes == [True, False], "stopping the song's click is not free-run's end")

@@ -33,6 +33,7 @@ class WebRemoteManager(QObject):
         self.thread: Optional[QThread] = None
         self._last_pos = -1.0
         self._last_blackout = False
+        self._last_free_run = None
         # In-memory override of config.webremote.enabled (headless mode: the
         # remote is the only interface) — never persisted to prefs.
         self._force_enabled = bool(force_enabled)
@@ -154,10 +155,11 @@ class WebRemoteManager(QObject):
             w.stop_playback()
             if not self._blackout_state():
                 w.preview_clip([(0, 51, 0)])
-        elif action == "set_precount":
-            w.on_song_precount_toggled(bool(cmd.get("on")))
-        elif action == "set_countin_bars":
-            w.set_count_in_bars(cmd.get("bars", 2))
+        elif action == "free_run":
+            # Refused by AppCore while the song plays: its click is the song's.
+            w.start_free_run(cmd["bpm"], cmd["meter"])
+        elif action == "free_run_stop":
+            w.stop_free_run()
         elif action == "open_show":
             self._open_show_by_name(cmd.get("name", ""))
         # Immediate feedback: every command ends with a fresh snapshot.
@@ -169,6 +171,15 @@ class WebRemoteManager(QObject):
     def _blackout_state(self) -> bool:
         controller = getattr(self.core, "software_controller", None)
         return bool(getattr(controller, "blackout_all_state", False))
+
+    def _free_run_state(self) -> Optional[dict]:
+        """The click running on its own (the desktop click panel's free-run,
+        which the remote starts too) as {'bpm', 'meter'}; None while the click
+        follows the song or is stopped."""
+        tempo_map = self.core.metronome.free_run_map()
+        if tempo_map is None:
+            return None
+        return {"bpm": tempo_map.base_bpm, "meter": tempo_map.meter}
 
     def _open_show(self):
         """The open show project, or None (e.g. test fakes without one)."""
@@ -230,6 +241,8 @@ class WebRemoteManager(QObject):
                    if w.midi_manager.is_song_part(e) and e.get("info")]
         blackout = self._blackout_state()
         self._last_blackout = blackout
+        free_run = self._free_run_state()
+        self._last_free_run = free_run
         show = self._open_show()
         song = self.config.get_current_song()
         return remote_state.build_state(
@@ -242,6 +255,7 @@ class WebRemoteManager(QObject):
             blackout=blackout,
             countin={"enabled": bool(song.precount) if song else False,
                      "bars": self.config.audio.count_in_bars},
+            free_run=free_run,
             setlist=remote_state.build_setlist(
                 self.config.playlist.songs,
                 self.config.playlist.current_song_index),
@@ -303,7 +317,10 @@ class WebRemoteManager(QObject):
             self.worker.publish_event(event)
         # The blackout toggle can flip outside our commands (timeline note-51
         # events, desktop clip previews) — poll it so the web button tracks.
-        if self._blackout_state() != self._last_blackout:
+        # Same for the free-run: the desktop panel starts and retimes it (a
+        # retime emits nothing), and play or stop ends it.
+        if (self._blackout_state() != self._last_blackout
+                or self._free_run_state() != self._last_free_run):
             self._publish_full()
 
     def _on_beat(self, beat: int) -> None:

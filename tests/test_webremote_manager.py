@@ -93,6 +93,28 @@ class FakeBpmState:
 class FakeMetronome:
     beat_occurred = FakeSignal()
 
+    def __init__(self):
+        self.free_map = None
+
+    def free_run_map(self):
+        return self.free_map
+
+
+class FakeWorker:
+    """Records what the manager publishes, in place of the server thread."""
+
+    def __init__(self):
+        self.states = []
+
+    def set_song_paths(self, paths):
+        pass
+
+    def publish_state(self, state):
+        self.states.append(state)
+
+    def publish_event(self, event):
+        pass
+
 
 class FakePlaylistController:
     def __init__(self, window):
@@ -135,11 +157,11 @@ class FakeWindow:
     def preview_clip(self, messages):
         self.calls.append(("preview", messages))
 
-    def on_song_precount_toggled(self, enabled):
-        self.calls.append(("precount", enabled))
+    def start_free_run(self, bpm, meter):
+        self.calls.append(("free_run", bpm, meter))
 
-    def set_count_in_bars(self, bars):
-        self.calls.append(("countin_bars", bars))
+    def stop_free_run(self):
+        self.calls.append("free_run_stop")
 
 
 def _wav(path, seconds, rate=8000):
@@ -265,13 +287,45 @@ def test_blackout_and_panic():
             "panic with blackout already active does not un-toggle it")
 
 
-def test_countin_commands():
-    print("test_countin_commands")
+def test_free_run_commands():
+    print("test_free_run_commands")
     manager, config, window = _make_manager()
-    manager._execute({"action": "set_precount", "on": False})
-    manager._execute({"action": "set_countin_bars", "bars": 4})
-    _assert(window.calls == [("precount", False), ("countin_bars", 4)],
-            "count-in commands map to the window's precount/bars API")
+    manager._execute({"action": "free_run", "bpm": 96, "meter": "6/8"})
+    manager._execute({"action": "free_run_stop"})
+    _assert(window.calls == [("free_run", 96, "6/8"), "free_run_stop"],
+            "free-run commands map to AppCore's start/stop_free_run")
+
+
+def test_free_run_reaches_the_page():
+    """The desktop panel starts and retimes the free-run too, and a retime
+    emits nothing — so the tick polls it, like the blackout toggle."""
+    print("test_free_run_reaches_the_page")
+    manager, config, window = _make_manager()
+    worker = manager.worker = FakeWorker()
+
+    manager._publish_full()
+    _assert(worker.states[-1]["free_run"] is None,
+            "no free-run publishes as null")
+
+    window.metronome.free_map = TempoMap(90, meter="3/4")
+    manager._on_tick()
+    _assert(len(worker.states) == 2
+            and worker.states[-1]["free_run"] == {"bpm": 90, "meter": "3/4"},
+            "a free-run started elsewhere publishes its tempo and meter")
+
+    manager._on_tick()
+    _assert(len(worker.states) == 2, "an unchanged free-run publishes nothing")
+
+    window.metronome.free_map = TempoMap(140, meter="3/4")
+    manager._on_tick()
+    _assert(worker.states[-1]["free_run"] == {"bpm": 140, "meter": "3/4"},
+            "a retime publishes")
+
+    window.metronome.free_map = None
+    manager._on_tick()
+    _assert(len(worker.states) == 4 and worker.states[-1]["free_run"] is None,
+            "and so does its end (play or stop took the click)")
+    manager.worker = None
 
 
 def test_build_state_snapshot():
@@ -446,7 +500,8 @@ def main():
     test_duration_spans_the_longest_track()
     test_cue_fires_the_resolved_favorite()
     test_blackout_and_panic()
-    test_countin_commands()
+    test_free_run_commands()
+    test_free_run_reaches_the_page()
     test_build_state_snapshot()
     test_show_provides_cues_and_name()
     test_open_show_by_name()

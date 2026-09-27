@@ -262,10 +262,6 @@ body.offline .live-dot { background: var(--red); box-shadow: none; }
 .next-title { font-size: 22px; font-weight: 600; }
 
 /* ---- right column ---- */
-.placeholder-card { display: block; padding-bottom: 30px; }
-.stepper-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
-.stepper { display: inline-flex; align-items: center; gap: 10px; }
-.stepper button { min-height: 32px; width: 32px; border-radius: 6px; }
 .fake-toggle {
   width: 40px; height: 22px; border-radius: 999px; background: var(--accent);
   position: relative;
@@ -275,18 +271,41 @@ body.offline .live-dot { background: var(--red); box-shadow: none; }
   width: 18px; height: 18px; border-radius: 50%; background: #fff;
 }
 
-/* Live iOS-style toggle (AUTO COUNT-IN) */
-.toggle {
-  width: 40px; height: 22px; min-height: 0; border-radius: 999px; background: #2a3542;
-  position: relative; border: none; padding: 0; cursor: pointer;
+/* Free-run click: a thumb-sized tempo picker (−/+ hold to repeat, TAP), the
+   meter as a native select — a wheel or list on a phone — and start/stop. */
+#click-card { display: block; }
+#click-card.running { border-color: var(--accent-dark); }
+.bpm-picker { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.bpm-picker button {
+  flex: none; min-height: 52px;
+  touch-action: none;             /* a hold is not the start of a scroll */
+  -webkit-touch-callout: none;
 }
-.toggle::after {
-  content: ""; position: absolute; left: 2px; top: 2px;
-  width: 18px; height: 18px; border-radius: 50%; background: #fff;
-  transition: left 0.15s ease;
+.bpm-step { width: 52px; font-size: 26px; line-height: 1; }
+.bpm-tap { padding: 0 12px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; }
+.bpm-tap:active, .bpm-step:active { filter: brightness(1.4); }
+.bpm-value { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+#click-bpm { font-size: 30px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.click-row { display: flex; gap: 8px; }
+#click-meter {
+  flex: 0 0 88px; min-height: 48px; padding: 0 28px 0 12px;
+  font: inherit; font-size: 16px;   /* under 16px, iOS zooms the page on focus */
+  color: var(--text); color-scheme: dark;
+  background: var(--card) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%238a919e' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 6px center / 18px;
+  border: 1px solid var(--border); border-radius: 8px;
+  appearance: none; -webkit-appearance: none;
 }
-.toggle.on { background: var(--accent); }
-.toggle.on::after { left: 20px; }
+.click-run {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-weight: 600; letter-spacing: 0.08em;
+  color: var(--accent); border-color: var(--accent-dark);
+}
+.click-run svg { width: 18px; height: 18px; fill: currentColor; }
+.click-run .icon-stop, .click-run.running .icon-start { display: none; }
+.click-run.running .icon-stop { display: inline; }
+.click-run.running { color: var(--red); border-color: var(--red); background: #2b1a18; }
+.click-run:disabled { opacity: 0.4; cursor: default; }
+.click-run:not(:disabled):active { filter: brightness(1.4); }
 
 /* Count-in countdown: tint the clocks while position < 0 */
 body.counting-in .clock { color: var(--amber); }
@@ -414,8 +433,10 @@ body.setlist-open #drawer-backdrop { opacity: 1; pointer-events: auto; }
       "setlist next"
       "setlist cues";
   }
-  #right-panel { flex-direction: row; }
-  #right-panel > .card { flex: 1; }
+  /* Side by side while both fit (the click card's tempo picker needs about
+     260px), stacked below that. */
+  #right-panel { flex-direction: row; flex-wrap: wrap; }
+  #right-panel > .card { flex: 1 1 260px; }
   #song-title { font-size: 30px; }
 }
 
@@ -445,8 +466,8 @@ body.setlist-open #drawer-backdrop { opacity: 1; pointer-events: auto; }
   }
   /* blocks size to content; the whole column scrolls */
   #now-panel { background: none; border: none; padding: 0; overflow: visible; }
-  #right-panel { flex-direction: column; overflow: visible; }
-  #cues-card { flex: none; }        /* natural height so it doesn't overrun the meters row */
+  #right-panel { flex-direction: column; flex-wrap: nowrap; overflow: visible; }
+  #right-panel > .card { flex: none; }   /* natural height so it doesn't overrun the meters row */
   #chip-index { display: none; }    /* the header index already shows this */
   #next-card { margin-bottom: 0; }
   #meters-scroll { display: flex; grid-area: meters; }

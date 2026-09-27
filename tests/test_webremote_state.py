@@ -155,7 +155,7 @@ def test_build_state_schema():
 
     expected_keys = {"type", "show_name", "shows", "playing", "position",
                      "duration", "bpm", "beats_per_bar", "beat_note",
-                     "blackout", "countin",
+                     "blackout", "countin", "free_run",
                      "setlist", "sections", "cues"}
     _assert(set(state) == expected_keys, "state message has the frozen schema keys")
     _assert(state["type"] == "state", "type tag is 'state'")
@@ -165,15 +165,19 @@ def test_build_state_schema():
             "the meter defaults to 4/4")
     _assert(state["countin"] == {"enabled": False, "bars": 2},
             "countin defaults to disabled / 2 bars when not provided")
+    _assert(state["free_run"] is None, "no free-run unless one is given")
     _assert(state["bpm"] == 142 and state["position"] == 12.5,
             "values pass through")
 
     state = build_state(
         playing=True, position=-3.2, duration=200.0, bpm=142, blackout=False,
         setlist={"current": 0, "songs": []}, sections=[], cues=[],
-        countin={"enabled": True, "bars": 4})
+        countin={"enabled": True, "bars": 4},
+        free_run={"bpm": 90, "meter": "3/4"})
     _assert(state["countin"] == {"enabled": True, "bars": 4},
             "countin block passes through")
+    _assert(state["free_run"] == {"bpm": 90, "meter": "3/4"},
+            "free_run block passes through")
     _assert(state["position"] == -3.2,
             "negative position (count-in countdown) passes through")
 

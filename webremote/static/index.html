@@ -103,10 +103,25 @@
   </div>
 
   <aside id="right-panel">
-    <div class="card placeholder-card" id="countin-card">
-      <div class="panel-header"><span class="kicker">AUTO COUNT-IN</span><button id="countin-toggle" class="toggle" aria-label="Count-in for this song"></button></div>
-      <div class="stepper-row"><span>Count-in bars</span>
-        <span class="stepper"><button id="countin-minus" aria-label="Fewer bars">−</button><b id="countin-bars">—</b><button id="countin-plus" aria-label="More bars">+</button></span>
+    <div class="card" id="click-card">
+      <div class="panel-header"><span class="kicker">FREE-RUN CLICK</span></div>
+      <div class="bpm-picker">
+        <button id="click-minus" class="bpm-step" aria-label="Slower">−</button>
+        <div class="bpm-value"><b id="click-bpm">120</b><span class="kicker">BPM</span></div>
+        <button id="click-plus" class="bpm-step" aria-label="Faster">+</button>
+        <button id="click-tap" class="bpm-tap">TAP</button>
+      </div>
+      <div class="click-row">
+        <!-- The meters a song may count in: core/tempo_map.py METERS. -->
+        <select id="click-meter" aria-label="Meter">
+          <option>3/4</option><option selected>4/4</option><option>5/4</option>
+          <option>7/4</option><option>3/8</option><option>6/8</option>
+        </select>
+        <button id="click-run" class="click-run">
+          <svg class="icon-start" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg class="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+          <span id="click-run-label">START</span>
+        </button>
       </div>
     </div>
 

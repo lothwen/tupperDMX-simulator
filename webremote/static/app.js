@@ -24,6 +24,16 @@
   var reconnectDelay = 500;
   var seeking = false;                 // true while dragging the phone seek bar
 
+  // The free-run click's DRAFT: what its picker shows. It follows the current
+  // song's tempo and meter until edited (the desktop panel opens on them), and
+  // mirrors the click while one runs, so every remote shows the same one.
+  var MIN_BPM = 40, MAX_BPM = 300;     // core/tempo_map.py
+  var RETIME_DELAY_MS = 300;           // a retime restarts the bar: let the draft settle
+  var clickDraft = { bpm: 120, meter: "4/4" };
+  var clickSongKey = null;             // the song tempo the draft last took
+  var retimeTimer = null;              // a retime waiting on the draft
+  var taps = [];                       // TAP times, seconds
+
   function paintSeek(f) {
     $("seekbar-fill").style.width = (f * 100) + "%";
     $("seekbar-knob").style.left = (f * 100) + "%";
@@ -112,7 +122,7 @@
     renderCues(s.cues);
     renderSectionStrip(s);
     renderBeatDots(s);
-    renderCountin(s);
+    renderClick(s);
     $("btn-blackout").classList.toggle("active", !!s.blackout);
     updatePlayIcon(s.playing);
     if (s.setlist.current !== waveSong) {
@@ -130,6 +140,7 @@
     pos = { t: msg.t, wall: performance.now(), playing: msg.playing };
     updatePlayIcon(msg.playing);
     renderMeters(msg.levels);
+    paintClickRun();
   }
 
   function onBeat(msg) {
@@ -144,15 +155,21 @@
 
   // ---- rendering -------------------------------------------------------------
 
-  // The song's meter: its chip, and one dot per beat — three for 3/4, six for
-  // 6/8 — drawn smaller when a beat is an eighth. Rebuilt only when the meter
+  function songMeter(s) {
+    return (s.beats_per_bar || 4) + "/" + (s.beat_note || 4);
+  }
+
+  // The song's meter chip, and one dot per beat of the click that sounds — the
+  // song's, or a free-run's own meter while one runs: three for 3/4, six for
+  // 6/8, drawn smaller when a beat is an eighth. Rebuilt only when the meter
   // changes, so every state message does not blank the beat that is lit.
   function renderBeatDots(s) {
-    var count = s.beats_per_bar || 4;
-    var note = s.beat_note || 4;
-    var meter = count + "/" + note;
+    $("chip-meter").textContent = songMeter(s);
+    var meter = s.free_run ? s.free_run.meter : songMeter(s);
     if (meter === dotsMeter) return;
     dotsMeter = meter;
+    var count = Number(meter.split("/")[0]);
+    var note = Number(meter.split("/")[1]);
     ["section-dots", "beat-dots"].forEach(function (id) {
       var box = $(id);
       box.textContent = "";
@@ -164,7 +181,6 @@
         box.appendChild(dot);
       }
     });
-    $("chip-meter").textContent = meter;
   }
 
   function songMeta(song) {
@@ -288,10 +304,31 @@
       : next.precount ? "COUNT-IN · " + bars + " BARS" : "SEGUE";
   }
 
-  function renderCountin(s) {
-    var countin = s.countin || { enabled: false, bars: null };
-    $("countin-toggle").classList.toggle("on", !!countin.enabled);
-    $("countin-bars").textContent = countin.bars != null ? countin.bars : "—";
+  function renderClick(s) {
+    // Never under the operator's finger: a retime still waiting on the draft
+    // outranks a snapshot that predates it.
+    if (retimeTimer === null) {
+      var key = s.setlist.current + "|" + s.bpm + "|" + songMeter(s);
+      if (s.free_run) {
+        clickDraft = { bpm: s.free_run.bpm, meter: s.free_run.meter };
+        clickSongKey = key;              // stopping keeps what ran
+      } else if (key !== clickSongKey) {
+        clickDraft = { bpm: s.bpm, meter: songMeter(s) };
+        clickSongKey = key;
+      }
+    }
+    $("click-bpm").textContent = clickDraft.bpm;
+    $("click-meter").value = clickDraft.meter;
+    paintClickRun();
+  }
+
+  function paintClickRun() {
+    var running = !!(state && state.free_run);
+    $("click-card").classList.toggle("running", running);
+    $("click-run").classList.toggle("running", running);
+    $("click-run-label").textContent = running ? "STOP" : "START";
+    // The song's click owns the output while it plays (AppCore refuses too).
+    $("click-run").disabled = !running && pos.playing;
   }
 
   function renderMeters(levels) {
@@ -444,6 +481,9 @@
         $("section-remaining").textContent = (-t).toFixed(1) + "s to start";
         $("bar-beat").textContent =
           "COUNT-IN · BEAT " + (beat || "—") + "/" + state.beats_per_bar;
+      } else if (state.free_run) {
+        $("bar-beat").textContent = "FREE-RUN · BEAT " + (beat || "—") + "/" +
+          state.free_run.meter.split("/")[0];
       } else {
         renderSection(t);
         // bpm counts quarters; a beat is one beat_note note (an eighth in /8).
@@ -489,19 +529,75 @@
   $("btn-next").addEventListener("click", function () { send({ action: "next" }); });
   $("btn-blackout").addEventListener("click", function () { send({ action: "blackout" }); });
 
-  // AUTO COUNT-IN card: toggle = current song's precount, stepper = global bars.
-  $("countin-toggle").addEventListener("click", function () {
-    if (state && state.countin) send({ action: "set_precount", on: !state.countin.enabled });
-  });
-  $("countin-minus").addEventListener("click", function () {
-    if (state && state.countin && state.countin.bars > 1) {
-      send({ action: "set_countin_bars", bars: state.countin.bars - 1 });
+  // FREE-RUN CLICK card. Editing the draft only reaches the app while the
+  // click runs, and then as a retime once the draft settles.
+  function draftChanged() {
+    $("click-bpm").textContent = clickDraft.bpm;
+    if (!state || !state.free_run) return;
+    clearTimeout(retimeTimer);
+    retimeTimer = setTimeout(function () {
+      retimeTimer = null;
+      send({ action: "free_run", bpm: clickDraft.bpm, meter: clickDraft.meter });
+    }, RETIME_DELAY_MS);
+  }
+
+  function setDraftBpm(bpm) {
+    bpm = Math.max(MIN_BPM, Math.min(MAX_BPM, Math.round(bpm)));
+    if (bpm === clickDraft.bpm) return;
+    clickDraft.bpm = bpm;
+    draftChanged();
+  }
+
+  // −/+ step one BPM a tap; held, they repeat, and after a second in fives on
+  // the round numbers — 40 to 300 is otherwise a long hold on a phone.
+  function holdToStep(btn, dir) {
+    var timer = null, repeats = 0;
+    function step() {
+      var bpm = clickDraft.bpm;
+      if (repeats < 12) bpm += dir;
+      else bpm = dir > 0 ? Math.floor(bpm / 5) * 5 + 5 : Math.ceil(bpm / 5) * 5 - 5;
+      setDraftBpm(bpm);
     }
+    function release() { clearTimeout(timer); timer = null; }
+    btn.addEventListener("pointerdown", function () {
+      release();
+      repeats = 0;
+      step();
+      timer = setTimeout(function again() {
+        repeats++;
+        step();
+        timer = setTimeout(again, 80);
+      }, 400);
+    });
+    btn.addEventListener("pointerup", release);
+    btn.addEventListener("pointerleave", release);
+    btn.addEventListener("pointercancel", release);
+    btn.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
+  }
+  holdToStep($("click-minus"), -1);
+  holdToStep($("click-plus"), 1);
+
+  // TAP on press (a tap is a moment): the mean of the last four intervals,
+  // started over by a pause longer than one beat at MIN_BPM — the desktop
+  // panel's TapTempo.
+  $("click-tap").addEventListener("pointerdown", function () {
+    var now = performance.now() / 1000;
+    if (taps.length && now - taps[taps.length - 1] > 2.0) taps = [];
+    taps = taps.concat([now]).slice(-5);
+    if (taps.length > 1) setDraftBpm(60 / ((now - taps[0]) / (taps.length - 1)));
   });
-  $("countin-plus").addEventListener("click", function () {
-    if (state && state.countin && state.countin.bars < 8) {
-      send({ action: "set_countin_bars", bars: state.countin.bars + 1 });
-    }
+
+  $("click-meter").addEventListener("change", function () {
+    clickDraft.meter = this.value;
+    draftChanged();
+  });
+
+  $("click-run").addEventListener("click", function () {
+    if (!state) return;
+    clearTimeout(retimeTimer);
+    retimeTimer = null;
+    if (state.free_run) send({ action: "free_run_stop" });
+    else send({ action: "free_run", bpm: clickDraft.bpm, meter: clickDraft.meter });
   });
 
   // PANIC requires a 600 ms hold so a stray tap can't kill the show.

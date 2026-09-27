@@ -149,6 +149,11 @@ class Metronome(QObject):
     def is_free_running(self) -> bool:
         return self._free_map is not None
 
+    def free_run_map(self):
+        """The map a free-run is counting, or None while the click follows
+        the song (or is stopped)."""
+        return self._free_map
+
     def start_free_run(self, tempo_map: TempoMap) -> None:
         """Click `tempo_map` from its beat 1, now, off the transport. Called
         again while running it retimes — from beat 1 again, since the grid

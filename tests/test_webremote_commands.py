@@ -84,22 +84,23 @@ def test_indexed_validation():
                 f"{action} without an index is rejected")
 
 
-def test_countin_command_validation():
-    print("test_countin_command_validation")
-    cmd = parse_command({"type": "cmd", "action": "set_precount", "on": False})
-    _assert(cmd == {"action": "set_precount", "on": False},
-            "set_precount carries its bool")
-    for bad in (None, "true", 1, 0):
-        raw = {"type": "cmd", "action": "set_precount", "on": bad}
-        _assert(parse_command(raw) is None, f"set_precount on={bad!r} is rejected")
-
-    cmd = parse_command({"type": "cmd", "action": "set_countin_bars", "bars": 4})
-    _assert(cmd == {"action": "set_countin_bars", "bars": 4},
-            "set_countin_bars carries its count")
-    for bad in (None, "2", 0, -1, 1.5, True):
-        raw = {"type": "cmd", "action": "set_countin_bars", "bars": bad}
+def test_free_run_command_validation():
+    print("test_free_run_command_validation")
+    cmd = parse_command({"type": "cmd", "action": "free_run",
+                         "bpm": 96, "meter": "6/8"})
+    _assert(cmd == {"action": "free_run", "bpm": 96, "meter": "6/8"},
+            "free_run carries its tempo and meter")
+    for bad in (None, "96", 96.5, True, 39, 301, 10 ** 400):
+        raw = {"type": "cmd", "action": "free_run", "bpm": bad, "meter": "4/4"}
         _assert(parse_command(raw) is None,
-                f"set_countin_bars bars={bad!r} is rejected")
+                f"free_run bpm={str(bad)[:12]!r} is rejected")
+    for bad in (None, "4/3", "banana", ["4/4"], 4):
+        raw = {"type": "cmd", "action": "free_run", "bpm": 120, "meter": bad}
+        _assert(parse_command(raw) is None,
+                f"free_run meter={bad!r} is rejected")
+
+    cmd = parse_command({"type": "cmd", "action": "free_run_stop"})
+    _assert(cmd == {"action": "free_run_stop"}, "free_run_stop takes nothing")
 
 
 def test_open_show_validation():
@@ -132,7 +133,7 @@ def test_actions_whitelist_is_closed():
     print("test_actions_whitelist_is_closed")
     _assert(ACTIONS == {"play_pause", "stop", "next", "prev", "seek", "cue",
                         "select_song", "blackout", "panic",
-                        "set_precount", "set_countin_bars", "open_show"},
+                        "free_run", "free_run_stop", "open_show"},
             "the remote action whitelist is exactly the frozen protocol set")
 
 
@@ -142,7 +143,7 @@ def main():
     test_rejects_bad_envelopes()
     test_seek_validation()
     test_indexed_validation()
-    test_countin_command_validation()
+    test_free_run_command_validation()
     test_open_show_validation()
     test_worker_handle_text_delegates()
     test_actions_whitelist_is_closed()

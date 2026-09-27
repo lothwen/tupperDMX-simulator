@@ -426,7 +426,7 @@ class AppCore(QObject):
     # ------------------------------------------------------------------
     def on_song_precount_toggled(self, enabled: bool):
         """Persist the current song's count-in flag and apply it live
-        (triggered by the click panel or the web remote)."""
+        (triggered by the click panel)."""
         song = self.config.get_current_song()
         if song is None or song.precount == bool(enabled):
             return
@@ -435,17 +435,6 @@ class AppCore(QObject):
         self.save_config()
         self.precount_changed.emit(song.precount)
         self.webremote_manager._publish_full()
-
-    def set_count_in_bars(self, bars: int):
-        """Set the global count-in length (Settings ▸ AUDIO / web remote)."""
-        bars = max(1, min(8, int(bars)))
-        if bars == self.config.audio.count_in_bars:
-            return
-        self.config.audio.count_in_bars = bars
-        song = self.config.get_current_song()
-        self.media_controller.set_count_in(
-            song.precount if song else False, bars)
-        self.save_config()
 
     def _on_beat_scheduled(self, beat_number, beat_time, frame):
         """During the LAST count-in bar, speak the beat number on the voice bus
