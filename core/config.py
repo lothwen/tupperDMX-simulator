@@ -11,6 +11,7 @@ from core.fixture_library import (
     fixture_modes, load_fixture_defs, resolve_fixture,
 )
 from core.paths import bundle_dir, userprefs_dir
+from core.tempo_map import DEFAULT_METER, valid_meter
 from tupperlogger import get_logger
 
 logger = get_logger("config")
@@ -206,6 +207,7 @@ class SongConfig:
     title: str = ""
     key: str = ""                                       # musical key, e.g. "Am"
     precount: bool = True                               # count-in click; off = segue from previous song
+    meter: str = DEFAULT_METER                          # one of core.tempo_map.METERS
     voice_tts: List[VoiceTTSConfig] = field(default_factory=list)
     # Control markers (tempo change, stop click) — the transport's half of the
     # marker track that voice_tts is the spoken half of.
@@ -329,6 +331,7 @@ class AudioConfig:
     routing: str = "stereo"              # see AUDIO_ROUTING_MODES
     count_in_bars: int = 2               # length of the precount (bars of 4)
     count_in_voice: bool = True          # speak beat numbers on the last bar
+    click_accent: bool = True            # beat 1 of the click takes the accent sound
     tts_voice: str = "es_ES-davefx-medium"
 
 
@@ -579,6 +582,7 @@ class Config:
                     title=str(song_data.get("title", "")),
                     key=str(song_data.get("key", "")),
                     precount=bool(song_data.get("precount", True)),
+                    meter=valid_meter(song_data.get("meter")),
                     voice_tts=cls._parse_voice_tts(
                         song_data.get("voice_tts",
                                       song_data.get("voice_cues"))),
@@ -616,6 +620,8 @@ class Config:
                     audio_data.get("count_in_bars", defaults.count_in_bars), 1, 8),
                 count_in_voice=bool(
                     audio_data.get("count_in_voice", defaults.count_in_voice)),
+                click_accent=bool(
+                    audio_data.get("click_accent", defaults.click_accent)),
                 tts_voice=str(audio_data.get("tts_voice", defaults.tts_voice)
                               or defaults.tts_voice),
             )

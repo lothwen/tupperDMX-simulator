@@ -904,7 +904,8 @@ class Timeline(ClipCommandsMixin, SelectionMixin, QWidget):
         """Update BPM and redraw ruler and time grid to match new tempo."""
         if self.bpm != bpm:
             self.bpm = bpm
-            self.set_tempo_map(TempoMap(bpm, self.tempo_map.changes()))
+            self.set_tempo_map(TempoMap(bpm, self.tempo_map.changes(),
+                                        self.tempo_map.meter))
             self.logger.info(f"Timeline BPM updated to {bpm}")
 
     def set_voice_tts(self, cues):

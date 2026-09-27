@@ -17,6 +17,15 @@ from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSlider,
                              QVBoxLayout, QWidget)
 
 
+def format_db(percent: int) -> str:
+    """Render a 0-100 volume percentage as an approximate dB readout
+    (100% = 0 dB, 0% = -∞)."""
+    if percent <= 0:
+        return "-∞"
+    db = 20.0 * math.log10(percent / 100.0)
+    return "0dB" if db >= -0.5 else f"{round(db)}dB"
+
+
 class MasterHeaderPanel(QWidget):
     """The strip header: the TRACKS counter over the three bus volume rows."""
 
@@ -93,14 +102,14 @@ class MasterHeaderPanel(QWidget):
         mute_button.setCheckable(True)
         mute_button.setFixedSize(18, 18)
 
-        db_label = QLabel(self._format_db(slider.value()))
+        db_label = QLabel(format_db(slider.value()))
         db_label.setObjectName("VolumeDbLabel")
         db_label.setAlignment(Qt.AlignmentFlag.AlignRight
                               | Qt.AlignmentFlag.AlignVCenter)
 
         slider.valueChanged.connect(volume_signal.emit)
         slider.valueChanged.connect(
-            lambda value: db_label.setText(self._format_db(value)))
+            lambda value: db_label.setText(format_db(value)))
         mute_button.toggled.connect(mute_signal.emit)
         return slider, mute_button, db_label
 
@@ -116,15 +125,6 @@ class MasterHeaderPanel(QWidget):
         row.addWidget(slider, 1)
         row.addWidget(db_label)
         return row
-
-    @staticmethod
-    def _format_db(percent: int) -> str:
-        """Render a 0-100 volume percentage as an approximate dB readout
-        (100% = 0 dB, 0% = -∞)."""
-        if percent <= 0:
-            return "-∞"
-        db = 20.0 * math.log10(percent / 100.0)
-        return "0dB" if db >= -0.5 else f"{round(db)}dB"
 
     def set_track_count(self, count: int) -> None:
         """Refresh the TRACKS counter (live fixture count)."""
@@ -144,4 +144,4 @@ class MasterHeaderPanel(QWidget):
             blocked = slider.blockSignals(True)
             slider.setValue(int(round(float(value) * 100)))
             slider.blockSignals(blocked)
-            db_label.setText(self._format_db(slider.value()))
+            db_label.setText(format_db(slider.value()))

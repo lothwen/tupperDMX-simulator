@@ -9,7 +9,7 @@ from audio.engine import AudioEngine
 from audio.mixer import BUS_BACKING
 from tupperlogger import get_logger
 from core.io_routing import MidiRouting
-from core.tempo_map import BEATS_PER_BAR, TempoMap
+from core.tempo_map import TempoMap
 from midi import MidiManager
 
 # Editor monitor: which track feeds the engine's backing bus. Session-only
@@ -239,13 +239,14 @@ class MediaController(QObject):
         self.count_in_bars = max(1, min(8, int(bars)))
 
     def count_in_duration(self) -> float:
-        """Length of the configured count-in in seconds (bars of 4 beats).
+        """Length of the configured count-in in seconds (bars of the song's
+        meter).
 
         Asked of the tempo map rather than of one BPM, so a tempo marker sitting
         at t=0 (a song that simply starts at another tempo) counts in at the
         tempo the song will actually begin with."""
         return -self.tempo_map.seconds_at_beat(
-            -self.count_in_bars * BEATS_PER_BAR)
+            -self.count_in_bars * self.tempo_map.beats_per_bar)
 
     def set_voice_tts(self, lines: List[Tuple[float, np.ndarray]]) -> None:
         """Install the song's rendered voice-TTS lines [(time_sec, samples)]."""

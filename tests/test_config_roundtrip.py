@@ -444,6 +444,7 @@ def test_audio_config_roundtrip():
         _assert(cfg.audio.routing == "stereo", "default routing is stereo")
         _assert(cfg.audio.count_in_bars == 2, "default count-in is 2 bars")
         _assert(cfg.audio.count_in_voice is True, "spoken count-in defaults on")
+        _assert(cfg.audio.click_accent is True, "the click accents beat 1 by default")
         _assert(cfg.audio.output_device == "", "default output device is system default")
         _assert(abs(cfg.volume.voice - 0.8) < 1e-9, "default voice volume")
 
@@ -451,6 +452,7 @@ def test_audio_config_roundtrip():
         cfg.audio.routing = "split_backing_left"
         cfg.audio.count_in_bars = 4
         cfg.audio.count_in_voice = False
+        cfg.audio.click_accent = False
         cfg.audio.tts_voice = "en_US-lessac-medium"
         cfg.volume.voice = 0.4
         cfg.save()
@@ -461,6 +463,7 @@ def test_audio_config_roundtrip():
         _assert(cfg2.audio.routing == "split_backing_left", "routing round-tripped")
         _assert(cfg2.audio.count_in_bars == 4, "count-in bars round-tripped")
         _assert(cfg2.audio.count_in_voice is False, "count-in voice round-tripped")
+        _assert(cfg2.audio.click_accent is False, "click accent round-tripped")
         _assert(cfg2.audio.tts_voice == "en_US-lessac-medium", "tts voice round-tripped")
         _assert(abs(cfg2.volume.voice - 0.4) < 1e-9, "voice volume round-tripped")
 

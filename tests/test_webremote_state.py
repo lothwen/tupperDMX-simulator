@@ -154,13 +154,15 @@ def test_build_state_schema():
         sections=[], cues=[{"index": 0, "label": "Warm", "color": "#fff"}])
 
     expected_keys = {"type", "show_name", "shows", "playing", "position",
-                     "duration", "bpm", "beats_per_bar", "blackout", "countin",
+                     "duration", "bpm", "beats_per_bar", "beat_note",
+                     "blackout", "countin",
                      "setlist", "sections", "cues"}
     _assert(set(state) == expected_keys, "state message has the frozen schema keys")
     _assert(state["type"] == "state", "type tag is 'state'")
     _assert(state["show_name"] is None, "show name is a Phase-3 placeholder (null)")
     _assert(state["shows"] == [], "the show list defaults to empty")
-    _assert(state["beats_per_bar"] == 4, "beats_per_bar is constant 4 this phase")
+    _assert(state["beats_per_bar"] == 4 and state["beat_note"] == 4,
+            "the meter defaults to 4/4")
     _assert(state["countin"] == {"enabled": False, "bars": 2},
             "countin defaults to disabled / 2 bars when not provided")
     _assert(state["bpm"] == 142 and state["position"] == 12.5,

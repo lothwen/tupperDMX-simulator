@@ -27,10 +27,11 @@ VOICES = (
 DEFAULT_VOICE = VOICES[0]
 
 # Spoken count-in words by voice language prefix.
+# Up to seven: the longest bar a song's meter counts (7/4).
 COUNT_WORDS = {
-    "es": ("uno", "dos", "tres", "cuatro"),
-    "en": ("one", "two", "three", "four"),
-    "eu": ("bat", "bi", "hiru", "lau")
+    "es": ("uno", "dos", "tres", "cuatro", "cinco", "seis", "siete"),
+    "en": ("one", "two", "three", "four", "five", "six", "seven"),
+    "eu": ("bat", "bi", "hiru", "lau", "bost", "sei", "zazpi")
 }
 
 # Loaded piper voice models, kept warm per process (onnx load is ~1s).
@@ -112,11 +113,17 @@ def render(text: str, voice: str) -> Optional[np.ndarray]:
 
 
 def render_count_words(voice: str) -> Optional[List[np.ndarray]]:
-    """The four spoken count-in words for `voice`, or None if any is missing."""
-    rendered = [render(word, voice) for word in count_words_for_voice(voice)]
-    if any(samples is None for samples in rendered):
-        return None
-    return rendered
+    """The spoken count-in words for `voice`, from "one" up to the first that
+    will not render, or None if not even "one" does. A prefix rather than all
+    or nothing, because rendering is cache-first: a box whose cache predates
+    the longer meters (and can no longer synthesize) keeps counting its 4/4."""
+    rendered = []
+    for word in count_words_for_voice(voice):
+        samples = render(word, voice)
+        if samples is None:
+            break
+        rendered.append(samples)
+    return rendered or None
 
 
 def _synthesize(text: str, voice: str) -> Optional[np.ndarray]:

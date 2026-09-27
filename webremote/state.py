@@ -168,11 +168,15 @@ def build_state(*, playing: bool, position: float, duration: Optional[float],
                 sections: List[dict], cues: List[dict],
                 show_name: Optional[str] = None,
                 shows: Optional[List[dict]] = None,
-                countin: Optional[dict] = None) -> dict:
+                countin: Optional[dict] = None,
+                beats_per_bar: int = 4, beat_note: int = 4) -> dict:
     """Assemble the full 'state' WS message (the schema's single source).
     ``position`` may be negative while the count-in runs (clients render it
     as a countdown); ``countin`` = {'enabled': current song's precount,
-    'bars': the global count-in length}; ``shows`` = build_shows()."""
+    'bars': the global count-in length}; ``shows`` = build_shows().
+    ``beats_per_bar`` and ``beat_note`` are the song's meter (6 and 8 for 6/8):
+    a beat is one ``beat_note`` note, and ``bpm`` always counts QUARTERS, so a
+    client times one beat as 60 / bpm * 4 / beat_note seconds."""
     return {
         "type": "state",
         "show_name": show_name,
@@ -181,7 +185,8 @@ def build_state(*, playing: bool, position: float, duration: Optional[float],
         "position": float(position),
         "duration": float(duration) if duration else None,
         "bpm": int(bpm),
-        "beats_per_bar": 4,
+        "beats_per_bar": int(beats_per_bar),
+        "beat_note": int(beat_note),
         "blackout": bool(blackout),
         "countin": countin if countin is not None
         else {"enabled": False, "bars": 2},

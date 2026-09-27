@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QGraphicsItem, QGraphicsLineItem,
                              QGraphicsObject, QMenu)
 
 from core import note_layout
-from core.tempo_map import BEATS_PER_BAR
+from core.tempo_map import GRID_BEATS
 from timeline import arrangement
 
 # Screen px either side of a boundary that grab it rather than the box.
@@ -415,10 +415,11 @@ class SongSectionOverlay:
     def _bars(self, start: float, end: float) -> str:
         """A section's length in bars, to the nearest beat — markers in a real
         file sit a few ms off the grid, and 7.99 bars is 8 to a musician. Whole
-        bars bare, a part bar in quarters (8.25 = 8 bars and a beat)."""
+        bars bare, a part bar as a fraction of the meter's (8.25 = 8 bars and a
+        beat in 4/4), to two places."""
         tmap = self.tm.tempo_map
         beats = round(tmap.beat_at(end) - tmap.beat_at(start))
-        return f"{beats / BEATS_PER_BAR:g}"
+        return f"{round(beats / tmap.beats_per_bar, 2):g}"
 
     def refit_labels(self, *_):
         """Fit each header's words to the part of its box on screen: the name
@@ -469,7 +470,8 @@ class SongSectionOverlay:
 
     def _min_gap(self) -> float:
         """The shortest a section may get: one beat."""
-        return self.tm.tempo_map.shortest_bar_seconds() / BEATS_PER_BAR
+        tmap = self.tm.tempo_map
+        return tmap.shortest_bar_seconds() / tmap.beats_per_bar
 
     def _snap(self, seconds: float, whole_bar: bool) -> float:
         """The nearest beat — the nearest bar line with `whole_bar` (Shift) —
@@ -478,7 +480,7 @@ class SongSectionOverlay:
         if not self.tm.snap_enabled:
             return seconds
         return self.tm.tempo_map.nearest_grid_seconds(
-            seconds, 1 if whole_bar else BEATS_PER_BAR)
+            seconds, 1 if whole_bar else GRID_BEATS)
 
     def _bar_beat(self, seconds: float) -> str:
         return "%d.%d" % self.tm.tempo_map.bar_beat_at(seconds + 1e-6)
@@ -753,7 +755,7 @@ class SongSectionOverlay:
             return False
         tmap = self.tm.tempo_map
         t0 = self._starts[moving[0]]
-        step = 1 if fine else BEATS_PER_BAR
+        step = 1 if fine else tmap.beats_per_bar
         delta = tmap.seconds_at_beat(tmap.beat_at(t0) + direction * step) - t0
         lo, hi = self.tm.selection_move_bounds()
         if lo - 1e-9 <= delta <= hi + 1e-9:

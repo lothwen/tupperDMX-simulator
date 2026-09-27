@@ -24,6 +24,7 @@ from core.io_routing import midi_routing_from_io
 from core.paths import default_shows_dir
 from core.show import store as show_store
 from core.show.model import ShowError
+from core.tempo_map import DEFAULT_METER
 from timeline.manager import Timeline
 from tupperlogger import get_logger
 from ui.widgets import icons
@@ -372,6 +373,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
         self.timeline_toolbar.markers_requested.connect(self.show_markers_dialog)
         self.timeline_toolbar.add_track_requested.connect(self.add_fixture_from_timeline)
+        self._connect_click_popup()
 
         # Bundle the timeline toolbar + tracks into one resizable section. The
         # layout is kept because undocking flips the two (see _set_toolbar_at_bottom).
@@ -836,9 +838,40 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.set_song_bpm(value)
         self.timeline_toolbar.set_bpm(value)
 
+    def _connect_click_popup(self):
+        """The toolbar's click panel. Its level IS the header's CLICK slider,
+        so each follows the other; free-run, the song's tempo and the accent
+        are the core's."""
+        popup = self.timeline_toolbar.click_popup
+        popup.set_level(round(self.config.volume.metronome * 100))
+        popup.set_accent(self.config.audio.click_accent)
+        popup.level_changed.connect(self._on_click_popup_level)
+        self.timeline.metronome_volume_changed.connect(popup.set_level)
+        popup.accent_toggled.connect(self.app_core.set_click_accent)
+        popup.free_run_requested.connect(self.app_core.start_free_run)
+        popup.free_run_stop_requested.connect(self.app_core.stop_free_run)
+        popup.apply_requested.connect(self.app_core.set_song_tempo)
+        self.metronome.free_run_changed.connect(
+            self.timeline_toolbar.set_click_free_running)
+        # Every BPM, meter and song change rebuilds the map.
+        self.app_core.tempo_map_changed.connect(self._refresh_click_popup)
+        self._refresh_click_popup()
+
+    def _on_click_popup_level(self, value):
+        self.app_core.set_volume(metronome=value / 100.0)
+        self.timeline.set_volumes(metronome=value / 100.0)
+
+    def _refresh_click_popup(self, *_):
+        """Hand the click panel the current song's own tempo and meter."""
+        song = self.config.get_current_song()
+        self.timeline_toolbar.click_popup.set_song_tempo(
+            self.bpm_state.get_bpm(), song.meter if song else DEFAULT_METER,
+            song is not None)
+
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
         self.timeline_toolbar.update_play_pause_icon(is_playing)
+        self.timeline_toolbar.click_popup.set_transport_playing(is_playing)
         # A clip editor's live output must not fight the sequencer for the
         # same DMX slots, so it is disarmed for the duration.
         self.timeline.set_transport_playing(is_playing)
@@ -1018,6 +1051,11 @@ class MainWindow(QMainWindow):
                 audio=self.config.volume.audio,
                 metronome=self.config.volume.metronome,
                 voice=self.config.volume.voice)
+            self.timeline_toolbar.click_popup.set_level(
+                round(self.config.volume.metronome * 100))
+        if "audio" in adopted:
+            self.timeline_toolbar.click_popup.set_accent(
+                self.config.audio.click_accent)
 
     def show_about_dialog(self):
         """Show the About dialog with build provenance."""
@@ -1458,7 +1496,7 @@ class MainWindow(QMainWindow):
             audio_engine=self.audio_engine,
             tts_voice=self.config.audio.tts_voice,
             segue=song.segue, segue_time=song.segue_time,
-            base_bpm=self.bpm_state.get_bpm(),
+            base_bpm=self.bpm_state.get_bpm(), meter=song.meter,
             duration=song_duration(song) or self.midi_manager.get_duration() or 0.0,
             song_title=song.title,
             has_next_song=(self.config.playlist.current_song_index

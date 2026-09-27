@@ -147,17 +147,6 @@ QMenu::separator {
     color: white;
 }
 
-/* Toolbar tempo glyph (decorative ♩ next to the BPM spinbox) */
-#MetronomeButton {
-    background-color: transparent;
-    color: #cfcfcf;
-    font-size: 22px;
-    min-width: 32px;
-    max-width: 32px;
-    min-height: 32px;
-    max-height: 32px;
-}
-
 /* Combined track-header panel (TRACKS counter + MASTER/METRO volumes) */
 #TrackHeaderPanel {
     background-color: #242424;
@@ -1562,7 +1551,7 @@ QPushButton#InspectorDelete:pressed {
 /* ============================================================
    Timeline toolbar (strip above the timeline tracks)
    Transport widgets reuse #StopButton/#PlayPauseButton/
-   #TimeDisplay/#MetronomeButton styles defined above.
+   #TimeDisplay styles defined above.
    ============================================================ */
 QWidget#TimelineToolbar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #303030, stop:1 #2a2a2a);
@@ -2967,6 +2956,208 @@ QWidget#TimelineToolbar QSpinBox#TTBpm {
     max-width: 50px;
     min-height: 30px;
     max-height: 30px;
+}
+
+/* The ♩▴ button next to it, which opens the click panel. */
+QWidget#TimelineToolbar QPushButton#TTClickButton {
+    color: #cfcfcf;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 11px;
+    min-height: 30px;
+    padding: 0 6px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTClickButton:hover {
+    background: #3a3a3a;
+    border: 1px solid #1d1d1d;
+}
+
+/* Lit while the click free-runs — the one sign of it once the panel closes. */
+QWidget#TimelineToolbar QPushButton#TTClickButton[running="true"] {
+    background: #2f5a2c;
+    border: 1px solid #3e8a3a;
+}
+
+
+/* ============================================================
+   CLICK PANEL (ui/click_popup.py)
+   Opens upward from the timeline toolbar's ♩ button: tempo + TAP,
+   meter, accent, level, then free-run / set as song tempo.
+   ============================================================ */
+QFrame#ClickPopup {
+    background: #2b2b2b;
+    border: 1px solid #161616;
+    border-radius: 6px;
+    min-width: 250px;
+}
+
+QLabel#ClickPopupTitle {
+    color: #9a9a9a;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#ClickRowLabel {
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-width: 50px;
+}
+
+QLabel#ClickRowLabel[top="true"] {
+    padding-top: 6px;
+}
+
+QFrame#ClickTempoBox {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    min-height: 42px;
+}
+
+QSpinBox#ClickBpm {
+    background: transparent;
+    border: none;
+    color: #f0a830;
+    font-size: 26px;
+    font-weight: bold;
+    min-width: 56px;
+    max-width: 56px;
+    padding: 0;
+    selection-background-color: #5a4520;
+}
+
+QLabel#ClickBpmUnit {
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: bold;
+    padding-bottom: 10px;
+}
+
+QPushButton#ClickStepButton,
+QPushButton#ClickTapButton,
+QPushButton#ClickApplyButton {
+    color: #e0e0e0;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
+    border: 1px solid #1d1d1d;
+    border-top: 1px solid #454545;
+    border-radius: 5px;
+}
+
+QPushButton#ClickStepButton:hover,
+QPushButton#ClickTapButton:hover,
+QPushButton#ClickApplyButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #464646, stop:1 #3c3c3c);
+}
+
+QPushButton#ClickStepButton:pressed,
+QPushButton#ClickTapButton:pressed,
+QPushButton#ClickApplyButton:pressed {
+    background: #2a2a2a;
+}
+
+QPushButton#ClickStepButton {
+    font-size: 18px;
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 42px;
+    max-height: 42px;
+}
+
+QPushButton#ClickTapButton {
+    font-size: 12px;
+    font-weight: bold;
+    min-width: 46px;
+    min-height: 42px;
+    max-height: 42px;
+}
+
+QPushButton#ClickMeterChip {
+    color: #bdbdbd;
+    background: #242424;
+    border: 1px solid #161616;
+    border-radius: 4px;
+    font-size: 12px;
+    min-width: 46px;
+    padding: 5px 0;
+}
+
+QPushButton#ClickMeterChip:hover {
+    color: #e6e6e6;
+    background: #303030;
+}
+
+QPushButton#ClickMeterChip:checked {
+    color: #f0a830;
+    background: #332a1c;
+    border: 1px solid #c98a2a;
+    font-weight: bold;
+}
+
+QLabel#ClickAccentHint {
+    color: #b0b0b0;
+}
+
+QSlider#ClickLevelSlider::groove:horizontal {
+    height: 4px;
+    background: #1a1a1a;
+    border-radius: 2px;
+}
+
+QSlider#ClickLevelSlider::sub-page:horizontal {
+    background: #4a90d9;
+    border-radius: 2px;
+}
+
+QSlider#ClickLevelSlider::handle:horizontal {
+    background: #f0f0f0;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QLabel#ClickLevelDb {
+    color: #b0b0b0;
+    font-size: 11px;
+    min-width: 40px;
+}
+
+QPushButton#ClickFreeRunButton,
+QPushButton#ClickApplyButton {
+    font-size: 12px;
+    min-height: 32px;
+    padding: 0 10px;
+}
+
+QPushButton#ClickFreeRunButton {
+    color: #f2fff0;
+    font-weight: bold;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a9a45, stop:1 #3a7f36);
+    border: 1px solid #2a5e27;
+    border-top: 1px solid #5cae56;
+    border-radius: 5px;
+}
+
+QPushButton#ClickFreeRunButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55a850, stop:1 #438c3e);
+}
+
+QPushButton#ClickFreeRunButton[running="true"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #b0463c, stop:1 #963a31);
+    border: 1px solid #6e2a24;
+    border-top: 1px solid #c45a4f;
+}
+
+QPushButton#ClickFreeRunButton:disabled,
+QPushButton#ClickApplyButton:disabled {
+    color: #5a5a5a;
+    background: #2e2e2e;
+    border: 1px solid #242424;
 }
 
 

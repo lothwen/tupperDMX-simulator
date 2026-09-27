@@ -4,13 +4,14 @@
 
 `app/metronome.py` decides WHEN a beat reaches the output (anchor, lookahead,
 frames); this module decides WHAT that beat is — its time on the timeline, its
-1-4 number, and the kind of sound it takes — and whether the click should be
-sounding at a position at all. The sound for each kind is `audio/click.py`'s.
+number in the bar, and the kind of sound it takes — and whether the click
+should be sounding at a position at all. The sound for each kind is
+`audio/click.py`'s.
 
 A beat is addressed by its continuous INDEX on the tempo map (negative through
 a count-in), never by a free-running counter: the accent then survives a tempo
-change, and a count-in's beats land on the same 1-4 cycle the song continues
-with, because Python's % is floor-based.
+change, and a count-in's beats land on the same bar cycle the song continues
+with, because Python's % is floor-based. The bar is the map's meter.
 """
 
 import math
@@ -21,7 +22,7 @@ from core.markers import KIND_CLICK_STOP
 from core.tempo_map import BEATS_PER_BAR, TempoMap
 
 #: The kinds of sound a click event takes (keys of `audio.click.ClickSounds`).
-KIND_ACCENT = "accent"   # the downbeat, beat 1
+KIND_ACCENT = "accent"   # the downbeat, beat 1 — unless the accent is off
 KIND_BEAT = "beat"       # every other beat
 KINDS = (KIND_ACCENT, KIND_BEAT)
 
@@ -30,20 +31,24 @@ KINDS = (KIND_ACCENT, KIND_BEAT)
 class ClickEvent:
     index: int       # continuous beat index on the tempo map
     seconds: float   # timeline time it falls at
-    number: int      # 1..BEATS_PER_BAR
+    number: int      # 1..beats per bar
     kind: str        # one of KINDS
 
 
-def beat_number(index: int) -> int:
-    """The 1-4 count of beat `index` (floor-based, so negative indices work)."""
-    return (int(index) % BEATS_PER_BAR) + 1
+def beat_number(index: int, beats_per_bar: int = BEATS_PER_BAR) -> int:
+    """The count in the bar of beat `index`, from 1 (floor-based, so negative
+    indices work)."""
+    return (int(index) % beats_per_bar) + 1
 
 
-def event_at(tempo_map: TempoMap, index: int) -> ClickEvent:
-    """Beat `index` as the click sounds it."""
-    number = beat_number(index)
+def event_at(tempo_map: TempoMap, index: int,
+             accent: bool = True) -> ClickEvent:
+    """Beat `index` as the click sounds it. With `accent` off, beat 1 takes
+    the same sound as every other beat — its NUMBER stays 1, since the bar is
+    still counted (the spoken count-in and the web remote read it)."""
+    number = beat_number(index, tempo_map.beats_per_bar)
     return ClickEvent(int(index), tempo_map.seconds_at_beat(index), number,
-                      KIND_ACCENT if number == 1 else KIND_BEAT)
+                      KIND_ACCENT if accent and number == 1 else KIND_BEAT)
 
 
 def first_index_at(tempo_map: TempoMap, seconds: float) -> int:

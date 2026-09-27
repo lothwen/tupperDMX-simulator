@@ -47,7 +47,9 @@ class WebRemoteManager(QObject):
         w.media_controller.playback_state_changed.connect(self._publish_full)
         w.media_controller.media_loaded.connect(self._publish_full)
         w.midi_manager.data_changed.connect(self._publish_full)
-        w.bpm_state.bpm_changed.connect(self._publish_full)
+        # The map, not the base BPM: it is rebuilt by every BPM change AND by
+        # a song's meter, which the state's beats_per_bar carries.
+        w.bpm_state.tempo_map_changed.connect(self._publish_full)
         w.metronome.beat_occurred.connect(self._on_beat)
         show_manager = getattr(w, "show_manager", None)
         if show_manager is not None:
@@ -235,6 +237,8 @@ class WebRemoteManager(QObject):
             position=w.media_controller.get_current_position(),
             duration=duration,
             bpm=w.bpm_state.get_bpm(),
+            beats_per_bar=w.bpm_state.tempo_map().beats_per_bar,
+            beat_note=w.bpm_state.tempo_map().beat_note,
             blackout=blackout,
             countin={"enabled": bool(song.precount) if song else False,
                      "bars": self.config.audio.count_in_bars},

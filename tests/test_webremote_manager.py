@@ -29,6 +29,7 @@ app = QApplication.instance() or QApplication([])
 from core import clips
 from core.config import Config, SongConfig, shipped_fixtures
 from core.note_layout import NoteInfo
+from core.tempo_map import TempoMap
 from midi.constants import SONG_PART_NOTES
 from webremote.manager import WebRemoteManager
 from webremote.server import WebRemoteWorker, WAVEFORM_WAIT_S
@@ -80,9 +81,13 @@ class FakeMidiManager:
 
 class FakeBpmState:
     bpm_changed = FakeSignal()
+    tempo_map_changed = FakeSignal()
 
     def get_bpm(self):
         return 128
+
+    def tempo_map(self):
+        return TempoMap(128, meter="6/8")
 
 
 class FakeMetronome:
@@ -286,6 +291,9 @@ def test_build_state_snapshot():
     _assert(state["playing"] is True and state["position"] == 12.0,
             "playback state comes from the media controller")
     _assert(state["bpm"] == 128, "bpm comes from the BpmState holder")
+    _assert(state["beats_per_bar"] == 6 and state["beat_note"] == 8,
+            "the song's meter rides the state, off the tempo map")
+    _assert(state["bpm"] == 128, "while bpm stays the quarter-note tempo")
     _assert(state["duration"] == 100.0,
             "unreadable audio falls back to midi song_end_time")
     _assert([s["name"] for s in state["sections"]] == ["INTRO", "VERSE"],

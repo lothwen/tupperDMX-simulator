@@ -16,6 +16,7 @@
   var state = null;                    // last full state message
   var pos = { t: 0, wall: 0, playing: false };
   var beat = 0;
+  var dotsMeter = "";                  // the meter the beat dots were built for
   var waveBins = null;                 // peaks for the current song
   var waveSong = -1;                   // setlist index the peaks belong to
   var waveDuration = 0;                // seconds of audio those peaks cover
@@ -110,6 +111,7 @@
     renderNowPlaying(s);
     renderCues(s.cues);
     renderSectionStrip(s);
+    renderBeatDots(s);
     renderCountin(s);
     $("btn-blackout").classList.toggle("active", !!s.blackout);
     updatePlayIcon(s.playing);
@@ -141,6 +143,29 @@
   }
 
   // ---- rendering -------------------------------------------------------------
+
+  // The song's meter: its chip, and one dot per beat — three for 3/4, six for
+  // 6/8 — drawn smaller when a beat is an eighth. Rebuilt only when the meter
+  // changes, so every state message does not blank the beat that is lit.
+  function renderBeatDots(s) {
+    var count = s.beats_per_bar || 4;
+    var note = s.beat_note || 4;
+    var meter = count + "/" + note;
+    if (meter === dotsMeter) return;
+    dotsMeter = meter;
+    ["section-dots", "beat-dots"].forEach(function (id) {
+      var box = $(id);
+      box.textContent = "";
+      box.classList.toggle("eighths", note === 8);
+      for (var i = 1; i <= count; i++) {
+        var dot = document.createElement("span");
+        dot.className = "beat-dot";
+        dot.dataset.beat = String(i);
+        box.appendChild(dot);
+      }
+    });
+    $("chip-meter").textContent = meter;
+  }
 
   function songMeta(song) {
     var parts = [];
@@ -421,7 +446,8 @@
           "COUNT-IN · BEAT " + (beat || "—") + "/" + state.beats_per_bar;
       } else {
         renderSection(t);
-        var beatDur = 60 / (state.bpm || 120);
+        // bpm counts quarters; a beat is one beat_note note (an eighth in /8).
+        var beatDur = 60 / (state.bpm || 120) * 4 / (state.beat_note || 4);
         var bar = Math.floor(t / (state.beats_per_bar * beatDur)) + 1;
         $("bar-beat").textContent =
           "BAR " + bar + " · BEAT " + (beat || "—") + "/" + state.beats_per_bar;

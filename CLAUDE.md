@@ -96,7 +96,7 @@ transport tick in between.
   **A drag in progress is a proposal**: the live signal moves
   the SETLIST chip and nothing else (no controller offset, no config, nothing per-frame in the audio path), so Cancel
   reverts by just repositioning the item.
-- **Count-in is negative timeline time.** With `song.precount`, playback begins at `-(bars × 4 beats)`; audio/MIDI/lights
+- **Count-in is negative timeline time.** With `song.precount`, playback begins at `-(bars × beats per bar)`; audio/MIDI/lights
   wait for t ≥ 0; pausing resets to 0 and seeking cancels it. AppCore speaks the numbers on the LAST count-in bar when
   `config.audio.count_in_voice` is on.
 - **Guide track**: a song may carry a full-mix reference; the BACKING|GUIDE monitor picks which file feeds the engine. It
@@ -120,11 +120,13 @@ transport tick in between.
   placed ahead but lets a beep already sounding finish, or a clean stop becomes a pop. The spoken count-in rides
   `beat_scheduled` (number, timeline time, frame) and is placed at the beat's OWN frame; `beat_occurred` still fires when
   the output *reaches* a beat, which is what keeps the web remote's indicator honest.
-  **The click is three layers**: `core/click.py` (Qt-free) says WHAT each beat is — time, 1-4 number, sound *kind* —
+  **The click is three layers**: `core/click.py` (Qt-free) says WHAT each beat is — time, number in the bar, sound *kind* —
   and whether the click is on at a position (stop-click); `audio/click.py` (Qt-free) says what each kind SOUNDS like
   at the output rate; `app/metronome.py` says WHEN, and `Metronome.follow()` is the ONE start/seek/retime entry, so
   AppCore never asks the stop-click rule itself. **The window never starts or stops the click** — it once did, after
   AppCore on the same signal, and its bare restart undid both the stop-click and the anchor.
+  **Free-run** (the toolbar's ♩▴ click panel) is the one click that is not the song's: the metronome counts a map of its
+  own, and `follow()` — so every play and seek — ends it; AppCore's retime on `tempo_map_changed` leaves it alone.
 - **`audio/diagnostics.py` records the click's own timing** — `TimingMonitor`, armed on play and summarised in one log
   line per pass, is the only reason a glitch at a show is answerable afterwards. The metronome reports every beat's
   scheduling error, the audio feed every top-up and the sink's own underrun verdict (`UnderrunError`/`IdleState` — the
@@ -153,7 +155,13 @@ Four things ride a song's timeline that are neither notes nor audio: a spoken **
   watches
 - **Beats are counted continuously across a change** — a marker dropped mid-bar shortens the rest of that bar rather than
   restarting the bar numbering. Negative time extrapolates at the FIRST segment's tempo, which is what lets
-  `count_in_duration()` be `-seconds_at_beat(-bars×4)` and land exactly on beat 1 at t=0.
+  `count_in_duration()` be `-seconds_at_beat(-bars × beats_per_bar)` and land exactly on beat 1 at t=0.
+- **A song has ONE meter** (`SongConfig.meter`, in `show.json`, absent = 4/4), carried by the map (`TempoMap.meter`).
+  **The BPM ALWAYS counts quarter notes** (the user's call — a first cut counted the written beat and was reversed): a
+  map BEAT is one click of the meter's own note, so a /8 beat is half a quarter — 6/8 at 120 is six clicks a bar,
+  0.25 s apart, two to each quarter. `bpm_at()`, tempo markers and the `.mid` stay in quarters; the click, grid,
+  count-in and bar.beat count beats. The grid's `divisions` keeps its toolbar meaning in any meter (1 = bars, 4 =
+  beats, 8 = half-beats).
 - **A stop-click's effect outlives its crossing.** `_reset_marker_pointer` deliberately does not replay markers behind
   the playhead, so every seek/resume/start re-asks `click_stopped_at()` instead.
 - **The scene's x axis is SECONDS, so a tempo change moves the grid and never a clip.** That is what makes a tempo map

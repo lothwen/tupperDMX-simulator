@@ -117,27 +117,42 @@ def test_render_degrades_gracefully():
 
 def test_count_words():
     print("test_count_words")
-    _assert(tts.count_words_for_voice("es_ES-davefx-medium")
-            == ("uno", "dos", "tres", "cuatro"), "Spanish voice counts in Spanish")
-    _assert(tts.count_words_for_voice("en_US-lessac-medium")
-            == ("one", "two", "three", "four"), "English voice counts in English")
-    _assert(tts.count_words_for_voice("fr_FR-something")
-            == ("one", "two", "three", "four"), "unknown language falls back to English")
+    spanish = ("uno", "dos", "tres", "cuatro", "cinco", "seis", "siete")
+    english = ("one", "two", "three", "four", "five", "six", "seven")
+    _assert(tts.count_words_for_voice("es_ES-davefx-medium") == spanish,
+            "Spanish voice counts in Spanish, up to the 7 beats of 7/4")
+    _assert(tts.count_words_for_voice("en_US-lessac-medium") == english,
+            "English voice counts in English")
+    _assert(tts.count_words_for_voice("fr_FR-something") == english,
+            "unknown language falls back to English")
 
     with tempfile.TemporaryDirectory() as tmp:
         with _Env(tmp) as env:
             words = tts.render_count_words("es_ES-davefx-medium")
-            _assert(words is not None and len(words) == 4,
-                    "count words render as four clips")
-            _assert([c[0] for c in env.synth_calls]
-                    == ["uno", "dos", "tres", "cuatro"],
+            _assert(words is not None and len(words) == 7,
+                    "count words render as seven clips")
+            _assert([c[0] for c in env.synth_calls] == list(spanish),
                     "the Spanish numbers were synthesized")
         with _Env(tmp, available=False):
             # cache from the previous env is gone (different is_available), but
             # the wavs persist — count words come straight from cache
             words = tts.render_count_words("es_ES-davefx-medium")
-            _assert(words is not None,
+            _assert(words is not None and len(words) == 7,
                     "cached count words survive without the engine")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # A cache written when the count stopped at four, on a box that can no
+        # longer synthesize: it keeps counting 4/4 rather than going silent.
+        with _Env(tmp):
+            for word in spanish[:4]:
+                tts.render(word, "es_ES-davefx-medium")
+        with _Env(tmp, available=False):
+            words = tts.render_count_words("es_ES-davefx-medium")
+            _assert(words is not None and len(words) == 4,
+                    "an older cache counts as far as it goes")
+        with _Env(tmp + "-empty", available=False):
+            _assert(tts.render_count_words("es_ES-davefx-medium") is None,
+                    "nothing renderable at all is None")
 
 
 def test_wav_roundtrip():

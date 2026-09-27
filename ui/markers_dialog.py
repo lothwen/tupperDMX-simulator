@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
 from audio import tts
 from core import markers as core_markers
 from core.config import ControlMarkerConfig, VoiceTTSConfig
-from core.tempo_map import BEATS_PER_BAR, TempoMap
+from core.tempo_map import DEFAULT_METER, TempoMap
 from tupperlogger import get_logger
 from ui.widgets import icons
 
@@ -29,14 +29,14 @@ def _format_clock(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
-def _split_bar_beat(value: float):
+def _split_bar_beat(value: float, beats_per_bar: int):
     """Decode a `bar.beat` spinbox value (53.2 → bar 53, beat 2).
 
     One decimal digit IS the beat, which only reads correctly while the beat
-    stays a single digit — true for the 4/4 this app counts everywhere."""
+    stays a single digit — true for every meter a song can take (7/4 at most)."""
     bar = max(1, int(value))
     beat = int(round((value - bar) * 10))
-    return bar, min(BEATS_PER_BAR, max(1, beat))
+    return bar, min(beats_per_bar, max(1, beat))
 
 
 def _kind_swatch(kind: str, size: int = 10) -> QPixmap:
@@ -104,7 +104,7 @@ class TimeSpin(QDoubleSpinBox):
         if self._mode == MODE_SECONDS:
             return float(self.value())
         return max(0.0, self._tempo_map.seconds_at_bar_beat(
-            *_split_bar_beat(self.value())))
+            *_split_bar_beat(self.value(), self._tempo_map.beats_per_bar)))
 
     def seconds(self) -> float:
         return self._seconds
@@ -123,10 +123,10 @@ class TimeSpin(QDoubleSpinBox):
         if self._mode == MODE_SECONDS:
             super().stepBy(steps)
             return
-        bar, beat = _split_bar_beat(self.value())
-        index = max(0, (bar - 1) * BEATS_PER_BAR + (beat - 1) + steps)
-        self.setValue(index // BEATS_PER_BAR + 1
-                      + (index % BEATS_PER_BAR + 1) / 10.0)
+        per_bar = self._tempo_map.beats_per_bar
+        bar, beat = _split_bar_beat(self.value(), per_bar)
+        index = max(0, (bar - 1) * per_bar + (beat - 1) + steps)
+        self.setValue(index // per_bar + 1 + (index % per_bar + 1) / 10.0)
 
 
 class MarkerStrip(QWidget):
@@ -312,7 +312,8 @@ class MarkersDialog(QDialog):
                  control_markers: List[ControlMarkerConfig], parent=None,
                  audio_engine=None, tts_voice: str = tts.DEFAULT_VOICE,
                  segue: bool = False, segue_time: float = 0.0,
-                 base_bpm: int = 120, duration: float = 0.0,
+                 base_bpm: int = 120, meter: str = DEFAULT_METER,
+                 duration: float = 0.0,
                  song_title: str = "", has_next_song: bool = True,
                  select: Optional[Tuple[str, float]] = None):
         super().__init__(parent)
@@ -320,6 +321,7 @@ class MarkersDialog(QDialog):
         self.audio_engine = audio_engine
         self.tts_voice = tts_voice
         self.base_bpm = int(base_bpm)
+        self.meter = meter
         self.duration = float(duration or 0.0)
         self.has_next_song = bool(has_next_song)
 
@@ -327,7 +329,7 @@ class MarkersDialog(QDialog):
         self._rows = []           # dicts: uid, time, kind, text, bpm
         self._selected_uid = None
         self._time_mode = MODE_SECONDS
-        self._tempo_map = TempoMap(self.base_bpm)
+        self._tempo_map = TempoMap(self.base_bpm, meter=meter)
         self._loading = False
 
         for cue in voice_tts:
@@ -375,7 +377,7 @@ class MarkersDialog(QDialog):
         row.addWidget(title)
 
         meta = [_format_clock(self.duration)] if self.duration > 0 else []
-        meta += [f"{self.base_bpm} BPM", "4/4"]
+        meta += [f"{self.base_bpm} BPM", self.meter]
         meta_label = QLabel("  ·  ".join(meta))
         meta_label.setObjectName("SettingsDimLabel")
         row.addWidget(meta_label)
@@ -671,7 +673,7 @@ class MarkersDialog(QDialog):
         being edited rather than the ones the song was opened with."""
         changes = [(r["time"], r["bpm"]) for r in self._rows
                    if r["kind"] == core_markers.KIND_TEMPO]
-        self._tempo_map = TempoMap(self.base_bpm, changes)
+        self._tempo_map = TempoMap(self.base_bpm, changes, self.meter)
 
     # ------------------------------------------------------------------
     # Refresh

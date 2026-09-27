@@ -88,7 +88,8 @@ def test_headless_core_contract():
             # The frozen web-remote snapshot works without a window.
             state = core.webremote_manager._build_state()
             for key in ("type", "show_name", "playing", "position", "duration",
-                        "bpm", "beats_per_bar", "blackout", "countin",
+                        "bpm", "beats_per_bar", "beat_note", "blackout",
+                        "countin",
                         "setlist", "sections", "cues"):
                 _assert(key in state, f"snapshot carries '{key}'")
             _assert(state["show_name"] == "Rack", "snapshot names the show")

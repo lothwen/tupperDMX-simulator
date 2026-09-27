@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
 from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
+from ui.click_popup import ClickPopup
 from ui.widgets import icons
 from ui.widgets.segmented import Segment, segmented
 from ui.widgets.toggle_switch import ToggleSwitch
@@ -293,14 +294,20 @@ class TimelineToolbar(QWidget):
         self.time_display.setObjectName("TimeDisplay")
         row.addWidget(self.time_display)
 
-        # BPM cluster: decorative tempo glyph + spinbox. (Metronome mute now
-        # lives solely on the timeline header's CLICK row, so this is a
-        # non-interactive label.)
-        tempo_glyph = QLabel()
-        tempo_glyph.setPixmap(icons.pixmap("note", 18, "#cfcfcf"))
-        tempo_glyph.setObjectName("MetronomeButton")
-        tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        row.addWidget(tempo_glyph)
+        # BPM cluster: the click button + spinbox. The button opens the click
+        # panel upward (tempo/TAP, meter, accent, level, free-run); metronome
+        # mute stays on the timeline header's CLICK row.
+        self.click_button = QPushButton("▴")
+        self.click_button.setIcon(icons.icon("note", "#cfcfcf"))
+        self.click_button.setIconSize(QSize(18, 18))
+        self.click_button.setObjectName("TTClickButton")
+        self.click_button.setToolTip(
+            "Click: tempo, meter, accent and level — free-run it, or set it "
+            "as the song's tempo")
+        self.click_popup = ClickPopup(self)
+        self.click_button.clicked.connect(
+            lambda: self.click_popup.open_above(self.click_button))
+        row.addWidget(self.click_button)
 
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(40, 300)
@@ -420,6 +427,14 @@ class TimelineToolbar(QWidget):
         if self.bpm_spinbox:
             return self.bpm_spinbox.value()
         return 120
+
+    def set_click_free_running(self, running: bool) -> None:
+        """Light the click button while the click free-runs — the panel may be
+        closed, and this is the one sign left that the click is its own."""
+        self.click_button.setProperty("running", bool(running))
+        self.click_button.style().unpolish(self.click_button)
+        self.click_button.style().polish(self.click_button)
+        self.click_popup.set_free_running(running)
 
     def set_song_precount(self, enabled: bool,
                           has_song: Optional[bool] = None) -> None:

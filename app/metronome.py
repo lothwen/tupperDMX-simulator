@@ -46,11 +46,17 @@ class Metronome(QObject):
     rather than played late, because a click that resumes late misleads a
     musician where a missing one merely disappoints.
 
-    WHAT each beat is — its time, its 1-4 number, the kind of sound it takes —
-    is `core.click`'s answer, and whether the click runs at a position at all
-    is `follow()`'s, so this class only has to get beats to the output on time.
-    Negative timeline positions (the count-in) need no casing: the beat index
-    runs seamlessly through t=0 into the song."""
+    WHAT each beat is — its time, its number in the bar, the kind of sound it
+    takes — is `core.click`'s answer, and whether the click runs at a position
+    at all is `follow()`'s, so this class only has to get beats to the output
+    on time. Negative timeline positions (the count-in) need no casing: the
+    beat index runs seamlessly through t=0 into the song.
+
+    FREE-RUN is the one time the click is not the song's: it counts a tempo
+    map of its own from beat 1, off the transport (the desktop's click popup).
+    Anything that puts the click back on the transport — follow(), and so
+    every play and seek — ends it, because the song's click is the one a show
+    cannot do without."""
 
     # Signals
     metronome_volume_changed = pyqtSignal(float)  # volume 0.0-1.0
@@ -62,6 +68,7 @@ class Metronome(QObject):
     # frame). Anything that must sound WITH the beat — the spoken count-in —
     # schedules itself at that same frame rather than reacting later.
     beat_scheduled = pyqtSignal(int, float, int)
+    free_run_changed = pyqtSignal(bool)  # free-run started / ended
     audio_error_occurred = pyqtSignal(str, str)  # error message, error type
 
     def __init__(self, engine: AudioEngine, initial_volume: float = 0.5):
@@ -83,6 +90,10 @@ class Metronome(QObject):
         # The current song's control markers — the state a stop-click leaves
         # behind, which follow() re-resolves rather than replays.
         self._control_markers = []
+        # Free-run's own tempo map; None whenever the click follows the song.
+        self._free_map = None
+        # Whether beat 1 takes the accent sound (config.audio.click_accent).
+        self.accent = True
         # The grid's anchor: timeline time `_anchor_time` falls at output frame
         # `_anchor_frame`. Every beat's frame is derived from this pair, so the
         # click rides the sound card's clock rather than the system's.
@@ -126,6 +137,29 @@ class Metronome(QObject):
             f"Tempo map set: base {tempo_map.bpm_at(0.0)} BPM, "
             f"{len(tempo_map.changes())} change(s)")
 
+    def set_accent(self, accent: bool) -> None:
+        """Accent beat 1, or click every beat alike. Beats already queued keep
+        the sound they were queued with — the change lands within LOOKAHEAD_S."""
+        self.accent = bool(accent)
+
+    def _clock_map(self) -> TempoMap:
+        """The map beats are read from: free-run's own, else the song's."""
+        return self._free_map if self._free_map is not None else self.tempo_map
+
+    def is_free_running(self) -> bool:
+        return self._free_map is not None
+
+    def start_free_run(self, tempo_map: TempoMap) -> None:
+        """Click `tempo_map` from its beat 1, now, off the transport. Called
+        again while running it retimes — from beat 1 again, since the grid
+        being counted no longer exists."""
+        was_free = self.is_free_running()
+        self._halt()
+        self._free_map = tempo_map
+        self._run(0.0)
+        if not was_free:
+            self.free_run_changed.emit(True)
+
     def set_control_markers(self, markers) -> None:
         """Install the current song's control markers (what follow() asks)."""
         self._control_markers = list(markers)
@@ -155,6 +189,11 @@ class Metronome(QObject):
         "now" would sit the whole grid that far behind the music. None means
         the caller read the position just now."""
         self.stop_metronome()
+        self._run(timeline_position_sec, anchor_monotonic)
+
+    def _run(self, timeline_position_sec: float,
+             anchor_monotonic: float = None) -> None:
+        """start_metronome() on a halted click, reading `_clock_map()`."""
         self.is_metronome_enabled = True
 
         lag = (0.0 if anchor_monotonic is None
@@ -165,21 +204,30 @@ class Metronome(QObject):
         # The first beat at or after the anchor, less the grace — so the beat
         # the transport is sitting ON still counts as due.
         self._set_beat_index(click.first_index_at(
-            self.tempo_map, self._anchor_time - START_GRACE_S))
+            self._clock_map(), self._anchor_time - START_GRACE_S))
         self._opening_beat = True
 
         self._pump()   # queue the opening beats before returning
         self.metronome_timer.start()
         self.logger.info(
-            f"Metronome started at {self.tempo_map.bpm_at(self._anchor_time)} "
+            f"Metronome {'free-run' if self.is_free_running() else 'started'} "
+            f"at {self._clock_map().bpm_at(self._anchor_time)} "
             f"BPM, position {timeline_position_sec:.2f}s, "
             f"{len(self._pending)} beat(s) queued")
 
     def stop_metronome(self) -> None:
         """Stop the click and un-queue the beats already placed ahead of the
-        playhead — they belong to a grid that is about to stop existing."""
+        playhead — they belong to a grid that is about to stop existing.
+        Ends a free-run too."""
+        was_free = self.is_free_running()
+        self._halt()
+        if was_free:
+            self.free_run_changed.emit(False)
+
+    def _halt(self) -> None:
         was_enabled = self.is_metronome_enabled
         self.is_metronome_enabled = False
+        self._free_map = None
         self.metronome_timer.stop()
         self.engine.clear_clicks()
         self._pending = []
@@ -189,9 +237,10 @@ class Metronome(QObject):
             self.logger.info("Metronome stopped")
 
     def _set_beat_index(self, index: int) -> None:
-        """Move to a continuous beat index, deriving the 1-4 count from it."""
+        """Move to a continuous beat index, deriving the bar's count from it."""
         self._beat_index = int(index)
-        self.beat_count = click.beat_number(self._beat_index)
+        self.beat_count = click.beat_number(
+            self._beat_index, self._clock_map().beats_per_bar)
 
     def _frame_at(self, seconds: float) -> int:
         """The output frame timeline time `seconds` falls on.
@@ -214,7 +263,8 @@ class Metronome(QObject):
         grace = int(START_GRACE_S * self.engine.rate())
         dropped = 0
         while True:
-            event = click.event_at(self.tempo_map, self._beat_index)
+            event = click.event_at(self._clock_map(), self._beat_index,
+                                   self.accent)
             frame = self._frame_at(event.seconds)
             if frame >= horizon:
                 break

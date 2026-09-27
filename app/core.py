@@ -21,6 +21,7 @@ from core import markers as core_markers
 from core import note_layout
 from core.config import Config, userprefs_path
 from core.io_routing import midi_routing_from_io
+from core.tempo_map import TempoMap, valid_meter
 from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import get_logger, setup_logging
@@ -114,6 +115,7 @@ class AppCore(QObject):
         self.media_controller.segue_reached.connect(self._on_segue_reached)
 
         self.metronome = Metronome(self.audio_engine, config.volume.metronome)
+        self.metronome.set_accent(config.audio.click_accent)
         self.metronome.beat_scheduled.connect(self._on_beat_scheduled)
         self.metronome.audio_error_occurred.connect(self._on_audio_error)
 
@@ -168,6 +170,7 @@ class AppCore(QObject):
         song = self.config.get_current_song()
         self.media_controller.set_count_in(
             song.precount if song else False, self.config.audio.count_in_bars)
+        self.metronome.set_accent(self.config.audio.click_accent)
         self._refresh_count_words()
 
     def apply_logging_config(self):
@@ -336,8 +339,10 @@ class AppCore(QObject):
 
         Restarting a running metronome is what re-phases the beat: the map may
         have changed under the playhead (a tempo marker edited mid-playback),
-        and its beat grid no longer lines up with the one being counted."""
-        was_running = self.metronome.is_metronome_running()
+        and its beat grid no longer lines up with the one being counted. A
+        free-run is left alone — it is counting a tempo of its own."""
+        was_running = (self.metronome.is_metronome_running()
+                       and not self.metronome.is_free_running())
         position = (self.media_controller.get_current_position()
                     if was_running else 0.0)
 
@@ -349,6 +354,46 @@ class AppCore(QObject):
                 position, self.media_controller.monotonic_at(position))
 
         self.tempo_map_changed.emit(tempo_map)
+
+    # ------------------------------------------------------------------
+    # The click on its own (the desktop's click popup)
+    # ------------------------------------------------------------------
+    def start_free_run(self, bpm: int, meter: str):
+        """Run the click alone at `bpm` in `meter`, off the transport — or
+        retime a free-run already going. Refused while the song plays: the
+        click then is the song's, and it is the one a show needs. Playing
+        ends a free-run (the metronome's follow() does it)."""
+        if self.media_controller.get_playback_state():
+            return
+        self.metronome.start_free_run(TempoMap(bpm, meter=meter))
+
+    def stop_free_run(self):
+        if self.metronome.is_free_running():
+            self.metronome.stop_metronome()
+
+    def set_song_tempo(self, bpm: int, meter: str):
+        """Make `bpm` and `meter` the current song's ("Set as song tempo").
+
+        The BPM goes through bpm_state like the toolbar spinbox's, so the .mid
+        stays its home; the meter rides the song entry in show.json. Both
+        rebuild the tempo map, which is what re-grids the ruler."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        meter = valid_meter(meter)
+        if song.meter != meter:
+            song.meter = meter
+            self.bpm_state.set_meter(meter)
+            self.save_config()
+        self.bpm_state.set_bpm(bpm)
+
+    def set_click_accent(self, accent: bool):
+        """Accent beat 1 of every click, or not — a machine-level preference."""
+        if self.config.audio.click_accent == bool(accent):
+            return
+        self.config.audio.click_accent = bool(accent)
+        self.metronome.set_accent(accent)
+        self.save_config()
 
     # ------------------------------------------------------------------
     # Current song's details
@@ -404,7 +449,8 @@ class AppCore(QObject):
 
     def _on_beat_scheduled(self, beat_number, beat_time, frame):
         """During the LAST count-in bar, speak the beat number on the voice bus
-        so the musician hears the song coming ("uno, dos, tres, cuatro").
+        so the musician hears the song coming ("uno, dos, tres, cuatro" in
+        4/4 — one word per beat of the song's meter).
 
         Scheduled at the beat's OWN output frame, so the word lands on the beep
         rather than near it, and keyed off the beat's own time rather than a
@@ -414,11 +460,14 @@ class AppCore(QObject):
             return                       # count-in beats are the negative ones
         if not self.config.audio.count_in_voice or not self._count_words:
             return
-        beat_len = self.metronome.tempo_map.beat_seconds_at(beat_time)
-        beats_remaining = round(-beat_time / beat_len)
-        if 1 <= beats_remaining <= 4:
+        tempo_map = self.metronome.tempo_map
+        bar = tempo_map.beats_per_bar
+        if bar > len(self._count_words):
+            return                       # a cache older than this meter
+        beats_remaining = round(-beat_time / tempo_map.beat_seconds_at(beat_time))
+        if 1 <= beats_remaining <= bar:
             self.audio_engine.schedule_voice(
-                self._count_words[4 - beats_remaining], frame)
+                self._count_words[bar - beats_remaining], frame)
 
     def _refresh_count_words(self):
         """Pre-render the spoken count-in numbers in the background (cache-first;
@@ -462,13 +511,16 @@ class AppCore(QObject):
         threading.Thread(target=work, daemon=True, name="tts-voice").start()
 
     def apply_song_markers(self, song):
-        """Install a song's control markers and segue across the core.
+        """Install a song's meter, control markers and segue across the core.
 
         The tempo half goes through bpm_state (which rebuilds the map every
         consumer reads), the rest straight onto the transport. Called on every
         song load and after every edit in the markers dialog."""
         markers = list(getattr(song, "control_markers", []))
         self.metronome.set_control_markers(markers)
+        # The meter first: set_tempo_changes always rebuilds the map, so the
+        # map it announces carries both.
+        self.bpm_state.set_meter(getattr(song, "meter", None))
         self.bpm_state.set_tempo_changes(core_markers.tempo_changes(markers))
         self.media_controller.set_control_markers(
             [(m.time, m.kind, m.bpm) for m in markers])

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 from core import clips
 from core.config import Config, PlaylistConfig, SongConfig
 from core.show.model import FORMAT_VERSION, SHOW_DIR_SUFFIX, Show, ShowError
+from core.tempo_map import valid_meter
 
 
 def _portable(path: Optional[str], root: Path) -> Optional[str]:
@@ -51,6 +52,7 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "guide_offset": song.guide_offset,
             "key": song.key,
             "precount": song.precount,
+            "meter": song.meter,
             "voice_tts": [asdict(c) for c in song.voice_tts],
             "control_markers": [asdict(m) for m in song.control_markers],
             "segue": song.segue,
@@ -97,6 +99,7 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             title=str(entry.get("title", "")),
             key=str(entry.get("key", "")),
             precount=bool(entry.get("precount", True)),
+            meter=valid_meter(entry.get("meter")),
             # `voice_cues` is what shows written before the rename call it —
             # read only, so a versions/ snapshot or a .showpack from then still
             # opens with its spoken markers. Every write is the new key.
