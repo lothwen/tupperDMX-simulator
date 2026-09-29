@@ -524,6 +524,26 @@ def test_stage_render_prefs_roundtrip():
                 "an absurd exposure clamps to the top of the range")
 
 
+def test_experimental_3d_stage_pref_roundtrip():
+    print("test_experimental_3d_stage_pref_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shipped.write_text(json.dumps(SHIPPED))
+
+        cfg = Config.load()
+        _assert(cfg.window.stage_3d_experimental is False,
+                "the experimental 3D stage is off until asked for")
+
+        cfg.window.stage_3d_experimental = True
+        cfg.save()
+        _assert(Config.load().window.stage_3d_experimental is True,
+                "stage_3d_experimental survives a save/load")
+
+        prefs.write_text(json.dumps({"window": {"stage_gpu": True}}))
+        _assert(Config.load().window.stage_3d_experimental is False,
+                "prefs written before the key existed load with it off")
+
+
 def test_volumetric_fog_prefs_roundtrip():
     print("test_volumetric_fog_prefs_roundtrip")
     with tempfile.TemporaryDirectory() as tmp:
@@ -646,6 +666,7 @@ def main():
     test_audio_config_validation()
     test_next_free_channel()
     test_stage_render_prefs_roundtrip()
+    test_experimental_3d_stage_pref_roundtrip()
     test_volumetric_fog_prefs_roundtrip()
     test_the_launcher_reads_the_stage_gpu_pref()
     print("\nALL TESTS PASSED")

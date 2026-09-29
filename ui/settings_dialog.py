@@ -991,6 +991,19 @@ class SettingsDialog(QDialog):
             signal.connect(self._sync_quality_slider)
         self._sync_quality_slider()
 
+        # Outside the quality presets on purpose: it is a different renderer,
+        # not a setting of this one.
+        self.stage_3d_check = QCheckBox("Experimental: 3D stage (looks cool)")
+        self.stage_3d_check.setChecked(self.config.window.stage_3d_experimental)
+        self.stage_3d_check.setToolTip(
+            "Show the 3D bar prototype, lit by the show's patch, in place of "
+            "the 2D stage.\n"
+            "Needs OpenGL 4.1. The stage designer switches back to the 2D "
+            "stage.\n"
+            "Drag to look around, hold WASD to fly where you look, wheel to "
+            "step, F for fullscreen, -/+ for exposure.")
+        layout.addWidget(self.stage_3d_check)
+
         layout.addStretch(1)
         return page
 
@@ -1430,6 +1443,7 @@ class SettingsDialog(QDialog):
         self.config.logging.level = self.log_level_combo.currentText()
         self.config.logging.log_dir = log_dir
         self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
+        self.config.window.stage_3d_experimental = self.stage_3d_check.isChecked()
         self.config.window.ui_scale = self.scale_slider.value() / 100.0
         # Through the config's own parser, so the dialog and a hand-edited
         # prefs file agree about what is in range.

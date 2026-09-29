@@ -129,6 +129,9 @@ class WindowConfig:
     # Off by default — it needs a working OpenGL context, and the raster path
     # is the one that survives a venue machine with no usable driver.
     stage_gpu: bool = False
+    # EXPERIMENTAL: show the 3D bar prototype (stage/stage3d/) in the 2D stage's
+    # place. A machine setting like stage_gpu — it needs OpenGL 4.1.
+    stage_3d_experimental: bool = False
     # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
     stage_exposure: float = 1.0
     # Volumetric fog: what `stage_haze` looks like once it is marched through
@@ -554,6 +557,7 @@ class Config:
                 stage_haze=cls._validate_float(
                     window_data.get("stage_haze", 0.5), 0.0, 1.0),
                 stage_gpu=bool(window_data.get("stage_gpu", False)),
+                stage_3d_experimental=bool(window_data.get("stage_3d_experimental", False)),
                 stage_exposure=cls._validate_float(
                     window_data.get("stage_exposure", 1.0), 0.1, 4.0),
                 fog=cls._parse_fog(window_data.get("fog")),

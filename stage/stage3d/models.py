@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
 # ABOUTME: Procedural models for the patched fixtures the bar's GLBs do not cover —
 # ABOUTME: pixel bars and LED panels, blinders, smoke machines — built at run time.
-"""The patch's own bodies, for `scripts/stage3d_bar.py`.
+"""The patch's own bodies, for `bar.py`.
 
-`scripts/build_bar_assets.py` writes the room and the photograph's rig — a par
+`build_assets.py` writes the room and the photograph's rig — a par
 and a moving head — to GLB files. A show's patch can hold anything, so the
 fixtures those two files do not cover are built here, at run time, from the
 same primitives (imported, not copied), at the size each definition says the
@@ -22,11 +21,11 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 
-import build_bar_assets as bba
-from build_bar_assets import Mesh, Node, Rx, T, cylinder, merge, oriented, rod, rounded_box
+from stage.stage3d import build_assets as bba
+from stage.stage3d.build_assets import Mesh, Node, Rx, T, cylinder, merge, oriented, rod, rounded_box
 
 #: The emitting face: a dark diffuser the renderer adds each cell's light to.
-#: Anything textured would drop its UVs in `build_bar_assets.GLB`, which is
+#: Anything textured would drop its UVs in `build_assets.GLB`, which is
 #: one reason these models never go through a GLB at all.
 MATERIALS: Dict[str, dict] = dict(bba.MATERIALS)
 MATERIALS["cells"] = dict(base=(0.035, 0.035, 0.04), rough=0.25)

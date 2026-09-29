@@ -32,6 +32,11 @@ same stack. TTS voice models (~60 MB) download on demand into `userprefs_dir()/t
   `state`/`commands`/`peaks` are Qt-free too).
 - `stage/` (render engine) and `timeline/` are **top-level**: QtWidgets importing nothing from `ui/` (only `core/`, PyQt6,
   `tupperlogger`), which is what earns them the root.
+- `stage/stage3d/` — the **EXPERIMENTAL** 3D bar prototype, shown in the 2D stage's place behind
+  `window.stage_3d_experimental`; it lives under `stage/` only so every build ships it, and the 2D engine's rules below
+  don't bind it. The app reaches it through `embedded.py` alone, lazily from `MainWindow`. Its standalone launcher
+  (`scripts/stage3d_bar.py`, with its own Art-Net listener or controller) stays in `scripts/` because `stage/` may not
+  import `dmx/` or `software_controller/`.
 - `ui/` — three layers: `ui/widgets/` (leaf toolkit, no app knowledge, safe to import), `ui/fixture/` (fixture editing —
   the timeline reaches in for `console` and `affordances`), and the root.
 - `fixtures/` — strict OFL `*.json` + optional `*.tdmx.json` sidecar + optional `*.effects/` artwork folder. A **subfolder

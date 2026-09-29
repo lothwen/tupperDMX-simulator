@@ -164,6 +164,9 @@ class MainWindow(QMainWindow):
         # routing, web remote.
         self.app_core.start()
 
+        # After start(), whose show load would otherwise rebuild it straight away.
+        self._sync_stage3d()
+
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
 
@@ -461,6 +464,8 @@ class MainWindow(QMainWindow):
         self._docked_content_sizes = None
         self._collapsed_before_undock = False
         self._docked_before_fullscreen = False
+        # The experimental 3D stage while it stands in the 2D stage's place.
+        self._stage3d = None
         self.dock_stage_button = QPushButton()
         self.dock_stage_button.setObjectName("StageDockButton")
         self.dock_stage_button.setIconSize(QSize(18, 18))
@@ -933,8 +938,12 @@ class MainWindow(QMainWindow):
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""
-        # Update stage fixtures
-        self.stage_controller.update_fixtures_with_dmx(dmx_data)
+        # Update stage fixtures — only the one on show: a hidden 2D stage
+        # needn't pay for every frame.
+        if self._stage3d is not None:
+            self._stage3d.update_dmx(dmx_data)
+        else:
+            self.stage_controller.update_fixtures_with_dmx(dmx_data)
         
         # Update DMX display
         self.dmx_display.update_dmx_data(dmx_data)
@@ -945,6 +954,9 @@ class MainWindow(QMainWindow):
         # What the dialog can change, read afresh each time (it hands back new
         # objects), and what re-applies it — run in THIS order when it did.
         watched = (
+            # Swap the experimental 3D stage in or out before anything else, so
+            # the 2D stage is back in its place before its renderer is touched.
+            (lambda: cfg.window.stage_3d_experimental, self._sync_stage3d),
             # Build or drop the GL context first: the light layer that fog is
             # then handed to is the one this call decides the existence of.
             (lambda: cfg.window.stage_gpu, self._apply_stage_gpu),
@@ -982,6 +994,8 @@ class MainWindow(QMainWindow):
         """Turn the stage's GPU renderer on or off, now rather than on the next
         launch. Says so when the box cannot honour it — the fallback is silent
         at startup, but here it is the answer to something just asked for."""
+        if self._stage3d is not None:
+            return      # the 2D stage is put away; _drop_stage3d re-applies it
         wanted = self.config.window.stage_gpu
         if self.stage_controller.set_gpu_light(wanted) == wanted:
             return
@@ -1041,9 +1055,10 @@ class MainWindow(QMainWindow):
         its own. Mirrors what show_settings_dialog() re-applies, minus the
         window geometry, which belongs to the window rather than to the file."""
         if "window" in adopted:
+            self._sync_stage3d()
             self.stage_controller.set_haze_baseline(self.config.window.stage_haze)
-            if self.config.window.stage_gpu != (self.stage_controller.light_layer
-                                                is not None):
+            if self._stage3d is None and self.config.window.stage_gpu != (
+                    self.stage_controller.light_layer is not None):
                 self.stage_controller.set_gpu_light(self.config.window.stage_gpu)
             self.stage_controller.apply_stage_config()
             self.apply_ui_scale()
@@ -1065,6 +1080,8 @@ class MainWindow(QMainWindow):
 
     def enter_edit_mode(self):
         """Enter the stage scenario designer: grid on, swap button for toolbar."""
+        # The designer is the 2D stage's; exit_edit_mode brings the 3D one back.
+        self._drop_stage3d()
         stage_view = self.stage_controller.get_stage_view()
         self.stage_controller.set_design_mode(True)
         stage_view.set_grid_visible(True)
@@ -1082,6 +1099,87 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.hide()
         self.edit_stage_button.show()
         stage_view.reposition_overlays()
+        self._sync_stage3d()
+
+    # ------------------------------------------------------------------
+    # The experimental 3D stage (stage/stage3d/)
+    # ------------------------------------------------------------------
+    def _sync_stage3d(self, rebuild=False):
+        """Show the experimental 3D stage in the 2D stage's place, or put the
+        2D stage back, as the preference and edit mode say — the one entry
+        for launch, Settings, a prefs reload and the designer. `rebuild` builds
+        it afresh for a changed patch, which it reads only when built."""
+        wanted = (self.config.window.stage_3d_experimental
+                  and self.edit_toolbar.isHidden())
+        if not wanted:
+            self._drop_stage3d()
+        elif self._stage3d is None or rebuild:
+            self._show_stage3d()
+
+    def _show_stage3d(self):
+        from stage.stage3d import embedded   # here: the 2D path never pays for it
+        view = embedded.create(self.config.fixtures)
+        if view is None:
+            self._give_up_stage3d("The 3D stage could not be built (see the log).")
+            return
+        old = self._stage3d
+        if old is not None:
+            # Before the swap reparents it: Qt drops a reparented GL widget's
+            # context, and its textures must go while that context is current.
+            old.dispose()
+        else:
+            old = self.stage_controller.get_stage_view()
+            # A decision, not a suspend: a resume that dock/undock queued must
+            # not rebuild the light on a stage nobody can see.
+            self.stage_controller.set_gpu_light(False)
+        self._swap_stage_widget(old, view)
+        view.render_failed.connect(self._on_stage3d_render_failed,
+                                   Qt.ConnectionType.QueuedConnection)
+        self._stage3d = view
+        self.logger.info("Experimental 3D stage shown")
+
+    def _drop_stage3d(self):
+        view, self._stage3d = self._stage3d, None
+        if view is None:
+            return
+        view.dispose()      # before the swap, as in _show_stage3d
+        self._swap_stage_widget(view, self.stage_controller.get_stage_view())
+        # The GPU light _show_stage3d turned off; deferred like dock_stage's.
+        QTimer.singleShot(0, self._apply_stage_gpu)
+        self.logger.info("2D stage back in place of the 3D stage")
+
+    def _stage_widget(self):
+        """Whichever stage is on show: the 3D one, or the 2D view."""
+        if self._stage3d is not None:
+            return self._stage3d
+        return self.stage_controller.get_stage_view()
+
+    def _swap_stage_widget(self, old, new):
+        """Put `new` where `old` stands — slot 0 of main_content, or the floating
+        stage window — leaving `old` parentless and hidden (stage_controller
+        keeps the 2D view alive; its overlays go with it)."""
+        if self._stage_window is not None:
+            self._stage_window.layout().replaceWidget(old, new)
+            old.setParent(None)
+            new.show()
+        else:
+            # Replace, never insert: main_content is also _sidebar_splitter,
+            # which holds exactly two widgets.
+            self.main_content.replaceWidget(0, new)
+
+    def _on_stage3d_render_failed(self):
+        self._give_up_stage3d("The 3D stage cannot render with this machine's "
+                              "OpenGL driver (it needs OpenGL 4.1).")
+
+    def _give_up_stage3d(self, why):
+        """Put the 2D stage back and turn the preference off, so a machine
+        that cannot run it is not asked again at every patch edit."""
+        self.config.window.stage_3d_experimental = False
+        self._drop_stage3d()
+        self.save_config()
+        QMessageBox.warning(self, "3D stage unavailable",
+                            f"{why}\n\nThe 2D stage is back, and the experimental "
+                            "3D stage has been turned off in Settings.")
 
     # ------------------------------------------------------------------
     # Stage docking
@@ -1139,7 +1237,7 @@ class MainWindow(QMainWindow):
         """
         if self._stage_window is not None:
             return
-        stage_view = self.stage_controller.get_stage_view()
+        stage_view = self._stage_widget()
 
         # A collapsed sidebar would be stranded: its toggle is a stage overlay,
         # which is about to leave with the stage. Remember the state rather than
@@ -1186,7 +1284,7 @@ class MainWindow(QMainWindow):
         """Put the stage back into the main window."""
         if self._stage_window is None:
             return
-        stage_view = self.stage_controller.get_stage_view()
+        stage_view = self._stage_widget()
         self.stage_controller.suspend_gpu_light()
         self._set_toolbar_at_bottom(False)
 
@@ -1334,6 +1432,9 @@ class MainWindow(QMainWindow):
 
         self.app_core.on_patch_edited()
         self.toolbar_manager.update_show_stats()
+        # The 3D stage reads its patch once, when it is built.
+        if self._stage3d is not None:
+            self._sync_stage3d(rebuild=True)
 
     def _rebuild_patch_views(self):
         """Rebuild every view laid out from the patch: the timeline lanes, the
@@ -1359,6 +1460,8 @@ class MainWindow(QMainWindow):
         # The stage too: opening a show rebinds config.fixtures to a new list,
         # and without this the previous show's rig stayed lit until a restart.
         self.stage_controller.sync_from_config(self.config)
+        if self._stage3d is not None:
+            self._sync_stage3d(rebuild=True)
 
     def _on_show_reloaded(self):
         """Counters, show name, autosave chip and title after a show reload."""
@@ -2171,6 +2274,8 @@ class MainWindow(QMainWindow):
         # app alive after the main window is gone.
         if self._stage_window is not None:
             self.dock_stage()
+        if self._stage3d is not None:
+            self._stage3d.dispose()
 
         # Flush the show first, clean up every component, save config — all
         # in the core (idempotent, shared with headless shutdown).

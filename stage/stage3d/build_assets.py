@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 # ABOUTME: Builds the 3D bar stage's GLB assets — venue, backline, furniture and fixtures —
 # ABOUTME: procedurally with numpy, textures included, into assets/models/bar/.
-"""Generate the glTF 2.0 binaries `scripts/stage3d_bar.py` renders.
+"""Generate the glTF 2.0 binaries `bar.py` renders.
 
 Run it:
 
-    uv run python scripts/build_bar_assets.py
+    uv run python -m stage.stage3d.build_assets
 
 Every model is built here from a handful of primitives — rounded boxes,
 surfaces of revolution, tubes swept along paths, bevelled extrusions — and every
@@ -46,8 +45,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(ROOT, "assets", "models", "bar")
+from core.paths import asset_path
+
+# The repo's assets/ in a dev checkout — the only place this is ever run.
+# (Every GLB still names `scripts/build_bar_assets.py` as its generator: that
+# string is part of the files, and renaming it would rewrite all of them.)
+OUT_DIR = asset_path("models", "bar")
 
 # --------------------------------------------------------------------------
 # The venue, in metres: phase 2b's axes (+X audience right, +Y up, +Z toward
