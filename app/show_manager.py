@@ -16,6 +16,7 @@ from core.show import store, versions
 from core.show.manifest import show_to_manifest
 from core.show.migrate import remember_show
 from core.show.model import Show
+from midi.codec import MidiCodec
 from tupperlogger import get_logger
 from webremote import state as remote_state
 
@@ -240,14 +241,35 @@ class ShowManager(QObject):
             if not has_events:
                 self._midi_dirty = False
                 return False
-            song.midi = store.allocate_midi_path(self.show, song.title or "song")
-            self.midi_path_allocated.emit(song.midi)
+            self.allocate_song_midi(song)
 
         bpm = self.core.bpm_state.get_bpm()
         if not mm.export_to_file(song.midi, bpm):
             raise RuntimeError(f"export_to_file('{song.midi}') returned False")
         self._update_song_cache(song, bpm)
         self._midi_dirty = False
+        return True
+
+    def allocate_song_midi(self, song: SongConfig) -> str:
+        """Give the song its owned midis/<slug>.mid path (not yet written)."""
+        song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        self.midi_path_allocated.emit(song.midi)
+        return song.midi
+
+    def write_song_tempo(self, song: SongConfig, bpm: int) -> bool:
+        """Set a song's tempo in its .mid on disk, creating a tempo-only one
+        when there is none. For a song whose .mid is not loaded: the current
+        song's tempo is bpm_state's, flushed from memory over this file (the
+        one exception is giving an event-less current song its first file)."""
+        if self.show is None:
+            return False
+        if not song.midi:
+            # Not allocate_song_midi: its signal speaks for the CURRENT song.
+            song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        if not MidiCodec().write_file_tempo(song.midi, bpm):
+            return False
+        self._update_song_cache(song, bpm)
+        self.notify_changed()
         return True
 
     def _create_untitled_song(self) -> SongConfig:

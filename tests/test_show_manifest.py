@@ -171,6 +171,24 @@ def test_guide_track_roundtrip():
                 "manifests without guide keys default to None/0.0")
 
 
+def test_enabled_flag_roundtrip():
+    print("test_enabled_flag_roundtrip")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "Gira.show"
+        root.mkdir()
+        show = show_from_manifest(root, {
+            "format_version": 1,
+            "songs": [{"title": "legacy"}, {"title": "off", "enabled": False}],
+        })
+        legacy, off = show.playlist.songs
+        _assert(legacy.enabled is True,
+                "a manifest written before the flag loads every song enabled")
+        _assert(off.enabled is False, "enabled: false is read")
+        again = show_from_manifest(root, show_to_manifest(show))
+        _assert([s.enabled for s in again.playlist.songs] == [True, False],
+                "the flag survives a save/load round trip")
+
+
 def test_show_name_fallback():
     print("test_show_name_fallback")
     root = Path("/tmp/Directo Billares 2026.show")
@@ -251,6 +269,7 @@ def main():
     test_missing_media_paths_are_preserved()
     test_song_metadata_defaults_and_id()
     test_guide_track_roundtrip()
+    test_enabled_flag_roundtrip()
     test_show_name_fallback()
     test_fixtures_and_favorites_reuse_the_shared_parsers()
     test_song_status_matrix()

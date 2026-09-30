@@ -6,6 +6,7 @@ apply a tempo, and export to disk. No scene-group / fade reconstruction lives
 here — that orchestration stays on MidiManager, which calls parse_into() first.
 """
 
+from types import SimpleNamespace
 from typing import List, Optional
 import json
 import os
@@ -377,3 +378,18 @@ class MidiCodec:
                 self.logger.warning(f"Failed to clean up temporary file {temp_path}: {cleanup_error}")
 
             return False
+
+    def write_file_tempo(self, file_path: str, bpm: int) -> bool:
+        """Set the tempo of a .mid ON DISK, keeping every event's wall-clock
+        time (apply_tempo), or create a tempo-only file when there is none —
+        the empty document MidiManager.create_empty_track builds.
+
+        For songs that are NOT loaded: the current song's in-memory document
+        would overwrite this file on its next flush, so its tempo goes through
+        bpm_state instead."""
+        if os.path.exists(file_path):
+            midi_data = self.read(file_path)
+        else:
+            midi_data = mido.MidiFile(type=1, ticks_per_beat=480)
+            midi_data.tracks.append(mido.MidiTrack())
+        return self.export(SimpleNamespace(midi_data=midi_data), file_path, bpm)

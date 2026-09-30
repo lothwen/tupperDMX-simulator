@@ -220,6 +220,9 @@ class SongConfig:
     # Optional so unticking the box does not throw away the time already dialled.
     segue: bool = False
     segue_time: float = 0.0
+    # Off = the song stays in the setlist (and can still be opened to edit)
+    # but next/prev, the segue and the web remote's setlist skip it.
+    enabled: bool = True
     cache: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -228,6 +231,17 @@ class PlaylistConfig:
     """Configuration for the playlist."""
     songs: List["SongConfig"] = field(default_factory=list)
     current_song_index: int = 0
+
+    def neighbour(self, step: int) -> Optional[int]:
+        """Index of the nearest ENABLED song after (step > 0) or before
+        (step < 0) the current one, or None. The one rule next/prev, the
+        segue and the toolbar's nav buttons share."""
+        i = self.current_song_index + (1 if step > 0 else -1)
+        while 0 <= i < len(self.songs):
+            if self.songs[i].enabled:
+                return i
+            i += 1 if step > 0 else -1
+        return None
 
 
 @dataclass
@@ -1031,6 +1045,20 @@ class Config:
                 self.playlist.current_song_index -= 1
             return True
         return False
+
+    def move_song(self, src: int, dst: int) -> bool:
+        """Move the song at src so it lands at index dst. The current index
+        follows the current song OBJECT: the show autosave flushes pending
+        MIDI edits into whatever song is current, so it must stay the same one."""
+        songs = self.playlist.songs
+        if not (0 <= src < len(songs) and 0 <= dst < len(songs)) or src == dst:
+            return False
+        current = self.get_current_song()
+        songs.insert(dst, songs.pop(src))
+        if current is not None:
+            self.playlist.current_song_index = next(
+                i for i, s in enumerate(songs) if s is current)
+        return True
 
     def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None,
                             guide: Optional[str] = None,

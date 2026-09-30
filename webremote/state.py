@@ -114,6 +114,7 @@ def build_setlist(songs: list, current_index: int) -> dict:
                 "bpm": probe_bpm(getattr(song, "midi", None)),
                 "key": getattr(song, "key", "") or None,
                 "precount": bool(getattr(song, "precount", True)),
+                "enabled": bool(getattr(song, "enabled", True)),
             }
             for i, song in enumerate(songs)
         ],

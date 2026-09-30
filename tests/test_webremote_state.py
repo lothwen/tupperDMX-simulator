@@ -105,6 +105,13 @@ def test_build_setlist():
     _assert(all(s["key"] is None and s["precount"] is True
                 for s in setlist["songs"]),
             "songs without metadata expose null key and default precount")
+    _assert(all(s["enabled"] is True for s in setlist["songs"]),
+            "songs without the flag are enabled")
+    off = FakeSong(audio="/no/such/dir/Humo.mp3")
+    off.enabled = False
+    listed = build_setlist([off], 0)["songs"][0]
+    _assert(listed["enabled"] is False and listed["index"] == 0,
+            "a disabled song is still listed, flagged, at its real index")
 
     keyed = FakeSong(audio="/no/such/dir/Marea.mp3")
     keyed.key = "Am"

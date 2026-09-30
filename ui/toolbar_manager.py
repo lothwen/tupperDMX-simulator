@@ -84,13 +84,12 @@ class ToolbarManager(QObject):
     # Bundle / setlist signals
     export_bundle_requested = pyqtSignal()
     import_bundle_requested = pyqtSignal()
-    song_title_edited = pyqtSignal(str)
     song_key_edited = pyqtSignal(str)        # current song's musical key (TONO)
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
     new_song_requested = pyqtSignal()     # append an empty song to the setlist
-    remove_song_requested = pyqtSignal()
+    playlist_requested = pyqtSignal()     # open the playlist manager
     song_selected = pyqtSignal(int)  # setlist combobox picked a song by index
     # Application menu signals
     settings_requested = pyqtSignal()
@@ -131,7 +130,7 @@ class ToolbarManager(QObject):
         self.prev_button: Optional[QPushButton] = None
         self.next_button: Optional[QPushButton] = None
         self.new_song_button: Optional[QPushButton] = None
-        self.remove_button: Optional[QPushButton] = None
+        self.playlist_button: Optional[QPushButton] = None
         self.menu_button: Optional[QToolButton] = None
         self.dock_stage_action = None
         # Show section widgets
@@ -493,8 +492,8 @@ class ToolbarManager(QObject):
         self.prev_button.setEnabled(False)
         controls_layout.addWidget(self.prev_button)
 
-        # Unified selector: a counter badge + editable combobox in one rounded
-        # frame (the frame carries the border; the combobox is drawn flat).
+        # Unified selector: a counter badge + combobox in one rounded frame
+        # (the frame carries the border; the combobox is drawn flat).
         selector = QFrame()
         selector.setObjectName("SetlistSelector")
         selector.setFixedHeight(30)
@@ -507,20 +506,15 @@ class ToolbarManager(QObject):
         selector_layout.addWidget(self.setlist_counter_badge)
         self.song_combo = QComboBox()
         self.song_combo.setObjectName("SetlistCombo")
-        self.song_combo.setEditable(True)
-        self.song_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.song_combo.lineEdit().setPlaceholderText("Song title")
-        self.song_combo.setToolTip("Select a song, or edit its title and press Enter to rename")
+        self.song_combo.setPlaceholderText("No songs")
+        self.song_combo.setToolTip("Select a song (rename it in the playlist manager)")
         self.song_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # A title the operator can still read is the point of this control, so
         # give it a floor of its own rather than letting the row squeeze it.
         self.song_combo.setMinimumContentsLength(12)
-        # Selecting from the dropdown switches song; typing + Enter renames the
-        # current one. activated() only fires on user action (not programmatic
-        # repopulation), so no guard is needed on the selection path.
+        # Selecting from the dropdown switches song. activated() only fires on
+        # user action (not programmatic repopulation), so no guard is needed.
         self.song_combo.activated.connect(self._on_combo_activated)
-        self.song_combo.lineEdit().returnPressed.connect(
-            lambda: self.song_title_edited.emit(self.song_combo.currentText()))
         selector_layout.addWidget(self.song_combo, 1)
         controls_layout.addWidget(selector, 1)
 
@@ -546,14 +540,16 @@ class ToolbarManager(QObject):
         self.new_song_button.clicked.connect(self.new_song_requested.emit)
         controls_layout.addWidget(self.new_song_button)
 
-        self.remove_button = QPushButton()
-        self.remove_button.setIcon(icons.icon("trash", "#d98a8a"))
-        self.remove_button.setIconSize(QSize(15, 15))
-        self.remove_button.setFixedSize(28, 30)
-        self.remove_button.setObjectName("RemoveButton")
-        self.remove_button.setToolTip("Remove current song from playlist")
-        self.remove_button.clicked.connect(self.remove_song_requested.emit)
-        controls_layout.addWidget(self.remove_button)
+        # The playlist manager: reorder, remove, import and edit every song
+        # (the rest of this panel only ever touches the current one).
+        self.playlist_button = QPushButton()
+        self.playlist_button.setIcon(icons.icon("playlist", "#e6e6e6"))
+        self.playlist_button.setIconSize(QSize(15, 15))
+        self.playlist_button.setFixedSize(28, 30)
+        self.playlist_button.setObjectName("NavButton")
+        self.playlist_button.setToolTip("Manage playlist…")
+        self.playlist_button.clicked.connect(self.playlist_requested.emit)
+        controls_layout.addWidget(self.playlist_button)
 
         layout.addLayout(controls_layout)
 
@@ -735,10 +731,12 @@ class ToolbarManager(QObject):
 
         return card, path_label, empty_button
 
-    def _on_combo_activated(self, index: int) -> None:
-        """A dropdown pick (never programmatic repopulation) switches song."""
+    def _on_combo_activated(self, row: int) -> None:
+        """A dropdown pick (never programmatic repopulation) switches song —
+        by the song's playlist index, which the row carries: with disabled
+        songs left out, the two differ."""
         if not self._populating_setlist:
-            self.song_selected.emit(index)
+            self.song_selected.emit(self.song_combo.itemData(row))
 
     def _add_compact_actions(self, menu: QMenu) -> None:
         """The SHOW card as menu entries, hidden until the bar actually folds.
@@ -916,20 +914,25 @@ class ToolbarManager(QObject):
         if self.bpm_label is not None:
             self.bpm_label.setText(f"{int(bpm)} BPM" if bpm else "")
 
-    def set_setlist(self, titles: list, current_index: int) -> None:
+    def set_setlist(self, titles: list, current_index: int,
+                    enabled: Optional[list] = None) -> None:
         """Repopulate the song-selector combobox from the setlist and select
-        the current song, without firing a selection signal."""
+        the current song, without firing a selection signal.
+
+        A disabled song (`enabled[i]` false) is left out — it is out of the
+        running order — unless it is the current one, which the selector
+        still has to show."""
         if self.song_combo is None:
             return
         self._populating_setlist = True
         try:
             self.song_combo.clear()
-            self.song_combo.addItems(
-                [t or f"Song {i + 1}" for i, t in enumerate(titles)])
-            if 0 <= current_index < len(titles):
-                self.song_combo.setCurrentIndex(current_index)
-            else:
-                self.song_combo.setEditText("")
+            for i, title in enumerate(titles):
+                if enabled is not None and not enabled[i] and i != current_index:
+                    continue
+                self.song_combo.addItem(title or f"Song {i + 1}", i)
+                if i == current_index:
+                    self.song_combo.setCurrentIndex(self.song_combo.count() - 1)
         finally:
             self._populating_setlist = False
 

@@ -140,6 +140,10 @@ class AppCore(QObject):
         # (headless: the remote is the only interface) — never persisted.
         self.webremote_manager = WebRemoteManager(
             config, self, force_enabled=force_webremote)
+        # A reorder, removal or edit of a song that is not loaded changes the
+        # remote's setlist without any media/MIDI signal it already hears.
+        self.playlist_controller.setlist_changed.connect(
+            self.webremote_manager._publish_full)
 
     def start(self) -> None:
         """Bring the core up: current song, persisted I/O routing, web remote
@@ -398,11 +402,11 @@ class AppCore(QObject):
     # ------------------------------------------------------------------
     # Current song's details
     # ------------------------------------------------------------------
-    def set_song_title(self, title: str) -> bool:
-        """Rename the current song (the setlist's edit field): persisted and
-        published to the web remote. Returns whether anything changed, so the
-        view knows to redraw its setlist."""
-        song = self.config.get_current_song()
+    def set_song_title(self, title: str, song=None) -> bool:
+        """Rename a song — the current one unless `song` is given (the
+        playlist manager): persisted and published to the web remote. Returns
+        whether anything changed, so the view knows to redraw its setlist."""
+        song = song or self.config.get_current_song()
         title = title.strip()
         if song is None or song.title == title:
             return False
@@ -411,10 +415,11 @@ class AppCore(QObject):
         self.webremote_manager._publish_full()
         return True
 
-    def set_song_key(self, key: str):
-        """Set the current song's musical key (the TONO chip): persisted and
-        published to the web remote."""
-        song = self.config.get_current_song()
+    def set_song_key(self, key: str, song=None):
+        """Set a song's musical key — the current one's unless `song` is given
+        (the TONO chip, the playlist manager): persisted and published to the
+        web remote."""
+        song = song or self.config.get_current_song()
         if song is None or song.key == key:
             return
         song.key = key
@@ -424,16 +429,20 @@ class AppCore(QObject):
     # ------------------------------------------------------------------
     # Count-in + spoken guide (Fase 4)
     # ------------------------------------------------------------------
-    def on_song_precount_toggled(self, enabled: bool):
-        """Persist the current song's count-in flag and apply it live
-        (triggered by the click panel)."""
-        song = self.config.get_current_song()
+    def on_song_precount_toggled(self, enabled: bool, song=None):
+        """Persist a song's count-in flag — the current one's unless `song` is
+        given (the click panel, the playlist manager) — and, for the current
+        song, apply it live."""
+        current = self.config.get_current_song()
+        song = song or current
         if song is None or song.precount == bool(enabled):
             return
         song.precount = bool(enabled)
-        self.media_controller.set_count_in(enabled, self.config.audio.count_in_bars)
         self.save_config()
-        self.precount_changed.emit(song.precount)
+        if song is current:
+            self.media_controller.set_count_in(
+                enabled, self.config.audio.count_in_bars)
+            self.precount_changed.emit(song.precount)
         self.webremote_manager._publish_full()
 
     def _on_beat_scheduled(self, beat_number, beat_time, frame):
@@ -541,9 +550,8 @@ class AppCore(QObject):
         No next song means the segue is a no-op rather than an error: a setlist
         gets reordered far more often than its markers do, and the last song
         silently keeping its own ending is the harmless reading."""
-        songs = self.config.playlist.songs
-        if self.config.playlist.current_song_index >= len(songs) - 1:
-            self.logger.info("Segue reached on the last song — nothing to segue to")
+        if self.config.playlist.neighbour(+1) is None:
+            self.logger.info("Segue reached on the last enabled song — nothing to segue to")
             return
         self.playlist_controller.next_song()
         self.media_controller.start_playback(force_no_count_in=True)

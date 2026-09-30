@@ -5,7 +5,7 @@ Covers create_show folder layout, load/save roundtrip through show.json,
 atomic_write_json (valid content, no leftover temp files), ShowError on
 missing/corrupt manifests, duplicate_show (versions/ history excluded, copy
 retitled, relative paths re-resolve under the new root), allocate_midi_path
-uniqueness, and is_show_dir.
+uniqueness, is_show_dir, and which of a song's files the show owns alone.
 
 Run with:
     uv run python tests/test_show_store.py
@@ -33,6 +33,7 @@ from core.show.store import (
     is_show_dir,
     load_show,
     save_manifest,
+    song_owned_files,
 )
 
 
@@ -215,6 +216,37 @@ def test_allocate_midi_path():
                 "unsluggable titles fall back to 'song'")
 
 
+def test_song_owned_files():
+    print("test_song_owned_files")
+    with tempfile.TemporaryDirectory() as tmp:
+        show = create_show(tmp, "Gira")
+
+        def put(path):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_bytes(b"x")
+            return str(path)
+
+        external = put(Path(tmp) / "music" / "marea.wav")
+        shared = put(show.audio_dir / "shared.wav")
+        song = SongConfig(id="s1", midi=put(show.midis_dir / "marea.mid"),
+                          audio=put(show.audio_dir / "marea.wav"), guide=external)
+        other = SongConfig(id="s2", audio=shared)
+        show.playlist.songs.extend([song, other])
+
+        owned = song_owned_files(show, song)
+        _assert(owned == [str(show.midis_dir / "marea.mid"),
+                          str(show.audio_dir / "marea.wav")],
+                "the .mid and the in-show backing belong to the song")
+        _assert(external not in owned, "audio referenced in place is never the show's")
+
+        song.guide = shared
+        _assert(shared not in song_owned_files(show, song),
+                "a file another song still uses is kept")
+        song.audio = str(show.audio_dir / "gone.wav")
+        _assert(song_owned_files(show, song) == [str(show.midis_dir / "marea.mid")],
+                "a missing file is nothing to delete")
+
+
 def main():
     test_create_show_layout()
     test_save_load_roundtrip()
@@ -223,6 +255,7 @@ def main():
     test_atomic_write_json()
     test_duplicate_show()
     test_allocate_midi_path()
+    test_song_owned_files()
     print("\nALL TESTS PASSED")
 
 

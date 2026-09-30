@@ -1,15 +1,20 @@
 # ABOUTME: PlaylistController — the widget half of the playlist: timeline/
-# ABOUTME: toolbar refresh per song load, missing-media relink dialogs, and
-# ABOUTME: navigation delegation to app.playlist.PlaylistCore.
+# ABOUTME: toolbar refresh per song load, missing-media relink dialogs,
+# ABOUTME: navigation delegation to app.playlist.PlaylistCore, and the
+# ABOUTME: playlist manager's route to it.
 
 import os
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
+from core.paths import default_shows_dir, is_audio_path
+from core.show import song_import, store
 from core.show.model import song_status
 from core.show.relink import find_by_basename
 from tupperlogger import get_logger
+from ui.error_dialogs import ErrorDialogManager
+from ui.playlist_dialog import PlaylistDialog
 from ui.widgets import icons
 
 
@@ -52,28 +57,114 @@ class PlaylistController:
         """Append an empty song and switch to it (SETLIST ▸ +)."""
         self.window.playlist_core.add_empty_song()
 
-    def remove_current_song(self):
-        """Confirm with the user, then remove the current song via the core."""
+    # ------------------------------------------------------------------
+    # Playlist manager (ui/playlist_dialog.py): every song, not only the
+    # current one. The current song keeps its own routes (they reload the
+    # engine and refresh the toolbar); any other song is plain data.
+    # ------------------------------------------------------------------
+    def open_manager(self):
+        """The playlist manager: modal, applying every edit as it happens. A
+        show opened meanwhile (the web remote can) closes it — its rows would
+        be the old show's songs, and its index-based edits would land in the
+        new one."""
+        core = self.window.app_core
+        dialog = PlaylistDialog(self, self.window)
+        core.show_reloaded.connect(dialog.reject)
+        dialog.exec()
+        core.show_reloaded.disconnect(dialog.reject)
+        dialog.deleteLater()
+
+    def songs(self):
+        return self.window.config.playlist.songs
+
+    def current_song(self):
+        return self.window.config.get_current_song()
+
+    def show_name(self):
+        show = self.window.show_manager.show
+        return show.name if show is not None else ""
+
+    def other_shows(self):
+        """Show folders beside this one in the shows folder, to import from."""
+        show = self.window.show_manager.show
+        return song_import.other_shows(
+            default_shows_dir(), show.root if show is not None else None)
+
+    def patch(self):
+        return self.window.config.fixtures
+
+    def song_bpm(self, song):
+        return self.window.playlist_core.song_bpm(song)
+
+    def new_song(self):
+        """Append an empty song WITHOUT switching to it; returns its index."""
+        return self.window.playlist_core.add_empty_song(switch=False)
+
+    def move_song(self, src, dst):
+        self.window.playlist_core.move_song(src, dst)
+
+    def song_owned_files(self, song):
+        """The song's files deleting it with its files would remove."""
+        return store.song_owned_files(self.window.show_manager.show, song)
+
+    def remove_song(self, index, delete_files=False):
+        """Returns the files that could not be deleted."""
+        return self.window.playlist_core.remove_song(index, delete_files)
+
+    def set_song_enabled(self, song, enabled):
+        self.window.playlist_core.set_song_enabled(song, enabled)
+
+    def set_song_title(self, song, title):
+        if self.window.app_core.set_song_title(title, song=song):
+            self.update_song_counter()
+            if song is self.current_song():
+                self._refresh_song_info(song)
+
+    def set_song_key(self, song, key):
+        self.window.app_core.set_song_key(key, song=song)
+        if song is self.current_song():
+            self._refresh_song_info(song)
+
+    def set_song_precount(self, song, enabled):
+        self.window.app_core.on_song_precount_toggled(enabled, song=song)
+
+    def set_song_bpm(self, song, bpm):
+        self.window.playlist_core.set_song_bpm(song, bpm)
+        if song is self.current_song():
+            self._refresh_song_info(song)   # a first .mid turns the chip
+
+    def set_song_track(self, song, kind, path):
+        """Set (path) or clear (None) a song's backing ('audio') or guide."""
         w = self.window
-        if len(w.config.playlist.songs) == 0:
+        if song is self.current_song():
+            if path:
+                w.load_media_file(kind, path)
+            elif kind == "audio":
+                w.clear_backing_track()
+            else:
+                w.clear_guide_track()
             return
-
-        # Get current song info for confirmation message
-        current_song = w.config.get_current_song()
-        song_name = (os.path.basename(current_song.audio)
-                     if current_song and current_song.audio else "this song")
-
-        reply = QMessageBox.question(
-            w,
-            "Remove Song",
-            f"Are you sure you want to remove '{song_name}' from the playlist?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if path and not os.path.exists(path):
+            ErrorDialogManager.show_media_file_error(w, path, "File not found")
             return
+        if path and not is_audio_path(path):
+            ErrorDialogManager.show_media_file_error(
+                w, path, "Unsupported audio format. Please select an MP3 or "
+                         "WAV file.")
+            return
+        w.playlist_core.set_song_track(song, kind, path)
 
-        w.playlist_core.remove_current_song()
+    def import_songs(self, songs, copy_audio):
+        """Append copies of another show's songs; returns (new, warnings)."""
+        return self.window.playlist_core.import_songs(songs, copy_audio)
+
+    def _refresh_song_info(self, song):
+        """The SETLIST footer for the current song."""
+        w = self.window
+        w.toolbar_manager.update_song_info(
+            song.title, song_status(song),
+            bpm=w.bpm_state.get_bpm(), offset=song.offset,
+            key=song.key)
 
     # ------------------------------------------------------------------
     # Widget refresh on song load (PlaylistCore.song_loaded)
@@ -143,10 +234,7 @@ class PlaylistController:
         else:
             w.toolbar_manager.update_midi_file_display("")
 
-        w.toolbar_manager.update_song_info(
-            song.title, song_status(song),
-            bpm=w.bpm_state.get_bpm(), offset=song.offset,
-            key=song.key)
+        self._refresh_song_info(song)
         w.timeline_toolbar.click_popup.set_precount(
             song.precount, has_song=bool(song.title))
         w.timeline_toolbar.set_monitor_state(
@@ -253,9 +341,10 @@ class PlaylistController:
         total = len(songs)
         index = w.config.playlist.current_song_index
         current = index + 1 if total > 0 else 0
-        has_prev = current > 1
-        has_next = current < total
+        has_prev = w.config.playlist.neighbour(-1) is not None
+        has_next = w.config.playlist.neighbour(+1) is not None
         w.toolbar_manager.update_song_counter(current, total)
-        w.toolbar_manager.set_setlist([s.title for s in songs], index)
+        w.toolbar_manager.set_setlist([s.title for s in songs], index,
+                                      [s.enabled for s in songs])
         w.toolbar_manager.set_navigation_enabled(has_prev, has_next)
         w.toolbar_manager.update_show_stats()

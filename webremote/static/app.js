@@ -183,6 +183,17 @@
     });
   }
 
+  // A disabled song stays in the desktop setlist but out of the running
+  // order: next/prev skip it, so the remote's list and "next" do too.
+  function isOff(song) { return song.enabled === false; }
+
+  function nextEnabled(songs, current) {
+    for (var i = current + 1; i < songs.length; i++) {
+      if (!isOff(songs[i])) return i;
+    }
+    return -1;
+  }
+
   function songMeta(song) {
     var parts = [];
     if (song.bpm != null) parts.push(song.bpm + " BPM");
@@ -232,13 +243,18 @@
     var list = $("setlist");
     var current = s.setlist.current;
     var songs = s.setlist.songs;
-    $("setlist-count").textContent = songs.length + " tracks";
+    var nextIdx = nextEnabled(songs, current);
+    $("setlist-count").textContent =
+      songs.filter(function (song) { return !isOff(song); }).length + " tracks";
     list.innerHTML = "";
     songs.forEach(function (song, i) {
+      // Indices stay the real playlist's: select_song and the waveform
+      // endpoint look songs up by them.
+      if (isOff(song) && i !== current) return;
       var li = document.createElement("li");
       if (i < current) li.className = "done";
       else if (i === current) li.className = "current";
-      else if (i === current + 1) li.className = "next";
+      else if (i === nextIdx) li.className = "next";
 
       var num = document.createElement("span");
       num.className = "num";
@@ -253,7 +269,7 @@
       main.appendChild(title);
       var meta = document.createElement("div");
       meta.className = "song-meta";
-      meta.textContent = i === current + 1
+      meta.textContent = i === nextIdx
         ? "NEXT · " + songMeta(song) : songMeta(song);
       main.appendChild(meta);
       li.appendChild(main);
@@ -296,7 +312,8 @@
       : "— / — · —";
     $("wave-total").textContent = fmtDur(s.duration);
 
-    var next = songs[current + 1];
+    var nextIdx = nextEnabled(songs, current);
+    var next = nextIdx >= 0 ? songs[nextIdx] : null;
     $("next-title").textContent = next ? next.title : "— (end of setlist)";
     $("next-meta").textContent = next ? songMeta(next) : "";
     var bars = s.countin ? s.countin.bars : null;

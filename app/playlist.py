@@ -6,7 +6,13 @@ import os
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from core.config import SongConfig
+from core.show import song_import, store
+from core.tempo_map import clamp_bpm
 from tupperlogger import get_logger
+from webremote.state import probe_bpm
+
+# What a .mid without a set_tempo plays at (MIDI's default of 500000 µs/beat).
+DEFAULT_BPM = 120
 
 
 class PlaylistCore(QObject):
@@ -25,7 +31,7 @@ class PlaylistCore(QObject):
 
     song_loaded = pyqtSignal(object, bool)  # SongConfig|None, midi_ok
     audio_missing = pyqtSignal(object)      # SongConfig (path kept: relink key)
-    setlist_changed = pyqtSignal()          # length/current index changed
+    setlist_changed = pyqtSignal()          # order, length, current index or a song's details
 
     def __init__(self, core):
         super().__init__()
@@ -140,36 +146,36 @@ class PlaylistCore(QObject):
     # Navigation
     # ------------------------------------------------------------------
     def next_song(self):
-        """Switch to the next song in the playlist."""
+        """Switch to the next enabled song in the playlist."""
         core = self.core
-        total = len(core.config.playlist.songs)
-        current = core.config.playlist.current_song_index
-        if current < total - 1:
+        index = core.config.playlist.neighbour(+1)
+        if index is not None:
             # Stop playback and save pending edits before switching
             core.stop_playback()
             core.show_manager.flush("song-switch")
 
-            core.config.set_current_song_index(current + 1)
-            self.load_current_song()
-            self.setlist_changed.emit()
-            core.save_config()
-            self.logger.info(f"Switched to song {current + 2}/{total}")
-
-    def prev_song(self):
-        """Switch to the previous song in the playlist."""
-        core = self.core
-        current = core.config.playlist.current_song_index
-        if current > 0:
-            # Stop playback and save pending edits before switching
-            core.stop_playback()
-            core.show_manager.flush("song-switch")
-
-            core.config.set_current_song_index(current - 1)
+            core.config.set_current_song_index(index)
             self.load_current_song()
             self.setlist_changed.emit()
             core.save_config()
             total = len(core.config.playlist.songs)
-            self.logger.info(f"Switched to song {current}/{total}")
+            self.logger.info(f"Switched to song {index + 1}/{total}")
+
+    def prev_song(self):
+        """Switch to the previous enabled song in the playlist."""
+        core = self.core
+        index = core.config.playlist.neighbour(-1)
+        if index is not None:
+            # Stop playback and save pending edits before switching
+            core.stop_playback()
+            core.show_manager.flush("song-switch")
+
+            core.config.set_current_song_index(index)
+            self.load_current_song()
+            self.setlist_changed.emit()
+            core.save_config()
+            total = len(core.config.playlist.songs)
+            self.logger.info(f"Switched to song {index + 1}/{total}")
 
     def go_to_song(self, index):
         """Switch to a specific song by playlist index (e.g. tapping the web
@@ -191,13 +197,22 @@ class PlaylistCore(QObject):
         core.save_config()
         self.logger.info(f"Switched to song {index + 1}/{total}")
 
-    def add_empty_song(self):
+    def add_empty_song(self, switch=True):
         """Append an empty song (no backing, no guide, empty MIDI track) and
-        make it current.
+        make it current — or, with switch=False (the playlist manager), just
+        append it, leaving the current song and its playback alone. An empty
+        setlist switches either way: there is no song loaded to leave alone.
 
-        The ONE way the setlist grows: loading a file only ever edits the
-        current song, so a song exists first and collects its tracks after."""
+        Loading a file only ever edits the current song, so a song exists
+        first and collects its tracks after (importing from another show is
+        the other way the setlist grows)."""
         core = self.core
+        if not switch and core.config.playlist.songs:
+            index = core.config.add_song()
+            core.save_config()
+            self.setlist_changed.emit()
+            self.logger.info(f"Added empty song at index {index}")
+            return index
 
         # Stop playback and save pending edits before switching away
         core.stop_playback()
@@ -211,10 +226,49 @@ class PlaylistCore(QObject):
         self.logger.info(f"Added empty song at index {index}")
         return index
 
+    def move_song(self, src, dst):
+        """Move a song to another place in the setlist. Nothing stops or
+        flushes: the current song stays the same object (Config.move_song
+        makes the index follow it), so pending MIDI edits keep their home."""
+        if self.core.config.move_song(src, dst):
+            self.core.save_config()
+            self.setlist_changed.emit()
+
+    def remove_song(self, index, delete_files=False):
+        """Remove any song from the setlist. Its files stay on disk unless
+        `delete_files`, which deletes the ones only this song of this show
+        uses (store.song_owned_files) — after the song is gone, so the current
+        song's pending MIDI edits are flushed first rather than written back
+        into a deleted file. Only removing the CURRENT song stops playback and
+        loads another. Returns the files that could not be deleted."""
+        core = self.core
+        songs = core.config.playlist.songs
+        if not 0 <= index < len(songs):
+            return []
+        doomed = (store.song_owned_files(core.show_manager.show, songs[index])
+                  if delete_files else [])
+        if index == core.config.playlist.current_song_index:
+            self.remove_current_song()
+        elif core.config.remove_song(index):
+            core.save_config()
+            self.setlist_changed.emit()
+            self.logger.info(
+                f"Removed song {index + 1} from playlist. "
+                f"{len(core.config.playlist.songs)} songs remaining.")
+        failed = []
+        for path in doomed:
+            try:
+                os.remove(path)
+                self.logger.info(f"Deleted {path}")
+            except OSError as e:
+                self.logger.warning(f"Could not delete {path}: {e}")
+                failed.append(path)
+        return failed
+
     def remove_current_song(self):
         """Remove the current song from the playlist (the entry — and its
         owned .mid — stays on disk; only the setlist forgets it). The UI's
-        confirmation dialog lives in ui.PlaylistController."""
+        confirmation lives in the playlist manager."""
         core = self.core
         current = core.config.playlist.current_song_index
         if len(core.config.playlist.songs) == 0:
@@ -234,3 +288,73 @@ class PlaylistCore(QObject):
             f"Removed song from playlist. "
             f"{len(core.config.playlist.songs)} songs remaining."
         )
+
+    # ------------------------------------------------------------------
+    # Any song's details (the playlist manager)
+    # ------------------------------------------------------------------
+    def set_song_enabled(self, song, enabled):
+        """Take a song out of the running order (or put it back): it stays in
+        the setlist, but next/prev, the segue and the web remote skip it."""
+        if song.enabled == bool(enabled):
+            return
+        song.enabled = bool(enabled)
+        self.core.save_config()
+        self.setlist_changed.emit()
+
+    def set_song_track(self, song, kind, path):
+        """Set (path) or clear (None) a NOT-current song's backing ('audio')
+        or guide. A different file's sync offset is not the old one's, so the
+        offset resets. The current song goes through the window's media
+        loading instead, which reloads the engine."""
+        if kind == "audio":
+            song.audio, song.offset = path or None, 0.0
+        else:
+            song.guide, song.guide_offset = path or None, 0.0
+        self.core.save_config()
+        self.setlist_changed.emit()
+
+    def song_bpm(self, song) -> int:
+        """A song's base tempo. The .mid is its home, so a song that is not
+        loaded is read from there; the manifest cache is only a fallback."""
+        if song is self.core.config.get_current_song():
+            return self.core.bpm_state.get_bpm()
+        return (probe_bpm(song.midi) or song.cache.get("bpm")
+                or DEFAULT_BPM)
+
+    def set_song_bpm(self, song, bpm):
+        """Set any song's base tempo. The current song's is bpm_state's (the
+        timeline and the autosave follow it); a song that is not loaded gets
+        its .mid rewritten. Either way a song with no .mid gets a tempo-only
+        one — the autosave never writes an event-less song, so without it the
+        tempo would have nowhere to live."""
+        core = self.core
+        bpm = clamp_bpm(bpm)
+        if song is core.config.get_current_song():
+            if not song.midi:
+                core.show_manager.allocate_song_midi(song)
+                core.show_manager.write_song_tempo(song, bpm)
+            core.bpm_state.set_bpm(bpm)
+        else:
+            core.show_manager.write_song_tempo(song, bpm)
+        self.setlist_changed.emit()
+
+    def import_songs(self, songs, copy_audio):
+        """Append copies of another show's songs (read with
+        song_import.peek_show) to this setlist. Returns (new songs,
+        warnings). An empty setlist loads the first one, like a new song."""
+        core = self.core
+        was_empty = not core.config.playlist.songs
+        if was_empty:
+            core.stop_playback()
+            core.show_manager.flush("song-import")
+        new_songs, warnings = song_import.import_songs(
+            core.show_manager.show, songs, copy_audio=copy_audio)
+        core.config.playlist.songs.extend(new_songs)
+        if was_empty and new_songs:
+            core.config.set_current_song_index(0)
+            self.load_current_song()
+        core.save_config()
+        self.setlist_changed.emit()
+        self.logger.info(f"Imported {len(new_songs)} song(s) "
+                         f"({'copied' if copy_audio else 'referenced'} audio)")
+        return new_songs, warnings

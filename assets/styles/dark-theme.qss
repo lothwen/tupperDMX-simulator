@@ -367,25 +367,6 @@ QPushButton#NavButton:disabled {
     border-top-color: #444;
 }
 
-/* Remove Song Button */
-QPushButton#RemoveButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
-    color: #d98a8a;
-    border: 1px solid #202020;
-    border-top: 1px solid #5d5d5d;
-    border-radius: 6px;
-    font-size: 14px;
-}
-
-QPushButton#RemoveButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #585858, stop:1 #4d4d4d);
-    color: #e89a9a;
-}
-
-QPushButton#RemoveButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #404040, stop:1 #3a3a3a);
-}
-
 /* Toolbar Hamburger Menu Button */
 QToolButton#MenuButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
@@ -454,6 +435,9 @@ QLabel#SetlistCounter {
     font-family: ui-monospace,monospace;
 }
 
+/* combobox-popup: 0 — a plain list that drops BELOW the selector. A
+   non-editable combobox otherwise opens the style's menu popup, which lays the
+   current song over the selector, so from a late song the list runs upwards. */
 QComboBox#SetlistCombo {
     background: transparent;
     border: none;
@@ -461,13 +445,7 @@ QComboBox#SetlistCombo {
     font-size: 13px;
     font-weight: bold;
     padding: 2px 4px;
-}
-
-QComboBox#SetlistCombo QLineEdit {
-    background: transparent;
-    border: none;
-    color: #f0f0f0;
-    font-weight: bold;
+    combobox-popup: 0;
 }
 
 QComboBox#SetlistCombo::drop-down {
@@ -3312,4 +3290,390 @@ QPushButton#OffsetMoveShow[state="blocked"] {
     color: #9a5a5a;
     border: 1px solid #6b3434;
     border-top: 1px solid #6b3434;
+}
+
+
+/* ============================================================
+   PLAYLIST MANAGER (ui/playlist_dialog.py)
+   The whole setlist in one table. Everything is scoped to the
+   dialog: the generic `QDialog QPushButton` gradient would
+   otherwise win over every button here. The palette is the
+   fixture dialog's (AddFixtureDialog): #262626 body, #1f1f1f
+   footer and rail, #3a3a3a hairlines, the #79cdf0 accent.
+   ============================================================ */
+QDialog#PlaylistDialog {
+    background-color: #262626;
+    min-width: 980px;
+    min-height: 420px;
+}
+
+QFrame#PlaylistActions {
+    background-color: #262626;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 6px 8px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPrimary {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPrimary:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistSecondary {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistSecondary:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QFrame#PlaylistActionsSep {
+    color: #3a3a3a;
+    max-width: 1px;
+    margin: 4px 6px;
+}
+
+QToolButton#PlaylistMove {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    min-width: 28px;
+    min-height: 28px;
+}
+
+QToolButton#PlaylistMove:hover {
+    background-color: #3a3a3a;
+}
+
+QToolButton#PlaylistMove:disabled {
+    background-color: #2a2a2a;
+    border-color: #333333;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete {
+    background: transparent;
+    color: #ff8a8a;
+    border: 1px solid #a04040;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete:hover {
+    background-color: rgba(120, 40, 40, 200);
+    color: #ffffff;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete:disabled {
+    color: #5f5f5f;
+    border-color: #3f3f3f;
+}
+
+/* The filter, BPM and key fields keep the app-wide QLineEdit / QSpinBox /
+   QComboBox look; only their size is set here. */
+QLineEdit#PlaylistFilter {
+    padding: 5px 6px;
+    min-width: 220px;
+}
+
+QTableWidget#PlaylistTable {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: none;
+    font-size: 13px;
+    selection-background-color: #3a5a67;
+    outline: none;
+}
+
+QTableWidget#PlaylistTable::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 6px;
+}
+
+QTableWidget#PlaylistTable::item:selected {
+    background-color: #3a5a67;
+}
+
+QTableWidget#PlaylistTable QHeaderView::section {
+    background-color: #232323;
+    color: #7a7a7a;
+    border: none;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 8px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QTableWidget#PlaylistTable QLineEdit {
+    border: 1px solid #79cdf0;
+    padding: 2px 4px;
+}
+
+/* Some of the project's songs checked: the box outlined, not filled. */
+QCheckBox#ImportSelectAll::indicator:indeterminate {
+    background-color: #1a1a1a;
+    border: 2px solid #5e9ec2;
+}
+
+/* A song's backing or guide: the toolbar's SONG FILES card in small —
+   same slot colour, same dot per kind (guide blue, backing green). */
+QFrame#PlaylistChip {
+    background-color: #202020;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    min-height: 24px;
+    max-height: 24px;
+}
+
+QFrame#PlaylistChip[state="missing"] {
+    background-color: rgba(120, 40, 40, 90);
+    border: 1px solid rgba(224, 82, 82, 110);
+}
+
+QFrame#PlaylistChip[state="ok"] QLabel#PlaylistChipDot {
+    border-radius: 3px;
+    min-width: 6px;
+    max-width: 6px;
+    min-height: 6px;
+    max-height: 6px;
+}
+
+QFrame#PlaylistChip[kind="guide"][state="ok"] QLabel#PlaylistChipDot {
+    background-color: #5da9e8;
+}
+
+QFrame#PlaylistChip[kind="audio"][state="ok"] QLabel#PlaylistChipDot {
+    background-color: #6fce7f;
+}
+
+QLabel#PlaylistChipName {
+    color: #dcdcdc;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QFrame#PlaylistChip[state="missing"] QLabel#PlaylistChipName {
+    color: #e05252;
+}
+
+QToolButton#PlaylistChipClear {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QToolButton#PlaylistChipClear:hover {
+    background-color: #3a3a3a;
+    border-radius: 2px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPick {
+    background: transparent;
+    color: #9a9a9a;
+    border: 1px dashed #555;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 11px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPick:hover {
+    color: #d0d0d0;
+    border-color: #777;
+}
+
+QSpinBox#PlaylistBpm, QComboBox#PlaylistKey {
+    padding: 2px 4px;
+    font-size: 12px;
+    min-height: 20px;
+}
+
+QSpinBox#PlaylistBpm {
+    min-width: 44px;
+}
+
+QComboBox#PlaylistKey {
+    min-width: 60px;
+}
+
+QFrame#PlaylistFooter {
+    background-color: #1f1f1f;
+    border-top: 1px solid #3a3a3a;
+    padding: 4px 8px;
+}
+
+QLabel#PlaylistFooterText {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+
+/* ============================================================
+   IMPORT FROM OTHER PROJECTS (ui/import_songs_dialog.py)
+   Same palette as the playlist manager; the projects rail is the
+   fixture dialog's library rail.
+   ============================================================ */
+QDialog#ImportSongsDialog {
+    background-color: #262626;
+    min-width: 600px;
+    min-height: 380px;
+}
+
+QFrame#ImportProjectsPanel {
+    background-color: #1f1f1f;
+    border-right: 1px solid #3a3a3a;
+    min-width: 200px;
+    max-width: 220px;
+}
+
+QLabel#ImportHeading {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 12px 14px 6px 14px;
+}
+
+QListWidget#ImportProjects {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#ImportProjects::item {
+    border-left: 2px solid transparent;
+}
+
+QListWidget#ImportProjects::item:hover {
+    background-color: #2e2e2e;
+}
+
+QListWidget#ImportProjects::item:selected {
+    background-color: #2e2e2e;
+    border-left: 2px solid #79cdf0;
+}
+
+QLabel#ImportProjectName {
+    color: #e8e8e8;
+    font-size: 13px;
+}
+
+QLabel#ImportProjectDetail {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QFrame#ImportSongsHeader {
+    border-bottom: 1px solid #3a3a3a;
+    padding: 6px 14px;
+}
+
+QCheckBox#ImportSelectAll {
+    color: #cfcfcf;
+    font-size: 12px;
+}
+
+/* The warning block of the stage inspector (InspectorWarning), in the
+   app's warning amber instead of its error red. */
+QLabel#ImportPatchWarning {
+    background-color: rgba(107, 74, 31, 90);
+    color: #d9a13b;
+    border-bottom: 1px solid rgba(165, 116, 44, 110);
+    padding: 8px 14px;
+    font-size: 11px;
+}
+
+QTreeWidget#ImportSongList {
+    background: transparent;
+    color: #dcdcdc;
+    border: none;
+    outline: none;
+    font-size: 13px;
+}
+
+QTreeWidget#ImportSongList::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background-color: #1a1a1a;
+}
+
+QTreeWidget#ImportSongList::indicator:hover {
+    border-color: #777;
+}
+
+QTreeWidget#ImportSongList::indicator:checked {
+    background-color: #5e9ec2;
+    border-color: #5e9ec2;
+    image: url('assets/icons/checkmark.png');
+}
+
+QTreeWidget#ImportSongList::item {
+    border-bottom: 1px solid #333333;
+    padding: 8px 10px;
+}
+
+QLabel#ImportEmpty {
+    color: #7a7a7a;
+    font-size: 12px;
+}
+
+QFrame#ImportFooter {
+    background-color: #1f1f1f;
+    border-top: 1px solid #3a3a3a;
+    padding: 8px 12px;
+}
+
+QLabel#ImportStatus {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportCancel {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 6px 16px;
+    font-size: 12px;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportCancel:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm:disabled {
+    background-color: #3a4a52;
+    color: #6a7a82;
+    border-color: #35424a;
 }

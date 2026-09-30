@@ -21,7 +21,7 @@ from app.media_controller import MONITOR_GUIDE
 from audio.mixer import BUS_VOICE
 from core.config import Config, shipped_fixtures
 from core.io_routing import midi_routing_from_io
-from core.paths import default_shows_dir
+from core.paths import default_shows_dir, is_audio_path
 from core.show import store as show_store
 from core.show.model import ShowError
 from core.tempo_map import DEFAULT_METER
@@ -61,16 +61,6 @@ ARROW_SEEK_INTERVAL = 0.08
 # Widgets that type text, so a Space or an arrow is a keystroke for them and
 # never a transport command.
 TEXT_ENTRY_WIDGETS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
-
-# The audio formats the app loads. One list behind the load-time check and the
-# drop target's accept test, so the window never accepts a drag it will then
-# refuse to load.
-AUDIO_SUFFIXES = ('.mp3', '.wav')
-
-
-def is_audio_path(path):
-    """True for a path this app can load as a backing or guide track."""
-    return path.lower().endswith(AUDIO_SUFFIXES)
 
 
 def audio_paths_from_mime(mime):
@@ -254,7 +244,6 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.restore_version_requested.connect(self.restore_version_from_toolbar)
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
-        self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
         self.toolbar_manager.song_key_edited.connect(self.app_core.set_song_key)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
@@ -278,7 +267,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
         self.toolbar_manager.new_song_requested.connect(self.playlist_controller.add_empty_song)
-        self.toolbar_manager.remove_song_requested.connect(self.playlist_controller.remove_current_song)
+        self.toolbar_manager.playlist_requested.connect(self.playlist_controller.open_manager)
         self.toolbar_manager.song_selected.connect(self.playlist_controller.go_to_song)
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
@@ -1574,13 +1563,6 @@ class MainWindow(QMainWindow):
             self.show_manager.open_show(root)
         except ShowError as e:
             ErrorDialogManager.show_media_file_error(self, path, str(e))
-
-    def on_song_title_edited(self, title: str):
-        """Rename the current song (the core persists it and tells the web
-        remote), then refresh the setlist combobox so the renamed entry
-        updates in place."""
-        if self.app_core.set_song_title(title):
-            self.playlist_controller.update_song_counter()
 
     def on_marker_edit_requested(self, kind: str, time_sec: float):
         """A ruler flag was double-clicked: its editor, opened on it."""

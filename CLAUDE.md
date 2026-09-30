@@ -66,6 +66,23 @@ backings AND guides. `ShowManager` (QtCore-only, **attach FIRST** in `AppCore.__
 funnels through `save_config()` → `notify_changed()` (saved iff content changed) and `flush()` (~3 s debounced `.mid`
 autosave, forced on song switch/close/Save; opening snapshot + at most one automatic snapshot per 5 min).
 
+**The playlist manager** (`ui/playlist_dialog.py`, the SETLIST panel's playlist button) edits EVERY song, live, with no
+OK/Cancel. `PlaylistController` routes each edit: the **current** song keeps its own paths (media loading, AppCore
+setters, `bpm_state` — they reload the engine), any other song is plain data through `PlaylistCore`. Two rules follow
+from `_flush_midi` writing to whatever song is current: a reorder keeps `current_song_index` on the same song OBJECT
+(`Config.move_song`), and a song that is not loaded gets its BPM by rewriting its `.mid` on disk
+(`MidiCodec.write_file_tempo`) — never through `bpm_state`, and debounced in the dialog, since every rewrite rounds the
+ticks. A song with no `.mid` gets a tempo-only one, because the autosave never writes an event-less song.
+`SongConfig.enabled` (absent = true) keeps a song in the setlist but out of the running order: `PlaylistConfig.neighbour`
+is the one rule next/prev, the segue, the toolbar's nav buttons and the web remote's list follow. **Importing from
+another show reads its manifest with `song_import.peek_show`, NEVER `store.load_show`**, which would switch the global
+fixture-defs layer and create folders in the other show; imported songs get fresh ids and their `.mid` copied, and
+the user picks per import whether audio is copied into `audio/` or referenced in place. Deleting a song asks whether
+its files go too, and **only files inside the show folder that no other song uses** can (`store.song_owned_files`):
+audio referenced in place is the user's, and other shows may point at it. They are deleted AFTER the removal, so the
+current song's pending MIDI is flushed first rather than written back into a deleted file. The SETLIST combobox only
+picks a song; renaming is the manager's.
+
 ## Audio and the transport
 
 **ONE stereo QAudioSink feeds every path.** The Qt-free mixer carries backing/click/voice buses with per-bus

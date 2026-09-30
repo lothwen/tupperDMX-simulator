@@ -26,6 +26,17 @@ def asset_path(*parts: str) -> str:
     return os.path.join(bundle_dir(), "assets", *parts)
 
 
+# The audio formats the app loads. One list behind the load-time check, the
+# drop target's accept test and the playlist manager's picker, so nothing
+# accepts a file it will then refuse to load.
+AUDIO_SUFFIXES = ('.mp3', '.wav')
+
+
+def is_audio_path(path) -> bool:
+    """True for a path this app can load as a backing or guide track."""
+    return path.lower().endswith(AUDIO_SUFFIXES)
+
+
 def default_shows_dir() -> Path:
     """Default parent directory for show projects (~/Documents/TupperDMX)."""
     return Path(platformdirs.user_documents_dir()) / "TupperDMX"

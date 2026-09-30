@@ -57,6 +57,7 @@ def show_to_manifest(show: Show) -> Dict[str, Any]:
             "control_markers": [asdict(m) for m in song.control_markers],
             "segue": song.segue,
             "segue_time": song.segue_time,
+            "enabled": song.enabled,
             "cache": dict(song.cache),
         })
     return {
@@ -110,6 +111,7 @@ def show_from_manifest(root: Path, data: Dict[str, Any]) -> Show:
             segue=bool(entry.get("segue", False)),
             segue_time=Config._validate_float(
                 entry.get("segue_time", 0.0), 0.0, 36000.0),
+            enabled=bool(entry.get("enabled", True)),
             cache=entry["cache"] if isinstance(entry.get("cache"), dict) else {},
         ))
 
