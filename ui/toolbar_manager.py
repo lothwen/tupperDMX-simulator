@@ -90,6 +90,7 @@ class ToolbarManager(QObject):
     next_song_requested = pyqtSignal()
     new_song_requested = pyqtSignal()     # append an empty song to the setlist
     playlist_requested = pyqtSignal()     # open the playlist manager
+    auto_program_requested = pyqtSignal()  # open the auto program
     song_selected = pyqtSignal(int)  # setlist combobox picked a song by index
     # Application menu signals
     settings_requested = pyqtSignal()
@@ -803,6 +804,10 @@ class ToolbarManager(QObject):
         menu = QMenu(button)
         menu.setToolTipsVisible(True)
         self._add_compact_actions(menu)
+        auto_action = menu.addAction(icons.icon("bolt"), "Auto program…")
+        auto_action.setToolTip("Generate a song's light show from its audio")
+        auto_action.triggered.connect(self.auto_program_requested.emit)
+        menu.addSeparator()
         self._add_version_actions(menu)
         # The stage's own dock button leaves with the stage, so this is the way
         # back when its window ends up on a display that is no longer there.

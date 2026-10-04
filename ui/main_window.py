@@ -29,6 +29,7 @@ from timeline.manager import Timeline
 from tupperlogger import get_logger
 from ui.widgets import icons
 from ui.about_dialog import AboutDialog
+from ui.autoprogram_dialog import AutoProgramDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
@@ -268,6 +269,8 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
         self.toolbar_manager.new_song_requested.connect(self.playlist_controller.add_empty_song)
         self.toolbar_manager.playlist_requested.connect(self.playlist_controller.open_manager)
+        self.toolbar_manager.auto_program_requested.connect(self.open_auto_program)
+        self.app_core.autoprogrammer.applied.connect(self._on_auto_program_applied)
         self.toolbar_manager.song_selected.connect(self.playlist_controller.go_to_song)
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
@@ -1651,6 +1654,28 @@ class MainWindow(QMainWindow):
                 self, "Snapshot", str(e), "a writable show folder")
             return
         self._refresh_versions_ui()
+
+    def open_auto_program(self):
+        """The auto program, on the loaded song first. Modal; a show opened
+        meanwhile (the web remote can) closes it, as it does the playlist
+        manager — its songs would be the old show's."""
+        dialog = AutoProgramDialog(self.app_core.autoprogrammer,
+                                   self.config.playlist.songs,
+                                   self.config.get_current_song(), self)
+        self.app_core.show_reloaded.connect(dialog.reject)
+        dialog.exec()
+        self.app_core.show_reloaded.disconnect(dialog.reject)
+        dialog.deleteLater()
+
+    def _on_auto_program_applied(self, song, current):
+        """A take became `song`'s program: the loaded song's timeline shows
+        the document AutoProgrammer reloaded, as after loading a .mid."""
+        if not current:
+            return
+        self.timeline.refresh_from_manager(detect_bpm=True)
+        self.toolbar_manager.update_midi_file_display(song.midi)
+        self.toolbar_manager.set_export_midi_enabled(True)
+        self.update_window_title()
 
     def _refresh_versions_ui(self):
         """Repopulate the ☰ menu's Restore submenu from disk."""

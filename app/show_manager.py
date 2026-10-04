@@ -272,6 +272,24 @@ class ShowManager(QObject):
         self.notify_changed()
         return True
 
+    def write_song_midi(self, song: SongConfig, source: str, bpm: int) -> None:
+        """Make the .mid at `source` the song's sequence: copied onto its
+        owned path (allocated when it has none), the setlist cache and the
+        manifest refreshed. For a song whose .mid is not loaded, or for the
+        current one right before it is reloaded from the file — flushed
+        first, or the autosave writes the old program back over it."""
+        if self.show is None:
+            return
+        if not song.midi:
+            if song is self.config.get_current_song():
+                self.allocate_song_midi(song)
+            else:
+                # Not allocate_song_midi: its signal speaks for the CURRENT song.
+                song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        shutil.copyfile(source, song.midi)
+        self._update_song_cache(song, bpm)
+        self.notify_changed()
+
     def _create_untitled_song(self) -> SongConfig:
         song = SongConfig(id=str(uuid.uuid4()), title="Untitled")
         self.config.playlist.songs.append(song)

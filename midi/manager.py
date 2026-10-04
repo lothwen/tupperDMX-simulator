@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any, Iterable, Tuple
 from contextlib import contextmanager
+import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
 import copy
@@ -85,6 +86,8 @@ class MidiManager(QObject):
         self._restoring: bool = False
         self._batching: bool = False
         self._batch_dirty: bool = False
+        self._bulk: bool = False
+        self._bulk_dirty: bool = False
 
         # In-memory clip clipboard (list of unit payloads). See copy_selection.
         self._clipboard: List[Dict[str, Any]] = []
@@ -607,6 +610,44 @@ class MidiManager(QObject):
             if self._batch_dirty and not self._restoring:
                 self._push_history()
 
+    @contextmanager
+    def bulk_edit(self):
+        """Many edits as one undo step, with the work each edit otherwise
+        repeats done once, when the block ends: rebuilding the .mid,
+        refreshing the worker, notifying data_changed and re-deriving the
+        fade ramps of every lane an edit touched. For authoring at scale —
+        the auto program places thousands of clips, where that per-edit work
+        costs minutes.
+
+        Inside the block the document's event lists are exact; midi_data, and
+        the file length song_end_time() reads from it, stay as the block found
+        them. A scene's fade setter still writes its own ramp at once.
+
+        The editors' line per edit is held back to warnings: it narrates a
+        hand edit, and a block authors thousands. Their loggers are swapped on
+        this manager alone, so another manager's edits still log meanwhile.
+        """
+        if self._bulk:
+            yield
+            return
+        self._bulk, self._bulk_dirty = True, False
+        editors = (self._clips, self._scenes, self._selection)
+        loggers = [editor.logger for editor in editors]
+        for editor, logger in zip(editors, loggers):
+            editor.logger = get_logger(f"{logger.name}.bulk")
+            editor.logger.setLevel(logging.WARNING)
+        self._fades.defer_lanes()
+        with self.history_batch():
+            try:
+                yield
+            finally:
+                self._bulk = False
+                for editor, logger in zip(editors, loggers):
+                    editor.logger = logger
+                self._fades.regenerate_deferred()
+                if self._bulk_dirty:
+                    self._commit()
+
     # ------------------------------------------------------------------
     # Clip clipboard — copy/paste of clips and scene groups
     # ------------------------------------------------------------------
@@ -759,6 +800,9 @@ class MidiManager(QObject):
 
     def _commit(self) -> None:
         """Final step of any mutation: rebuild MIDI, push to worker, notify."""
+        if self._bulk:
+            self._bulk_dirty = True          # bulk_edit() does all of it once, at its end
+            return
         self._rebuild_midi_data()
         self._auto_update_worker()
         self.data_changed.emit()

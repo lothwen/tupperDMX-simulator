@@ -13,6 +13,8 @@ Covers the fade ramp math and the scene fade setters:
   * a fade-out stops short of the right edge so it can't overwrite the clip
     that starts there
   * a fade-out follows its clip's right edge when a NEIGHBOUR moves it
+  * bulk_edit() does the per-edit work once, at its end, and ends where the
+    same edits one by one would
   * ramps round-trip through the .mid without leaking back in as clips
 
 Locks current fade behavior before the collaborator-object refactor.
@@ -292,6 +294,43 @@ def test_fade_out_follows_a_neighbours_arrival():
             f"…and still sits in the last half second (got {after:.3f})")
 
 
+def test_bulk_edit_does_the_work_once():
+    """bulk_edit() defers what every edit repeats — the .mid rebuild, the
+    notification, the lane's ramps — to the block's end, and ends where the
+    same edits one by one end: a neighbour arriving inside the block still
+    moves the fade-out behind it, and the whole block is one undo step."""
+    print("test_bulk_edit_does_the_work_once")
+
+    def edits(m):
+        g = m.add_scene(1.0, SCENE_CH, "A", channel=LEDBAR_CH)
+        m.set_scene_fade_out(g, 0.5)
+        m.add_scene(9.0, dict(SCENE_CH, red=200), "B", channel=LEDBAR_CH)
+        return g
+
+    def ramps(m):
+        return sorted((n["time"], n["velocity"]) for n in m.midi_notes if n.get("is_fade"))
+
+    one_by_one = _make_manager()
+    edits(one_by_one)
+
+    m = _make_manager()
+    changed = []
+    m.data_changed.connect(lambda: changed.append(1))
+    with m.bulk_edit():
+        g = edits(m)
+        _assert(not changed, "nothing is announced inside the block")
+        _assert(len(m.midi_data.tracks[0]) == len(_make_manager().midi_data.tracks[0]),
+                "the .mid is not rebuilt inside the block")
+    _assert(len(changed) == 1, f"the block ends with one notification (got {len(changed)})")
+    _assert(max(n["time"] for n in _fade_notes(m, g)) < 9.0,
+            "the neighbour that arrived in the block moved the fade-out")
+    _assert(ramps(m) == ramps(one_by_one), "the ramps are those of the same edits one by one")
+    _assert(m.midi_data.length == one_by_one.midi_data.length,
+            "the .mid is rebuilt at the end")
+    m.undo()
+    _assert(not m.midi_events and not m.midi_notes, "one undo takes the whole block back")
+
+
 def test_ramps_roundtrip_without_leaking_back_as_clips():
     """Ramp notes are stripped from the timeline on load and re-derived, so a
     save/load cycle is a fixed point: no clip count growth, no doubled ramps."""
@@ -338,6 +377,7 @@ def main():
     test_indexed_verb_never_fades()
     test_fade_out_does_not_overwrite_the_next_clip()
     test_fade_out_follows_a_neighbours_arrival()
+    test_bulk_edit_does_the_work_once()
     test_ramps_roundtrip_without_leaking_back_as_clips()
     print("\nALL TESTS PASSED")
 

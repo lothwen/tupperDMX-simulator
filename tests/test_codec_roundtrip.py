@@ -162,10 +162,62 @@ def test_scene_fade_roundtrip():
     _assert(abs(rfout - 1.5) < 0.11, f"fade_out survived round-trip (~1.5, got {rfout:.3f})")
 
 
+def _edit_and_roundtrip(m, k):
+    """An unrelated edit, then a save and a reload: the edit is what rebuilds
+    the file from midi_notes, which a bare re-export of a loaded file never
+    does."""
+    m.add_event(BLINDER_CLIP, 200.0 + k, 100, channel=BLINDER_CH)
+    return _roundtrip(m)
+
+
+def test_dense_track_keeps_its_timing():
+    """A late event is still where it was after several saves.
+
+    Each delta used to be truncated to whole ticks with nothing carrying the
+    remainder, so a dense track crept earlier — by a quarter of a second over
+    a minute of 16ths — and again on every save, since float error turns an
+    exact 48 ticks back into 47.999."""
+    print("test_dense_track_keeps_its_timing")
+    m = _make_manager()
+    step = 60.0 / 138 / 4                       # a 16th at 138 BPM
+    times = [round(k * step, 4) for k in range(400)]
+    for t in times:
+        m.add_event(BLINDER_CLIP, t, 100, channel=BLINDER_CH)
+
+    for k in range(3):
+        m = _edit_and_roundtrip(m, k)
+    after = sorted(e["time"] for e in m.midi_events if e["time"] < 100.0)
+    _assert(len(after) == len(times), f"all {len(times)} clips survived three saves")
+    worst = max(abs(a - b) for a, b in zip(after, times))
+    # One tick at the file's 120 BPM is ~1.04 ms: rounding may cost half of it.
+    _assert(worst < 0.001, f"no clip moved more than 1 ms (worst {worst * 1000:.2f} ms)")
+
+
+def test_faded_scene_keeps_its_dimmer_across_saves():
+    """A fade-in's ramp starts ON the scene's own dimmer note, so the file
+    carries two overlapping notes with the same channel and pitch. Pairing
+    note-offs by key alone let the ramp's note take the scene's slot, and the
+    next save wrote the scene without its dimmer — a dark clip."""
+    print("test_faded_scene_keeps_its_dimmer_across_saves")
+    m = _make_manager()
+    g = m.add_scene(2.0, SCENE_CH, "Faded", channel=LEDBAR_CH)
+    m.add_event(BLINDER_CLIP, 6.0, 100, channel=BLINDER_CH)
+    m.set_scene_fade_in(g, 1.0)
+
+    for k in range(3):
+        m = _edit_and_roundtrip(m, k)
+    dimmer = [e for e in m.midi_events
+              if e.get("group_id") and e["note"] == 1]
+    _assert(len(dimmer) == 1, "the scene still has its dimmer after three saves")
+    _assert(dimmer[0]["velocity"] == 127, "at the scene's own level")
+
+
 def main():
     test_single_clips_and_blackouts_roundtrip()
     test_scene_group_roundtrip()
     test_scene_fade_roundtrip()
+    test_dense_track_keeps_its_timing()
+    test_faded_scene_keeps_its_dimmer_across_saves()
     print("\nALL TESTS PASSED")
 
 

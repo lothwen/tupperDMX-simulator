@@ -1,81 +1,93 @@
-#!/usr/bin/env python3
-"""Play a WAV file while printing live audio analysis to the console.
-
-Standalone R&D prototype for the Fase 6 auto-lights direction (hand-rolled
-numpy/scipy DSP, no app integration whatsoever):
+# ABOUTME: The causal (live) audio analysers — envelope followers, onsets,
+# ABOUTME: tempo, a beat oscillator, a section tracker — the 3-band filterbank
+# ABOUTME: they read, and bench(), the console that prints them live. Qt-free.
+"""Audio analysis that runs frame by frame, as a live input would need it.
 
   * energy            total + 3-band IIR filterbank (bass/mid/high) with
                       asymmetric attack/release envelope followers
   * onsets            spectral flux + adaptive median threshold peak picking
   * tempo (BPM)       autocorrelation of the onset envelope, log-BPM prior
   * beat phase        phase-locked oscillator nudged by onsets (prediction)
-  * brightness        spectral centroid
   * sections          QUIET/GROOVE/PEAK state machine on short-vs-long-term
                       energy ratio, with hysteresis + dwell
 
-Playback goes through the first external player found (pw-play / paplay /
-aplay / ffplay); the analysis loop is paced against the wall clock so the
-console events line up with what you hear.
-
-Usage:
-    uv run python scripts/play_analyze_wav.py path/to/song.wav
-    uv run python scripts/play_analyze_wav.py song.wav --no-audio   # silent, full speed
+analysis.py runs these over a whole recording and then reads the song at once;
+bench() prints them live while a file plays (scripts/autoprogram_cli.py live).
 """
 
-import argparse
 import shutil
 import subprocess
 import time
 from collections import deque
 
 import numpy as np
-from scipy import signal
-from scipy.io import wavfile
 
 FRAME = 1024            # STFT window (~23 ms @ 44.1 kHz)
 HOP = 512               # analysis hop (~12 ms @ 44.1 kHz)
 BPM_MIN, BPM_MAX = 40.0, 300.0   # same clamp BpmState uses
-STATUS_EVERY = 1.0      # seconds between status lines
-
-GRAY, BOLD, CYAN, YELLOW, RESET = "\033[90m", "\033[1m", "\033[36m", "\033[33m", "\033[0m"
-BLOCKS = " ▁▂▃▄▅▆▇█"
-
-PLAYERS = [
-    ("pw-play", []),
-    ("paplay", []),
-    ("aplay", ["-q"]),
-    ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet"]),
-]
+FFT_SIZE = 1 << 20      # the filterbank filters FFT_SIZE / 2 samples per FFT; the
+                        # other half holds the filter's ring (~0.1 s), many times over
 
 
-def meter(x):
-    x = min(max(x, 0.0), 1.0)
-    return BLOCKS[round(x * (len(BLOCKS) - 1))]
+def filterbank(sr, mono):
+    """``[bass, mid, high]``: `mono` through the 4th-order Butterworth
+    low-pass at 120 Hz, band-pass 120-2000 Hz and high-pass at 2 kHz — causal,
+    so the whole signal at once is what a streamed filter gives."""
+    return [_filter(mono, butterworth(4, cutoff, kind, sr))
+            for cutoff, kind in ((120, "lowpass"), ((120, 2000), "bandpass"), (2000, "highpass"))]
 
 
-def load_wav(path):
-    sr, data = wavfile.read(path)
-    if data.dtype.kind == "i":
-        data = data.astype(np.float32) / np.iinfo(data.dtype).max
-    elif data.dtype.kind == "u":            # 8-bit WAV is unsigned
-        data = (data.astype(np.float32) - 128.0) / 128.0
+def butterworth(order, cutoff, kind, rate):
+    """``(zeros, poles, gain)`` of the digital Butterworth filter — what
+    scipy.signal.butter(order, cutoff, kind, fs=rate) designs: the analog
+    prototype moved to the prewarped `cutoff` (a (low, high) pair for a
+    "bandpass"), then through the bilinear transform. `kind` is "lowpass",
+    "highpass" or "bandpass"."""
+    poles = -np.exp(1j * np.pi * np.arange(1 - order, order, 2) / (2 * order))
+    zeros = np.zeros(0, complex)
+    gain = 1.0
+    # the analog edge(s), for a sampling rate normalised to 2
+    warped = 4.0 * np.tan(np.pi * np.asarray(cutoff, dtype=float) / rate)
+    if kind == "lowpass":
+        poles, gain = poles * warped, gain * warped ** order
+    elif kind == "highpass":
+        gain = gain * np.real(1 / np.prod(-poles))
+        poles, zeros = warped / poles, np.zeros(order, complex)
+    elif kind == "bandpass":
+        width, centre = warped[1] - warped[0], np.sqrt(warped[0] * warped[1])
+        half = poles * width / 2
+        poles = np.concatenate((half + np.sqrt(half ** 2 - centre ** 2),
+                                half - np.sqrt(half ** 2 - centre ** 2)))
+        zeros, gain = np.zeros(order, complex), gain * width ** order
     else:
-        data = data.astype(np.float32)
-    mono = data.mean(axis=1) if data.ndim == 2 else data
-    peak = float(np.abs(mono).max())
-    if peak > 0:                            # normalize so meters/thresholds compare across files
-        mono = mono / peak
-    return sr, mono
+        raise ValueError(f"unknown filter kind {kind!r}")
+    # bilinear transform; the zeros at infinity land on -1 (Nyquist)
+    gain = gain * np.real(np.prod(4.0 - zeros) / np.prod(4.0 - poles))
+    zeros = np.concatenate(((4.0 + zeros) / (4.0 - zeros), -np.ones(len(poles) - len(zeros))))
+    poles = (4.0 + poles) / (4.0 - poles)
+    return zeros, poles, gain
 
 
-def start_player(path):
-    for name, args in PLAYERS:
-        exe = shutil.which(name)
-        if exe:
-            proc = subprocess.Popen([exe, *args, path],
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return proc, name
-    return None, None
+def _filter(x, zpk) -> np.ndarray:
+    """`x` (float64) through the causal filter `zpk`, as a sample-by-sample
+    IIR from rest gives it: overlap-add of FFT_SIZE / 2 samples a block,
+    each block's ring carried into the next. A response sampled on FFT_SIZE
+    points is the impulse response folded every FFT_SIZE samples, which is
+    the filter itself while its ring dies out well within half of that."""
+    zeros, poles, gain = zpk
+    e = np.exp(2j * np.pi * np.arange(FFT_SIZE // 2 + 1) / FFT_SIZE)
+    response = np.full(len(e), gain, dtype=complex)
+    for z in zeros:
+        response *= e - z
+    for p in poles:
+        response /= e - p
+    block = FFT_SIZE // 2
+    out = np.zeros(len(x) + FFT_SIZE)
+    for start in range(0, len(x), block):
+        chunk = np.asarray(x[start:start + block], dtype=np.float64)
+        out[start:start + FFT_SIZE] += np.fft.irfft(np.fft.rfft(chunk, FFT_SIZE) * response,
+                                                    FFT_SIZE)
+    return out[:len(x)]
 
 
 class EnvFollower:
@@ -244,23 +256,50 @@ class SectionTracker:
         return change
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("wav", help="path to a WAV file")
-    ap.add_argument("--no-audio", action="store_true",
-                    help="skip playback and run the analysis at full speed")
-    args = ap.parse_args()
+# ---------------------------------------------------------------------------
+# The console bench: the analysers printed live while a file plays
+# ---------------------------------------------------------------------------
+STATUS_EVERY = 1.0      # seconds between status lines
 
-    sr, mono = load_wav(args.wav)
+GRAY, BOLD, CYAN, YELLOW, RESET = "\033[90m", "\033[1m", "\033[36m", "\033[33m", "\033[0m"
+BLOCKS = " ▁▂▃▄▅▆▇█"
+
+PLAYERS = [
+    ("pw-play", []),
+    ("paplay", []),
+    ("aplay", ["-q"]),
+    ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet"]),
+]
+
+
+def _meter(x):
+    x = min(max(x, 0.0), 1.0)
+    return BLOCKS[round(x * (len(BLOCKS) - 1))]
+
+
+def _start_player(path):
+    for name, args in PLAYERS:
+        exe = shutil.which(name)
+        if exe:
+            proc = subprocess.Popen([exe, *args, path],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return proc, name
+    return None, None
+
+
+def bench(path, sr, mono, play=True):
+    """Print the analysers' onsets, tempo changes, beats, section changes and
+    a status line a second over `mono`, the samples of the file at `path`.
+    With `play` the file plays through the first external player found
+    (pw-play / paplay / aplay / ffplay) and the frames are paced against the
+    wall clock, so the console lines up with what you hear; without, it runs
+    silent at full speed."""
     fps = sr / HOP
-    print(f"{args.wav}: {sr} Hz, {len(mono) / sr:.1f} s  "
+    print(f"{path}: {sr} Hz, {len(mono) / sr:.1f} s  "
           f"(frame {FRAME}, hop {HOP}, {fps:.1f} analysis fps)")
 
-    # 3-band causal IIR filterbank over the whole signal (identical to streamed sosfilt)
-    sos = [signal.butter(4, 120, "lowpass", fs=sr, output="sos"),
-           signal.butter(4, [120, 2000], "bandpass", fs=sr, output="sos"),
-           signal.butter(4, 2000, "highpass", fs=sr, output="sos")]
-    bands = [signal.sosfilt(s, mono) for s in sos]
+    # 3-band causal IIR filterbank over the whole signal (identical to streamed filtering)
+    bands = filterbank(sr, mono)
 
     onset_det = OnsetDetector(fps)
     tempo_est = TempoEstimator(fps)
@@ -272,8 +311,8 @@ def main():
     centroid_sm = 0.0
 
     player = None
-    if not args.no_audio:
-        player, name = start_player(args.wav)
+    if play:
+        player, name = _start_player(path)
         if player:
             print(f"playing via {name}\n")
         else:
@@ -290,7 +329,7 @@ def main():
             pos = i * HOP
             t = (pos + FRAME / 2) / sr
 
-            if not args.no_audio:
+            if play:
                 delay = t - (time.perf_counter() - start)
                 if delay > 0:
                     time.sleep(delay)
@@ -314,7 +353,7 @@ def main():
                 ot, strength = onset
                 n_onsets += 1
                 pll.on_onset(ot)
-                print(f"{GRAY}{ot:7.2f}s  onset  {meter(strength / 8)}  x{strength:.1f}{RESET}")
+                print(f"{GRAY}{ot:7.2f}s  onset  {_meter(strength / 8)}  x{strength:.1f}{RESET}")
 
             if t - last_tempo >= 0.5:
                 last_tempo = t
@@ -339,9 +378,9 @@ def main():
             if t - last_status >= STATUS_EVERY:
                 last_status = t
                 bpm_s = f"{bpm:6.1f} BPM ({conf:.2f})" if bpm else "    --"
-                print(f"{t:7.2f}s  status  E {meter(e_total * 3)}  "
-                      f"bass {meter(e_bands[0] * 3)} mid {meter(e_bands[1] * 3)} "
-                      f"high {meter(e_bands[2] * 3)}  bright {centroid_sm / 1000:4.1f} kHz  "
+                print(f"{t:7.2f}s  status  E {_meter(e_total * 3)}  "
+                      f"bass {_meter(e_bands[0] * 3)} mid {_meter(e_bands[1] * 3)} "
+                      f"high {_meter(e_bands[2] * 3)}  bright {centroid_sm / 1000:4.1f} kHz  "
                       f"{bpm_s}  {sections.state}")
     except KeyboardInterrupt:
         print("\ninterrupted")
@@ -352,7 +391,3 @@ def main():
     tempo_s = f"{bpm:.1f} BPM (conf {conf:.2f})" if bpm else "undetected"
     print(f"\ndone: {n_onsets} onsets, {n_beats} beats, tempo {tempo_s}, "
           f"final section {sections.state}")
-
-
-if __name__ == "__main__":
-    main()

@@ -3677,3 +3677,551 @@ QDialog#ImportSongsDialog QPushButton#ImportConfirm:disabled {
     color: #6a7a82;
     border-color: #35424a;
 }
+
+
+/* ============================================================
+   AUTO PROGRAM (ui/autoprogram_dialog.py)
+   The playlist manager's family: #262626 body, #1f1f1f footer and
+   rails, #232323 tables, #3a3a3a hairlines, the #79cdf0 accent,
+   #d9a13b warnings, #e05252 / #ff8a8a errors. Buttons are scoped
+   to the dialog so the generic `QDialog QPushButton` gradient
+   loses; the replace confirmation is the dialog's child, so the
+   same rules reach it. Letter spacing is set in Python (QSS has no
+   property for it); the song map, role chips and step / notice
+   icons are painted, with these same colours.
+   ============================================================ */
+QDialog#AutoProgramDialog,
+QDialog#AutoProgramConfirm {
+    background-color: #262626;
+}
+
+QDialog#AutoProgramDialog {
+    min-width: 760px;
+    min-height: 520px;
+}
+
+/* Every label's default; as specific as `QLabel#Name`, so the
+   named rules below (later in the sheet) win. */
+#AutoProgramDialog QLabel {
+    color: #dcdcdc;
+    font-size: 12px;
+}
+
+QLabel#AutoProgramCaption {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+/* Song and palette */
+QDialog#AutoProgramDialog QComboBox {
+    background-color: #2f2f2f;
+    color: #dcdcdc;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 8px;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QComboBox:hover {
+    border-color: #555555;
+}
+
+QDialog#AutoProgramDialog QComboBox:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QComboBox::drop-down {
+    width: 16px;
+    padding-right: 4px;
+}
+
+QDialog#AutoProgramDialog QComboBox::down-arrow {
+    width: 10px;
+    height: 10px;
+}
+
+/* A custom palette's colours: the fill is each swatch's own */
+QPushButton#AutoProgramSwatch {
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+}
+
+QPushButton#AutoProgramSwatch:hover {
+    border-color: #79cdf0;
+}
+
+/* Audio to analyse: two segments sharing one seam */
+QPushButton#AutoProgramTrack {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    padding: 0px;
+}
+
+QPushButton#AutoProgramTrack[seg="left"] {
+    border-top-left-radius: 3px;
+    border-bottom-left-radius: 3px;
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+}
+
+QPushButton#AutoProgramTrack[seg="right"] {
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+    border-top-left-radius: 0px;
+    border-bottom-left-radius: 0px;
+}
+
+QPushButton#AutoProgramTrack:hover {
+    background-color: #353535;
+}
+
+QPushButton#AutoProgramTrack:checked {
+    background-color: #3a5a67;
+    border-color: #5fb4d8;
+}
+
+QPushButton#AutoProgramTrack:disabled {
+    background-color: #2a2a2a;
+    border-color: #333333;
+}
+
+QLabel#AutoProgramTrackName {
+    color: #cfcfcf;
+    font-weight: 600;
+}
+
+QLabel#AutoProgramTrackFile {
+    color: #9a9a9a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramTrackName[state="on"] {
+    color: #ffffff;
+}
+
+QLabel#AutoProgramTrackFile[state="on"] {
+    color: #c4dde8;
+}
+
+QLabel#AutoProgramTrackName[state="disabled"] {
+    color: #5a5a5a;
+}
+
+QLabel#AutoProgramTrackFile[state="disabled"] {
+    color: #4f4f4f;
+}
+
+/* The Advanced toggle and its panel */
+QToolButton#AutoProgramAdvanced {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+}
+
+QToolButton#AutoProgramAdvanced:hover {
+    background-color: #353535;
+}
+
+QToolButton#AutoProgramAdvanced:checked {
+    background-color: #3a5a67;
+    border-color: #5fb4d8;
+}
+
+QLabel#AutoProgramAdvancedText {
+    color: #cfcfcf;
+}
+
+QLabel#AutoProgramAdvancedText[state="open"] {
+    color: #ffffff;
+}
+
+QLabel#AutoProgramAdvancedCount {
+    color: #79cdf0;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramAdvancedArrow {
+    color: #9a9a9a;
+    font-size: 9px;
+}
+
+QFrame#AutoProgramAdvancedPanel {
+    background-color: #232323;
+    border: 1px solid #3a3a3a;
+}
+
+QLabel#AutoProgramGroupNote,
+QLabel#AutoProgramPaceReadout {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+/* The Feel slider's names, as Settings' (the dialog's label default above
+   would otherwise light them all). */
+#AutoProgramDialog QLabel#SliderTickLabel {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+#AutoProgramDialog QLabel#SliderTickLabel[active="true"] {
+    color: #e0e0e0;
+}
+
+QLabel#AutoProgramFieldLabel {
+    color: #9a9a9a;
+}
+
+QLabel#AutoProgramFieldLabel[changed="true"] {
+    color: #dcdcdc;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField {
+    background-color: #1f1f1f;
+    color: #dcdcdc;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 2px 0px 6px;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField[changed="true"] {
+    border-color: #5fb4d8;
+    color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button {
+    subcontrol-origin: border;
+    width: 14px;
+    background-color: transparent;
+    border: none;
+    border-left: 1px solid #3f3f3f;
+    padding: 0px;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button {
+    subcontrol-position: top right;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button {
+    subcontrol-position: bottom right;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button:hover,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button:hover {
+    background-color: #2f2f2f;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-arrow,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-arrow {
+    width: 8px;
+    height: 8px;
+}
+
+QFrame#AutoProgramDivider {
+    background-color: #3a3a3a;
+    border: none;
+}
+
+/* The summary strip */
+QFrame#AutoProgramSummary {
+    border: none;
+    border-top: 1px solid #3a3a3a;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+QLabel#AutoProgramSummaryKey {
+    color: #8a8a8a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummaryValue {
+    color: #dcdcdc;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummarySub {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummaryValue[state="warn"],
+QDialog#AutoProgramDialog QLabel#AutoProgramSummarySub[state="warn"] {
+    color: #d9a13b;
+}
+
+/* Notices: warnings and errors, never selectable */
+QListWidget#AutoProgramNotices {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: 1px solid #3a3a3a;
+    font-size: 12px;
+    outline: none;
+}
+
+QListWidget#AutoProgramNotices::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 8px;
+}
+
+/* The song map, and the progress shown in its place */
+QFrame#AutoProgramMapFrame {
+    border: 1px solid #3a3a3a;
+    background-color: #1a1a1a;
+}
+
+QFrame#AutoProgramProgressPanel {
+    border: 1px solid #3a3a3a;
+    background-color: #1a1a1a;
+}
+
+QLabel#AutoProgramStep {
+    color: #7a7a7a;
+}
+
+QLabel#AutoProgramStep[state="now"] {
+    color: #dcdcdc;
+}
+
+QLabel#AutoProgramStep[state="done"] {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramStepTime {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramProgressText {
+    color: #9a9a9a;
+}
+
+QProgressBar#AutoProgramProgress {
+    background-color: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 0px;
+    padding: 1px;
+}
+
+QProgressBar#AutoProgramProgress::chunk {
+    background-color: #79cdf0;
+}
+
+/* Nothing to show: no audio, a failed or cancelled analysis */
+QFrame#AutoProgramErrorPanel {
+    background-color: #232323;
+    border: 1px solid #3a3a3a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorMark {
+    background-color: #e05252;
+    color: #1f1f1f;
+    border-radius: 18px;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorTitle {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QLabel#AutoProgramErrorBody {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorDetail {
+    color: #9a9a9a;
+    background-color: #1f1f1f;
+    border: 1px solid #333333;
+    padding: 6px 10px;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+/* Sections and fixtures */
+QLabel#AutoProgramTableCaption {
+    color: #9a9a9a;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramTableCount {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramTableEmpty {
+    color: #7a7a7a;
+}
+
+QTableWidget#AutoProgramSections,
+QTableWidget#AutoProgramFixtures {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: 1px solid #3a3a3a;
+    font-size: 12px;
+    outline: none;
+}
+
+/* With the style's own 3px text margin, text starts 8px into its column
+   (the mock's row padding) and keeps 5px clear of the next. */
+QTableWidget#AutoProgramSections::item,
+QTableWidget#AutoProgramFixtures::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 2px 0px 5px;
+}
+
+QTableWidget#AutoProgramSections QHeaderView::section,
+QTableWidget#AutoProgramFixtures QHeaderView::section {
+    background-color: #1f1f1f;
+    color: #7a7a7a;
+    border: none;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 0px 5px 0px 8px;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+QTableWidget#AutoProgramSections QScrollBar:vertical,
+QTableWidget#AutoProgramFixtures QScrollBar:vertical,
+QListWidget#AutoProgramNotices QScrollBar:vertical {
+    background-color: #1f1f1f;
+    width: 8px;
+}
+
+QTableWidget#AutoProgramSections QScrollBar::handle:vertical,
+QTableWidget#AutoProgramFixtures QScrollBar::handle:vertical,
+QListWidget#AutoProgramNotices QScrollBar::handle:vertical {
+    background-color: #4a4a4a;
+    border-radius: 3px;
+    margin: 2px 1px;
+    min-height: 20px;
+}
+
+/* The footer */
+QFrame#AutoProgramFooter,
+QFrame#AutoProgramConfirmFooter {
+    background-color: #1f1f1f;
+    border: none;
+    border-top: 1px solid #3a3a3a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramStats {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramNote[state="busy"] {
+    color: #9a9a9a;
+}
+
+QLabel#AutoProgramNote[state="error"] {
+    color: #ff8a8a;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 0px 18px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary:disabled {
+    background-color: #2f4552;
+    color: #6f8b99;
+    border-color: #3a5a67;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 14px;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary:disabled {
+    background-color: #2a2a2a;
+    color: #5a5a5a;
+    border-color: #333333;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramReset {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 10px;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramReset:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+/* The replace confirmation */
+QDialog#AutoProgramConfirm QPushButton#AutoProgramSecondary:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramDestructive {
+    background-color: #262626;
+    color: #ff8a8a;
+    border: 1px solid #a04040;
+    border-radius: 3px;
+    padding: 0px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramDestructive:hover {
+    background-color: rgba(120, 40, 40, 200);
+    color: #ffffff;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmHeading {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmCaption {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmCaption[state="replaced"] {
+    color: #ff8a8a;
+}
+
+QLabel#AutoProgramConfirmItem[state="kept"] {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmInfo {
+    color: #9a9a9a;
+    background-color: #232323;
+    border: 1px solid #333333;
+    padding: 8px 10px;
+}

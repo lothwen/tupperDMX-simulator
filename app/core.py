@@ -7,6 +7,7 @@ import threading
 import mido
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from app.autoprogram import AutoProgrammer
 from app.bpm import BpmState
 from app.media_controller import MediaController
 from app.metronome import Metronome
@@ -129,6 +130,8 @@ class AppCore(QObject):
         self.bpm_state.set_tempo_changes([])  # seed both controllers
 
         self.playlist_controller = PlaylistCore(self)
+        # A song's show generated from its audio (desktop only; idle until asked).
+        self.autoprogrammer = AutoProgrammer(self)
 
         # The running software controller (None until DMXManager spawns one),
         # and the patch signature it was last handed (see on_patch_edited).
@@ -735,6 +738,7 @@ class AppCore(QObject):
         # Stop playback and cleanup components — guard each so one failure
         # doesn't abort the rest of the shutdown.
         for name, cleanup in (
+            ("autoprogrammer", self.autoprogrammer.cleanup),
             ("webremote_manager", self.webremote_manager.cleanup),
             ("media_controller", self.media_controller.cleanup),
             ("metronome", self.metronome.cleanup),

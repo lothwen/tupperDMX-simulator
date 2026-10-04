@@ -62,15 +62,16 @@ def hsl_to_rgb(h, s, l):
     return round(r * 255), round(g * 255), round(b * 255)
 
 
-def generate_song_colors(mode, hue_index, FromDialog=False):
-    """Build a palette for the given mode and hue index.
+def generate_song_colors(mode, hue_index, FromDialog=False, rng=random):
+    """Build a palette for the given mode and hue index; `rng` draws the
+    hue of a random one.
 
     When ``FromDialog`` is True the function returns None
     """
     if hue_index >= 12:
         if FromDialog:
             return None
-        hue = random.randint(0, 360)
+        hue = rng.randint(0, 360)
     else:
         hue = RAINBOW_HUE_12[hue_index % len(RAINBOW_HUE_12)] * 360
 
@@ -277,9 +278,15 @@ class Fixture:
 
 
 class DMXController:
-    def __init__(self, fixtures=None):
+    def __init__(self, fixtures=None, clock=time.time, rng=random):
+        """`clock` gives the seconds every timer runs on and `rng` the random
+        palette, chase and song-part picks: an offline replay passes a
+        simulated clock and a seeded generator of its own, so it never
+        touches a controller running live in the same process."""
         self.logger = get_logger("software_controller.main")
         self.lock = threading.Lock()
+        self.clock = clock
+        self.random = rng
 
         # DMX buffers (lean strategy from the branch):
         #   present     - full DMX output buffer (what we send over Art-Net)
@@ -499,7 +506,7 @@ class DMXController:
         s.chase = chase
         step = ft.chases[chase]
         self.load_scene(fx, step['banks'][0], step['scenes'][0])
-        s.last_chase_change = time.time()  # arm the step timer
+        s.last_chase_change = self.clock()  # arm the step timer
 
     def update_chase(self, fx, now):
         s = self.fixtures[fx]
@@ -568,7 +575,7 @@ class DMXController:
         s.color_change_time = color_change_time
         s.is_color_cycling = True
         self.set_fixture_color(fx, palette[start_index])
-        s.last_palette_change = time.time()
+        s.last_palette_change = self.clock()
 
     # ------------------------------------------------------------------
     # Blackouts
@@ -760,7 +767,7 @@ class DMXController:
                     hue_index = velocity // 6
                     palette_mode = velocity % 6
                     s.palette_ptr = generate_song_colors(
-                        PALETTE_MODES[palette_mode], hue_index)
+                        PALETTE_MODES[palette_mode], hue_index, rng=self.random)
                     s.palette_index = 0
                 case 70:                         # load chase (velocity = index)
                     # Runs via update_chase until a later verb/song-part
@@ -801,7 +808,7 @@ class DMXController:
             entries = self.fixtures[fx].type.song_part_program.get(part)
             if not entries:
                 continue
-            entry = random.choice(entries)
+            entry = self.random.choice(entries)
             if entry.is_chase:
                 self.load_chase(fx, entry.index)
             else:
@@ -870,27 +877,44 @@ class DMXController:
                     self._sink_errors.add(id(sink))
                     self.logger.warning(f"DMX sink {sink} failed: {e}")
 
+    def tick_timers(self, now):
+        """The palette and chase timers at `now` (the controller's clock): one
+        pass of the output loop. The caller holds the lock."""
+        # Color palette timers (per fixture: each can run its own palette
+        # at its own color_change_time).
+        for fx in range(self.num_fixtures):
+            s = self.fixtures[fx]
+            if s.is_color_cycling and len(s.palette_ptr) > 1 and \
+               now - s.last_palette_change >= s.color_change_time / 1000.0:
+                i = self.random.randint(16, 48) if s.is_palette_random else 1
+                s.palette_index = (s.palette_index + i) % len(s.palette_ptr)
+                self.set_fixture_color(fx, s.palette_ptr[s.palette_index])
+                s.last_palette_change = now
+
+        # Chase timers
+        for fx in range(self.num_fixtures):
+            self.update_chase(fx, now)
+
+    def tick_frame(self, dt):
+        """One DMX frame, `dt` ms after the last: the blends advanced, and the
+        universe to send — all zero, with nothing blending, while blacked
+        out. The caller holds the lock."""
+        if self.blackout_all_state:
+            return [0] * UNIVERSE_SIZE
+        for fx in range(self.num_fixtures):
+            self.update_blend(fx, dt)
+        # Snapshot while holding the lock so sinks never see a
+        # torn frame (present keeps mutating on the MIDI side).
+        return list(self.present)
+
     def _run_loop(self):
-        last_dmx_update = time.time()
+        last_dmx_update = self.clock()
 
         while self._running:
 
-            current_time = time.time()
+            current_time = self.clock()
             with self.lock:
-                # Color palette timers (per fixture: each can run its own palette
-                # at its own color_change_time).
-                for fx in range(self.num_fixtures):
-                    s = self.fixtures[fx]
-                    if s.is_color_cycling and len(s.palette_ptr) > 1 and \
-                       current_time - s.last_palette_change >= s.color_change_time / 1000.0:
-                        i = random.randint(16, 48) if s.is_palette_random else 1
-                        s.palette_index = (s.palette_index + i) % len(s.palette_ptr)
-                        self.set_fixture_color(fx, s.palette_ptr[s.palette_index])
-                        s.last_palette_change = current_time
-
-                # Chase timers
-                for fx in range(self.num_fixtures):
-                    self.update_chase(fx, current_time)
+                self.tick_timers(current_time)
 
             # DMX Loop
             if current_time - last_dmx_update >= 1.0 / DMX_UPDATE_HZ:
@@ -898,16 +922,7 @@ class DMXController:
                 with self.lock:
                     dt = (current_time - last_dmx_update) * 1000
                     last_dmx_update = current_time
-
-                    if self.blackout_all_state:
-                        data_to_send = [0] * UNIVERSE_SIZE
-                    else:
-                        # Blend logic
-                        for fx in range(self.num_fixtures):
-                            self.update_blend(fx, dt)
-                        # Snapshot while holding the lock so sinks never see a
-                        # torn frame (present keeps mutating on the MIDI side).
-                        data_to_send = list(self.present)
+                    data_to_send = self.tick_frame(dt)
                     sinks = list(self._sinks)
 
                 if data_to_send:

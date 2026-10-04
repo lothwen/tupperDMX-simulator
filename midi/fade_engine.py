@@ -47,6 +47,9 @@ class FadeEngine:
         self._commit = commit
         self._notify_changed = notify_changed
         self.logger = get_logger("midi.fade_engine")
+        # Lanes whose ramps wait for regenerate_deferred() (bulk editing);
+        # None when regenerate_fixture works at once.
+        self._deferred: Optional[set] = None
 
     # --- what a fade rides ---------------------------------------------------
 
@@ -603,9 +606,23 @@ class FadeEngine:
         where it starts — a fade-out is anchored on its clip's RIGHT edge,
         which is a property of its neighbour, not of itself.
         """
+        if self._deferred is not None:
+            self._deferred.add(fixture)
+            return
         owners = self._fade_owners()
         self._rebuild(owners,
                       [key for key, owner in owners.items() if owner == fixture])
+
+    def defer_lanes(self) -> None:
+        """Hold regenerate_fixture's work until regenerate_deferred(): every
+        lane it is asked for is re-derived once, then."""
+        self._deferred = set()
+
+    def regenerate_deferred(self) -> None:
+        fixtures, self._deferred = self._deferred or set(), None
+        if fixtures:
+            owners = self._fade_owners()
+            self._rebuild(owners, [key for key, owner in owners.items() if owner in fixtures])
 
     def clamp_group_to_visible(self, group_id: str) -> None:
         """Shrink fade_in/fade_out values that no longer fit a resized clip.

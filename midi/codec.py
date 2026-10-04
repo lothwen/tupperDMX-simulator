@@ -111,24 +111,27 @@ class MidiCodec:
             # admitted above but never paired with its note_off, and `rebuild`
             # (which writes from midi_notes, not midi_events) would drop it on
             # the next save.
+            #
+            # One key can sound twice at once — a fade-in's ramp starts ON its
+            # scene's own dimmer note — so each key keeps a STACK of open
+            # notes. A single slot let the ramp's note take the scene's place,
+            # and the next save wrote the scene without its dimmer.
             if msg.type == 'note_on' and (msg.velocity > 0
                                           or msg.note in VALUE_BEARING_NOTES):
-                active_notes[(msg.channel, msg.note)] = {
-                    "time": current_time, "velocity": msg.velocity}
+                active_notes.setdefault((msg.channel, msg.note), []).append({
+                    "time": current_time, "velocity": msg.velocity})
             elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
                 key = (msg.channel, msg.note)
-                if key in active_notes:
-                    note_id = str(uuid.uuid4())
-                    start_time = active_notes[key]["time"]
+                if active_notes.get(key):
+                    opened = active_notes[key].pop()
                     doc.midi_notes.append({
-                        "id": note_id,
+                        "id": str(uuid.uuid4()),
                         "note": msg.note,
-                        "time": start_time,
-                        "duration": current_time - start_time,
-                        "velocity": active_notes[key]["velocity"],
+                        "time": opened["time"],
+                        "duration": current_time - opened["time"],
+                        "velocity": opened["velocity"],
                         "channel": msg.channel,
                     })
-                    del active_notes[key]
 
     def rebuild(self, doc) -> None:
         """Rebuild doc.midi_data from doc.midi_events and doc.midi_notes."""
@@ -190,23 +193,26 @@ class MidiCodec:
             # Sort by time, then by is_fade so fade events follow originals
             # at the same timestamp.
             all_events.sort(key=lambda x: (x['time'], x['is_fade']))
-            current_time_seconds = 0
+            # Each delta comes from ROUNDED ABSOLUTE ticks: a delta rounded on
+            # its own leaves its remainder behind, and over thousands of notes
+            # the remainders pile up into audible drift — compounding on every
+            # save, since an exact 48 ticks reads back as 47.999.
+            current_tick = 0
 
             for event in all_events:
-                delta_time_seconds = event['time'] - current_time_seconds
-                delta_ticks = int(mido.second2tick(delta_time_seconds,
-                                                 ticks_per_beat=new_mid.ticks_per_beat,
-                                                 tempo=tempo_microseconds))
+                event_tick = round(mido.second2tick(event['time'],
+                                                   ticks_per_beat=new_mid.ticks_per_beat,
+                                                   tempo=tempo_microseconds))
 
                 msg = mido.Message(
                     event['type'],
                     channel=event['channel'],
                     note=event['note'],
                     velocity=event['velocity'],
-                    time=delta_ticks
+                    time=event_tick - current_tick
                 )
                 track.append(msg)
-                current_time_seconds = event['time']
+                current_tick = event_tick
 
             doc.midi_data = new_mid
 

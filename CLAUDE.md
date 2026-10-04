@@ -28,8 +28,8 @@ same stack. TTS voice models (~60 MB) download on demand into `userprefs_dir()/t
 - `core/` — the **Qt-free** domain layer (config, show/, paths, OFL parsing, fixture library and state model, note layout,
   clip model, I/O routing).
 - `app/` — the shared core: QtCore/QtMultimedia only, **never** QtWidgets or `ui/`.
-- `audio/`, `dmx/`, `midi/`, `software_controller/`, `webremote/` — widget-free subsystems (`webremote`'s
-  `state`/`commands`/`peaks` are Qt-free too).
+- `audio/`, `dmx/`, `midi/`, `software_controller/`, `webremote/`, `autoprogram/` — widget-free subsystems
+  (`webremote`'s `state`/`commands`/`peaks` are Qt-free too; `autoprogram`'s layering is in its own section).
 - `stage/` (render engine) and `timeline/` are **top-level**: QtWidgets importing nothing from `ui/` (only `core/`, PyQt6,
   `tupperlogger`), which is what earns them the root.
 - `stage/stage3d/` — the **EXPERIMENTAL** 3D bar prototype, shown in the 2D stage's place behind
@@ -191,6 +191,85 @@ Four things ride a song's timeline that are neither notes nor audio: a spoken **
   safe to add to a song that is already programmed. 
 - **The dialog's `TimeSpin` holds exact seconds**; bar.beat resolves only to the beat, so a value merely *looked at* in
   bar.beat would come back quantized.
+
+## The auto program (`autoprogram/` + `app/autoprogram.py`, ☰ ▸ Auto program…)
+
+A song's light show generated from its audio. **The package is layered in one direction**: `streaming`
+(the causal live analysers) → `analysis` (the whole-song map, `SongMap`) → `colours`/`looks`/`cues`/
+`director` (the design, as cues) → `writer` (the ONLY module that writes MIDI) → `take` (one song's
+whole pipeline, `analyse()` then `program()`) → `replay` (the light it makes) → `score` (its picture).
+Everything up to `director` is Qt-free and never sees `MidiManager`; `decode` is the one blocking
+QtCore bridge to the app's decoder; `score` is the only QtGui module, and only the CLI draws it — the
+dialog shows the analysis (its song map is painted from the `SongMap`), not a replay.
+
+- **No scipy, at runtime or in dev.** The analysis was tuned on scipy's filters, so the numpy ports in
+  `streaming`/`analysis` reproduce `butter`+`sosfilt`, `decimate`, `stft`, `dct` and `uniform_filter1d`
+  to float32 rounding — a "simpler" filter would move every threshold.
+- **Every time is AUDIO seconds until `writer` adds the analysed track's offset.**
+- **Looks and roles come from capabilities, never from a fixture's name**, and the library's scenes
+  (tagged by song part) come first; `writer` owns what a generated `.mid` needs to reload as authored
+  (`MIN_GAP`, `MIN_FADE`, `FADE_MARGIN`, one-channel looks as clips) and authors inside
+  `MidiManager.bulk_edit()`, which does the per-edit rebuild/notify/ramp work once, at the end.
+- **A mirrored pair is one fixture to the eye** (the user's call — one side lit alone looks like a
+  mistake): two lanes of one type, mode and rigging either side of the rig's middle share ONE look
+  cycle (never two shuffles of the shared rng), join together and take every hit together. They split
+  only as an answer: hits within `ANSWER_BARS` of each other in a material planned "in turn". A glow
+  lights the lead's middle UNIT (a centred lane or the innermost pair) — never `role[len // 2]`, which
+  on two fixtures is the right-hand one. The middle is the rig's own extent, fog aside; twins on one
+  address count at every position, so a pair of them stands in the middle.
+- **The show is an ARC to its climax, and a part keeps its choreography** (the user's call: not
+  every fixture on all show, alike on alike parts, a strong start, an escalating middle, a climax).
+  A section lights a CAST — a prefix of ONE order (its lead role, then the roles in the order the
+  sections before the climax led, blinders last) sized by tier and progress (`BAND_SHARE`/
+  `FULL_SHARE`) — so a part coming back lights a superset of what it lit. A (material, tier) keeps
+  the choreography it FIRST played (together / in turn / alternate / chase / stack), or a cast that
+  grew would turn an alternation into a chase. The RESERVE — the outermost unit of the last role in
+  that has two or more, never a whole role — stays dark until the climax, and every flash reaches the
+  rig through `flashed()`/`held()`: a new kind of hit that lights `self.lanes` directly spoils the
+  reveal. Turns run on units, so they never split a mirrored pair.
+- **A loud chorus is lit as the climax is, and the climax stays above it** (the user's call):
+  every pre-climax CHORUS at MID or louder takes the PEAK tier — the whole cast but the reserve, a
+  landing hit with a breath. The climax keeps three things no chorus has: the reserve, looks
+  changing twice as often (`beats()`, down to half a beat — the grid is fractional for it) and
+  strobe fills into its phrase lines (IMPACT, so nothing cuts a fill short).
+- **The chorus climax the song ends on is its OUTRO, and END starts where it ends** (the
+  user's call): only a CHORUS climax with at most `TAIL_BARS` quiet bars after it (its last
+  hit, its ring) — a song that plays on after its climax keeps its names. It is a MARKER
+  only: `SongMap.parts()`/`end_start` name the arrangement band (writer, dialog, reports),
+  while `Section.part` stays what the music plays and is all the director reads — a climax
+  lit as an OUTRO would take the library's OUTRO scenes.
+- **The blinders are rationed** (the user's call — repeated blinder hits on choruses were an
+  abuse): they fire on the song's OWN hits (analysed impacts, the landing after a build) and
+  nowhere else — no kicks, no snare, no accents, no hit the show adds (`impact(blinders=False)`)
+  — until `last_stretch()` (the last chorus run, the climax, the outro), where they may also strobe
+  in bursts of one beat. A new hit that passes `blinders=True` by default breaks this.
+- **`replay` drives a `DMXController` built with its own `clock` and `rng`, through `tick_timers()`/
+  `tick_frame()` — never by patching `software_controller.main`**: the live controller runs in the same
+  process.
+- **Generating never touches the show** (a worker thread, a copy of the patch, a `.mid` in a temp
+  folder). **Applying** flushes, takes a pinned snapshot `before auto-program — <title>`, then
+  `ShowManager.write_song_midi`; the current song's document is reloaded inside `begin/end_song_load`
+  (so the autosave is not armed), any other song just has its file replaced. Desktop only.
+- **`take` is the one pipeline**: the app's AutoProgrammer and `scripts/autoprogram_cli.py`
+  (`live` / `analyse` / `program` / `score`) both call it, and the CLI holds no logic but argument
+  parsing. `scripts/program_final_stand.py` is the hand-tuned reference and uses none of it. It is
+  two calls because they change for different reasons: AutoProgrammer keeps each `Analysis` keyed on
+  the file's stamp, the song's tempo, its meter and the `Tuning`, so a palette, pace, take or
+  `Style` change only programs again (~0.3 s against seconds). A take asked for while one runs
+  supersedes it — the dropped job announces nothing, but an analysis it finished is still kept.
+- **The dialog's Advanced values are the engine's own tunables**: `analysis.Tuning` and
+  `director.Style`, whose defaults ARE the module constants (the user's call — the design's proposed
+  parameters that the engine lacks were not invented). At the defaults the output is the CLI's,
+  byte for byte. **The Feel slider (Still … Frantic) is presets over the pace and `Style`**
+  (`director.FEELS`, Steady = the defaults), and the feel is the BASE (the user's call): Advanced's
+  marks, its "N changed" and Reset measure against the selected feel, and moving the slider writes
+  the feel's values over any edit to them.
+- **A palette is a SPEC string** resolved by `colours.palette()`: a preset, `MODE:HUE` or
+  `custom:#rrggbb,…`. The modes are the fixture Palette tab's own maths (`generate_song_colors`),
+  BORROWED ONLY — the show writes its colours into its looks and never touches note 60 or the live
+  cycling. A `random` hue is drawn from the take's seed and the Take records the resolved spec,
+  so a draw the user likes can be pinned. ONE palette a song (the user's call): more choices,
+  not more colours per song.
 
 ## I/O routing (`config.io` + `core/io_routing.py`)
 
