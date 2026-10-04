@@ -1,6 +1,7 @@
 # ABOUTME: AudioEngine — the Qt bridge that streams the Mixer through ONE stereo
 # ABOUTME: QAudioSink (pull mode) on a selectable device; buses: backing/click/voice.
 
+import time
 from typing import Dict, Optional
 
 import numpy as np
@@ -10,7 +11,8 @@ from PyQt6.QtMultimedia import (QAudio, QAudioDevice, QAudioFormat, QAudioSink,
                                 QMediaDevices)
 
 from audio.decode import ThreadedAudioDecoder
-from audio.diagnostics import TimingMonitor, maybe_start_attributor
+from audio.diagnostics import (HEARTBEAT_MS, TimingMonitor,
+                               maybe_start_attributor)
 from audio.click import ClickSounds
 from audio.mixer import BUS_CLICK, BUS_VOICE, SAMPLE_RATE, Mixer, resample
 from tupperlogger import get_logger
@@ -243,6 +245,38 @@ class _FeedWorker(QObject):
         self._sink_device.write(payload)
 
 
+class QtThreadPulse(QObject):
+    """A heartbeat stamped from the Qt thread, for StallAttributor to watch.
+
+    The attributor used to watch the audio feed's top-ups, back when they ran
+    on the Qt thread. They run on their own thread now — straight through the
+    C++ blocks the attributor exists to name — so the Qt thread needs a pulse
+    of its own. Only started while stall tracing is on: it is a timer firing
+    into Python ~66 times a second."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # None until the event loop first runs: app start-up is not a stall.
+        self._last: Optional[float] = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(HEARTBEAT_MS)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.timeout.connect(self._beat)
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def last(self) -> Optional[float]:
+        """Monotonic time of the last beat (read from the sampler thread)."""
+        return self._last
+
+    def _beat(self) -> None:
+        self._last = time.monotonic()
+
+
 class AudioEngine(QObject):
     """Single audio output for the whole app. Owns the Mixer (backing / click /
     voice buses), a push-mode QAudioSink on the configured output device and
@@ -267,8 +301,11 @@ class AudioEngine(QObject):
         # monitor is handed a verdict rather than the device.
         self.monitor = TimingMonitor()
         # Opt-in (TUPPERDMX_STALL_TRACE=1): names whatever blocks the Qt thread
-        # by watching the feed's heartbeat from a thread of its own.
-        self._attributor = maybe_start_attributor(self.monitor.last_feed)
+        # by watching a pulse stamped from it, from a thread of its own.
+        self._pulse = QtThreadPulse(self)
+        self._attributor = maybe_start_attributor(self._pulse.last)
+        if self._attributor is not None:
+            self._pulse.start()
 
         self._decoder = ThreadedAudioDecoder(self)
         self._decoder.decoded.connect(self._on_decoded)
@@ -504,6 +541,7 @@ class AudioEngine(QObject):
             self._attributor.stop()
             self._attributor = None
         self._watchdog.stop()
+        self._pulse.stop()
         self._decoder.shutdown()
         if self._thread.isRunning():
             self._stop_sink()

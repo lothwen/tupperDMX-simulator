@@ -1,10 +1,11 @@
 """
 Characterization test: click timing and its flight recorder.
 
-Covers what Tier 1 changed — the metronome's precise timer, its monotonic
-clock, the caller-supplied phase anchor and its refusal to replay beats it was
-too late to play — plus the TimingMonitor that records all of it. Fakes only:
-no audio device, no GL.
+Covers the click's scheduler — its precise pump, the caller-supplied phase
+anchor, beats placed at exact output frames and its refusal to crowd in beats
+it was too late to play — plus the TimingMonitor that records all of it and
+the StallAttributor that names what blocks the Qt thread. Fakes only: no
+audio device, no GL.
 
 Run with:
     uv run python tests/test_click_timing.py
@@ -288,6 +289,9 @@ def test_monitor_tracks_the_scheduling_lead():
 # ----------------------------------------------------------------------
 # Stall attribution
 # ----------------------------------------------------------------------
+_QAPP = None
+
+
 def _attributor_says(duration_ms, lost_ms, wakes):
     from audio.diagnostics import StallAttributor
     attributor = StallAttributor(heartbeat=lambda: None)
@@ -334,6 +338,49 @@ def test_attributor_captures_the_calling_stack():
     captured = StallAttributor._capture(threading.current_thread().ident)
     _assert("test_click_timing.py" in captured and "captures" in captured,
             f"the stack names where the thread actually is ({captured[:60]}…)")
+
+
+def test_attributor_watches_the_qt_thread():
+    print("test_attributor_watches_the_qt_thread")
+    # The heartbeat has to be stamped FROM the Qt thread. The audio feed's
+    # top-ups used to be that, until they moved to a thread of their own and
+    # ran straight through every C++ block the attributor exists to name.
+    from PyQt6.QtCore import QCoreApplication, QElapsedTimer
+    from audio.diagnostics import StallAttributor
+    from audio.engine import QtThreadPulse
+
+    # Held for the process's lifetime: a QApplication that nothing references
+    # is collected out from under the event dispatcher, and no timer fires.
+    global _QAPP
+    _QAPP = QApplication.instance() or QApplication(sys.argv)
+
+    def pump(ms):
+        timer = QElapsedTimer()
+        timer.start()
+        while timer.elapsed() < ms:
+            QCoreApplication.processEvents()
+
+    pulse = QtThreadPulse()
+    _assert(pulse.last() is None,
+            "no pulse before the event loop runs — app start-up is not a stall")
+    pulse.start()
+    attributor = StallAttributor(pulse.last)
+    said = []
+    attributor.logger.warning = lambda msg: said.append(msg)
+    try:
+        pump(100)
+        _assert(pulse.last() is not None, "the pulse beats with the event loop")
+        attributor.start()
+        pump(100)
+        time.sleep(0.2)     # the Qt thread blocked with the GIL free, as in C++
+        pump(100)
+    finally:
+        attributor.stop()
+        pulse.stop()
+    blocked = [m for m in said if m.startswith("Qt thread blocked")]
+    _assert(blocked, "a block of the Qt thread alone is reported")
+    _assert(any("GIL free" in m for m in blocked),
+            "…and named as C++, which the audio feed's own thread runs through")
 
 
 def test_attributor_is_opt_in():

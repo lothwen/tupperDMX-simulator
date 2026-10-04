@@ -39,7 +39,8 @@ from typing import Dict, List, Optional
 from tupperlogger import get_logger
 
 # A feed gap this long has not underrun yet (the buffer holds ~80 ms) but is
-# the early warning that something is taking the Qt thread away from the audio.
+# the early warning that something is keeping the audio feed thread from
+# running — Python holding the GIL, or the sink blocking a write.
 LATE_FEED_MS = 40.0
 
 # Bound on the per-beat errors kept for percentiles: an hour of the fastest
@@ -204,12 +205,6 @@ class TimingMonitor:
             f"worst gap {s['worst_feed_gap_ms']:.0f} ms "
             f"in {int(s['feeds'])} feeds")
 
-    def last_feed(self) -> Optional[float]:
-        """Monotonic time of the last buffer top-up — the Qt thread's pulse,
-        which is what StallAttributor watches from outside."""
-        with self._lock:
-            return self._last_feed
-
     # ------------------------------------------------------------------
     def _warn(self, message: str) -> None:
         """Rate-limited warning. The bookkeeping happens under the lock, the
@@ -234,7 +229,11 @@ class TimingMonitor:
 # competes for the GIL it is trying to measure. Off unless asked for.
 STALL_TRACE_ENV = "TUPPERDMX_STALL_TRACE"
 
-# A Qt thread that has not fed the sink in this long is stalled, not busy.
+# How often the Qt thread stamps the heartbeat the attributor watches
+# (audio.engine.QtThreadPulse) — the cadence the Qt thread used to feed the
+# sink at, which the threshold below was set against.
+HEARTBEAT_MS = 15
+# A Qt thread whose heartbeat is this old is stalled, not busy.
 STALL_THRESHOLD_MS = 40.0
 SAMPLE_INTERVAL_S = 0.010
 # Frames of the Qt thread's Python stack to report, innermost last.
@@ -250,26 +249,28 @@ GIL_CONTENTION_MS = 1.0
 class StallAttributor:
     """Names what is blocking the Qt thread, by watching it from another one.
 
-    The TimingMonitor can say the audio feed ran late; it cannot say WHY,
-    because it only runs when the thread it would blame lets it. This samples
-    from outside instead: a daemon thread wakes every 10 ms, notices when the
-    feed's heartbeat has gone stale, and captures the Qt thread's Python stack
-    while it is still stuck.
+    The Qt thread runs the transport tick and the click's pump: a stall there
+    eats into the click's lookahead (`min lead`) and holds back the MIDI and
+    the lights. Nothing on that thread can report its own stall, so this
+    samples from outside: a daemon thread wakes every 10 ms, notices when the
+    heartbeat the Qt thread stamps (`heartbeat()`, a monotonic time or None)
+    has gone stale, and captures the Qt thread's Python stack while it is
+    still stuck.
 
-    It also answers the question that decides the FIX. Two stalls look alike
-    from the audio's side but are not:
+    It also says what the stall cost the AUDIO, which lives on a thread of its
+    own. Two stalls look alike from the Qt thread's side but are not:
 
     - the Qt thread is inside C++ (a vsync-blocking buffer swap, a QPainter
-      run, GL calls) — the GIL is released there, so this sampler keeps its own
-      10 ms rhythm throughout. Moving the audio feed to its own thread would
-      then keep it fed right through the stall.
+      run, GL calls) — the GIL is released there, so this sampler keeps its
+      own 10 ms rhythm throughout, and so does the audio feed: the sink stays
+      fed right through the stall.
     - the Qt thread is running PYTHON and holding the GIL — this sampler is
-      starved too, and its own wake-ups slip by the same order. No amount of
-      threading rescues the audio from that; the offending code has to get
-      cheaper or move.
+      starved too, its own wake-ups slipping by the same order, and so is the
+      audio feed. Threading cannot rescue the audio from that; the offending
+      code has to get cheaper or move.
 
     So each report carries how much the sampler ITSELF lost during the stall.
-    That ratio is the recommendation."""
+    That ratio is the verdict."""
 
     def __init__(self, heartbeat, threshold_ms: float = STALL_THRESHOLD_MS):
         self.logger = get_logger("audio.stall")
@@ -349,14 +350,14 @@ class StallAttributor:
         lost_ms = sampler_lost_s * 1000
         per_wake = lost_ms / max(1, sampler_wakes)
         # Our own slip per wake-up is the GIL measurement: keeping our rhythm
-        # means the GIL stayed free, which means an audio thread of our own
-        # would have kept feeding straight through this.
+        # means the GIL stayed free, which means the audio feed thread kept
+        # feeding straight through this.
         gil_held = per_wake > GIL_CONTENTION_MS
-        verdict = ("GIL HELD — Python code blocked it, a separate audio thread "
-                   "would stall too"
+        verdict = ("GIL HELD — Python code blocked it, and the audio feed "
+                   "thread waits on the same GIL"
                    if gil_held else
-                   "GIL free — it blocked in C++, a separate audio thread would "
-                   "have kept feeding")
+                   "GIL free — it blocked in C++; the audio feed, on its own "
+                   "thread, kept running")
         self.logger.warning(
             f"Qt thread blocked {duration_ms:.0f} ms ({verdict}; sampler lost "
             f"{lost_ms:.0f} ms over {sampler_wakes} wakes = "
