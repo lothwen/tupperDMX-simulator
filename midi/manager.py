@@ -564,6 +564,10 @@ class MidiManager(QObject):
             self._doc.midi_data = copy.deepcopy(snap["midi_data"])
             self._doc.midi_events = copy.deepcopy(snap["midi_events"])
             self._doc.midi_notes = copy.deepcopy(snap["midi_notes"])
+            # The auto flags just came back with the note-71 setup notes; the
+            # live controller is their runtime mirror (and what the lane's 'A'
+            # button shows), so it has to follow them.
+            self.seed_controller_auto()
             self._auto_update_worker()
             self.data_changed.emit()
         finally:

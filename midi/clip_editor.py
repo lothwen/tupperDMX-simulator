@@ -111,11 +111,14 @@ class ClipEditor:
             
         # Find and update corresponding note. Ramp notes share their clip's
         # note number and, for a fade-in, its exact time — they are re-derived
-        # below, never mirrored.
+        # below, never mirrored. The channel is part of the match: another
+        # lane can hold the same note at the same time.
         for note in self._doc.midi_notes:
             if note.get('is_fade'):
                 continue
-            if (note['note'] == event['note'] and abs(note['time'] - old_time) < 0.01):
+            if (note['note'] == event['note']
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - old_time) < 0.01):
                 note['time'] = new_time
                 break
         
@@ -156,12 +159,14 @@ class ClipEditor:
         if 'velocity' in kwargs:
             event['velocity'] = kwargs['velocity']
             
-        # Find and update corresponding note (never a ramp note — see
-        # update_event_timing).
+        # Find and update corresponding note (never a ramp note, and never
+        # another lane's — see update_event_timing).
         for note in self._doc.midi_notes:
             if note.get('is_fade'):
                 continue
-            if (note['note'] == old_note and abs(note['time'] - old_time) < 0.01):
+            if (note['note'] == old_note
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - old_time) < 0.01):
                 if 'note' in kwargs:
                     note['note'] = kwargs['note']
                 if 'time' in kwargs:
@@ -191,13 +196,16 @@ class ClipEditor:
         if not event:
             return False
             
-        # Find and remove corresponding note (never a ramp note — see
-        # update_event_timing; regenerate_fixture drops those below).
+        # Find and remove corresponding note (never a ramp note, and never
+        # another lane's — see update_event_timing; regenerate_fixture drops
+        # the ramps below).
         note_to_remove = None
         for i, note in enumerate(self._doc.midi_notes):
             if note.get('is_fade'):
                 continue
-            if (note['note'] == event['note'] and abs(note['time'] - event['time']) < 0.01):
+            if (note['note'] == event['note']
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - event['time']) < 0.01):
                 note_to_remove = self._doc.midi_notes.pop(i)
                 break
                 

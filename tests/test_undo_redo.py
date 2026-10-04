@@ -192,6 +192,39 @@ def test_scene_group_undo():
     _assert(len(m.midi_events) == full, "redo restored the whole scene group")
 
 
+class FakeController:
+    """The slice of DMXController the auto toggle touches."""
+
+    def __init__(self):
+        self.auto = set()
+
+    def set_fixture_auto(self, channel, on):
+        (self.auto.add if on else self.auto.discard)(channel)
+
+    def apply_auto(self, channels):
+        self.auto = set(channels)
+
+    def is_fixture_auto(self, channel):
+        return channel in self.auto
+
+
+def test_undo_reseeds_controller_auto():
+    """Undoing a lane's A toggle must reach the live controller too: the header
+    button shows the controller's state, and the song-part program runs on it."""
+    print("test_undo_reseeds_controller_auto")
+    m = _make_manager()
+    ctrl = FakeController()
+    m.set_software_controller(ctrl)
+    m.set_fixture_auto(LEDBAR_CH, True)
+    _assert(ctrl.is_fixture_auto(LEDBAR_CH), "the toggle reaches the controller")
+    m.undo()
+    _assert(LEDBAR_CH not in m.auto_channels(), "undo clears the persisted flag")
+    _assert(not ctrl.is_fixture_auto(LEDBAR_CH),
+            "undo takes the controller out of auto as well")
+    m.redo()
+    _assert(ctrl.is_fixture_auto(LEDBAR_CH), "redo puts the controller back in auto")
+
+
 def main():
     test_baseline_no_history()
     test_add_undo_redo_roundtrip()
@@ -203,6 +236,7 @@ def main():
     test_history_batch_single_step()
     test_empty_batch_no_step()
     test_scene_group_undo()
+    test_undo_reseeds_controller_auto()
     print("\nALL TESTS PASSED")
 
 
