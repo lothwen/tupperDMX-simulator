@@ -18,22 +18,24 @@ running app does not already have, and resolves the app from its own location.
 
 Probes (`all` runs every one):
 
-  timer     Does this kernel honour a 1 ms timer? Schedules beats exactly as
-            the metronome does, with Qt's coarse default and with PreciseTimer,
-            across musical tempos. The app uses precise; this confirms the
-            platform delivers it. Needs no sound card.
+  timer     Does this kernel honour a 1 ms timer? Fires a drift-anchored timer
+            at musical tempos, with Qt's coarse default and with PreciseTimer.
+            The click no longer depends on it (beats are placed by frame), but
+            the audio feed, the click's pump and the transport tick all run on
+            precise timers; this confirms the platform delivers them. Needs no
+            sound card.
 
-  latency   How long after the metronome decides a beat does the beep reach the
-            output stream, and how much does that vary? This is the push-buffer
-            jitter that Tier 1 does NOT fix — the number that says whether a
-            sample-scheduled click (Tier 2) is worth building.
+  latency   How full the sink's buffer runs, sampled every 5 ms: the headroom
+            a stall has to eat before it becomes an audible dropout.
 
   clock     The sound card's sample clock against time.monotonic(), in ppm.
-            The backing advances on the card's clock while the click is
-            scheduled on the system's, so any difference is click-vs-track
-            drift, hidden by the 150 ms resync deadband until it snaps. Measured
-            -1 ppm on the dev box (PipeWire rate-matches); the SBC is the open
-            question. Needs the longest run — a minute buys ~16 ppm resolution.
+            The backing and the click advance on the card's clock while the
+            timeline (MIDI, lights, cues) runs on the system's, so any
+            difference is audio-vs-lights drift. The 150 ms resync deadband
+            hides it until the backing snaps back; the click, anchored only at
+            start/seek, does not. Measured -1 ppm on the dev box (PipeWire
+            rate-matches); the SBC is the open question. Needs the longest
+            run — a minute buys ~16 ppm resolution.
 
   stall     Blocks the Qt thread the way a samba copy or a flash write does,
             then checks the click recovered on the grid (no burst, no early
@@ -106,7 +108,7 @@ def probe_timer(args):
             if state["n"] >= args.beats:
                 app.quit()
                 return
-            # Drift-anchored, exactly as AudioController schedules.
+            # Drift-anchored: each target is the last one plus a beat.
             state["target"] += interval
             timer.start(max(0, round((state["target"] - time.monotonic()) * 1000)))
 
@@ -126,10 +128,10 @@ def probe_timer(args):
               f"| {max(precise) - min(precise):12.2f}ms "
               f"{max(map(abs, precise)):11.2f}ms")
     _verdict(worst_precise < 5.0,
-             f"precise timers land within {worst_precise:.1f} ms — the click's "
-             "schedule is trustworthy here",
+             f"precise timers land within {worst_precise:.1f} ms — the feed, "
+             "the pump and the transport keep their cadence here",
              f"precise timers miss by up to {worst_precise:.1f} ms — this box "
-             "cannot schedule a beat accurately; check the kernel timer "
+             "cannot keep a precise cadence; check the kernel timer "
              "resolution and what else is running")
 
 
@@ -232,24 +234,25 @@ def probe_clock(args):
     print(f"  {len(samples)} samples over {t[-1]:.1f} s, "
           f"buffer swing {residual.std() * 1000:.1f} ms rms")
     print(f"  device clock: {ppm:+.0f} +/- {ppm_err:.0f} ppm")
-    print(f"  => click-vs-track drift over a 4-minute song: {drift_4min:+.0f} ms")
+    print(f"  => audio-vs-lights drift over a 4-minute song: {drift_4min:+.0f} ms")
     if abs(ppm) > 3 * ppm_err and abs(drift_4min) >= 1.0:
         minutes = 150.0 / abs(ppm * 1e-6 * 1000) / 60
         print(f"  => the 150 ms resync deadband is reached after {minutes:.0f} "
-              "min of playback, and the backing then JUMPS")
+              "min of playback, and the backing then JUMPS back to the lights "
+              "— away from the click, which is not re-anchored mid-song")
     if abs(ppm) <= 3 * ppm_err:
         _verdict(True,
                  f"no drift resolvable above the noise (+/-{ppm_err:.0f} ppm) — "
-                 "the audio stack is rate-matching the card, so the click will "
-                 "not walk off the track",
+                 "the audio stack is rate-matching the card, so the audio will "
+                 "not walk off the lights",
                  "")
     else:
         _verdict(abs(drift_4min) < 20.0,
                  f"{abs(drift_4min):.0f} ms per song — close enough that the "
-                 "click will not audibly walk off the track",
-                 f"{abs(drift_4min):.0f} ms per song of click-vs-track drift, "
-                 "resolved well above the noise. This is what a sample-scheduled "
-                 "click (Tier 2) removes; nothing in Tier 1 addresses it")
+                 "audio will not audibly walk off the lights",
+                 f"{abs(drift_4min):.0f} ms per song of audio-vs-lights drift, "
+                 "resolved well above the noise. The backing and the click "
+                 "drift together; only the backing is pulled back, at 150 ms")
 
 
 # ----------------------------------------------------------------------

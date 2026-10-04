@@ -33,8 +33,8 @@ class MediaController(QObject):
     every light cue) by however far the clock was wrong.
 
     Count-in (Fase 4): when enabled for the song, start_playback() begins at a
-    NEGATIVE timeline time (-bars of 4 beats); audio/MIDI wait for t >= 0 while
-    the metronome runs through the boundary into the song."""
+    NEGATIVE timeline time (-bars of the song's meter); audio/MIDI wait for
+    t >= 0 while the metronome runs through the boundary into the song."""
 
     # Signals
     playback_state_changed = pyqtSignal(bool)  # is_playing

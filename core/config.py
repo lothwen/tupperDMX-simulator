@@ -346,7 +346,7 @@ class AudioConfig:
     per-song count-in on/off stays in the show (SongConfig.precount)."""
     output_device: str = ""              # QAudioDevice id; "" = system default
     routing: str = "stereo"              # see AUDIO_ROUTING_MODES
-    count_in_bars: int = 2               # length of the precount (bars of 4)
+    count_in_bars: int = 2               # length of the precount (bars of the song's meter)
     count_in_voice: bool = True          # speak beat numbers on the last bar
     click_accent: bool = True            # beat 1 of the click takes the accent sound
     tts_voice: str = "es_ES-davefx-medium"

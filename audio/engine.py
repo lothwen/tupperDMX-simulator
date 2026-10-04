@@ -1,5 +1,5 @@
 # ABOUTME: AudioEngine — the Qt bridge that streams the Mixer through ONE stereo
-# ABOUTME: QAudioSink (pull mode) on a selectable device; buses: backing/click/voice.
+# ABOUTME: QAudioSink (push mode, fed from its own thread); buses: backing/click/voice.
 
 import time
 from typing import Dict, Optional
@@ -283,8 +283,9 @@ class AudioEngine(QObject):
     the async file decoder. The sink runs continuously so click beeps and voice
     previews work while transport is stopped.
 
-    Push mode on purpose: a Qt-thread timer tops up the sink's own device, so
-    NO Python code ever runs on the audio callback thread — a pull-mode
+    Push mode on purpose: a timer on the engine's own feed thread tops up the
+    sink's device, so NO Python code ever runs on Qt's audio callback thread —
+    a pull-mode
     QIODevice implemented in Python deadlocks/aborts inside QAudioSink.stop()
     (the audio thread blocks on the GIL while stop() waits for it)."""
 
@@ -540,8 +541,8 @@ class AudioEngine(QObject):
         if self._attributor is not None:
             self._attributor.stop()
             self._attributor = None
-        self._watchdog.stop()
         self._pulse.stop()
+        self._watchdog.stop()
         self._decoder.shutdown()
         if self._thread.isRunning():
             self._stop_sink()

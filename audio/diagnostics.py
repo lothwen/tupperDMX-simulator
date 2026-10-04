@@ -5,8 +5,9 @@
 A live click is only trustworthy if a deviation is *recorded* rather than felt
 and forgotten, so both halves of the beat's journey report here:
 
-- `record_beat()` from the metronome — how far off its own schedule each beep
-  fired; `record_dropped()` for beats a stall made unplayable.
+- `record_beat()` / `record_lead()` from the metronome — how late against its
+  output frame each beep was queued, and how far ahead of the playhead;
+  `record_dropped()` for beats a stall made unplayable.
 - `record_feed()` from the audio engine — the interval between buffer top-ups
   and whether the sink ran dry (an underrun IS the dropout you heard).
 
@@ -17,13 +18,12 @@ reported is the same thread that would write the log line, and on an SBC that
 line goes to flash — a warning per feed would deepen the very stall it
 describes.
 
-What this does NOT measure: where the beep lands in the OUTPUT once queued.
-A one-shot is mixed into the next 15 ms block and that block is written behind
-whatever the sink still holds, so the audible beat carries a further variable
-delay (measured on a healthy desktop: 52-92 ms). That is a property of the
-push-buffer design, invisible from here, and only a sample-scheduled click
-removes it. The error reported below is the SCHEDULING error — the half this
-app currently controls — and the summary says so.
+What this does NOT measure: the sink's own latency. A beep is placed at an
+exact output frame and the backing rides the same frames, so the two are exact
+to each other; neither is heard until the sink's buffer drains in front of it,
+a delay invisible from here that the per-song audio offset absorbs. Lateness
+against the frame is 0 by construction (a scheduled beep sounds where it was
+placed), so the click's health metric is `min lead` — and the summary says so.
 
 Nothing here is Qt, and nothing here touches the sink: the engine reads the
 device state and passes the verdict in.
@@ -187,8 +187,9 @@ class TimingMonitor:
     def summary(self) -> str:
         """One line per song: what a live operator needs to trust the click.
 
-        "sched err" is how far each beep missed its own schedule, not how far
-        the audience heard it move — see the module docstring."""
+        "late" is how far behind its own output frame each beep was queued —
+        0 unless it fell inside the start grace; "min lead" is the margin that
+        matters — see the module docstring."""
         s = self.stats()
         if not s["beats"] and not s["feeds"]:
             return "Timing: nothing played"

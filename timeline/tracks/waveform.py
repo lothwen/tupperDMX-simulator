@@ -59,9 +59,9 @@ class DraggableWaveform(QGraphicsObject):
     """Draggable waveform graphics item.
 
     Two signals, because a drag has two different audiences. `position_changed`
-    is the live preview every mouse-move frame — it is what keeps a playing
-    transport following the drag, and it also fires when the offset is set
-    programmatically. `offset_committed` fires once, on mouse release, and only
+    is the live preview every mouse-move frame — it moves the SETLIST chip and
+    nothing else, since a drag is only a proposal until it is released — and it
+    also fires when the offset is set programmatically. `offset_committed` fires once, on mouse release, and only
     for a drag that actually moved the item: it carries where the drag STARTED
     as well as where it ended, which is the only moment the app knows by how
     much the audio just slid under the show.
