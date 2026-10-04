@@ -798,8 +798,8 @@ class Fixture:
         self._tilter = max(self.asset.find("body"), self.asset.find("head"))
         self._lens = self.asset.find("lens")
         self._shutter = ShutterFeature(None)
-        # DMX 127/128 is home — straight down for a hung head (CLAUDE.md, "The
-        # render engine") — so that is what an angle is measured from.
+        # DMX 127/128 is home — straight down for a hung head (docs/STAGE.md,
+        # "Aiming and rigging") — so that is what an angle is measured from.
         self.pan_home = self.tilt_home = 0.0
         if self.slots["pan"] >= 0:
             self.pan_home = angle_table(self.fdef, self.slots["pan"], "pan")[128]
