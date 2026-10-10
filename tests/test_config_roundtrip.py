@@ -504,19 +504,29 @@ def test_stage_render_prefs_roundtrip():
         shipped.write_text(json.dumps(SHIPPED))
 
         cfg = Config.load()
-        _assert(cfg.window.stage_gpu is False,
-                "the GPU stage is off until asked for")
-        _assert(abs(cfg.window.stage_exposure - 1.0) < 1e-9,
-                "default exposure is 1.0")
+        _assert(cfg.window.stage_gpu is True,
+                "the GPU stage is on out of the box (the Mid quality preset)")
+        _assert(abs(cfg.window.stage_exposure - 0.5) < 1e-9,
+                "default exposure is 0.5")
+        _assert(abs(cfg.window.stage_haze - 0.30) < 1e-9,
+                "default haze is 0.30")
 
-        cfg.window.stage_gpu = True
+        cfg.window.stage_gpu = False
         cfg.window.stage_exposure = 2.5
         cfg.save()
 
         cfg2 = Config.load()
-        _assert(cfg2.window.stage_gpu is True, "stage_gpu survives a save/load")
+        _assert(cfg2.window.stage_gpu is False, "stage_gpu survives a save/load")
         _assert(abs(cfg2.window.stage_exposure - 2.5) < 1e-9,
                 "and so does the exposure")
+
+        # A window section without the keys loads what a first launch gets.
+        prefs.write_text(json.dumps({"window": {}}))
+        missing = Config.load().window
+        _assert(missing.stage_gpu is True
+                and abs(missing.stage_exposure - 0.5) < 1e-9
+                and abs(missing.stage_haze - 0.30) < 1e-9,
+                "missing keys load the dataclass defaults")
 
         # Out of range on either side is clamped, not obeyed.
         prefs.write_text(json.dumps({"window": {"stage_exposure": 99.0}}))
@@ -551,8 +561,8 @@ def test_volumetric_fog_prefs_roundtrip():
         shipped.write_text(json.dumps(SHIPPED))
 
         cfg = Config.load()
-        _assert(cfg.window.fog.enabled is False,
-                "volumetric fog is off until asked for, like the GPU stage")
+        _assert(cfg.window.fog.enabled is True,
+                "volumetric fog is on out of the box, like the GPU stage")
         _assert(cfg.window.fog.march_steps == 24,
                 "and the shipped step count targets integrated graphics")
 
@@ -561,20 +571,20 @@ def test_volumetric_fog_prefs_roundtrip():
                 "medium integrates to a translucent sheet over the picture, "
                 "which is the one look this feature exists to avoid")
 
-        cfg.window.fog.enabled = True
+        cfg.window.fog.enabled = False
         cfg.window.fog.anisotropy = -0.4
         cfg.window.fog.color = "#112233"
         cfg.window.fog.march_steps = 48
-        cfg.window.fog.resolution = 0.25
+        cfg.window.fog.resolution = 0.5
         cfg.window.fog.texture = 0.4
         cfg.window.fog.texture_scale = 500.0
         cfg.save()
 
         again = Config.load().window.fog
-        _assert(again.enabled is True, "the whole block survives a save/load")
+        _assert(again.enabled is False, "the whole block survives a save/load")
         _assert(abs(again.anisotropy + 0.4) < 1e-9, "including a backward g")
         _assert(again.color == "#112233", "and the scattering colour")
-        _assert(again.march_steps == 48 and abs(again.resolution - 0.25) < 1e-9,
+        _assert(again.march_steps == 48 and abs(again.resolution - 0.5) < 1e-9,
                 "and the quality settings")
         _assert(abs(again.texture - 0.4) < 1e-9
                 and abs(again.texture_scale - 500.0) < 1e-9,
@@ -608,8 +618,8 @@ def test_volumetric_fog_prefs_roundtrip():
         # A prefs file written before this feature existed must still load.
         prefs.write_text(json.dumps({"window": {"stage_gpu": True}}))
         older = Config.load().window
-        _assert(older.stage_gpu is True and older.fog.enabled is False,
-                "prefs from before volumetric fog load with it simply off")
+        _assert(older.stage_gpu is True and older.fog.enabled is True,
+                "prefs from before volumetric fog load with its defaults")
 
 
 def test_the_launcher_reads_the_stage_gpu_pref():
@@ -640,9 +650,14 @@ def test_the_launcher_reads_the_stage_gpu_pref():
         _assert(main._stage_gpu_requested() is False,
                 "unreadable prefs mean the raster path, not a crash")
 
+        prefs.write_text(json.dumps({"window": {}}))
+        _assert(main._stage_gpu_requested() is True,
+                "prefs without the key mean the default, as Config reads them")
+
         prefs.unlink()
-        _assert(main._stage_gpu_requested() is False,
-                "and so does a first launch with no prefs at all")
+        _assert(main._stage_gpu_requested() is True,
+                "and so does a first launch: the stage will try the GPU, so "
+                "it must get the desktop-GL surface")
 
 
 def main():

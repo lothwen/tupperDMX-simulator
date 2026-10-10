@@ -33,7 +33,7 @@ def userprefs_path() -> Path:
 
 @dataclass
 class StageFogConfig:
-    """Volumetric fog on the virtual stage. GPU path only, off by default.
+    """Volumetric fog on the virtual stage. GPU path only, on by default.
 
     How *much* fog there is is deliberately NOT here: that is
     `WindowConfig.stage_haze`, which already exists and already has a slider.
@@ -42,7 +42,7 @@ class StageFogConfig:
     """
 
     # Needs `stage_gpu` as well — a ray march has nowhere to run on the raster
-    # path. Off by default for the same reason `stage_gpu` is.
+    # path. The shipped defaults are Settings' Mid quality preset.
     enabled: bool = True
 
     # -- the look ------------------------------------------------------
@@ -85,8 +85,8 @@ class StageFogConfig:
     # temporal pass then averages away. 0 disables it and the bands come back.
     jitter: float = 0.8
     # Fraction of the viewport the fog is marched at, upsampled on resolve.
-    # Half is the shipped default: fog is low-frequency, so the resolution it
-    # is computed at is much cheaper to give up than the step count.
+    # Quarter is the shipped default: fog is low-frequency, so the resolution
+    # it is computed at is much cheaper to give up than the step count.
     resolution: float = 0.25
 
 
@@ -126,8 +126,8 @@ class WindowConfig:
     stage_haze: float = 0.30
     # Draw the stage's light on the GPU: one HDR buffer everything adds into,
     # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
-    # Off by default — it needs a working OpenGL context, and the raster path
-    # is the one that survives a venue machine with no usable driver.
+    # On by default (Settings' Mid quality preset). It needs a working OpenGL
+    # context; a venue machine with no usable driver fails soft to raster.
     stage_gpu: bool = True
     # EXPERIMENTAL: show the 3D bar prototype (stage/stage3d/) in the 2D stage's
     # place. A machine setting like stage_gpu — it needs OpenGL 4.1.
@@ -569,11 +569,11 @@ class Config:
                 timeline_header_width=cls._validate_int(window_data.get("timeline_header_width", 0), 0, 600),
                 tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
                 stage_haze=cls._validate_float(
-                    window_data.get("stage_haze", 0.5), 0.0, 1.0),
-                stage_gpu=bool(window_data.get("stage_gpu", False)),
+                    window_data.get("stage_haze", 0.30), 0.0, 1.0),
+                stage_gpu=bool(window_data.get("stage_gpu", True)),
                 stage_3d_experimental=bool(window_data.get("stage_3d_experimental", False)),
                 stage_exposure=cls._validate_float(
-                    window_data.get("stage_exposure", 1.0), 0.1, 4.0),
+                    window_data.get("stage_exposure", 0.5), 0.1, 4.0),
                 fog=cls._parse_fog(window_data.get("fog")),
                 ui_scale=cls._validate_float(
                     window_data.get("ui_scale", 1.0),

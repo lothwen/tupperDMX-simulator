@@ -36,20 +36,26 @@ def _stage_gpu_requested() -> bool:
 
     The surface format has to be set before `QApplication` exists, which is
     before `Config.load()` has run, so this reads the single key it needs
-    straight out of userprefs. Anything at all going wrong means "no": the
-    raster stage is the answer that works everywhere.
+    straight out of userprefs. No prefs yet, or no key, means the default —
+    the stage will try the GPU with it, and without this surface it would get
+    an OpenGL ES or legacy context and quietly drop to raster. Anything else
+    going wrong means "no": the raster stage is the answer that works
+    everywhere.
     """
     import json
     # Resolved at call time, not bound at import: the module-level name would
     # be a private copy that a test redirecting the prefs directory cannot
     # reach, which is how the bug this guards against went unnoticed.
-    from core.config import userprefs_path
+    from core.config import WindowConfig, userprefs_path
     try:
         with open(userprefs_path(), "r", encoding="utf-8") as handle:
             window = json.load(handle).get("window", {})
-        return bool(window.get("stage_gpu", False))
+        return bool(window.get("stage_gpu", WindowConfig.stage_gpu))
+    except FileNotFoundError:
+        # First launch: Config.load() is about to write the defaults.
+        return WindowConfig.stage_gpu
     except (OSError, ValueError, AttributeError):
-        # No prefs yet, or unreadable: first launch looks exactly like this.
+        # Unreadable prefs.
         return False
     except Exception as exc:
         # Anything else is a bug in here, not a user's missing file. Say so —

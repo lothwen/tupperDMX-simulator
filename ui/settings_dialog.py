@@ -224,9 +224,9 @@ class SettingsDialog(QDialog):
         self.sidebar_list.currentRowChanged.connect(self._on_page_selected)
         layout.addWidget(self.sidebar_list, 1)
 
-        # Dev `git describe` tags are long (v1.0-56-gabc-dirty); show only the
-        # release component and keep the full tag on hover.
-        version = QLabel(f"TupperDMX · {buildinfo.GIT_TAG.split('-')[0]}")
+        # Dev `git describe` tags are long (v1.1-rc1-56-gabc-dirty); show only
+        # the release they follow and keep the full tag on hover.
+        version = QLabel(f"TupperDMX · {buildinfo.release_of(buildinfo.GIT_TAG)}")
         version.setObjectName("SettingsVersionLabel")
         version.setToolTip(buildinfo.GIT_TAG)
         layout.addWidget(version)

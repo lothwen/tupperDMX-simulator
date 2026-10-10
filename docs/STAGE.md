@@ -512,7 +512,7 @@ default. A seed from the slot's identity varies the pattern, so two gobos never 
 A beam is invisible in clean air, so how visible beams are is the one quantity shared across fixtures.
 `StageController` owns one `Atmosphere`, and every body reads `atmosphere.level` when it draws.
 
-- **Baseline**: `config.window.stage_haze` (default 0.50), the room's haze before any fixture runs.
+- **Baseline**: `config.window.stage_haze` (default 0.30), the room's haze before any fixture runs.
 - **Contributors**: every body whose definition declares a fog capability, whatever its category. Moving heads with a
   built-in hazer count. Each frame a contributor reports `state.atmosphere.output`, weighted by kind: `Haze` 1.0,
   `Fog` 0.6. Fog is denser but stays local.
@@ -716,11 +716,13 @@ when it changes, so a still stage reads "0 fps" and costs nothing.
 
 ## 14. The GPU renderer (`stage/gpu/`)
 
-It is off by default (`config.window.stage_gpu`) and needs desktop OpenGL 3.3 core or later.
+It is on by default (`config.window.stage_gpu`, Settings' Mid quality preset) and needs desktop OpenGL 3.3 core or
+later.
 
 ### 14.1 Turning it on and off
 
-- **At startup**, `main.py` calls `configure_surface_format()` **before `QApplication`** when `stage_gpu` is on.
+- **At startup**, `main.py` calls `configure_surface_format()` **before `QApplication`** when `stage_gpu` is on — read
+  straight from `userprefs.json`, with a missing file or key meaning the default, as `Config.load()` reads it.
   `StageController.__init__` then calls `_enable_gpu_light()`.
 - **From Settings**, `MainWindow._apply_stage_gpu` calls `set_gpu_light()`. If the machine cannot honour the request,
   the user gets a warning dialog. At startup the fallback is silent.
@@ -829,7 +831,7 @@ and housing tints are drawn in both modes.
 
 ## 15. Volumetric fog (`gpu/fog.py`)
 
-Off by default, and it needs the GPU path. It runs between accumulate and resolve, so fog lands in the HDR buffer
+On by default, and it needs the GPU path. It runs between accumulate and resolve, so fog lands in the HDR buffer
 before the tonemap: fog is just more light. **How much fog there is stays `stage_haze`.** These settings shape what it
 looks like and what it costs.
 
@@ -837,17 +839,17 @@ looks like and what it costs.
 
 | Field | Default | Range | Meaning |
 |---|---|---|---|
-| `enabled` | false | | Run the march. |
-| `height`, `height_falloff` | 520, 1.6 | 1–4000, 0–12 | How far up from the floor the haze reaches, and how sharply it thins. |
+| `enabled` | true | | Run the march. |
+| `height`, `height_falloff` | 520, 2.4 | 1–4000, 0–12 | How far up from the floor the haze reaches, and how sharply it thins. |
 | `color` | `#dfe4ee` | hex | The colour the air scatters. |
-| `scattering` | 1.0 | 0–8 | How much light comes back to the eye. |
-| `anisotropy` | 0.55 | −0.95–0.95 | Henyey-Greenstein g. |
-| `texture`, `texture_scale` | 1.1, 260 | 0–3, 20–2000 | How ragged the air is, and its feature size in scene units. |
-| `light_intensity`, `light_dir_deg` | 0.35, 255 | 0–4, 0–360 | A stage-wide key light on the medium, so smoke shows before any fixture does. |
+| `scattering` | 1.75 | 0–8 | How much light comes back to the eye. |
+| `anisotropy` | 0.1 | −0.95–0.95 | Henyey-Greenstein g. |
+| `texture`, `texture_scale` | 1.0, 260 | 0–3, 20–2000 | How ragged the air is, and its feature size in scene units. |
+| `light_intensity`, `light_dir_deg` | 0.8, 255 | 0–4, 0–360 | A stage-wide key light on the medium, so smoke shows before any fixture does. |
 | `march_steps` | 24 | 4–128 | Samples per ray. The biggest cost. |
 | `max_distance` | 1400 | 100–8000 | Depth of the marched slab. |
 | `jitter` | 0.8 | 0–2 | Ray-start dither. 0 brings the banding back. |
-| `resolution` | 0.5 | 0.125–1 | Fraction of the surface size the march runs at. |
+| `resolution` | 0.25 | 0.125–1 | Fraction of the surface size the march runs at. |
 
 They are edited in Settings, and live from the edit-mode toolbar: the `FOG` switch, `TEXTURE`, height, falloff,
 scatter, g, ambient and colour.

@@ -168,7 +168,7 @@ never a remembered device), while an explicit index that isn't there exits 2. Th
 **`docs/STAGE.md` is the reference** for `stage/` (all but `stage3d/`); read it before changing the engine. The OFL
 category picks a fixture's body and its capabilities pick the layers that shape its light. What reaches outside it:
 
-- **The GPU path (`config.window.stage_gpu`, with the volumetric fog under it) is opt-in and fails soft to raster.**
+- **The GPU path (`config.window.stage_gpu`, with the volumetric fog under it) is on by default and fails soft to raster.**
   `QWidget.grab()` cannot read back a GL viewport, so screenshots need raster. After the Settings dialog, `MainWindow`
   must call `StageController.apply_stage_config()`: Settings replaces `config.window.fog` with a new object, which the
   GPU layer would otherwise never see.

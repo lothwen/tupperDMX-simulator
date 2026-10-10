@@ -35,6 +35,10 @@ def _assert(cond, msg):
 def _stage():
     from stage.controller import StageController
     cfg = Config()
+    # Start on the raster path. Offscreen Qt refuses GL only at the first
+    # paint, which nothing here reaches, so the GPU default would leave a
+    # light layer up.
+    cfg.window.stage_gpu = False
     cfg.fixtures = [
         FixtureInstance(type="ledbar", dmx_start=1, bars=[FixturePosition(150, 350)]),
         FixtureInstance(type="blinder", dmx_start=33, x=575, y=500),
