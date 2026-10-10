@@ -141,3 +141,6 @@ make build           # standalone executable in dist/
 ## License
 
 [WTFPL](LICENSE.txt) — do what the fuck you want to.
+
+The one exception is the demo song's audio, which is non-commercial only: see
+[assets/demo.show/README.md](assets/demo.show/README.md).

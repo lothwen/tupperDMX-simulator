@@ -118,7 +118,8 @@ Two locations, with a strict division of labour.
 **The show folder** holds everything about *the gig*: the setlist, each song's
 files and settings, the fixture patch and the web-remote cues. It is
 self-contained and portable — copy the folder, or export a `.showpack` bundle.
-By default new shows are created under `Documents/TupperDMX/`.
+By default new shows are created under `Documents/TupperDMX/`. The very first
+launch puts one there for you, `demo.show`: a programmed song to try everything on.
 
 **The preferences file** holds everything about *this machine*: audio device,
 I/O routing, log level, window sizes, and whether this box has a GPU worth using

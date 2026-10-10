@@ -1,13 +1,13 @@
-# ABOUTME: Startup show resolution (last -> recents -> create) plus the
-# ABOUTME: one-time migration of the legacy userprefs playlist/patch into a
-# ABOUTME: default show project.
+# ABOUTME: Startup show resolution (last -> recents -> create): a first launch
+# ABOUTME: copies the shipped demo show, while legacy userprefs that still
+# ABOUTME: carry a playlist get the one-time migration into a default show.
 import os
 import shutil
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from core.paths import default_shows_dir
+from core.paths import asset_path, default_shows_dir
 from core.show import store
 from core.show.model import SHOW_DIR_SUFFIX, Show, ShowError
 from tupperlogger import get_logger
@@ -15,6 +15,7 @@ from tupperlogger import get_logger
 logger = get_logger("show.migrate")
 
 DEFAULT_SHOW_NAME = "Untitled"
+DEMO_SHOW_NAME = "demo"
 MAX_RECENT_SHOWS = 8
 
 
@@ -79,6 +80,44 @@ def migrate_config_to_show(config, shows_dir) -> Show:
     return show
 
 
+def demo_template_dir() -> Path:
+    """The show a first launch copies, shipped read-only under assets/."""
+    return Path(asset_path("demo.show"))
+
+
+def create_demo_show(shows_dir) -> Show:
+    """Copy the shipped demo show into shows_dir and load the copy.
+
+    The template is never loaded in place: load_show creates missing
+    subfolders in whatever it opens, and the bundle dir may be read-only
+    (PyInstaller, Program Files, /opt/tupperdmx). Files are copied by content
+    only, so a read-only install cannot hand the copy files the autosave is
+    then unable to write. A copy that fails halfway is removed, so a show
+    folder without its .mid is never left behind to be adopted later."""
+    template = demo_template_dir()
+    if not store.is_show_dir(template):
+        raise ShowError(f"No demo show template at '{template}'")
+    shows_dir = Path(shows_dir)
+    name = _unique_show_name(shows_dir, DEMO_SHOW_NAME)
+    root = shows_dir / (name + SHOW_DIR_SUFFIX)
+    root.mkdir(parents=True)
+    try:
+        for src in template.rglob("*"):
+            dest = root / src.relative_to(template)
+            if src.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest)
+        show = store.load_show(root)
+        show.name = name
+        store.save_manifest(show)
+    except (OSError, ShowError):
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return show
+
+
 def shows_present_in(shows_dir) -> list:
     """Show folders already sitting in shows_dir, most recently modified first."""
     try:
@@ -91,9 +130,11 @@ def shows_present_in(shows_dir) -> list:
 def open_or_create_startup_show(config, shows_dir=None, explicit_path=None) -> Show:
     """Resolve the show to open at startup, in order: an explicitly requested
     path (--show), last_show_path, the recent list, a show folder already
-    present in the shows dir, and only then a freshly created default show.
-    Persists the updated pointers via config.save(), which is also what makes
-    the migration one-time — the second launch takes the last_show_path branch."""
+    present in the shows dir, and only then a new show: the legacy userprefs
+    playlist migrated into one when there is a playlist, the demo otherwise
+    (an empty show if the demo cannot be copied). Persists the updated
+    pointers via config.save(), which is also what makes the creation
+    one-time — the second launch takes the last_show_path branch."""
     candidates = []
     if explicit_path:
         candidates.append(str(explicit_path))
@@ -112,10 +153,10 @@ def open_or_create_startup_show(config, shows_dir=None, explicit_path=None) -> S
         return show
 
     shows_dir = Path(shows_dir or default_shows_dir())
-    # Nothing the prefs pointed at was usable. Before inventing an empty show,
-    # adopt one that is already on disk: headless has no show picker, so an
-    # operator who copies a .show folder onto the box over the share has no way
-    # to select it, and creating "Untitled" instead buries it for good.
+    # Nothing the prefs pointed at was usable. Before creating a show, adopt
+    # one that is already on disk: headless has no show picker, so an operator
+    # who copies a .show folder onto the box over the share has no way to
+    # select it, and creating the demo instead buries it for good.
     for root in shows_present_in(shows_dir):
         try:
             show = store.load_show(root)
@@ -127,9 +168,19 @@ def open_or_create_startup_show(config, shows_dir=None, explicit_path=None) -> S
         config.save()
         return show
 
-    show = migrate_config_to_show(config, shows_dir)
-    logger.info(f"Created show '{show.root}' "
-                f"({len(show.playlist.songs)} songs adopted from userprefs)")
+    if config.playlist.songs:
+        show = migrate_config_to_show(config, shows_dir)
+        logger.info(f"Created show '{show.root}' "
+                    f"({len(show.playlist.songs)} songs adopted from userprefs)")
+    else:
+        try:
+            show = create_demo_show(shows_dir)
+            logger.info(f"Created show '{show.root}' from the demo")
+        except (OSError, ShowError) as e:
+            logger.warning(f"Cannot copy the demo show ({e}); "
+                           f"creating an empty one")
+            show = migrate_config_to_show(config, shows_dir)
+            logger.info(f"Created show '{show.root}'")
     remember_show(config, show.root)
     # Also slims userprefs: save() no longer emits playlist/fixtures.
     config.save()

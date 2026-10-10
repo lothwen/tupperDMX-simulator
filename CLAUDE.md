@@ -74,7 +74,8 @@ most one automatic snapshot per 5 min).
   new manifest key needs no `format_version` bump when its absence loads as empty.
 - **`userprefs.json` is MACHINE-level only** (a usable GL driver is a property of the box) and **re-read while the app
   runs** (`app/prefs_watcher.py`): editing it over the share is the only way to change a setting on a headless rack box.
-  The shipped `config.json` is only the seed patch for brand-new shows.
+  The shipped `config.json` is only the seed patch for "+ New" shows: a first launch copies
+  `assets/demo.show/` instead, file by file and never loading it in place, since the bundle may be read-only.
 - **The playlist manager** (`ui/playlist_dialog.py`) edits every song live, with no OK/Cancel. Only the **current**
   song goes through media loading, AppCore setters and `bpm_state`; any other song is plain data, because `_flush_midi`
   writes to whatever song is current (so a reorder keeps `current_song_index` on the same song OBJECT, and an unloaded

@@ -85,9 +85,11 @@ Then boot the target from it with EFI (not legacy/CSM) enabled.
 
 **Everything the application writes lands under `/var/lib/tupperdmx`**: `logs/`,
 `.config/tupperDMX/userprefs.json`, and the show projects in
-`Documents/TupperDMX/`. Back up that one directory and you have the box — and
-since that directory *is* the file share ([B.6](#b6-the-file-share)), backing it
-up means dragging one folder off the network.
+`Documents/TupperDMX/` — where a fresh box's first start copies `demo.show`, the
+show it boots into until you load your own. Back up that one directory and you
+have the box — and since that directory *is* the file share
+([B.6](#b6-the-file-share)), backing it up means dragging one folder off the
+network.
 
 ### Why it carries its own Python
 

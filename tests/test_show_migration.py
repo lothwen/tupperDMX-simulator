@@ -5,10 +5,12 @@ Characterization test: startup show resolution + one-time legacy migration
 Covers the happy migration of a legacy userprefs playlist/patch/cue set into a
 default show (owned .mid copies, referenced audio, slimmed prefs), idempotence
 via last_show_path (second launch reopens the same show), the clean-start path
-(empty default show with the seed patch, no favourites), fallback through
-recent_shows when last_show_path is stale, default-name collision handling, and
-the two ways a hand-edited userprefs.json used to cost the operator the show it
-names (a UTF-8 BOM, and an overwrite-on-parse-failure).
+(a copy of the shipped demo show, an empty seeded show when the demo cannot be
+copied, a read-only template still giving a writable copy), the demo using only
+shipped fixture types, fallback through recent_shows when last_show_path is
+stale, default-name collision handling, and the two ways a hand-edited
+userprefs.json used to cost the operator the show it names (a UTF-8 BOM, and an
+overwrite-on-parse-failure).
 
 Run with:
     uv run python tests/test_show_migration.py
@@ -16,6 +18,8 @@ Run with:
 
 import json
 import os
+import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -26,8 +30,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import config, fixture_library
 from core.config import Config
-from core.show import store
-from core.show.migrate import DEFAULT_SHOW_NAME, open_or_create_startup_show
+from core.show import migrate, store
+from core.show.migrate import (DEFAULT_SHOW_NAME, DEMO_SHOW_NAME,
+                               open_or_create_startup_show)
 
 
 @pytest.fixture(autouse=True)
@@ -161,18 +166,121 @@ def test_second_launch_reopens_same_show():
                 "songs load back from the manifest with owned midi paths")
 
 
-def test_clean_start_creates_empty_default_show():
-    print("test_clean_start_creates_empty_default_show")
+def _with_template(path):
+    """Point the demo template at path; returns the restore callable."""
+    orig = migrate.demo_template_dir
+    migrate.demo_template_dir = lambda: Path(path)
+    return lambda: setattr(migrate, "demo_template_dir", orig)
+
+
+def test_clean_start_copies_the_demo_show():
+    print("test_clean_start_copies_the_demo_show")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shows_dir = Path(tmp) / "shows"
+        template = migrate.demo_template_dir()
+        before = sorted(p.relative_to(template) for p in template.rglob("*"))
+
+        cfg = Config.load()  # first launch: creates default prefs
+        show = open_or_create_startup_show(cfg, shows_dir=shows_dir)
+        _assert(show.root == shows_dir / f"{DEMO_SHOW_NAME}.show"
+                and show.name == DEMO_SHOW_NAME,
+                "clean start: the demo show is copied into the shows dir")
+        _assert([s.title for s in show.playlist.songs] == ["The Final Stand"],
+                "clean start: the demo's song")
+        song = show.playlist.songs[0]
+        root = show.root.resolve()
+        _assert(all(os.path.isfile(p) and Path(p).resolve().is_relative_to(root)
+                    for p in (song.midi, song.guide)),
+                "its .mid and guide are files inside the copy")
+        _assert(len(show.fixtures) == 11,
+                "clean start: the demo's own patch, not the seed patch")
+        _assert(show.favorites == [], "clean start: no favourites")
+        _assert(not any(show.versions_dir.iterdir()), "no history shipped")
+        _assert(sorted(p.relative_to(template) for p in template.rglob("*"))
+                == before, "the template itself is left untouched")
+        _assert(cfg.last_show_path == str(show.root),
+                "the demo becomes last_show_path")
+
+        cfg2 = Config.load()
+        show2 = open_or_create_startup_show(cfg2, shows_dir=shows_dir)
+        _assert(show2.root == show.root and len(list(shows_dir.iterdir())) == 1,
+                "second launch reopens the demo, no second copy")
+
+
+def test_missing_template_falls_back_to_empty_show():
+    print("test_missing_template_falls_back_to_empty_show")
     with tempfile.TemporaryDirectory() as tmp:
         shipped, prefs = _patch_paths(tmp)
         shows_dir = Path(tmp) / "shows"
 
-        cfg = Config.load()  # first launch: creates default prefs
-        show = open_or_create_startup_show(cfg, shows_dir=shows_dir)
-        _assert(show.playlist.songs == [], "clean start: empty setlist")
+        restore = _with_template(Path(tmp) / "nowhere.show")
+        try:
+            show = open_or_create_startup_show(Config.load(), shows_dir=shows_dir)
+        finally:
+            restore()
+        _assert(show.root == shows_dir / f"{DEFAULT_SHOW_NAME}.show"
+                and show.playlist.songs == [],
+                "a missing demo template falls back to an empty default show")
         _assert(len(show.fixtures) == 2 and show.fixtures[0].type == "ledbar",
-                "clean start: show seeded with the shipped patch")
-        _assert(show.favorites == [], "clean start: no favourites to seed")
+                "the fallback show is seeded with the shipped patch")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shows_dir = Path(tmp) / "shows"
+        broken = Path(tmp) / "broken.show"
+        broken.mkdir()
+        (broken / "show.json").write_text('{"format_version": "x"}')
+
+        restore = _with_template(broken)
+        try:
+            show = open_or_create_startup_show(Config.load(), shows_dir=shows_dir)
+        finally:
+            restore()
+        _assert(show.root == shows_dir / f"{DEFAULT_SHOW_NAME}.show",
+                "an unloadable demo template falls back too")
+        _assert(not (shows_dir / f"{DEMO_SHOW_NAME}.show").exists(),
+                "and the half-made demo copy is removed")
+
+
+def test_read_only_template_yields_a_writable_show():
+    print("test_read_only_template_yields_a_writable_show")
+    with tempfile.TemporaryDirectory() as tmp:
+        shipped, prefs = _patch_paths(tmp)
+        shows_dir = Path(tmp) / "shows"
+        # What a packaged install looks like: read-only files in read-only dirs.
+        ro = Path(tmp) / "bundle" / "demo.show"
+        shutil.copytree(migrate.demo_template_dir(), ro)
+        for p in sorted(ro.rglob("*"), reverse=True) + [ro]:
+            p.chmod(0o555 if p.is_dir() else 0o444)
+
+        restore = _with_template(ro)
+        try:
+            show = open_or_create_startup_show(Config.load(), shows_dir=shows_dir)
+        finally:
+            restore()
+            for p in [ro] + sorted(ro.rglob("*")):
+                p.chmod(stat.S_IRWXU if p.is_dir() else 0o644)
+        song = show.playlist.songs[0]
+        _assert(all(os.access(p, os.W_OK) for p in
+                    (show.manifest_path, song.midi, song.guide, show.midis_dir)),
+                "a read-only template still gives a writable show")
+
+
+def test_demo_template_uses_only_shipped_fixtures():
+    print("test_demo_template_uses_only_shipped_fixtures")
+    template = migrate.demo_template_dir()
+    data = json.loads((template / "show.json").read_text(encoding="utf-8"))
+    shipped_dir = Path(fixture_library.fixtures_dir_shipped())
+    unshipped = [f["type"] for f in data["fixtures"]
+                 if not (shipped_dir / f"{f['type']}.json").is_file()]
+    _assert(unshipped == [], "every demo patch type ships in fixtures/")
+    bad_modes = [(f["type"], f["mode"]) for f in data["fixtures"]
+                 if f["mode"] and f["mode"] not in fixture_library.fixture_modes(f["type"])]
+    _assert(bad_modes == [], "every demo patch mode exists on its type")
+    missing = [p for s in data["songs"] for p in (s["midi"], s["guide"])
+               if p and not (template / p).is_file()]
+    _assert(missing == [], "every file the demo manifest names is shipped")
 
 
 def test_stale_pointers_fall_back():
@@ -199,8 +307,8 @@ def test_stale_pointers_fall_back():
         }))
         cfg2 = Config.load()
         show2 = open_or_create_startup_show(cfg2, shows_dir=shows_dir)
-        _assert(show2.root.parent == shows_dir and show2.playlist.songs == [],
-                "no loadable candidate -> fresh default show")
+        _assert(show2.root == shows_dir / f"{DEMO_SHOW_NAME}.show",
+                "no loadable candidate -> a fresh copy of the demo show")
 
 
 def test_hand_edited_prefs_with_a_bom_still_open_the_show():
@@ -319,12 +427,13 @@ def test_default_name_collision_uniquified():
     with tempfile.TemporaryDirectory() as tmp:
         shipped, prefs = _patch_paths(tmp)
         shows_dir = Path(tmp) / "shows"
-        (shows_dir / f"{DEFAULT_SHOW_NAME}.show").mkdir(parents=True)  # squatter
+        (shows_dir / f"{DEMO_SHOW_NAME}.show").mkdir(parents=True)  # squatter
 
         cfg = Config.load()
         show = open_or_create_startup_show(cfg, shows_dir=shows_dir)
-        _assert(show.root == shows_dir / f"{DEFAULT_SHOW_NAME} 2.show",
-                "existing default folder bumps the show name")
+        _assert(show.root == shows_dir / f"{DEMO_SHOW_NAME} 2.show"
+                and show.name == f"{DEMO_SHOW_NAME} 2",
+                "existing demo folder bumps the show name")
 
 
 def main():
@@ -332,7 +441,10 @@ def main():
     try:
         for test in (test_migrates_legacy_playlist_and_patch,
                      test_second_launch_reopens_same_show,
-                     test_clean_start_creates_empty_default_show,
+                     test_clean_start_copies_the_demo_show,
+                     test_missing_template_falls_back_to_empty_show,
+                     test_read_only_template_yields_a_writable_show,
+                     test_demo_template_uses_only_shipped_fixtures,
                      test_stale_pointers_fall_back,
                      test_hand_edited_prefs_with_a_bom_still_open_the_show,
                      test_unparseable_prefs_are_kept_not_overwritten,
