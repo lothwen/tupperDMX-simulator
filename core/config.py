@@ -43,21 +43,21 @@ class StageFogConfig:
 
     # Needs `stage_gpu` as well — a ray march has nowhere to run on the raster
     # path. Off by default for the same reason `stage_gpu` is.
-    enabled: bool = False
+    enabled: bool = True
 
     # -- the look ------------------------------------------------------
     # How far up from the floor the fog reaches, in scene units, and how sharply
     # it thins on the way. Haze settles: there is more of it round the ankles
     # than in the truss, and a slab of even density reads as a bug.
     height: float = 520.0
-    height_falloff: float = 1.6
+    height_falloff: float = 2.4
     # What colour the air scatters. Not white: real haze is very slightly cool.
     color: str = "#dfe4ee"
     # How much of the light that passes through the fog comes back to the eye.
-    scattering: float = 1.0
+    scattering: float = 1.75
     # Henyey-Greenstein g. Positive is forward-scattering, which is why a beam
     # aimed at you is blinding and the same beam crossing the stage is a shaft.
-    anisotropy: float = 0.55
+    anisotropy: float = 0.1
     # How ragged the air is, 0..3. 0 is a perfectly smooth medium, which
     # integrates to a translucent sheet laid over the picture — the "white
     # filter" look. Real haze has structure at every scale and drifts, and this
@@ -65,14 +65,14 @@ class StageFogConfig:
     # field. 1 is "a pocket of air can be completely empty"; past that the
     # billows separate into distinct banks with clear air between them, which is
     # a real stage under a smoke machine rather than one under a hazer.
-    texture: float = 1.1
+    texture: float = 1.0
     # How big those features are, in scene units. Around a third of the stage's
     # height is what reads as billows rather than as grain.
     texture_scale: float = 260.0
     # A stage-wide key light for the medium itself, so smoke is visible before
     # any fixture is. `light_dir_deg` is measured the way every other axis on
     # this stage is: 90 is straight down the picture.
-    light_intensity: float = 0.35
+    light_intensity: float = 0.8
     light_dir_deg: float = 255.0
 
     # -- what it costs -------------------------------------------------
@@ -87,7 +87,7 @@ class StageFogConfig:
     # Fraction of the viewport the fog is marched at, upsampled on resolve.
     # Half is the shipped default: fog is low-frequency, so the resolution it
     # is computed at is much cheaper to give up than the step count.
-    resolution: float = 0.5
+    resolution: float = 0.25
 
 
 # How tightly the interface packs: the factor the theme's type and spacing are
@@ -123,17 +123,17 @@ class WindowConfig:
     # How hazy the virtual stage's air is before any hazer runs, 0..1. Beams are
     # only visible because there is something for them to scatter off, so this
     # is what a rig with no hazer patched still gets to see.
-    stage_haze: float = 0.50
+    stage_haze: float = 0.30
     # Draw the stage's light on the GPU: one HDR buffer everything adds into,
     # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
     # Off by default — it needs a working OpenGL context, and the raster path
     # is the one that survives a venue machine with no usable driver.
-    stage_gpu: bool = False
+    stage_gpu: bool = True
     # EXPERIMENTAL: show the 3D bar prototype (stage/stage3d/) in the 2D stage's
     # place. A machine setting like stage_gpu — it needs OpenGL 4.1.
     stage_3d_experimental: bool = False
     # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
-    stage_exposure: float = 1.0
+    stage_exposure: float = 0.5
     # Volumetric fog: what `stage_haze` looks like once it is marched through
     # rather than multiplied into a beam's alpha. Needs `stage_gpu`.
     fog: StageFogConfig = field(default_factory=StageFogConfig)
