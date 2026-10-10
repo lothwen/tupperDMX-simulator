@@ -37,8 +37,10 @@ that into BBeat. On the night, this software is not running at all.
 
 **What matters to you in this manual:** the stage designer
 ([4](#4-the-stage-view)), the fixture browser ([5](#5-the-add-fixture-dialog)),
-the timeline ([6](#6-the-timeline)) and the clip library
-([8](#8-the-clip-library-and-the-dmx-monitor)). The I/O routing page matters
+the timeline ([6](#6-the-timeline)), the clip library
+([8](#8-the-clip-library-and-the-dmx-monitor)) and the auto program
+([11](#11-the-auto-program)), which writes a first draft of a song's lighting
+for you to refine. The I/O routing page matters
 only for previewing while you work — leave it on **All software**.
 
 ## 2.2 Mode 2 — the laptop on stage
@@ -77,8 +79,8 @@ is the most robust of the three on stage — nothing to knock, nothing to sleep,
 nothing to accidentally click.
 
 The trade is that you cannot edit during the show. The remote gives you the
-setlist, transport, count-in, manual light cues and a blackout; it does not give
-you the timeline. Design happens beforehand, on a normal machine, and travels to
+setlist, transport, a free-running click, manual light cues and a blackout; it
+does not give you the timeline. Design happens beforehand, on a normal machine, and travels to
 the rack as a `.showpack` bundle.
 
 ```bash

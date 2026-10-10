@@ -170,3 +170,48 @@ moves in beside it.
 The stage cannot be closed into nowhere — closing the floating window docks it
 back into the main window. If it opens on a display that is no longer connected,
 **☰ ▸ Dock stage** retrieves it.
+
+### Fullscreen
+
+**F** puts the stage alone on a whole screen — the one its window is on — with
+nothing else drawn: the view for a projector or a monitor facing the band.
+**F** again, or **Esc**, brings it back. A stage that was docked undocks for
+fullscreen and docks again on the way out, so you land where you started.
+
+F is ignored while you are typing in a field, and while a dialog is open.
+
+## 4.7 The experimental 3D stage
+
+![The experimental 3D stage: the show's patch hung in a modelled room, lit by the same DMX, with the camera and fog read-outs on top.](images/stage-3d.png)
+
+**Settings ▸ Virtual stage ▸ Experimental: 3D stage** replaces the 2D stage
+with a three-dimensional room — a small bar with a band's backline — and hangs
+the show's patch in it. It is lit by exactly the DMX the 2D stage would have
+drawn, so a cue looks the same in both, and it fills the same place in the
+window: docked, undocked, or fullscreen with **F**.
+
+It is a prototype, and it says so:
+
+- **It needs OpenGL 4.1.** On a machine that cannot run it, the 2D stage comes
+  back, the option is switched off, and a message says why.
+- **It is for looking, not for designing.** Click **Edit stage** and the 2D
+  stage returns for as long as the designer is open; positions, mounting and
+  everything in the Inspector are the 2D stage's.
+- **Every fixture hangs on one plane** across the back of the room, wherever
+  the 2D stage has it in the picture — move a fixture in the designer and it
+  moves here too.
+
+| Control | What it does |
+|---|---|
+| **Drag** | Look around |
+| **W A S D** (held) | Fly where you are looking |
+| **Mouse wheel** | Step forwards or back |
+| **R** | Back to the starting view |
+| **−** / **+** | Exposure |
+| **[** / **]** | Fog density |
+| **H** | The room's own house rig, on or off |
+| **F** | Fullscreen, as for the 2D stage |
+
+The read-out top-left is the renderer's own; the **fog** panel top-right shapes
+the room's air — density, height, texture, drift and forward scattering — and,
+unlike the 2D stage's fog row, is not saved.

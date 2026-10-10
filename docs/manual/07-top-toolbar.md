@@ -60,10 +60,11 @@ The **▾** menu holds:
 
 | Control | What it does |
 |---|---|
-| **◀** / **▶** | Previous / next song. The first and last disable the matching arrow |
+| **◀** / **▶** | Previous / next song, skipping songs that are switched off. The first and last disable the matching arrow |
 | **09/11** | Position in the setlist |
-| Song selector | **Pick from the drop-down to switch songs. Type a new title and press Enter to rename the current one** |
-| **🗑** | Removes the current song from the setlist (with confirmation). The files stay on disk |
+| Song selector | Pick from the drop-down to switch songs. Switched-off songs are not offered |
+| **+** | Adds a new, empty song to the end of the setlist |
+| **Playlist** (the list icon) | Opens the **playlist manager** — below |
 
 The footer shows the song's tempo, its audio offset, a media chip, and a small
 **key** field — the musical key, which is shown on the web remote for the band.
@@ -77,6 +78,65 @@ The media chip is worth learning:
 | `no audio` | MIDI only |
 | `⚠ audio missing` (red) | The file the song points at is not there |
 | `⚠ MIDI missing` (red) | Same, for the MIDI file |
+
+### The playlist manager
+
+![The playlist manager: every song of the show in one table, edited in place.](images/playlist-dialog.png)
+
+The toolbar only ever edits the *current* song. The playlist manager is the
+whole setlist in one table, and every change in it is **applied the moment you
+make it** — there is no OK and no Cancel; close the window when you are done.
+
+| Column | What it is |
+|---|---|
+| grip | Drag a row to reorder. **Ctrl+↑ / Ctrl+↓** move the selected song too |
+| **ON** | Whether the song is in the running order — see below |
+| **#** | Position |
+| **NAME** | Double-click to rename |
+| **GUIDE TRACK** / **BACKING TRACK** | The file, as a chip; its **✕** takes it off the song (the file stays on disk). **+ Pick file…** when there is none. A missing file shows a red warning sign, and its path on hover |
+| **BPM** | The song's tempo, written when you stop changing it |
+| **KEY** | Pick one, or type your own spelling |
+| **PRECOUNT** | The song's count-in — the same switch as COUNT-IN in the click panel ([6.1.2](#612-centre-transport)) |
+
+Along the top: **New song**, **Import from other projects…**, the move up/down
+arrows, **Delete**, and a **Filter songs** box. While the filter hides anything,
+reordering is off — "one place up" past a hidden row is not a move anyone could
+predict. The footer counts the songs, and how many are on and off.
+
+**Switching a song off** keeps it in the setlist and in the show, but takes it
+out of the running order: **◀ ▶** skip it, a segue jumps over it, the song
+selector leaves it out, and the web remote neither lists it nor offers it as
+*up next*. Its name is struck through here. It is the way to drop a song from
+tonight's set without losing its program.
+
+**Delete** asks first. When the song owns files inside the show folder — its
+MIDI, or audio that came in with an import — you choose between **Remove, keep
+files** and **Remove and delete files**, with the files listed. **A file
+outside the show folder, or one another song also uses, is never deleted.**
+
+### Importing songs from other shows
+
+![Import from other projects: the shows beside this one, a song list per show, and a warning that the patches differ.](images/import-songs.png)
+
+**Import from other projects…** lists every other show in the shows folder. Pick
+one on the left, tick songs on the right — **Select all** ticks the lot — and
+move on to another show if you like: the ticks are kept per show, so one import
+can draw on several. The other shows are only *read*; nothing in them changes.
+
+> **Read the amber warning.** The MIDI channel is what binds a clip to a
+> fixture, so when the other show's patch is different on some channel —
+> *"This project's patch differs on MIDI channel 4"* — the imported songs'
+> cues on that channel will drive whatever fixture *this* show has there, or
+> nothing. The import still works; that lane is the one to check afterwards.
+
+**Import** asks how the audio should come in, every time:
+
+- **Copy into this show** — the audio files are copied into this show's
+  `audio/` folder, so it keeps working if the other project is moved or deleted;
+- **Link to original files** — nothing is copied, and the songs go missing if
+  those files move.
+
+The MIDI is always copied: a show owns its MIDI files.
 
 ### When files go missing
 
@@ -115,13 +175,14 @@ editing, and always on song switch, on close, and when you press **Save**.
 
 ## 7.4 The ☰ menu — history and the rest
 
-![The ☰ menu: Snapshot and Restore version, the stage, Settings and About.](images/toolbar-menu.png)
+![The ☰ menu: Auto program, Snapshot and Restore version, the stage, Settings and About.](images/toolbar-menu.png)
 
 Every save also leaves a point you can come back to, and the history lives in
 the ☰ menu at the far right of the bar.
 
 | Entry | What it does |
 |---|---|
+| **Auto program…** | Generates a song's light show from its audio — chapter [11](#11-the-auto-program) |
 | **Snapshot** | Takes a named snapshot that is **pinned** — never pruned |
 | **Restore version ▸** | The history, newest first. Autosaves show a save icon and read `Autosave · 12:57:30`; pinned snapshots show an amber pin and their name. Picking one rolls the show back to it. Greyed out until the show has a history |
 | **Dock stage** | Brings an undocked stage window back into the main window |
@@ -134,7 +195,8 @@ Times show as `HH:MM:SS` for today and `MM-DD HH:MM:SS` for older points.
 
 Automatic snapshots are taken when a show is opened and at most once every five
 minutes thereafter; older ones are eventually pruned. Anything you name with
-**Snapshot** is kept forever.
+**Snapshot** is kept forever — and so is the version the auto program saves
+before it replaces a song's program (`before auto-program — <song>`).
 
 > **Restoring is itself undoable.** Before rolling back, the app snapshots the
 > current state — so if the version you restored was the wrong one, the state you
@@ -149,7 +211,7 @@ minutes thereafter; older ones are eventually pruned. Anything you name with
 | The fixture patch | Web-remote on/off and port |
 | The web-remote cues | Count-in bars, TTS voice |
 | MIDI files, bundled audio, show-local fixtures | Stage haze, GPU renderer, fog quality |
-| The version history | Window and track sizes, recent shows |
+| The version history | Window and track sizes, UI scale, recent shows |
 
 The split is deliberate: a show should carry the gig, and preferences should
 carry the box. Copying a show to another machine never drags an audio device or

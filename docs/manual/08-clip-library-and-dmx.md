@@ -6,7 +6,7 @@ the stage slides the whole sidebar away when you want the room.
 
 ## 8.1 The Library tab
 
-![The clip library: group pills built from the patch, and the clips of the selected group.](images/clip-library.png)
+![The clip library: the Favorites pill first, then the groups built from the patch, and the clips of the selected group with their stars.](images/clip-library.png)
 
 Everything here is built from **your patch**. Patch a fixture and its cues
 appear; remove it and they go.
@@ -22,6 +22,9 @@ several:
 - **a `Chases` group** for that fixture's chases
 - and, once for the whole show, a grey **`Show`** group holding the global
   verbs: the song parts and blackout-all
+
+Once you have starred anything, a gold **`Favorites`** group leads the row —
+see below.
 
 A pill's colour dot matches that fixture's timeline lane and its section in the
 DMX monitor, so a colour means the same fixture everywhere.
@@ -40,11 +43,25 @@ so it follows whatever the fixture's Palette tab set up
 |---|---|
 | **Click** | Auditions the cue live through whatever output is routed. **The timeline is not touched** |
 | **Drag onto a lane** | Inserts it as a clip at the drop point |
+| **Click the ☆** (top-right) | Stars it as a favourite, or un-stars it |
 | **Right-click** | **Edit '<fixture>'…** — opens that fixture's dialog ([5.7](#57-editing-a-fixture-you-have-already-patched)) **on the very scene or chase the card is for**, ready to edit. A card that is neither (a channel control, a colour macro, a blackout) names no scene, so it opens on the Scenes tab with nothing selected |
 
 A card in the grey **Show** group belongs to the show rather than to a fixture,
 and a starred card whose fixture has been unpatched resolves to nobody — neither
 offers the menu.
+
+### Favourites
+
+The star in a card's corner turns gold and puts the card in the **Favorites**
+group, in the order you starred them. **Favourites are the web remote's LIGHT
+CUES** ([10.2](#102-the-panel)): starring a card is how a look gets a button on
+the tablet.
+
+They belong to the show — they travel in its folder and its `.showpack` — and
+point at the scene, chase or verb by name rather than copying it, so editing the
+scene later changes what the button does. A favourite whose fixture or scene
+has gone from the patch stays in the group, dimmed and inert, until you un-star
+it: nothing you starred is ever dropped behind your back.
 
 ### Making new cues
 

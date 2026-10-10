@@ -56,15 +56,18 @@ its toolbar moves to the bottom edge. The stage window can be closed to dock it
 back; if it ends up on a display you no longer have, **☰ ▸ Dock stage** brings it
 home.
 
+**F** puts the stage alone on a whole screen, and **F** or **Esc** brings it back
+to where it was — docked or floating ([4.6](#46-the-stage-in-its-own-window)).
+
 ## 3.4 The position display
 
 The transport's read-out, in the middle of the timeline toolbar, shows
 `MM:SS.mmm` while the song runs.
 
-During a count-in it reads something different:
+During a count-in it counts *down*, with a minus sign:
 
 ```
-COUNT-IN −03.2
+−0:03.200
 ```
 
 This is not a quirk of the display. **A count-in is negative timeline time.**
@@ -77,15 +80,21 @@ count-in resets to zero; seeking cancels it. See [6.1.3](#613-count-in).
 | Key | Where | Action |
 |---|---|---|
 | **Space** | anywhere | Play / pause |
+| **←** / **→** | anywhere | Move the playhead. A tap steps half a second; holding the key speeds up to five seconds a step |
+| **F** | anywhere | The stage fullscreen, and back |
+| **Esc** | stage | Back out one level: close the Inspector, then leave the stage designer, then leave fullscreen |
 | **Ctrl + Z** | anywhere | Undo the last timeline edit |
 | **Ctrl + Shift + Z** | anywhere | Redo |
-| **Delete** | timeline | Replace the selected clips with blackouts |
+| **Delete** | timeline | Replace the selected clips with blackouts; selected song sections are removed |
+| **Alt + ←** / **Alt + →** | timeline | Nudge the selected song sections a bar (with **Shift**, a beat) — [6.10](#610-song-sections) |
 | **Ctrl + C** / **Ctrl + V** | timeline | Copy the selection / paste it at the playhead |
 | **Ctrl + mouse wheel** | timeline | Zoom horizontally, anchored under the pointer |
 
-**Space** is deliberately suppressed while a text field, a spin box or an
-editable drop-down has focus, so typing a song title never starts the show. It
-is also suppressed while a dialog is open.
+**Space**, the arrows and **F** are deliberately suppressed while a text field,
+a spin box or an editable drop-down has focus, so typing a song title never
+starts the show. They are also suppressed while a dialog is open. The arrows
+additionally leave a slider, a list or a tab bar alone, since those steer with
+them.
 
 Undo and redo have **no button and no menu entry**, and nothing greys out when
 there is nothing left to undo — the shortcuts are the whole interface. See
@@ -93,11 +102,15 @@ there is nothing left to undo — the shortcuts are the whole interface. See
 
 ## 3.6 The ☰ menu
 
-The hamburger button at the far right of the top toolbar holds the three actions
-that do not belong to any one section:
+The hamburger button at the far right of the top toolbar holds what does not
+belong to any one section:
 
 | Entry | Notes |
 |---|---|
+| **Auto program…** | Generates a song's light show from its audio — chapter [11](#11-the-auto-program) |
+| **Snapshot** / **Restore version ▸** | The show's version history — [7.4](#74-the-menu-history-and-the-rest) |
 | **Dock stage** | Disabled unless the stage is floating |
 | **Settings…** | Opens the preferences dialog — chapter [9](#9-settings) |
 | **About TupperDMX** | Version and build provenance |
+
+On a narrow window the SHOW card's actions fold into the top of this menu too.

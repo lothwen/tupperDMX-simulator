@@ -1,4 +1,4 @@
-# 11. A show from start to finish
+# 12. A show from start to finish
 
 This chapter is one continuous worked example: an empty project on a Monday, a
 gig on a Saturday. Each step points at the chapter that covers it properly.
@@ -9,30 +9,41 @@ gig on a Saturday. Each step points at the chapter that covers it properly.
 where it lives; `Documents/TupperDMX/` is the default and is fine.
 
 You now have a folder. Everything from here — the setlist, the rig, the cues —
-goes inside it. → [6.1](#61-the-transport-bar)
+goes inside it. → [7.1](#71-show-the-project)
 
-## Step 2 — Load the first backing track
+## Step 2 — Build the setlist
 
-**SONG FILES ▸ BACKING TRACK ▸ + Load backing**, and pick the MP3.
+Open the **playlist manager** — the list button at the end of the **SETLIST**
+row. Press **New song** once per song in the set, double-click each name to
+give it its title, and pick its **BACKING TRACK** — plus a **GUIDE** if you
+have the full mix, which is what you will design against and what the auto
+program listens to. Set each song's **KEY** while you are there. Drag the rows
+into running order.
 
-The song appears in the setlist, named after the file. Rename it by typing over
-the title in the **SETLIST** selector and pressing Enter.
+Already built some of these songs in another show? **Import from other
+projects…** brings them in, programs and all.
 
-Repeat for the rest of the set. Songs are added in the order you load them.
-→ [6.2](#62-what-a-clip-is)
+One song at a time works too: **+** on the SETLIST row adds an empty song, and
+**SONG FILES ▸ BACKING TRACK ▸ + Load backing** fills it.
+→ [7.2](#72-setlist-the-songs)
 
-## Step 3 — Get the tempo and the offset right
+## Step 3 — Get the tempo, the meter and the offset right
 
 Set the **BPM** on the transport bar, or let the timeline detect it from the
-audio. Then check the grid against the waveform: if the bar lines drift off the
-downbeats, the tempo is close but wrong.
+audio. A song that is not in 4/4 needs its meter too: open the click panel (the
+**♩** button beside the BPM), pick the meter — **TAP** helps if you are not sure
+of the tempo either — and press **Set as song tempo**. Then check the grid
+against the waveform: if the bar lines drift off the downbeats, the tempo is
+close but wrong.
 
 If the bar lines are *parallel* to the beats but shifted, the problem is the
-offset — **drag the waveform horizontally** to slide the audio against the grid
-until bar 1 lands on beat 1.
+offset — **drag the waveform horizontally**, below the section bars, to slide
+the audio against the grid until bar 1 lands on beat 1. With nothing on the
+song yet, the dialog that follows simply offers **Keep the new offset**.
 
 Get this right before writing any lighting. Every clip you place is positioned
-against this grid. → [6.1.2](#612-centre-transport)
+against this grid. → [6.1.2](#612-centre-transport),
+[6.10](#610-song-sections)
 
 ## Step 4 — Patch the rig
 
@@ -78,8 +89,15 @@ offer them automatically.
 
 ## Step 6 — Write the lighting
 
-Select a song, then start dropping cues from the **Library** onto the fixture
-lanes.
+**Start from a draft, if you like.** **☰ ▸ Auto program…** listens to the song
+and writes a complete program for the rig — sections, looks, hits and fades —
+using the scenes you tagged in step 5 first. Try a couple of palettes and feels,
+step **Take** for alternatives, then **Apply…**: it saves a version before it
+replaces anything. The song sections it writes are worth checking against what
+the band calls the parts. → [11](#11-the-auto-program)
+
+Whether you start from a draft or from nothing, the rest is the same: select a
+song, then start dropping cues from the **Library** onto the fixture lanes.
 
 - **Click a card first** to audition it. The stage shows you exactly what it does
   before it becomes a clip.
@@ -104,8 +122,10 @@ blend time, a chase, an exact channel value. → [6.9](#69-the-clip-editor)
 
 ## Step 7 — Count-ins and spoken markers for the band
 
-Turn the **Count-in** switch on for songs that start cold, and off for songs that
-segue. Set how many bars — and whether the last one is counted aloud — once, in
+Turn the count-in on for songs that start cold, and off for songs that segue —
+the **PRECOUNT** column of the playlist manager shows the whole set at once
+(the **COUNT-IN** switch in the click panel is the same setting). Set how many
+bars — and whether the last one is counted aloud — once, in
 **Settings ▸ Audio**.
 
 Add spoken voice-TTS markers with the **Markers** button for anything the band needs warning
@@ -135,11 +155,14 @@ is producing DMX and anything still dark is downstream. → [8.1](#81-the-librar
 
 ## Step 10 — Set up the tablet
 
+**Star** the library cards you want as buttons on the tablet — the remote's
+LIGHT CUES are the show's favourites, in the order you star them.
+
 **Settings ▸ Web Remote**: switch it on, note the address, open it on the tablet.
 
 Check the sync pill says **SYNCED**, run a song, and confirm the setlist, the
 section countdown and the cue buttons all do what you expect from the far side of
-the stage. → [10](#10-the-web-remote)
+the stage. → [8.1](#81-the-library-tab), [10](#10-the-web-remote)
 
 ## Step 11 — Rehearse, then pin a snapshot
 
@@ -148,7 +171,7 @@ Run the set. Fix what looks wrong.
 When it is right, **☰ ▸ Snapshot** and name it (`before Billares`). A
 named snapshot is pinned and never pruned, so whatever happens during load-in you
 have a known-good state one click away — and restoring it snapshots the current
-state first, so even the rollback is reversible. → [6.4](#64-undo-and-redo)
+state first, so even the rollback is reversible. → [7.4](#74-the-menu-history-and-the-rest)
 
 ## Step 12 — Take it to the gig
 
@@ -157,7 +180,7 @@ and the fixture definitions for every song. Copy it to the machine that will run
 the show and use **SHOW ▸ … ▸ Import bundle…**.
 
 If the show runs from a rack box with no screen, start it with `--headless` and
-drive the whole night from the tablet. → [6.1](#61-the-transport-bar),
+drive the whole night from the tablet. → [7.1](#71-show-the-project),
 [10.4](#104-rack-mode)
 
 ---
@@ -166,6 +189,8 @@ drive the whole night from the tablet. → [6.1](#61-the-transport-bar),
 
 | I want to… | Go to |
 |---|---|
+| Add, reorder, rename or switch off songs | The **playlist manager**, at the end of the SETLIST row |
+| Bring songs over from another show | Playlist manager ▸ **Import from other projects…** |
 | Add a light | **Edit stage ▸ Add fixture**, or **+ Add track** on the timeline |
 | Move a light on stage | **Edit stage**, then drag it |
 | Change a light's address or channel | **Edit stage**, select it, use the Inspector |
@@ -173,6 +198,10 @@ drive the whole night from the tablet. → [6.1](#61-the-transport-bar),
 | Save a look for reuse | **Add fixture ▸ Scenes** tab, or **Save as scene…** in a scene clip |
 | Try a cue without committing | **Click** it in the Library |
 | Add a cue to a song | **Drag** it from the Library onto the fixture's lane |
+| Get a first draft of a song's lighting | **☰ ▸ Auto program…** |
+| Change a song's meter | The **♩** click panel, then **Set as song tempo** |
+| Put a cue on the tablet | **Star** its card in the Library |
+| Show the stage on its own screen | **F** |
 | Undo | **Ctrl + Z** |
 | Really remove a clip | Delete it, then right-click the blackout ▸ **Remove blackout** |
 | Send lights to a real rig | **Settings ▸ Input / Output ▸ Software + real lights** |
