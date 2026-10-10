@@ -79,9 +79,13 @@ def test_tooltip_flips_above_when_it_would_not_fit_below():
     print("test_tooltip_flips_above_when_it_would_not_fit_below")
     parent = _parent()
     tip = CustomTooltip(parent)
+    tip.setText("near the bottom")
+    tip.adjustSize()
     # The timeline sits at the BOTTOM of the window, so this is the ordinary
-    # case for a clip tooltip, not an edge case.
-    anchor_y = parent.height() - 20
+    # case for a clip tooltip, not an edge case. Less than the tooltip's own
+    # height from the bottom, so it cannot fit below whatever the font makes
+    # that height.
+    anchor_y = parent.height() - tip.height() // 2
     tip.show_at(parent.mapToGlobal(QPoint(300, anchor_y)), "near the bottom")
     _assert(tip.geometry().bottom() < anchor_y,
             f"it goes ABOVE the cursor ({tip.geometry()}) rather than being "

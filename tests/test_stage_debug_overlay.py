@@ -173,14 +173,17 @@ def test_frame_rate_follows_the_paints(qapp):
     sc, _ = _stage()
     overlay = sc.debug_overlay
 
-    now = 1000.0
+    import time
+    # Long before the window on the overlay's own clock. Not a fixed
+    # timestamp: perf_counter counts from boot, and on a CI machine that
+    # booted a few minutes ago a fixed 1000.0 lands inside the window.
+    long_ago = time.perf_counter() - 10 * WINDOW_S
     for i in range(60):
-        start = now + i / 60.0
+        start = long_ago + i / 60.0
         overlay._on_frame(start, start + 0.004)
     fps, last, worst = overlay._rates()
     _assert(fps == 0.0, "frames older than the window count for nothing")
 
-    import time
     now = time.perf_counter()
     for i in range(20):
         start = now - 1.0 + i * 0.05
