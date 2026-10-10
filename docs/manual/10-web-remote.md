@@ -4,7 +4,7 @@ The web remote is a page served on your local network, meant for a tablet on a
 mic stand. It is how the show is actually run: the laptop can be closed in a
 flight case behind the drum riser.
 
-![The remote on a tablet: setlist, now playing, arrangement, waveform, count-in, light cues and transport.](images/webremote-tablet.png)
+![The remote on a tablet: setlist, now playing, arrangement, waveform, the free-run click, light cues and transport.](images/webremote-tablet.png)
 
 ## 10.1 Turning it on
 
@@ -26,6 +26,10 @@ off.
 The show's name on the left, the running clock and `09 / 11 · SONG TITLE` in the
 middle, and on the right the tempo chip, **BLACKOUT** and **PANIC**.
 
+**Tap the show's name** to open another show from the same shows folder — the
+way to change projects on a rack box with no screen. With only one show there,
+there is nothing to pick and no arrow beside the name.
+
 **BLACKOUT is a toggle** — press it once to kill the rig, again to bring it back.
 
 **PANIC stops the show and forces blackout on.** It is not the same button: panic
@@ -35,12 +39,15 @@ re-light the stage.
 ### SETLIST
 
 Every song in order, with its tempo and duration. Tap one to switch to it. The
-current song is highlighted.
+current song is highlighted, and the one after it is marked **NEXT**.
+
+Songs switched off in the playlist manager ([7.2](#72-setlist-the-songs)) are
+not listed, and **⏮ ⏭** skip them, exactly as on the desktop.
 
 ### NOW PLAYING
 
-The song title, its position in the setlist, its key, tempo and time signature,
-and a **sync pill** that reads `SYNCED` while the connection to the application
+The song title, its position in the setlist, its key, tempo and meter, and a
+**sync pill** that reads `SYNCED` while the connection to the application
 is alive and `DISCONNECTED` when it is not. Watch that pill — it is the
 difference between "the show is not responding" and "the tablet fell off the
 Wi-Fi".
@@ -48,8 +55,9 @@ Wi-Fi".
 **CURRENT SECTION** names the part of the arrangement you are in, with a
 countdown to the next one, so a musician can see the chorus coming.
 
-**BAR — · BEAT —/4** is a visual metronome: four dots, lit on the beat, for when
-the click is not in your ears.
+**BAR — · BEAT —/4** is a visual metronome: one dot per beat of the song's
+meter, lit on the beat, for when the click is not in your ears. In a /8 meter the
+dots are smaller, because each is an eighth.
 
 ### WAVEFORM · SECTIONS
 
@@ -61,19 +69,29 @@ and **tapping the waveform seeks**.
 
 Which song follows, its tempo and length, and whether it starts with a count-in.
 
-### AUTO COUNT-IN
+### FREE-RUN CLICK
 
-The current song's count-in switch and a **− 2 +** stepper for the number of
-bars. Both write straight back to the show — this is the same setting as the
-timeline toolbar's, reachable without walking back to the laptop.
+A click on its own, without playing a song — for a soundcheck, for warming up,
+or for counting the band into something that is not in the show. **−** / **+**
+step the tempo, **TAP** sets it from your taps, the drop-down picks the meter,
+and **START** runs it (it becomes **STOP**). It follows tempo and meter changes
+while it runs.
+
+It is the desktop click panel's free-run ([6.1.2](#612-centre-transport)): one
+started here shows there, and the other way round. It cannot start while a song
+is playing, and starting or stopping a song ends it. **It never changes the
+song's tempo** — only the desktop's *Set as song tempo* does that.
 
 ### LIGHT CUES
 
 A grid of manual looks, labelled `C1`…`Cn` with a colour dot. Tapping one fires
 it immediately.
 
-Cues come from the **open show**, so each project carries its own. They travel
-inside a `.showpack` bundle with everything else.
+The grid is the open show's **favourites** — the library cards you starred on the
+desktop ([8.1](#81-the-library-tab)), in the order you starred them. Star a card
+and it gets a button here; un-star it and the button goes. Because they belong
+to the show, each project carries its own, inside a `.showpack` bundle with
+everything else.
 
 ### Transport
 

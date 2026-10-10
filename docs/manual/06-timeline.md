@@ -21,35 +21,68 @@ undocked.
 | **Snap** | Snapping on/off. **On by default** |
 | **1 beat / 1/4 beat / 1/8 beat** | How fine the grid is. `1/4 beat` by default |
 | **Bars \| Time** | What the ruler counts. Bars by default |
-| **Cues** | Opens the marker-track editor — [6.1.4](#614-voice-cues-and-control-markers) |
+| **Markers** | Opens the marker-track editor — [6.1.4](#614-voice-tts-and-control-markers) |
 
 ### 6.1.2 Centre — transport
 
-Stop, play/pause, and the position read-out (`00:00.000`).
-
-The **♪** glyph beside the BPM is decorative — **the metronome is muted from the
-CLICK row** in the header column, not here.
+Stop, play/pause, the position read-out (`00:00.000`), the **click button**
+(**♩ ▴**) and the song's **BPM**.
 
 **BPM** accepts 40–300. Anything outside that range is refused with a dialog
 naming the limits. The timeline can also detect a tempo from the audio.
 
+The metronome is still **muted from the CLICK row** in the header column; the
+click button opens the click panel.
+
+![The click panel, opened upward from its button: tempo with TAP, the meter, accent, the song's count-in, level, and the two actions.](images/click-popup.png)
+
+| Row | What it does |
+|---|---|
+| **Tempo** | **−** / **+** step one BPM, or type it. **TAP** sets it from the beat you tap: the average of the last few taps, started over by a pause of two seconds |
+| **METER** | 3/4, 4/4, 5/4, 7/4, 3/8 or 6/8 |
+| **ACCENT** | Gives beat 1 its own, stronger sound. Off, every beat sounds alike |
+| **COUNT-IN** | This song's count-in, on or off — [6.1.3](#613-count-in) |
+| **LEVEL** | The click's volume. It *is* the CLICK slider in the header column; move either and the other follows |
+| **Free-run** | Plays the click on its own, at the panel's tempo and meter, with the transport stopped. The button becomes **Stop** |
+| **Set as song tempo** | Makes the panel's tempo and meter the song's own. Greyed out until they differ from what the song has |
+
+**Tempo and meter in the panel are a draft.** The panel opens on the song's own
+values, and nothing reaches the song until **Set as song tempo** — so you can tap
+along to a record, or click the drummer through a passage at another tempo,
+without touching the song. **Accent**, **count-in** and **level** are different:
+they apply as you change them.
+
+A free-run follows the draft while it plays, re-timing once you stop changing
+it. It is unavailable while the song plays — the song's own click has the
+output then — and starting or stopping the song ends it. With the panel closed,
+the click button stays lit for as long as a free-run is going; one started from
+the web remote ([10.2](#102-the-panel)) shows here too.
+
+**A song has one meter**, and the ruler, the click, the count-in, the markers'
+bar.beat and the web remote all count in it. **The BPM always counts quarter
+notes**, whatever the meter: in 3/8 or 6/8 the click ticks the eighths, two to
+each quarter, so 6/8 at 120 BPM is six clicks a bar, at 240 a minute.
+
 ### 6.1.3 Count-in
 
-The **Count-in** switch is **per song**. On, the song begins with a counted-in
-bar or two; off, it segues straight out of the previous song. How many bars — and
-whether the last one is spoken aloud — is set once for the machine in
-**Settings ▸ Audio** ([9.3](#93-audio)).
+The count-in is **per song**: the **COUNT-IN** switch in the click panel, and
+the **PRECOUNT** column of the playlist manager ([7.2](#72-setlist-the-songs)),
+are the same setting. On, the song begins with a counted-in bar or two; off, it
+segues straight out of the previous song. How many bars — and whether the last
+one is spoken aloud — is set once for the machine in **Settings ▸ Audio**
+([9.3](#93-audio)). A count-in bar is a bar of the song's own meter: six clicks
+in 6/8.
 
 A count-in is *negative timeline time*: playback starts before zero and the
 audio, MIDI, lights and metronome all begin together at t = 0. The position
-read-out shows `COUNT-IN −0X.X` while it runs. Pausing during a count-in resets
-to zero; seeking cancels it.
+read-out counts down with a minus sign (`−0:03.200`) while it runs. Pausing
+during a count-in resets to zero; seeking cancels it.
 
-### 6.1.4 Voice cues and control markers
+### 6.1.4 Voice TTS and control markers
 
-![The marker track: voice cues, tempo changes, stop-click and the segue.](images/voice-cues.png)
+![The marker track: voice TTS, tempo changes, stop-click and the segue.](images/voice-cues.png)
 
-**Cues** opens the current song's *marker track* — everything that happens at a
+**Markers** opens the current song's *marker track* — everything that happens at a
 point in the song without being a note. The strip along the top shows them laid
 out over the song; drag one to move it. The table lists them in time order, and
 the panel on the right edits whichever is selected.
@@ -58,7 +91,7 @@ Four kinds:
 
 | Marker | What it does |
 | --- | --- |
-| **Voice cue** | Speaks a line on the **VOICE** bus — in split routing the same side as the click, so it reaches the band and not the room. **Preview** renders the selected cue and plays it. |
+| **Voice TTS** | Speaks a line on the **VOICE** bus — in split routing the same side as the click, so it reaches the band and not the room. **Preview** renders the selected line and plays it. |
 | **Tempo change** | Retimes the click from that point on, and re-draws the bar grid to match. The song's *base* tempo — what the `.mid` stores — is not touched. |
 | **Stop click** | The click stops there and stays off for the rest of the song. Seeking back before the marker brings it back. |
 | **Segue** | At the given time the show hands over to the next song in the setlist and starts it **with no count-in**. One per song, set with the tick box along the bottom. |
@@ -67,11 +100,15 @@ The **Time / Bar.beat** switch changes the units every time in the dialog is
 shown and entered in. Bar.beat is read through the song's tempo map, so a
 position after a tempo change converts differently from one before it.
 
-Markers appear on the ruler, coloured by kind: teal for a voice cue, violet for
-a tempo change, red for the stop-click, amber for the segue.
+Markers appear on the ruler in their own lane above the bar numbers, each a
+flag coloured by kind — teal for voice TTS, violet for a tempo change, red for
+the stop-click, amber for the segue — carrying its own name. **Drag a flag to
+move the marker**; while you drag it, a dashed line runs down the arrangement
+so you can see what you are landing on. **Double-click one** to open this
+dialog on that marker.
 
-Voice cues need a TTS voice installed (**Settings ▸ Audio**). Without one the
-dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — voice cues stay
+Voice TTS needs a TTS voice installed (**Settings ▸ Audio**). Without one the
+dialog warns *"TTS voice not ready (Settings ▸ AUDIO) — voice TTS stays
 silent."* and nothing is spoken. The other three kinds do not use TTS and work
 regardless.
 
@@ -82,7 +119,7 @@ switch chooses which of the two you are monitoring and which waveform is drawn.
 
 > The monitor is **session-only**. It is never saved, always starts on BACKING,
 > and **never affects what a live surface plays**. MIDI, DMX, the metronome and
-> the cues are driven by the timeline and are identical under either.
+> the markers are driven by the timeline and are identical under either.
 
 The **GUIDE** button stays disabled until the current song actually has a guide
 file.
@@ -94,6 +131,10 @@ file.
 | **Rows S \| M \| L** | **S collapses every lane** (it is not a height). M = 50 px, L = 80 px, and both resize the timeline section to fit |
 | Zoom slider | 20 % – 400 %. Mirrors Ctrl+wheel and **Fit** |
 | **Fit** | Zooms so the whole song fits the width |
+
+On a narrow window these three fold into a single **View ▾** button, whose popup
+holds the same controls — the transport bar is wider than a 1280-pixel screen
+with everything shown.
 
 ## 6.2 What a clip is
 
@@ -118,10 +159,15 @@ Verbs are grouped by number:
 | 48 / 49 / 50 | Take manual control / manual / black out this fixture |
 | 51 | Black out everything (a toggle) |
 | 52 – 59 | Timing, palette and scene-step verbs |
-| 60 | **START** — initialise the palette |
 | 61 – 69 | Song parts (INTRO, VERSE, CHORUS…) |
 | 70 | Run a chase |
 | 72 – 75 | Colour macros |
+
+Notes 60 and 71 are missing from that table on purpose. They are the fixture's
+own **state** rather than anything authored against the music: 60 is its colour
+palette (Palette tab of the fixture dialog, [5.6](#56-the-palette-tab)) and 71 its per-track auto / mute
+/ lock flags (the lane header). Both sit at t=0 in the `.mid`, one per fixture,
+and neither ever appears as a clip.
 
 **Only a fixture's first 23 DMX slots can be driven from the timeline**, because
 notes 24 and up are already scene verbs. Channels past that are still patched,
@@ -140,28 +186,53 @@ full, `-∞` at zero):
 
 - **MASTER** — the backing track
 - **CLICK** — the metronome
-- **VOICE** — the spoken count-in and voice cues
+- **VOICE** — the spoken count-in and voice TTS
 
 Below them, one header per fixture:
 
 | Element | What it does |
 |---|---|
-| grip | Reordering — *not implemented yet*, and permanently disabled |
+| grip | Drag to reorder the lanes. The order is remembered with the show |
 | chevron | Collapses the lane to a single row. View only |
 | colour swatch | Matches this fixture's group in the clip library and its section in the DMX monitor |
-| name / `Ch. 0 · DMX 1–7` | The fixture's name over its MIDI channel and address range |
+| name / `Ch. 0 · DMX 1–7` | The fixture's name over its MIDI channel and address range. **It turns red when those channels are shared with another fixture** — see below |
 | **eye** | Mutes this lane's MIDI output. Its clips redraw dimmed |
 | **lock** | Makes the lane read-only: no moves, no resizes, no new clips, no editing |
 | **A** | Follow the song-part program automatically |
+
+**Double-click the header** — anywhere on it that isn't one of those controls —
+to open the **Edit fixture** dialog for that lane's fixture
+([5.7](#57-editing-a-fixture-you-have-already-patched)):
+its name, mode, address and MIDI channel, and its type's scenes and chases.
+Right-clicking the header offers the same thing as a menu item. A lane *is* one
+patched fixture, so there is never any doubt which one you get.
+
+**The header says so as you point at it**: the fixture's colour stripe down the
+left edge lightens, and the address line underneath the name turns into
+*"Double-click to edit"*, then goes back to the address when you move away.
+
+> **A red address line means two fixtures are sharing DMX channels.** Both
+> lanes turn red, not just the one you changed — they are equally wrong, and
+> either one can be moved to fix it. Point at the line and the tooltip names
+> what it collides with; double-click the header and the Inspector spells the
+> clash out and refuses any address that would keep it. The line keeps its own
+> words either way: the header row has no space to spare, and the address is
+> the thing you need to read.
+>
+> You cannot patch your way into this from the **Add fixture** dialog, which
+> disables OK ([5.3](#53-the-footer-the-patch-decision)). It comes from a
+> **Mode** change in the Inspector growing a fixture onto its neighbour, or
+> from a show whose patch was already overlapping when it loaded.
 
 ### The lanes
 
 ![Zoomed in to a few bars: the ruler in Bars mode, the waveform with its arrangement, and clips on the fixture lanes.](images/timeline-full.png)
 
-The ruler runs along the top in **Bars** or **Time**. Beneath it the waveform,
-overlaid with the song's arrangement as translucent labelled boxes (INTRO,
-VERSE, CHORUS…). Then the fixture lanes, ordered by DMX start address. A red
-playhead crosses the lot.
+The ruler runs along the top in **Bars** or **Time**. Beneath it the waveform
+band: the song's arrangement as a row of coloured header bars, each naming its
+part (INTRO, VERSE, CHORUS…) and its length in bars, with the waveform drawn
+underneath, tinted in each section's colour ([6.10](#610-song-sections)). Then the
+fixture lanes, ordered by DMX start address. A red playhead crosses the lot.
 
 Two kinds of block appear on a lane, and telling them apart matters:
 
@@ -201,9 +272,9 @@ empty — pressing Ctrl+Z with nothing to undo simply does nothing.
 |---|---|
 | Click a clip | Selects just that one |
 | **Ctrl + click** a clip | Adds it to / removes it from the selection |
-| Drag on empty lane space | Rubber-band marquee; everything it touches is selected |
+| Drag on empty lane space | Rubber-band marquee; everything it touches is selected. Dragged up into the waveform band, it picks up song sections too |
 | **Ctrl + drag** on empty space | Same, but keeps the existing selection |
-| Click empty space (no drag) | **Seeks the playhead** to that point |
+| Click empty space, or the waveform (no drag) | **Seeks the playhead** to that point |
 
 Selected clips get a warm gold border.
 
@@ -215,6 +286,10 @@ move handle, and dragging any one of them slides the entire selection as a rigid
 block.
 
 Selection survives redraws — it is tracked by clip, not by screen position.
+
+A selection can hold clips and song sections at once. Dragging moves both by
+the same amount, **Delete** takes both, and either way it is one step for
+**Ctrl+Z**.
 
 ## 6.6 Moving, resizing and fading
 
@@ -247,7 +322,8 @@ Three ways, all equivalent:
    locked lane, or over a fixture whose type does not match the scene you are
    dragging, the cursor shows *rejected*. **Song parts are the exception — they
    drop onto the waveform band**, not onto a fixture lane, because they belong to
-   the song rather than to a light.
+   the song rather than to a light; see [6.10](#610-song-sections) for what a
+   drop there does.
 2. **Right-click a lane** and choose **Add event at this position**.
 3. **Ctrl + V** pastes a copied selection at the playhead.
 
@@ -260,8 +336,11 @@ single **Delete N events**.
 
 Right-clicking empty lane space offers only **Add event at this position**.
 
-Right-clicking a song-section box offers **Edit '<part>'…** and **Delete
-'<part>'**.
+Right-clicking a song section, or the empty waveform band, has its own menu —
+[6.10](#610-song-sections).
+
+Right-clicking a lane *header* offers **Edit '<fixture>'…**, which opens that
+fixture's own dialog ([5.7](#57-editing-a-fixture-you-have-already-patched)).
 
 Hovering a clip shows its part name, note number, time, bar and beat, and
 velocity.
@@ -345,11 +424,97 @@ edit.
   re-send, not a restore: it cannot put back what the automatic program was
   doing.
 
-### The START clip
+### The palette is not a clip
 
-![The START clip's own editor: a base hue and the palette mode built from it.](images/start-event-edit.png)
+Note 60 (**START**) used to be a draggable clip with an editor of its own. It is
+the fixture's colour palette now — state you set on the fixture, not a cue you
+place in the song — so it lives in the **Palette** tab of the fixture dialog
+([5.6](#56-the-palette-tab)) and has no representation on the timeline at all.
 
-Note 60 gets its own dialog, because its velocity packs two choices rather than
-one parameter: a **Base Color** from a twelve-hue grid (or **?** for random) and
-a **Palette Mode** — COMPLEMENTARY, ANALOGOUS, TRIADIC, COLOR+WHITE,
-MONOCHROMATIC or SINGLE — each previewed as a live colour band.
+## 6.10 Song sections
+
+The waveform band carries the song's **arrangement**: INTRO, VERSE, CHORUS and
+the rest, one after another from the start of the song to its end. The web
+remote shows them to the band, the **A** lanes follow them, and the auto program
+([11](#11-the-auto-program)) writes them.
+
+![A section selected on the arrangement strip, with its right-click menu.](images/song-sections.png)
+
+Each section is a coloured **header bar** across the top of the band, with the
+part's name on the left and its length in bars on the right (`8`, or `8.25` for
+eight bars and a beat). The waveform underneath takes the section's colour.
+
+**A section has no length of its own.** What is stored is where each one
+*starts*; it runs until the next one starts, and the last one runs to the end.
+So the strip is always contiguous — no gaps, no overlaps — and editing it really
+means moving the **boundaries** between sections.
+
+### The bar is the section, the waveform is the audio
+
+The two halves of the band answer different gestures:
+
+| Where | Gesture | Result |
+|---|---|---|
+| Header bar | Click | Selects the section and seeks there. **Ctrl** adds or removes it, **Shift** extends the selection |
+| Header bar | Drag across several | Sweeps a selection |
+| Header bar | Drag a selected section | Moves **all** the selected ones together |
+| Header bar | Double-click | Picks another part for it from a list |
+| A boundary, anywhere down the band | Drag | Moves that one boundary: the section before grows, the one after shrinks |
+| Waveform | Click | Seeks |
+| Waveform | Drag | Slides the audio against the grid (its **offset**) — see below |
+
+**A single section never moves on its own.** Dragging one would mean moving the
+audio under it, which does not move. Drag its edge instead, or select two or
+more and move the group.
+
+Everything snaps to the beat while **Snap** is on (hold **Shift** for whole
+bars), and nothing can cross or crowd a neighbour: a section is never shorter
+than one beat, and never changes its place in the order. **Alt + ←/→** nudges
+the selected sections a bar, or a beat with **Shift** as well.
+
+### Adding, retyping and deleting
+
+**Drop a song part** from the clip library's grey **Show** group onto the band.
+A ghost shows where it would land. Dropped inside a section, it **splits** it
+there; dropped on a section's start, it **retypes** that section instead — two
+parts can never stack at one instant.
+
+**Right-click a section:**
+
+| Entry | What it does |
+|---|---|
+| **Change to ▸** | Retypes it — or every selected section — to another part |
+| **Split here ▸** | Starts a new section of the chosen part where you clicked |
+| **Play from '<part>'** | Starts playback at the section's start |
+| **Select all sections** | |
+| **Delete '<part>'** | Removes it; the section before it extends over the gap, as the menu says (`Delete 'BRIDGE' (VERSE extends)`) |
+| **Set audio offset…** | See below |
+
+**Right-click the band outside a section** — before the first one, say — and the
+menu offers **Add section here ▸** (or **Change '<part>' to ▸** on a start), and
+the offset again.
+
+**Delete** removes the selected sections without asking: **Ctrl+Z** puts them
+back, like any other edit.
+
+### The audio offset
+
+The waveform below the header bars is the audio, and dragging it slides the
+track against the grid — the way to put bar 1 on beat 1. **An offset moves that
+one track and nothing else**: clips, sections and markers stay where they are
+on the timeline, and a song's guide and backing each have an offset of their
+own.
+
+So when you let go, **Move show with audio** asks what should follow:
+
+| Button | Result |
+|---|---|
+| **Move show** | The clips, song sections and markers move by the same amount — a tick box adds the other audio track |
+| **Audio only** | The track keeps its new offset; everything else stays. On a song with nothing on it yet, this is the only choice, and reads **Keep the new offset** |
+| **Cancel** | Nothing changes |
+
+**Advanced** in the same dialog takes the offset as a number, or as a move in
+beats at the song's tempo. **Set audio offset…** on either band menu opens it
+straight there, without a drag — the way to type an exact value. When the show
+cannot follow (something would be pushed before the start of the song), the
+dialog names what is in the way.

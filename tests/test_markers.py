@@ -3,7 +3,7 @@ Characterization test: the song marker track (voice cues + control markers).
 
 Covers the TempoMap in both directions, the ControlMarkerConfig model and its
 show-manifest round-trip, core.markers' resolution helpers, MediaController's
-marker/segue firing, and AudioController's beat scheduling across a tempo
+marker/segue firing, and the Metronome's beat scheduling across a tempo
 change — all with fakes: no audio device, no TTS, no GL.
 
 Run with:
@@ -21,8 +21,10 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication
 
+from core import click as core_click
 from core import markers as core_markers
-from core.config import Config, ControlMarkerConfig, PlaylistConfig, SongConfig
+from core.config import (Config, ControlMarkerConfig, PlaylistConfig,
+                         SongConfig, VoiceTTSConfig)
 from core.show.manifest import show_from_manifest, show_to_manifest
 from core.show.model import Show
 from core.tempo_map import TempoMap
@@ -177,13 +179,13 @@ def test_marker_helpers():
                ControlMarkerConfig(10.0, "tempo", 90)]
     _assert(core_markers.tempo_changes(markers) == [(10.0, 90), (96.0, 132)],
             "tempo_changes is what a TempoMap is built from")
-    _assert(core_markers.click_stop_time(markers) == 188.0,
+    _assert(core_click.click_stop_time(markers) == 188.0,
             "the EARLIEST stop-click wins (the marker is one-way)")
-    _assert(not core_markers.click_stopped_at(markers, 187.9),
+    _assert(not core_click.click_stopped_at(markers, 187.9),
             "the click runs before the marker")
-    _assert(core_markers.click_stopped_at(markers, 188.0),
+    _assert(core_click.click_stopped_at(markers, 188.0),
             "and is stopped from the marker on")
-    _assert(core_markers.click_stop_time([]) is None,
+    _assert(core_click.click_stop_time([]) is None,
             "no marker means the click never stops")
 
     song = SongConfig(control_markers=markers, segue=True, segue_time=210.5)
@@ -191,6 +193,50 @@ def test_marker_helpers():
     _assert(rows[0] == (10.0, "tempo", "90 BPM"), "ruler rows label a tempo")
     _assert((210.5, "segue", "next song, no count-in") in rows,
             "and carry the segue, which has no other way onto the ruler")
+
+    # What a ruler drag reports is (kind, the time the flag sat at) — the flags
+    # are drawn from those tuples, so this is how the edit finds the object.
+    found = core_markers.marker_at(markers, 188.0, "click_stop")
+    _assert(found is not None and found.time == 188.0,
+            "marker_at finds the marker a drag started from")
+    _assert(core_markers.marker_at(markers, 96.4, "tempo").time == 96.0,
+            "nearest wins, so float noise in the reported time is harmless")
+    _assert(core_markers.marker_at(markers, 96.0, "click_stop").time == 188.0,
+            "the kind filter never crosses into another kind")
+    _assert(core_markers.marker_at([], 1.0) is None, "and none is None")
+    cues = [VoiceTTSConfig(30.0, "aquí"), VoiceTTSConfig(80.0, "y aquí")]
+    _assert(core_markers.marker_at(cues, 79.0).text == "y aquí",
+            "voice cues carry no kind, and are looked up without one")
+
+
+def test_dialog_opens_on_a_marker():
+    print("test_dialog_opens_on_a_marker")
+    from ui.markers_dialog import MarkersDialog
+
+    cues = [VoiceTTSConfig(12.0, "entra bateria"), VoiceTTSConfig(48.5, "solo")]
+    controls = [ControlMarkerConfig(96.0, "tempo", 132),
+                ControlMarkerConfig(188.0, "click_stop")]
+
+    def _dialog(**kwargs):
+        return MarkersDialog(list(cues), list(controls), base_bpm=120,
+                             duration=240.0, **kwargs)
+
+    _assert(_dialog()._selected_row()["text"] == "entra bateria",
+            "with nothing named, the dialog opens on the first marker")
+    _assert(_dialog(select=("voice", 48.5))._selected_row()["text"] == "solo",
+            "a double-clicked flag opens it on its own marker instead")
+    picked = _dialog(select=("click_stop", 188.2))._selected_row()
+    _assert(picked["kind"] == "click_stop",
+            "nearest of that kind wins, so a rounded time still lands right")
+    _assert(_dialog(select=("tempo", 0.0))._selected_row()["kind"] == "tempo",
+            "and the kind is never crossed, however far the time is off")
+
+    # The segue is no row at all — the field it does have takes the caret.
+    seguing = _dialog(segue=True, segue_time=210.0, select=("segue", 210.0))
+    _assert(seguing.focusWidget() is seguing.segue_spin,
+            "opening on the segue puts the caret in the segue's own field")
+    _assert(seguing._selected_row()["text"] == "entra bateria",
+            "while the table still selects something rather than nothing")
 
 
 # ----------------------------------------------------------------------
@@ -286,45 +332,80 @@ def test_count_in_uses_the_tempo_map():
 
 def test_metronome_across_a_tempo_change():
     print("test_metronome_across_a_tempo_change")
-    from app.audio_controller import AudioController
+    from app.metronome import Metronome
     engine = FakeEngine()
-    controller = AudioController(engine)
+    controller = Metronome(engine)
     controller.set_tempo_map(TempoMap(120, [(8.0, 60)]))
+
+    scheduled = []      # (beat number, timeline time, output frame)
+    controller.beat_scheduled.connect(
+        lambda n, t, f: scheduled.append((n, t, f)))
 
     # Start on the first count-in beat of a 2-bar count-in at 120 BPM.
     controller.start_metronome(-4.0)
     _assert(engine.clicks == [True],
             "a count-in starts ON the downbeat, not mid-bar")
 
-    beats = [controller.beat_count]
-    for _ in range(7):
-        controller._play_metronome_beep()
-        beats.append(controller.beat_count)
-    _assert(beats == [2, 3, 4, 1, 2, 3, 4, 1],
+    # Run the output forward; the pump queues each beat as it enters the
+    # lookahead, which is the real mechanism.
+    for _ in range(20):          # 5 s of output: two full count-in bars on
+        engine.advance(0.25)     # from -4 s, and into the song past t=0
+        controller._pump()
+    _assert([n for n, _t, _f in scheduled][:8] == [1, 2, 3, 4, 1, 2, 3, 4],
             "the 1-2-3-4 cycle runs unbroken from negative time into the song")
 
     tempo_map = controller.tempo_map
     before = tempo_map.seconds_at_beat(16) - tempo_map.seconds_at_beat(15)
     after = tempo_map.seconds_at_beat(17) - tempo_map.seconds_at_beat(16)
     _assert(_close(before, 0.5) and _close(after, 1.0),
-            "the beat interval the scheduler adds changes at the marker")
+            "the beat interval the scheduler reads changes at the marker")
 
     # The scheduler needs no nudging at the marker: the map it reads already
     # carries the change, which is why nothing restarts it there.
+    scheduled.clear()
     engine.clicks.clear()
     controller.start_metronome(0.0)
-    landed = [0.0]
-    for _ in range(20):
-        controller._play_metronome_beep()
-        landed.append(controller.tempo_map.seconds_at_beat(controller._beat_index))
-    intervals = [round(landed[i + 1] - landed[i], 3) for i in range(14, 19)]
-    _assert(intervals == [0.5, 1.0, 1.0, 1.0, 1.0],
-            "beats retime themselves at the marker with no restart")
-    _assert(len(engine.clicks) == 21,
-            "and no beat is played twice on the way through it")
+    for _ in range(50):          # 12.5 s, well past the 8 s marker
+        engine.advance(0.25)
+        controller._pump()
+
+    # Beats 0-15 fill the first 8 s at 0.5 s each; beat 16 sits on the marker
+    # and every beat after it is 1.0 s.
+    times = [t for _n, t, _f in scheduled]
+    intervals = [round(times[i + 1] - times[i], 3) for i in range(14, 19)]
+    _assert(intervals == [0.5, 0.5, 1.0, 1.0, 1.0],
+            f"beats retime themselves at the marker with no restart ({intervals})")
+    _assert(len(times) == len(set(times)),
+            "and no beat is queued twice on the way through it")
+
+    # Each beat's FRAME matches its time exactly, measured from the grid's
+    # anchor (the playhead where the click was started) — that is the whole
+    # point of scheduling rather than timing.
+    rate = engine.rate()
+    worst = max(
+        abs((f - controller._anchor_frame)
+            - round((t - controller._anchor_time) * rate))
+        for _n, t, f in scheduled)
+    _assert(worst <= 1,
+            f"every beat is placed on its exact sample (worst off by {worst})")
 
     controller.stop_metronome()
     _assert(controller.beat_count == 0, "stopping resets the beat")
+
+
+def test_the_window_leaves_the_click_to_the_core():
+    print("test_the_window_leaves_the_click_to_the_core")
+    # AppCore owns the click's start/stop: it asks the stop-click marker and
+    # phases on the transport's anchor. The window reacting to the same signal
+    # ran AFTER it, and its bare restart undid both — pressing play past a
+    # stop-click brought the click back.
+    from unittest.mock import MagicMock
+    from ui.main_window import MainWindow
+    window = MagicMock()
+    for playing in (True, False):
+        MainWindow._on_playback_state_changed(window, playing)
+    _assert(window.metronome.mock_calls == [],
+            "the window's transport slot never touches the metronome")
 
 
 def main():
@@ -336,10 +417,12 @@ def main():
     test_parse_control_markers()
     test_manifest_roundtrip()
     test_marker_helpers()
+    test_dialog_opens_on_a_marker()
     test_marker_firing()
     test_segue_arming()
     test_count_in_uses_the_tempo_map()
     test_metronome_across_a_tempo_change()
+    test_the_window_leaves_the_click_to_the_core()
     print("\nALL TESTS PASSED")
 
 

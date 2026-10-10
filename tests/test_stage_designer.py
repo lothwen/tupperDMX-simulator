@@ -98,6 +98,29 @@ def test_remove_drops_only_target(qapp):
             "the other fixtures' render objects are untouched")
 
 
+def test_remove_fixture_by_identity_needs_no_selection(qapp):
+    """`remove_selected` answers the stage's selection; `remove_fixture`
+    answers a dialog opened from the timeline or the clip library, where there
+    is no selection to answer."""
+    print("test_remove_fixture_by_identity_needs_no_selection")
+    sc, cfg = _stage()
+    inst = sc.add_fixture("par-rgbw", 9, 400, 300)
+    keep_ids = {id(o) for o in (sc.led_bars + sc.blinders)}
+    announced = []
+    sc.fixture_removed.connect(announced.append)
+
+    _assert(len(sc.scene.selectedItems()) == 0, "nothing is selected")
+    _assert(sc.remove_fixture(inst) is True, "it removes the named fixture anyway")
+    _assert(inst not in cfg.fixtures, "the instance left the patch")
+    _assert(len(sc.generic_fixtures) == 0, "its render object was dropped")
+    _assert(announced == [inst], "and the removal was announced once")
+    _assert({id(o) for o in (sc.led_bars + sc.blinders)} == keep_ids,
+            "the other fixtures' render objects are untouched")
+
+    _assert(sc.remove_fixture(inst) is False, "removing it twice is a no-op")
+    _assert(sc.remove_fixture(None) is False, "and so is removing nothing")
+
+
 def test_scene_uses_no_index(qapp):
     """The stage scene must use NoIndex item lookup.
 
@@ -283,6 +306,7 @@ def main():
     test_added_fixture_receives_dmx(app)
     test_add_ledbar_seeds_all_bars(app)
     test_remove_drops_only_target(app)
+    test_remove_fixture_by_identity_needs_no_selection(app)
     test_scene_uses_no_index(app)
     test_remove_ledbar_purges_bars(app)
     test_remove_then_readd_keeps_other_channels_stable(app)

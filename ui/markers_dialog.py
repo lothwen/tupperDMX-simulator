@@ -1,7 +1,7 @@
 # ABOUTME: MarkersDialog — per-song editor for the marker track: spoken voice
 # ABOUTME: cues plus the control markers (tempo change, stop click) and segue.
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (QColor, QIcon, QPainter, QPainterPath, QPen,
@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox,
 
 from audio import tts
 from core import markers as core_markers
-from core.config import ControlMarkerConfig, VoiceCueConfig
-from core.tempo_map import BEATS_PER_BAR, TempoMap
+from core.config import ControlMarkerConfig, VoiceTTSConfig
+from core.tempo_map import DEFAULT_METER, TempoMap
 from tupperlogger import get_logger
 from ui.widgets import icons
 
@@ -29,14 +29,14 @@ def _format_clock(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
-def _split_bar_beat(value: float):
+def _split_bar_beat(value: float, beats_per_bar: int):
     """Decode a `bar.beat` spinbox value (53.2 → bar 53, beat 2).
 
     One decimal digit IS the beat, which only reads correctly while the beat
-    stays a single digit — true for the 4/4 this app counts everywhere."""
+    stays a single digit — true for every meter a song can take (7/4 at most)."""
     bar = max(1, int(value))
     beat = int(round((value - bar) * 10))
-    return bar, min(BEATS_PER_BAR, max(1, beat))
+    return bar, min(beats_per_bar, max(1, beat))
 
 
 def _kind_swatch(kind: str, size: int = 10) -> QPixmap:
@@ -104,7 +104,7 @@ class TimeSpin(QDoubleSpinBox):
         if self._mode == MODE_SECONDS:
             return float(self.value())
         return max(0.0, self._tempo_map.seconds_at_bar_beat(
-            *_split_bar_beat(self.value())))
+            *_split_bar_beat(self.value(), self._tempo_map.beats_per_bar)))
 
     def seconds(self) -> float:
         return self._seconds
@@ -123,10 +123,10 @@ class TimeSpin(QDoubleSpinBox):
         if self._mode == MODE_SECONDS:
             super().stepBy(steps)
             return
-        bar, beat = _split_bar_beat(self.value())
-        index = max(0, (bar - 1) * BEATS_PER_BAR + (beat - 1) + steps)
-        self.setValue(index // BEATS_PER_BAR + 1
-                      + (index % BEATS_PER_BAR + 1) / 10.0)
+        per_bar = self._tempo_map.beats_per_bar
+        bar, beat = _split_bar_beat(self.value(), per_bar)
+        index = max(0, (bar - 1) * per_bar + (beat - 1) + steps)
+        self.setValue(index // per_bar + 1 + (index % per_bar + 1) / 10.0)
 
 
 class MarkerStrip(QWidget):
@@ -299,26 +299,29 @@ class MarkersDialog(QDialog):
     """Editor for a song's marker track.
 
     Four things ride a song's timeline that are neither notes nor audio: a
-    spoken voice cue, a tempo change, a stop-click, and the segue out of the
-    song. They are one editing job — "what happens, and when" — so they share
+    spoken voice-TTS line, a tempo change, a stop-click, and the segue out of
+    the song. They are one editing job — "what happens, and when" — so they share
     one table, one strip and one time-unit toggle here, and are split back into
-    their storage shapes only on the way out (voice cues pre-render to PCM,
+    their storage shapes only on the way out (voice TTS pre-renders to PCM,
     control markers act on the transport, the segue is one flag per song).
 
     A pure editor: the accessors return the result and the caller persists.
     """
 
-    def __init__(self, voice_cues: List[VoiceCueConfig],
+    def __init__(self, voice_tts: List[VoiceTTSConfig],
                  control_markers: List[ControlMarkerConfig], parent=None,
                  audio_engine=None, tts_voice: str = tts.DEFAULT_VOICE,
                  segue: bool = False, segue_time: float = 0.0,
-                 base_bpm: int = 120, duration: float = 0.0,
-                 song_title: str = "", has_next_song: bool = True):
+                 base_bpm: int = 120, meter: str = DEFAULT_METER,
+                 duration: float = 0.0,
+                 song_title: str = "", has_next_song: bool = True,
+                 select: Optional[Tuple[str, float]] = None):
         super().__init__(parent)
         self.logger = get_logger("ui.markers")
         self.audio_engine = audio_engine
         self.tts_voice = tts_voice
         self.base_bpm = int(base_bpm)
+        self.meter = meter
         self.duration = float(duration or 0.0)
         self.has_next_song = bool(has_next_song)
 
@@ -326,17 +329,17 @@ class MarkersDialog(QDialog):
         self._rows = []           # dicts: uid, time, kind, text, bpm
         self._selected_uid = None
         self._time_mode = MODE_SECONDS
-        self._tempo_map = TempoMap(self.base_bpm)
+        self._tempo_map = TempoMap(self.base_bpm, meter=meter)
         self._loading = False
 
-        for cue in voice_cues:
+        for cue in voice_tts:
             self._new_row(cue.time, core_markers.KIND_VOICE, text=cue.text)
         for marker in control_markers:
             self._new_row(marker.time, marker.kind, bpm=marker.bpm)
         self._rows.sort(key=lambda r: r["time"])
 
         self.setObjectName("MarkersDialog")
-        self.setWindowTitle("Voice cues & control markers")
+        self.setWindowTitle("Song markers")
         self.setModal(True)
 
         layout = QVBoxLayout(self)
@@ -350,10 +353,19 @@ class MarkersDialog(QDialog):
         if not tts.is_available() or not tts.is_voice_installed(tts_voice):
             self.hint_label.setText(
                 f'{icons.img_tag("warning", "#e2a04a", 11)} '
-                "TTS voice not ready (Settings ▸ AUDIO) — voice cues stay silent.")
+                "TTS voice not ready (Settings ▸ AUDIO) — voice TTS stays silent.")
 
         self._rebuild_tempo_map()
-        self._refresh(select_uid=self._rows[0]["uid"] if self._rows else None)
+        opening = self._uid_for(*select) if select else None
+        if opening is None and self._rows:
+            opening = self._rows[0]["uid"]
+        self._refresh(select_uid=opening)
+        if select and select[0] == core_markers.KIND_SEGUE:
+            # The segue is no row, so there is nothing to select for it — the
+            # field it does have gets the caret instead, or a double-click on
+            # its flag would look like it had opened the dialog at random.
+            self.segue_spin.setFocus()
+            self.segue_spin.selectAll()
 
     # ------------------------------------------------------------------
     # Construction
@@ -365,7 +377,7 @@ class MarkersDialog(QDialog):
         row.addWidget(title)
 
         meta = [_format_clock(self.duration)] if self.duration > 0 else []
-        meta += [f"{self.base_bpm} BPM", "4/4"]
+        meta += [f"{self.base_bpm} BPM", self.meter]
         meta_label = QLabel("  ·  ".join(meta))
         meta_label.setObjectName("SettingsDimLabel")
         row.addWidget(meta_label)
@@ -442,7 +454,7 @@ class MarkersDialog(QDialog):
 
         self.preview_button = QPushButton("Preview")
         self.preview_button.setIcon(icons.icon("play"))
-        self.preview_button.setToolTip("Render the selected voice cue and play "
+        self.preview_button.setToolTip("Render the selected voice-TTS line and play "
                                        "it on the voice bus")
         self.preview_button.clicked.connect(self._preview_selected)
         row.addWidget(self.preview_button)
@@ -469,7 +481,7 @@ class MarkersDialog(QDialog):
         self.pages = QStackedWidget()
         self.pages.setObjectName("MarkersPages")
 
-        # Voice cue: the spoken text.
+        # Voice TTS: the spoken text.
         voice_page = QWidget()
         voice_layout = QVBoxLayout(voice_page)
         voice_layout.setContentsMargins(0, 0, 0, 0)
@@ -614,6 +626,18 @@ class MarkersDialog(QDialog):
         self._rows.append(row)
         return row
 
+    def _uid_for(self, kind: str, time_sec: float) -> Optional[int]:
+        """The row a caller pointed at, by (kind, time).
+
+        That pair is how the timeline names a marker — its ruler flags are
+        drawn from tuples, not from these rows — so opening the dialog "on"
+        one means finding it the same way `core.markers.marker_at` does."""
+        candidates = [r for r in self._rows if r["kind"] == kind]
+        if not candidates:
+            return None
+        return min(candidates,
+                   key=lambda r: abs(r["time"] - float(time_sec)))["uid"]
+
     def _row(self, uid):
         for row in self._rows:
             if row["uid"] == uid:
@@ -649,7 +673,7 @@ class MarkersDialog(QDialog):
         being edited rather than the ones the song was opened with."""
         changes = [(r["time"], r["bpm"]) for r in self._rows
                    if r["kind"] == core_markers.KIND_TEMPO]
-        self._tempo_map = TempoMap(self.base_bpm, changes)
+        self._tempo_map = TempoMap(self.base_bpm, changes, self.meter)
 
     # ------------------------------------------------------------------
     # Refresh
@@ -891,7 +915,7 @@ class MarkersDialog(QDialog):
         row = self._selected_row()
         if row is None or row["kind"] != core_markers.KIND_VOICE \
                 or not row["text"].strip():
-            self.status_label.setText("Select a voice cue with text to preview.")
+            self.status_label.setText("Select a voice-TTS marker with text to preview.")
             return
         self.setCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -910,10 +934,13 @@ class MarkersDialog(QDialog):
     # ------------------------------------------------------------------
     # Results
     # ------------------------------------------------------------------
-    def voice_cues(self) -> List[VoiceCueConfig]:
-        """The edited voice cues, sorted by time; blank rows are dropped."""
+    def voice_tts(self) -> List[VoiceTTSConfig]:
+        """The edited voice-TTS markers, sorted by time (blank rows dropped).
+
+        Still `VoiceTTSConfig` under the `voice_tts` key: the label changed,
+        the show format did not."""
         return sorted(
-            (VoiceCueConfig(time=r["time"], text=r["text"].strip())
+            (VoiceTTSConfig(time=r["time"], text=r["text"].strip())
              for r in self._rows
              if r["kind"] == core_markers.KIND_VOICE and r["text"].strip()),
             key=lambda c: c.time)

@@ -1,19 +1,24 @@
 # ABOUTME: SettingsDialog — modal editor for the user-writable preferences in
-# ABOUTME: userprefs.json (I/O routing, Art-Net target, log level). Opened from
-# ABOUTME: the menu; sidebar-navigated pages (I/O, Web Remote, Audio, Virtual
-# ABOUTME: stage, Interface, Logging).
+# ABOUTME: userprefs.json (I/O routing, Art-Net target, log level and folder).
+# ABOUTME: Opened from the menu; sidebar-navigated pages (I/O, Web Remote,
+# ABOUTME: Audio, Virtual stage, Interface, Logging).
 
 import html
+import os
 import threading
 from dataclasses import asdict
+from pathlib import Path
 
 from PyQt6.QtWidgets import (QDialog, QFormLayout, QGroupBox, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QComboBox, QCheckBox, QRadioButton, QButtonGroup,
                              QDialogButtonBox, QMessageBox, QWidget, QFrame,
                              QSizePolicy, QPushButton, QListWidget,
-                             QListWidgetItem, QStackedWidget, QSlider)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
+                             QListWidgetItem, QStackedWidget, QSlider,
+                             QGridLayout, QToolButton, QFileDialog,
+                             QSpacerItem, QApplication)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtMultimedia import QMediaDevices
 
 from audio import tts
@@ -22,18 +27,110 @@ from core import buildinfo, io_routing
 from core.config import Config, IOConfig, UI_SCALE_MIN, UI_SCALE_MAX
 from midi.worker import MidiWorker
 from dmx.usb_worker import USBDMXWorker
+from tupperlogger import DEFAULT_LOG_DIR, current_log_path, resolve_log_dir
 from ui.widgets import icons
 from ui.io_flow_widget import IOFlowWidget
+from ui.widgets.log_tail import LogTailView
+from ui.widgets.slider_ticks import SliderTickLabels
 from ui.widgets.toggle_switch import ToggleSwitch
 from webremote.state import lan_ip
 
 
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
+#: How long "Copy path" stays reading "Copied" before it goes back.
+COPIED_FLASH_MS = 1200
+
+
+def platform_neutral(form: QFormLayout) -> QFormLayout:
+    """`form` laid out the same on every OS.
+
+    QFormLayout takes its alignment and growth from three style hints, and no
+    two styles answer them alike: QMacStyle centres the whole form and freezes
+    the fields at their size hint, Fusion left-aligns and stretches every field
+    to the full row. Setting the properties is what stops the style being asked
+    at all.
+
+    `ExpandingFieldsGrow` is the growth policy, not `AllNonFixedFieldsGrow`: a
+    spin box holding "24" has no business being 700px wide, and only a field
+    that asks for the room — a size policy of Expanding — gets it.
+    """
+    form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+    form.setFieldGrowthPolicy(
+        QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    return form
+
+
+def human_bytes(count: float) -> str:
+    """A byte count as "38.4 MB" — one decimal, because the log folder is the
+    kind of number you glance at rather than audit."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if count < 1024 or unit == "GB":
+            return f"{count:.0f} {unit}" if unit == "B" else f"{count:.1f} {unit}"
+        count /= 1024
+
+
+def folder_summary(path) -> str:
+    """"38.4 MB · 12 files" for `path`, or why there is no such number.
+
+    Files only and one level deep: this describes a log folder, and a rotating
+    handler never makes subdirectories.
+    """
+    try:
+        with os.scandir(path) as entries:
+            files = [entry for entry in entries if entry.is_file()]
+    except OSError:
+        return "not created yet"
+    if not files:
+        return "empty"
+    total = sum(entry.stat().st_size for entry in files)
+    return f"{human_bytes(total)} · {len(files)} file{'s' if len(files) != 1 else ''}"
+
+
 #: UI-scale slider granularity, in percent, and how long a drag has to settle
 #: before the preview restyles the app.
 SCALE_STEP = 5
 SCALE_PREVIEW_DELAY_MS = 150
+
+
+#: Virtual-stage graphics presets, in slider order: one handle over the whole
+#: renderer, the way a game's quality preset works.
+#:
+#: Each names only the values it governs, and what a preset governs is what it
+#: COSTS. The fog's ambient direction, its extent, the stage haze and the
+#: exposure are all left alone: they decide what the stage looks like, and a
+#: quality tier that quietly moved them would be changing the look rather than
+#: the fidelity of it. (`max_distance` in particular reads like a cost and is
+#: not one — the march is normalised to a fixed optical depth over the slab, so
+#: a deeper slab is fog that reaches further back at the same price.)
+#:
+#: The two that do cost are step count and resolution, and they are not
+#: symmetric: the fog buffer scales with resolution SQUARED, while one march
+#: step is two octaves of value noise — sixteen hash lookups — plus a medium
+#: fetch and a phase function. So the cheap tiers give up resolution first,
+#: which is also the one fog can most afford to lose: it is soft and
+#: low-frequency, and the temporal pass averages the dither away regardless.
+#: Relative march cost is `resolution² × steps`, which puts the ladder at
+#: roughly 1 : 5 : 30 — each stop a real step rather than a nudge.
+QUALITY_PRESETS = (
+    ("Off", dict(gpu=False, fog=False)),
+    ("Low", dict(gpu=True, fog=False)),
+    # Quarter resolution is a 16x saving and buys the step count that keeps
+    # shafts smooth: this is the tier meant to run on integrated graphics.
+    ("Mid", dict(gpu=True, fog=True, march_steps=24, resolution=0.25,
+                 jitter=0.8)),
+    ("High", dict(gpu=True, fog=True, march_steps=32, resolution=0.5,
+                  jitter=0.8)),
+    ("Ultra", dict(gpu=True, fog=True, march_steps=48, resolution=1.0,
+                   jitter=0.8)),
+)
+#: The two presets that are defined by a switch rather than by numbers, and the
+#: slider's last stop, which is a readout: Custom is where the handle sits when
+#: the controls below spell out no preset at all.
+QUALITY_OFF = 0
+QUALITY_LOW = 1
+QUALITY_CUSTOM = len(QUALITY_PRESETS)
 
 
 class SettingsDialog(QDialog):
@@ -127,9 +224,9 @@ class SettingsDialog(QDialog):
         self.sidebar_list.currentRowChanged.connect(self._on_page_selected)
         layout.addWidget(self.sidebar_list, 1)
 
-        # Dev `git describe` tags are long (v1.0-56-gabc-dirty); show only the
-        # release component and keep the full tag on hover.
-        version = QLabel(f"TupperDMX · {buildinfo.GIT_TAG.split('-')[0]}")
+        # Dev `git describe` tags are long (v1.1-rc1-56-gabc-dirty); show only
+        # the release they follow and keep the full tag on hover.
+        version = QLabel(f"TupperDMX · {buildinfo.release_of(buildinfo.GIT_TAG)}")
         version.setObjectName("SettingsVersionLabel")
         version.setToolTip(buildinfo.GIT_TAG)
         layout.addWidget(version)
@@ -455,7 +552,7 @@ class SettingsDialog(QDialog):
         routing, count-in length and the TTS voice."""
         page, layout = self._make_page("Audio", "output · click & voice")
 
-        form = QFormLayout()
+        form = platform_neutral(QFormLayout())
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(10)
 
@@ -615,10 +712,7 @@ class SettingsDialog(QDialog):
         row.addWidget(reset)
         layout.addLayout(row)
 
-        hint = QLabel(
-            "Previewed as you drag, and kept only if you press OK. The "
-            "timeline's track headers and the side panel's opening width "
-            "follow on the next launch.")
+        hint = QLabel("Previewed as you drag, and kept only if you press OK.")
         hint.setObjectName("SettingsDimLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -644,27 +738,160 @@ class SettingsDialog(QDialog):
         self.ui_scale_previewed.emit(self.scale_slider.value() / 100.0)
 
     def _build_logging_page(self) -> QWidget:
+        """Level, where the files go, and what is being written right now.
+
+        Both settings take effect as soon as the dialog is accepted, which is
+        what makes the pane below them worth watching: turn DEBUG on and the
+        detail starts arriving in it.
+
+        The pane tails the file the app is *actually* writing, which is not
+        necessarily the folder in the field above it: a folder typed here is
+        where logging moves to when the dialog is accepted.
+        """
         page, layout = self._make_page("Logging")
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Level:"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
+
+        grid.addWidget(QLabel("Level:"), 0, 0)
         self.log_level_combo = QComboBox()
         self.log_level_combo.addItems(LOG_LEVELS)
         current = (self.config.logging.level
                    if self.config.logging.level in LOG_LEVELS else "INFO")
         self.log_level_combo.setCurrentText(current)
-        row.addWidget(self.log_level_combo, 1)
-        layout.addLayout(row)
+        self.log_level_combo.setToolTip(
+            "How much detail is logged. Applies as soon as you press OK.\n"
+            "DEBUG is worth turning on to reproduce a problem, and worth "
+            "turning off again afterwards.")
+        grid.addWidget(self.log_level_combo, 0, 1)
 
-        hint = QLabel("Level changes apply on the next launch.")
-        hint.setObjectName("SettingsDimLabel")
-        layout.addWidget(hint)
+        grid.addItem(QSpacerItem(0, 10), 1, 0)
 
-        layout.addStretch(1)
+        grid.addWidget(QLabel("Folder:"), 2, 0)
+        grid.addLayout(self._build_log_folder_row(), 2, 1)
+
+        self.log_file_hint = QLabel()
+        self.log_file_hint.setObjectName("SettingsDimLabel")
+        grid.addWidget(self.log_file_hint, 3, 1)
+
+        grid.addItem(QSpacerItem(0, 10), 4, 0)
+
+        live_label = QLabel("Live log")
+        grid.addWidget(live_label, 5, 0, Qt.AlignmentFlag.AlignTop)
+        self.log_tail = LogTailView()
+        self.log_tail.set_path(current_log_path())
+        grid.addWidget(self.log_tail, 5, 1)
+        grid.setRowStretch(5, 1)
+
+        layout.addLayout(grid, 1)
+        self._update_log_folder_info()
         return page
 
+    def _build_log_folder_row(self) -> QHBoxLayout:
+        """The path field (folder icon · path · size) and its two buttons."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        field = QFrame()
+        field.setObjectName("SettingsPathField")
+        inner = QHBoxLayout(field)
+        inner.setContentsMargins(8, 3, 8, 3)
+        inner.setSpacing(6)
+
+        browse = QToolButton()
+        browse.setObjectName("SettingsPathIcon")
+        browse.setAutoRaise(True)
+        browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse.setIcon(icons.icon("folder-open", "#8a8a8a"))
+        browse.setIconSize(QSize(14, 14))
+        browse.setToolTip("Choose a folder…")
+        browse.clicked.connect(self._on_browse_log_dir)
+        inner.addWidget(browse)
+
+        self.log_dir_edit = QLineEdit(self.config.logging.log_dir)
+        self.log_dir_edit.setObjectName("SettingsPathEdit")
+        self.log_dir_edit.setFrame(False)
+        # Empty is a real setting, not a missing one: it means "wherever the
+        # app puts them by default", so the placeholder spells that folder out
+        # instead of leaving the field looking unconfigured.
+        self.log_dir_edit.setPlaceholderText(str(DEFAULT_LOG_DIR.resolve()))
+        self.log_dir_edit.setToolTip(
+            "Where the rotating log files are written.\n"
+            "Leave it empty to keep them in the app's own logs/ folder.\n"
+            "Applies as soon as you press OK; files already written stay "
+            "where they are.")
+        self.log_dir_edit.textChanged.connect(self._update_log_folder_info)
+        inner.addWidget(self.log_dir_edit, 1)
+
+        self.log_dir_stats = QLabel()
+        self.log_dir_stats.setObjectName("SettingsDimLabel")
+        inner.addWidget(self.log_dir_stats)
+        row.addWidget(field, 1)
+
+        open_button = QPushButton(icons.icon("external-link", "#cfcfcf"),
+                                  " Open folder")
+        open_button.setToolTip("Show the folder in the system file manager")
+        open_button.clicked.connect(self._on_open_log_dir)
+        row.addWidget(open_button)
+
+        self.log_copy_button = QPushButton("Copy path")
+        self.log_copy_button.setToolTip("Copy the folder's full path to the clipboard")
+        self.log_copy_button.clicked.connect(self._on_copy_log_dir)
+        row.addWidget(self.log_copy_button)
+        return row
+
+    def _chosen_log_dir(self) -> Path:
+        """The folder the field currently names, blank resolved to the
+        default, as an absolute path."""
+        return resolve_log_dir(self.log_dir_edit.text()).expanduser().absolute()
+
+    def _update_log_folder_info(self, *_args) -> None:
+        """Re-read what the named folder holds, and which file it will grow."""
+        self.log_dir_stats.setText(folder_summary(self._chosen_log_dir()))
+
+        if not self.config.logging.file_output:
+            self.log_file_hint.setText("File logging is off.")
+            return
+        active = current_log_path()
+        name = active.name if active else "one file per day"
+        rotation = human_bytes(self.config.logging.max_file_size)
+        self.log_file_hint.setText(
+            f"{name} · rotates at {rotation}, keeps "
+            f"{self.config.logging.backup_count}")
+
+    def _on_browse_log_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Log folder", str(self._chosen_log_dir()))
+        if chosen:
+            self.log_dir_edit.setText(chosen)
+
+    def _on_open_log_dir(self) -> None:
+        folder = self._chosen_log_dir()
+        if not folder.is_dir():
+            QMessageBox.information(
+                self, "Log folder",
+                f"{folder} doesn't exist yet.\n\n"
+                "It is created the first time the app logs to it.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _on_copy_log_dir(self) -> None:
+        QApplication.clipboard().setText(str(self._chosen_log_dir()))
+        self.log_copy_button.setText("Copied")
+        QTimer.singleShot(COPIED_FLASH_MS,
+                          lambda: self.log_copy_button.setText("Copy path"))
+
     def _build_stage_page(self) -> QWidget:
-        page, layout = self._make_page("Virtual stage", "renderer · fog")
+        page, layout = self._make_page("Virtual stage",
+                                       "quality · renderer · fog")
+
+        # Set before anything the presets govern is built: applying a preset
+        # writes those controls, and their change signals come straight back
+        # here asking which preset is showing.
+        self._applying_preset = False
+        self._build_quality_slider(layout)
 
         self.stage_gpu_check = QCheckBox("Render the stage light on the GPU")
         self.stage_gpu_check.setChecked(self.config.window.stage_gpu)
@@ -677,14 +904,135 @@ class SettingsDialog(QDialog):
             "if there isn't one.")
         layout.addWidget(self.stage_gpu_check)
 
-        gpu_hint = QLabel("Applies on the next launch.")
-        gpu_hint.setObjectName("SettingsDimLabel")
-        layout.addWidget(gpu_hint)
-
         self._build_fog_controls(layout)
+
+        # Wired last: the preset both reads and writes every control above, so
+        # all of them have to exist before the first sync.
+        self.quality_slider.valueChanged.connect(self._on_quality_slider)
+        for signal in (self.stage_gpu_check.toggled, self.fog_check.toggled,
+                       self.fog_steps_spin.valueChanged,
+                       self.fog_resolution_combo.currentIndexChanged,
+                       self.fog_jitter_spin.valueChanged):
+            signal.connect(self._sync_quality_slider)
+        self._sync_quality_slider()
+
+        # Outside the quality presets on purpose: it is a different renderer,
+        # not a setting of this one.
+        self.stage_3d_check = QCheckBox("Experimental: 3D stage (looks cool)")
+        self.stage_3d_check.setChecked(self.config.window.stage_3d_experimental)
+        self.stage_3d_check.setToolTip(
+            "Show the 3D bar prototype, lit by the show's patch, in place of "
+            "the 2D stage.\n"
+            "Needs OpenGL 4.1. The stage designer switches back to the 2D "
+            "stage.\n"
+            "Drag to look around, hold WASD to fly where you look, wheel to "
+            "step, F for fullscreen, -/+ for exposure.")
+        layout.addWidget(self.stage_3d_check)
 
         layout.addStretch(1)
         return page
+
+    def _build_quality_slider(self, layout: QVBoxLayout) -> None:
+        """One handle over everything below it.
+
+        As much a readout as a control: the handle is *derived* from the values
+        it governs, so reaching past it and changing one of them by hand lands
+        on Custom rather than leaving the slider lying about the rig.
+        """
+        row = QGridLayout()
+        row.setHorizontalSpacing(10)
+        row.setVerticalSpacing(2)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Quality:"), 0, 0)
+
+        self.quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.quality_slider.setRange(0, QUALITY_CUSTOM)
+        self.quality_slider.setSingleStep(1)
+        self.quality_slider.setPageStep(1)
+        self.quality_slider.setTickInterval(1)
+        self.quality_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.quality_slider.setToolTip(
+            "How much the virtual stage's renderer is asked to do.\n"
+            "Off is the raster path, the one that draws on any machine; every "
+            "other stop turns the GPU renderer on and spends the rest on "
+            "fog.\n"
+            "Custom is what the slider reads when the controls below match no "
+            "preset — it is not something you pick.")
+        row.addWidget(self.quality_slider, 0, 1)
+
+        # The names live under the ticks, so the strip has to share the
+        # slider's column to share its width.
+        self.quality_ticks = SliderTickLabels(
+            self.quality_slider,
+            [name for name, _ in QUALITY_PRESETS] + ["Custom"])
+        row.addWidget(self.quality_ticks, 1, 1)
+        row.setColumnStretch(1, 1)
+        layout.addLayout(row)
+
+    def _on_quality_slider(self, index: int) -> None:
+        """Write the preset the handle landed on into the controls below.
+
+        Custom has nothing to apply, so landing on it by hand puts the handle
+        straight back where the current values say it belongs.
+        """
+        if index == QUALITY_CUSTOM:
+            self._sync_quality_slider()
+            return
+
+        values = QUALITY_PRESETS[index][1]
+        self._applying_preset = True
+        try:
+            self.stage_gpu_check.setChecked(values["gpu"])
+            self.fog_check.setChecked(values["fog"])
+            if values["fog"]:
+                self.fog_steps_spin.setValue(values["march_steps"])
+                self._select_fog_resolution(values["resolution"])
+                self.fog_jitter_spin.setValue(
+                    int(round(values["jitter"] * 100)))
+        finally:
+            self._applying_preset = False
+        self._show_quality(index)
+
+    def _sync_quality_slider(self, *_) -> None:
+        """Put the handle where the controls below say it belongs."""
+        if self._applying_preset:
+            return
+        index = self._current_quality_index()
+        self.quality_slider.blockSignals(True)
+        self.quality_slider.setValue(index)
+        self.quality_slider.blockSignals(False)
+        self._show_quality(index)
+
+    def _current_quality_index(self) -> int:
+        """Which preset the controls currently spell out, or Custom.
+
+        Only what is actually in effect counts. With the GPU renderer off
+        nothing below it draws at all, and with fog off its quality numbers are
+        greyed out — matching on values nobody can see would read Custom for a
+        stage that looks exactly like the preset.
+        """
+        if not self.stage_gpu_check.isChecked():
+            return QUALITY_OFF
+        if not self.fog_check.isChecked():
+            return QUALITY_LOW
+        for index in range(QUALITY_LOW + 1, QUALITY_CUSTOM):
+            values = QUALITY_PRESETS[index][1]
+            if (self.fog_steps_spin.value() == values["march_steps"]
+                    and abs(self.fog_resolution_combo.currentData()
+                            - values["resolution"]) < 1e-6
+                    and self.fog_jitter_spin.value()
+                        == int(round(values["jitter"] * 100))):
+                return index
+        return QUALITY_CUSTOM
+
+    def _show_quality(self, index: int) -> None:
+        # Driven from here rather than from the slider's valueChanged: a sync
+        # sets the handle with the signal blocked, and the strip still has to
+        # follow.
+        self.quality_ticks.set_active(index)
+        # Off IS the GPU renderer being off, so the checkbox has nothing left
+        # to say; the slider is the way back on.
+        self.stage_gpu_check.setEnabled(index != QUALITY_OFF)
 
     def _build_fog_controls(self, layout: QVBoxLayout) -> None:
         """Volumetric fog: the switch, and what the march costs.
@@ -714,7 +1062,7 @@ class SettingsDialog(QDialog):
 
         quality = QFrame()
         quality.setObjectName("SettingsSubCard")
-        form = QFormLayout(quality)
+        form = platform_neutral(QFormLayout(quality))
         form.setContentsMargins(18, 6, 0, 0)
         form.setSpacing(6)
 
@@ -968,6 +1316,30 @@ class SettingsDialog(QDialog):
         self.ui_scale_previewed.emit(self._scale_at_open)
         super().reject()
 
+    def _log_dir_is_usable(self, log_dir: str) -> bool:
+        """Can we actually log into `log_dir`? Creates it to find out.
+
+        Blank needs no check — it is the default folder, which the logging
+        system creates for itself. Anything else is somewhere the operator
+        pointed us, and a folder that turns out to be unwritable at the next
+        launch loses the log silently, which is exactly when it is wanted.
+        """
+        if not log_dir:
+            return True
+        folder = Path(log_dir).expanduser()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            usable = os.access(folder, os.W_OK)
+            reason = "" if usable else "it is not writable"
+        except OSError as error:
+            usable, reason = False, str(error)
+        if not usable:
+            QMessageBox.warning(
+                self, "Invalid log folder",
+                f"Logs can't be written to '{log_dir}' — {reason}.\n\n"
+                "Pick another folder, or clear the field to use the default.")
+        return usable
+
     def _on_accept(self) -> None:
         io = self._io_from_widgets()
 
@@ -984,13 +1356,19 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Invalid I/O routing", "\n".join(errors))
             return
 
+        log_dir = self.log_dir_edit.text().strip()
+        if not self._log_dir_is_usable(log_dir):
+            return
+
         if self._is_valid_ipv4(ip):
             self.config.artnet.ip = ip
         self.config.artnet.port = self.port_spin.value()
         self.config.artnet.universe = self.universe_spin.value()
         self.config.io = io
         self.config.logging.level = self.log_level_combo.currentText()
+        self.config.logging.log_dir = log_dir
         self.config.window.stage_gpu = self.stage_gpu_check.isChecked()
+        self.config.window.stage_3d_experimental = self.stage_3d_check.isChecked()
         self.config.window.ui_scale = self.scale_slider.value() / 100.0
         # Through the config's own parser, so the dialog and a hand-edited
         # prefs file agree about what is in range.

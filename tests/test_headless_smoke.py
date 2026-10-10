@@ -7,7 +7,8 @@ CI), and asserts the headless contract: the software controller runs and the
 MIDI stream points at it, the web-remote snapshot carries the frozen schema
 keys (incl. Fase-4 countin), preview_clip drives the blackout verb (the
 remote's cue/blackout/panic path), playlist navigation moves the index, the
-count-in commands apply, and shutdown is idempotent.
+count-in switch applies, the remote's free-run click runs on the real
+metronome until the song's play takes it over, and shutdown is idempotent.
 
 Run with:
     uv run python tests/test_headless_smoke.py
@@ -88,7 +89,8 @@ def test_headless_core_contract():
             # The frozen web-remote snapshot works without a window.
             state = core.webremote_manager._build_state()
             for key in ("type", "show_name", "playing", "position", "duration",
-                        "bpm", "beats_per_bar", "blackout", "countin",
+                        "bpm", "beats_per_bar", "beat_note", "blackout",
+                        "countin", "free_run",
                         "setlist", "sections", "cues"):
                 _assert(key in state, f"snapshot carries '{key}'")
             _assert(state["show_name"] == "Rack", "snapshot names the show")
@@ -107,17 +109,30 @@ def test_headless_core_contract():
             _assert(config.playlist.current_song_index == 1,
                     "go_to_song moves the index")
 
-            # Count-in commands (the remote's set_countin_bars/set_precount).
-            core.set_count_in_bars(4)
-            _assert(config.audio.count_in_bars == 4
-                    and core.media_controller.count_in_bars == 4,
-                    "set_count_in_bars reaches config + media controller")
+            # Count-in (the click panel's switch; the remote reads it back).
             core.on_song_precount_toggled(False)
             _assert(config.get_current_song().precount is False,
-                    "set_precount persists on the current song")
+                    "the count-in switch persists on the current song")
             state = core.webremote_manager._build_state()
-            _assert(state["countin"] == {"enabled": False, "bars": 4},
+            _assert(state["countin"] == {"enabled": False, "bars": 2},
                     "the snapshot reflects the new count-in state")
+
+            # The remote's free-run click, on the real metronome.
+            remote = core.webremote_manager
+            remote._execute({"action": "free_run", "bpm": 96, "meter": "6/8"})
+            _assert(core.metronome.is_free_running()
+                    and remote._build_state()["free_run"]
+                    == {"bpm": 96, "meter": "6/8"},
+                    "free_run starts the click on its own and publishes it")
+            core.play_pause_playback()
+            _assert(core.media_controller.get_playback_state(), "the song plays")
+            _assert(not core.metronome.is_free_running()
+                    and remote._build_state()["free_run"] is None,
+                    "and its play took the click over from the free-run")
+            remote._execute({"action": "free_run", "bpm": 96, "meter": "6/8"})
+            _assert(not core.metronome.is_free_running(),
+                    "a free-run is refused while the song plays")
+            core.stop_playback()
         finally:
             core.shutdown()
 

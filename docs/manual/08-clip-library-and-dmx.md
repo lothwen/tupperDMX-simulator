@@ -6,7 +6,7 @@ the stage slides the whole sidebar away when you want the room.
 
 ## 8.1 The Library tab
 
-![The clip library: group pills built from the patch, and the clips of the selected group.](images/clip-library.png)
+![The clip library: the Favorites pill first, then the groups built from the patch, and the clips of the selected group with their stars.](images/clip-library.png)
 
 Everything here is built from **your patch**. Patch a fixture and its cues
 appear; remove it and they go.
@@ -21,7 +21,10 @@ several:
   `Multicolor`, `Strobes`, `Beams`, `Looks`…)
 - **a `Chases` group** for that fixture's chases
 - and, once for the whole show, a grey **`Show`** group holding the global
-  verbs: START, the song parts, and blackout-all
+  verbs: the song parts and blackout-all
+
+Once you have starred anything, a gold **`Favorites`** group leads the row —
+see below.
 
 A pill's colour dot matches that fixture's timeline lane and its section in the
 DMX monitor, so a colour means the same fixture everywhere.
@@ -31,14 +34,42 @@ DMX monitor, so a colour means the same fixture everywhere.
 Each card is one cue: a title, a subtitle naming its kind (`channel`, `scene`,
 `chase`, `color`, `blackout`, `cue`) and a coloured accent bar. A small **✱** on
 a scene means its colour comes from the palette rather than from fixed values,
-so it follows whatever the START clip set up.
+so it follows whatever the fixture's Palette tab set up
+([5.6](#56-the-palette-tab)).
 
-**Two things you can do with a card:**
+**Three things you can do with a card:**
 
 | Gesture | Result |
 |---|---|
 | **Click** | Auditions the cue live through whatever output is routed. **The timeline is not touched** |
 | **Drag onto a lane** | Inserts it as a clip at the drop point |
+| **Click the ☆** (top-right) | Stars it as a favourite, or un-stars it |
+| **Right-click** | **Edit '<fixture>'…** — opens that fixture's dialog ([5.7](#57-editing-a-fixture-you-have-already-patched)) **on the very scene or chase the card is for**, ready to edit. A card that is neither (a channel control, a colour macro, a blackout) names no scene, so it opens on the Scenes tab with nothing selected |
+
+A card in the grey **Show** group belongs to the show rather than to a fixture,
+and a starred card whose fixture has been unpatched resolves to nobody — neither
+offers the menu.
+
+### Favourites
+
+The star in a card's corner turns gold and puts the card in the **Favorites**
+group, in the order you starred them. **Favourites are the web remote's LIGHT
+CUES** ([10.2](#102-the-panel)): starring a card is how a look gets a button on
+the tablet.
+
+They belong to the show — they travel in its folder and its `.showpack` — and
+point at the scene, chase or verb by name rather than copying it, so editing the
+scene later changes what the button does. A favourite whose fixture or scene
+has gone from the patch stays in the group, dimmed and inert, until you un-star
+it: nothing you starred is ever dropped behind your back.
+
+### Making new cues
+
+The **+ New** tile at the end of the pill row opens the same **Edit fixture**
+dialog on its Scenes tab, ready to compose one. It uses the fixture the view is
+already about — whichever group is selected. When no single fixture owns the
+view (the **Show** group, **Favorites**, or an active search) it asks which
+fixture you mean first.
 
 Auditioning goes through the same path as everything else, so it respects your
 I/O routing — with the factory settings that means the internal controller and
@@ -51,9 +82,8 @@ selected one, and the header switches to `SEARCH · N clips` while it is active.
 It is the fastest way to find a scene when you cannot remember which bank it
 went into.
 
-> **Not yet implemented:** the grid/list view buttons, the `Name ▾` sort label
-> and the `+ New` tile at the end of the pill row are placeholders. They are
-> drawn but do nothing.
+> **Not yet implemented:** the grid/list view buttons and the `Name ▾` sort
+> label are placeholders. They are drawn but do nothing.
 
 If nothing is patched, the panel says so: *"No fixtures patched. Patch a fixture
 (Design stage) or edit the fixture defs."*

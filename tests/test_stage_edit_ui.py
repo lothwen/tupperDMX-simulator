@@ -91,8 +91,104 @@ def test_inspector_populates_and_edits(qapp):
     _assert(calls["patch"] == 1, "a name edit notifies the host to persist")
 
     insp._dmx_spin.setValue(40)
+    insp._dmx_spin.editingFinished.emit()
     _assert(blinder.dmx_start == 40, "editing the DMX address writes it onto the instance")
     _assert(calls["patch"] == 2, "a DMX edit notifies the host to persist")
+
+
+def test_inspector_refuses_an_illegal_address(qapp):
+    """The address field makes the browser footer's two refusals.
+
+    It commits on editing-finished rather than on every step, so the check does
+    not fire all the way across an occupied span while the user spins through
+    it, and a refusal puts the old address back the way a duplicate channel
+    does.
+    """
+    print("test_inspector_refuses_an_illegal_address")
+    from ui.fixture.designer import FixtureInspector
+    from PyQt6.QtWidgets import QMessageBox
+    sc, cfg = _stage()
+    calls = {"patch": 0}
+    insp = FixtureInspector(sc, lambda: calls.__setitem__("patch", calls["patch"] + 1))
+
+    blinder = cfg.fixtures[1]        # 8 channels at 33; the ledbar holds 1-7
+    insp.set_instance(blinder)
+
+    warnings = []
+    orig = QMessageBox.warning
+    QMessageBox.warning = lambda *a, **k: warnings.append(a[2])
+    try:
+        insp._dmx_spin.setValue(5)
+        _assert(blinder.dmx_start == 33, "a value not yet committed writes nothing")
+
+        insp._dmx_spin.editingFinished.emit()
+        _assert(len(warnings) == 1 and "Ledbar 1" in warnings[0],
+                "committing onto another fixture's span names the fixture hit")
+        _assert(blinder.dmx_start == 33, "an overlapping address is refused")
+        _assert(insp._dmx_spin.value() == 33, "and the field is put back")
+        _assert(calls["patch"] == 0, "a refused address persists nothing")
+
+        insp._dmx_spin.setValue(510)
+        insp._dmx_spin.editingFinished.emit()
+        _assert(len(warnings) == 2 and "512" in warnings[1],
+                "a span past the end of the universe is refused too")
+        _assert(blinder.dmx_start == 33, "and leaves the address alone")
+
+        insp._dmx_spin.setValue(100)
+        insp._dmx_spin.editingFinished.emit()
+        _assert(len(warnings) == 2, "a free span is not warned about")
+        _assert(blinder.dmx_start == 100, "a free address is written")
+        _assert(calls["patch"] == 1, "and notifies the host to persist it")
+
+        # Its own span is not a clash with itself.
+        insp._dmx_spin.editingFinished.emit()
+        _assert(len(warnings) == 2 and blinder.dmx_start == 100,
+                "re-committing the address it already holds is a no-op")
+    finally:
+        QMessageBox.warning = orig
+
+
+def test_inspector_flags_a_mode_that_grows_onto_a_neighbour(qapp):
+    """A wider mode is applied, and the clash it makes STAYS on the card.
+
+    The address field refuses an overlap outright; a mode change is let through
+    because the new layout is usually the point. So the clash has to be a
+    standing condition, not a dialog — still there when the fixture is selected
+    again, and gone only once the patch is legal.
+    """
+    print("test_inspector_flags_a_mode_that_grows_onto_a_neighbour")
+    from ui.fixture.designer import FixtureInspector
+    sc, _ = _stage()
+    insp = FixtureInspector(sc, lambda: None)
+
+    head = sc.add_fixture("moving-head", 100, 400, 200)   # 12 ch -> 100-111
+    par = sc.add_fixture("par-rgbw", 115, 500, 200)       #  6 ch -> 115-120
+
+    insp.set_instance(head)
+    _assert(insp._patch_warning.isHidden(), "a legal patch carries no warning")
+
+    insp._mode_combo.setCurrentText("18ch")               # 18 ch -> 100-117
+    _assert(head.mode == "18ch", "the wider mode is applied, not refused")
+    _assert(not insp._patch_warning.isHidden(),
+            "and the clash it made is flagged on the card")
+    _assert("Par-rgbw" in insp._patch_warning.text(),
+            "naming the fixture it grew onto")
+
+    # The whole point: selecting away and back must not lose the warning.
+    insp.set_instance(par)
+    _assert(not insp._patch_warning.isHidden() and "Moving-head" in insp._patch_warning.text(),
+            "the fixture that was grown onto is flagged too — it is one patch")
+    insp.set_instance(head)
+    _assert(not insp._patch_warning.isHidden(),
+            "and re-selecting the fixture brings its warning back")
+
+    # Only a legal patch clears it.
+    insp._dmx_spin.setValue(200)
+    insp._dmx_spin.editingFinished.emit()
+    _assert(head.dmx_start == 200, "moving it to a free span is allowed")
+    _assert(insp._patch_warning.isHidden(), "which clears the warning")
+    insp.set_instance(par)
+    _assert(insp._patch_warning.isHidden(), "for the neighbour as well")
 
 
 def test_inspector_rigs_a_fixture_either_way_up(qapp):
@@ -321,6 +417,8 @@ def main():
     test_overlay_registration_and_grid(app)
     test_toolbar_move_persists(app)
     test_inspector_populates_and_edits(app)
+    test_inspector_refuses_an_illegal_address(app)
+    test_inspector_flags_a_mode_that_grows_onto_a_neighbour(app)
     test_inspector_rigs_a_fixture_either_way_up(app)
     test_inspector_delete_removes_and_persists(app)
     test_inspector_delete_cancel_keeps_fixture(app)

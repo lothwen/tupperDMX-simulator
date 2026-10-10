@@ -89,7 +89,7 @@
           "type": "ShutterStrobe",
           "shutterEffect": "Strobe",
           "speedStart": "0.5Hz",
-          "speedEnd": "20Hz"
+          "speedEnd": "10Hz"
         }
       ]
     },

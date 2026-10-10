@@ -112,8 +112,13 @@ stage. Correct it in the Inspector whenever the guess is wrong.
 
 ## 4.5 The Inspector
 
-Select a fixture and the Inspector appears in the top-right corner. It is the
-whole per-fixture settings surface.
+Select a fixture and the Inspector appears in the top-right corner. It is every
+per-fixture setting, right next to the fixture on the stage.
+
+The same settings are also reachable without coming here — off a timeline lane
+or a clip-library card — in the **Edit fixture** dialog
+([5.7](#57-editing-a-fixture-you-have-already-patched)),
+which adds the type's scenes and chases.
 
 ![The Inspector for a moving head: identity, profile, mounting, patch and routing.](images/fixture-inspector.png)
 
@@ -121,11 +126,20 @@ whole per-fixture settings surface.
 |---|---|---|
 | **IDENTITY** | Name | Free text. Shows on the timeline lane and the DMX monitor. Blank falls back to the type name |
 | **PROFILE** | Fixture type | Read-only. A type's DMX footprint is not editable from here |
-| | Mode | **Only shown when the type declares more than one mode.** Changing it changes the channel layout, so the body is rebuilt |
+| | Mode | **Only shown when the type declares more than one mode.** Changing it changes the channel layout, so the body is rebuilt. A mode with more channels can push the fixture onto its neighbour's — that is allowed, and flagged; see the warning below |
 | **MOUNTING** | On the floor / Hanging | **Only shown for fixtures that can be flown.** A smoke machine or a floor can always stands on its own feet, so it gets no switch |
-| **DMX PATCH** | Start address | 1–512 |
+| **DMX PATCH** | Start address | 1–512. Committed when you leave the field or press ⏎, not on every step. An address whose channels would land on another fixture or run past 512 is refused, and the old one comes back |
 | **ROUTING** | MIDI channel | 0–15. See the warning below |
 | | **Delete** | Asks for confirmation, and says how many bars go with it for a multi-body fixture |
+
+> **A red block under the start address means the patch is broken.** It names
+> what the fixture's channels collide with — *"DMX 100 – 117 overlaps Par-rgbw
+> 1. Move the start address, or pick another mode."* — and it **stays**: select
+> another fixture, come back, and it is still there. Typing an overlapping
+> address is refused outright, so the only ways into this state are a **Mode**
+> change that grows the fixture, and a show whose patch was already overlapping
+> when it loaded. Both fixtures in a clash carry the block; moving either one's
+> start address clears it for both.
 
 **Mounting** flips two things at once: the housing turns upside down, and the
 beam is aimed at the floor instead of the ceiling. The hint under the switch says
@@ -156,3 +170,48 @@ moves in beside it.
 The stage cannot be closed into nowhere — closing the floating window docks it
 back into the main window. If it opens on a display that is no longer connected,
 **☰ ▸ Dock stage** retrieves it.
+
+### Fullscreen
+
+**F** puts the stage alone on a whole screen — the one its window is on — with
+nothing else drawn: the view for a projector or a monitor facing the band.
+**F** again, or **Esc**, brings it back. A stage that was docked undocks for
+fullscreen and docks again on the way out, so you land where you started.
+
+F is ignored while you are typing in a field, and while a dialog is open.
+
+## 4.7 The experimental 3D stage
+
+![The experimental 3D stage: the show's patch hung in a modelled room, lit by the same DMX, with the camera and fog read-outs on top.](images/stage-3d.png)
+
+**Settings ▸ Virtual stage ▸ Experimental: 3D stage** replaces the 2D stage
+with a three-dimensional room — a small bar with a band's backline — and hangs
+the show's patch in it. It is lit by exactly the DMX the 2D stage would have
+drawn, so a cue looks the same in both, and it fills the same place in the
+window: docked, undocked, or fullscreen with **F**.
+
+It is a prototype, and it says so:
+
+- **It needs OpenGL 4.1.** On a machine that cannot run it, the 2D stage comes
+  back, the option is switched off, and a message says why.
+- **It is for looking, not for designing.** Click **Edit stage** and the 2D
+  stage returns for as long as the designer is open; positions, mounting and
+  everything in the Inspector are the 2D stage's.
+- **Every fixture hangs on one plane** across the back of the room, wherever
+  the 2D stage has it in the picture — move a fixture in the designer and it
+  moves here too.
+
+| Control | What it does |
+|---|---|
+| **Drag** | Look around |
+| **W A S D** (held) | Fly where you are looking |
+| **Mouse wheel** | Step forwards or back |
+| **R** | Back to the starting view |
+| **−** / **+** | Exposure |
+| **[** / **]** | Fog density |
+| **H** | The room's own house rig, on or off |
+| **F** | Fullscreen, as for the 2D stage |
+
+The read-out top-left is the renderer's own; the **fog** panel top-right shapes
+the room's air — density, height, texture, drift and forward scattering — and,
+unlike the 2D stage's fog row, is not saved.

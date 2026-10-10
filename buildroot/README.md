@@ -408,6 +408,40 @@ case (PEP 540) and the preferences and manifests are read as UTF-8 regardless,
 so this line is noise. Silence it by generating a UTF-8 locale in `x86_config`
 if it bothers you; nothing about show loading depends on it.
 
+## Driving the rig: the USB DMX dongle
+
+The init script starts the app with `--dmx-usb auto`, which sends the software
+controller's DMX out of the **first FTDI dongle detected**, resolved fresh at
+every boot. Swap the interface for another one and the box picks the new one up
+on the next restart — nothing to edit.
+
+```bash
+# What this box can see, 0-indexed the way --dmx-usb selects them:
+/usr/bin/python3 /opt/tupperdmx/main.py --list-dmx-usb
+0: FTDI:FT232R USB UART:A50285BI
+1: FTDI:DMX USB PRO:EN123456
+
+# Pin one instead of taking the first (edit the init script's exec line):
+/usr/bin/python3 /opt/tupperdmx/main.py --headless --dmx-usb 1
+```
+
+The list is sorted by that `manufacturer:product:serial` string, so an index
+means the same device across reboots as long as the same dongles are plugged in.
+
+The pick is **not written to `userprefs.json`** — it is a fact about tonight's
+hardware, not a preference, so a run started with the flag never rewrites the
+routing an operator configured. What the flag does own is the whole USB output
+leg for that run: with nothing plugged in, `auto` leaves the USB output *off*
+(and logs it) rather than falling back to a device the file remembers and this
+box no longer has. An explicit index that is not there is treated as the typo it
+is: the app prints the reason and exits 2, so the init script reports `FAIL`
+rather than coming up quietly with no lights.
+
+Nothing else about the box depends on it — Art-Net output, the web remote and
+playback all come up either way. Kernel-wise this needs `CONFIG_USB_SERIAL` +
+`_FTDI_SIO` (see *The kernel fragment*): without them the dongle never becomes a
+tty and `--list-dmx-usb` prints nothing at all.
+
 ## Config notes
 
 Beyond python/uv/app, `x86_config` enables the runtime library closure of

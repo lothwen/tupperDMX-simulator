@@ -1,6 +1,6 @@
 [project]
 name = "tupperdmx-simulator"
-version = "1.0.0"
+version = "1.1.0rc1"
 description = "PyQt6-based lighting control application that synchronizes MP3 audio playback with MIDI-triggered DMX lighting sequences"
 requires-python = ">=3.13"
 dependencies = [
@@ -38,9 +38,6 @@ icon = "assets/icons/TupperDMX-icon.png"
 dev = [
     "jsonschema>=4.26.0",
     "pytest>=9.0.3",
-    # scripts/play_analyze_wav.py only — a standalone R&D prototype, excluded
-    # from the SBC image. Dev-only so the runtime stays scipy-free.
-    "scipy>=1.14",
 ]
 
 [tool.pytest.ini_options]

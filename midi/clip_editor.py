@@ -7,8 +7,10 @@ markers. The invariants (events sorted; no adjacent BLACKOUTs; no BLACKOUT with
 effective duration <= BLACKOUT_EPSILON) are enforced by
 MidiDocument.reconcile_blackouts() after every mutation.
 
-Operates on a shared MidiDocument; a single injected commit callback
-performs the MIDI rebuild + worker push + data_changed emit."""
+Operates on a shared MidiDocument and a FadeEngine — every op re-derives the
+ramps on the fixture it touched, since a clip edit moves not just its own fade
+but the fade-out of whichever clip now ends where it starts. A single injected
+commit callback performs the MIDI rebuild + worker push + data_changed emit."""
 
 from typing import Optional, List, Dict, Any, Tuple
 import uuid
@@ -21,8 +23,9 @@ from .constants import (
 
 
 class ClipEditor:
-    def __init__(self, doc, commit):
+    def __init__(self, doc, fades, commit):
         self._doc = doc
+        self._fades = fades
         self._commit = commit
         self.logger = get_logger("midi.clip_editor")
 
@@ -87,6 +90,7 @@ class ClipEditor:
         # already sits drops the now-zero-duration BLACKOUT instead of
         # leaving it as a width-0 ghost in front of the new clip.
         self._doc.reconcile_blackouts(self._doc._event_fixture(new_event))
+        self._fades.regenerate_fixture(self._doc._event_fixture(new_event))
         self._commit()
         self.logger.info(f"Added MIDI event: note={note}, time={time:.3f}s")
         return event_id
@@ -105,16 +109,24 @@ class ClipEditor:
         if not event:
             return False
             
-        # Find and update corresponding note
+        # Find and update corresponding note. Ramp notes share their clip's
+        # note number and, for a fade-in, its exact time — they are re-derived
+        # below, never mirrored. The channel is part of the match: another
+        # lane can hold the same note at the same time.
         for note in self._doc.midi_notes:
-            if (note['note'] == event['note'] and abs(note['time'] - old_time) < 0.01):
+            if note.get('is_fade'):
+                continue
+            if (note['note'] == event['note']
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - old_time) < 0.01):
                 note['time'] = new_time
                 break
         
         # Re-sort events by time
         self._doc.midi_events.sort(key=lambda x: x['time'])
         self._doc.midi_notes.sort(key=lambda x: x['time'])
-        
+
+        self._fades.regenerate_fixture(self._doc._event_fixture(event))
         self._commit()
         self.logger.info(f"Updated event timing: {event_id} to {new_time:.3f}s")
         return True
@@ -147,9 +159,14 @@ class ClipEditor:
         if 'velocity' in kwargs:
             event['velocity'] = kwargs['velocity']
             
-        # Find and update corresponding note
+        # Find and update corresponding note (never a ramp note, and never
+        # another lane's — see update_event_timing).
         for note in self._doc.midi_notes:
-            if (note['note'] == old_note and abs(note['time'] - old_time) < 0.01):
+            if note.get('is_fade'):
+                continue
+            if (note['note'] == old_note
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - old_time) < 0.01):
                 if 'note' in kwargs:
                     note['note'] = kwargs['note']
                 if 'time' in kwargs:
@@ -161,7 +178,8 @@ class ClipEditor:
         # Re-sort by time
         self._doc.midi_events.sort(key=lambda x: x['time'])
         self._doc.midi_notes.sort(key=lambda x: x['time'])
-        
+
+        self._fades.regenerate_fixture(self._doc._event_fixture(event))
         self._commit()
         self.logger.info(f"Edited event: {event_id}")
         return True
@@ -178,13 +196,20 @@ class ClipEditor:
         if not event:
             return False
             
-        # Find and remove corresponding note
+        # Find and remove corresponding note (never a ramp note, and never
+        # another lane's — see update_event_timing; regenerate_fixture drops
+        # the ramps below).
         note_to_remove = None
         for i, note in enumerate(self._doc.midi_notes):
-            if (note['note'] == event['note'] and abs(note['time'] - event['time']) < 0.01):
+            if note.get('is_fade'):
+                continue
+            if (note['note'] == event['note']
+                    and note.get('channel') == event.get('channel')
+                    and abs(note['time'] - event['time']) < 0.01):
                 note_to_remove = self._doc.midi_notes.pop(i)
                 break
                 
+        self._fades.regenerate_fixture(self._doc._event_fixture(event))
         self._commit()
         self.logger.info(f"Deleted event: {event_id}")
         return True
@@ -318,6 +343,7 @@ class ClipEditor:
         # merges adjacent ones within the same track).
         self._doc.reconcile_blackouts(fixture)
 
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Moved event {event_id} from {old_time:.3f}s to {best_new_time:.3f}s"
@@ -381,6 +407,7 @@ class ClipEditor:
         # reconcile_blackouts() will delete it if duration ≤ epsilon.
 
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Resized event {event_id} left edge {old_time:.3f}s → {new_time:.3f}s"
@@ -442,6 +469,7 @@ class ClipEditor:
                 return False
 
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Resized event {event_id} right edge to {new_right_time:.3f}s"
@@ -467,6 +495,7 @@ class ClipEditor:
             return False
 
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Replaced event {event_id} (note={old_note}, "

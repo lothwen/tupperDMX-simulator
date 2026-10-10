@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List
 
 from core import fixture_library
 from core.show.manifest import show_from_manifest, show_to_manifest
@@ -57,7 +57,7 @@ def is_show_dir(path) -> bool:
     return p.is_dir() and (p / MANIFEST_NAME).is_file()
 
 
-def create_show(parent, name: str, *, fixtures: Iterable = (), cues: Iterable = ()) -> Show:
+def create_show(parent, name: str, *, fixtures: Iterable = ()) -> Show:
     """Create Name.show/ (with its subfolders) under parent and write its
     manifest. Refuses to overwrite an existing folder. Activates the new
     show's (empty) show-local fixture-defs layer."""
@@ -68,7 +68,7 @@ def create_show(parent, name: str, *, fixtures: Iterable = (), cues: Iterable = 
     for sub in _SUBDIRS:
         (root / sub).mkdir(parents=True)
     fixture_library.set_show_fixtures_dir(root / FIXTURES_DIR)
-    show = Show(root=root, name=display, fixtures=list(fixtures), cues=list(cues))
+    show = Show(root=root, name=display, fixtures=list(fixtures))
     save_manifest(show)
     return show
 
@@ -133,3 +133,43 @@ def allocate_midi_path(show: Show, title: str) -> str:
         if not candidate.exists() and os.path.normpath(str(candidate)) not in taken:
             return str(candidate)
         n += 1
+
+
+def allocate_audio_path(show: Show, basename: str) -> str:
+    """Absolute path for an audio file copied into audio/: its basename, made
+    unique with a -2, -3 … suffix (the bundle collector's naming) against both
+    existing files and the paths the playlist already claims."""
+    show.audio_dir.mkdir(parents=True, exist_ok=True)
+    taken = {os.path.normpath(p) for s in show.playlist.songs
+             for p in (s.audio, s.guide) if p}
+    stem, ext = os.path.splitext(basename)
+    n = 1
+    while True:
+        name = basename if n == 1 else f"{stem}-{n}{ext}"
+        candidate = show.audio_dir / name
+        if not candidate.exists() and os.path.normpath(str(candidate)) not in taken:
+            return str(candidate)
+        n += 1
+
+
+def song_owned_files(show: Show, song) -> List[str]:
+    """The song's files (.mid, backing, guide) that live inside the show
+    folder and that no other song of the setlist uses: what deleting a song
+    WITH its files may remove. Audio referenced in place, outside the show,
+    is never among them — it is the user's file, and other shows may use it."""
+    root = show.root.resolve()
+    others = {os.path.normpath(p) for s in show.playlist.songs if s is not song
+              for p in (s.midi, s.audio, s.guide) if p}
+    owned = []
+    for path in (song.midi, song.audio, song.guide):
+        if not path or not os.path.isfile(path):
+            continue
+        path = os.path.normpath(path)
+        if path in others or path in owned:
+            continue
+        try:
+            Path(path).resolve().relative_to(root)
+        except ValueError:
+            continue
+        owned.append(path)
+    return owned

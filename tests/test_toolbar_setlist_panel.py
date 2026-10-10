@@ -3,7 +3,8 @@ Characterization test: the toolbar's SETLIST + SONG FILES sections
 (ui/toolbar_manager.py).
 
 Covers the song-selector combobox (populate without firing selection, pick →
-song_selected, edit + Enter → song_title_edited), the +/🗑 setlist actions,
+song_selected by playlist index, disabled songs left out, not editable, list
+drops below), the + / playlist-manager setlist actions,
 the counter badge / song count, and the footer (BPM / offset / linked chip).
 
 Run with:
@@ -16,11 +17,12 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QStyle, QStyleOptionComboBox
 
 app = QApplication.instance() or QApplication([])
 
 from core.config import Config
+from ui import theme
 from ui.toolbar_manager import ToolbarManager
 
 
@@ -54,8 +56,8 @@ def test_setlist_populate_is_silent():
             "empty setlist clears the combobox")
 
 
-def test_setlist_pick_and_rename():
-    print("test_setlist_pick_and_rename")
+def test_setlist_pick():
+    print("test_setlist_pick")
     manager = _manager()
     manager.set_setlist(["Intro", "El Acantilado", "Marea"], 0)
 
@@ -63,26 +65,67 @@ def test_setlist_pick_and_rename():
     manager.song_selected.connect(picked.append)
     manager.song_combo.activated.emit(2)  # user picks the third song
     _assert(picked == [2], "a dropdown pick fires song_selected(index)")
-
-    renamed = []
-    manager.song_title_edited.connect(renamed.append)
-    manager.song_combo.setEditText("Marea Alta")
-    manager.song_combo.lineEdit().returnPressed.emit()
-    _assert(renamed == ["Marea Alta"],
-            "editing the text + Enter fires song_title_edited")
+    _assert(not manager.song_combo.isEditable(),
+            "the combobox only picks: renaming is the playlist manager's")
 
 
-def test_new_and_remove_actions():
-    print("test_new_and_remove_actions")
+def test_setlist_leaves_out_disabled_songs():
+    print("test_setlist_leaves_out_disabled_songs")
+    manager = _manager()
+    combo = manager.song_combo
+    titles = ["Intro", "Descanso", "Marea", "Bis"]
+    manager.set_setlist(titles, 0, [True, False, True, False])
+
+    _assert([combo.itemText(i) for i in range(combo.count())] == ["Intro", "Marea"],
+            "disabled songs are left out")
+    picked = []
+    manager.song_selected.connect(picked.append)
+    combo.activated.emit(1)
+    _assert(picked == [2], "a pick reports the song's playlist index, not its row")
+
+    manager.set_setlist(titles, 3, [True, False, True, False])
+    _assert([combo.itemText(i) for i in range(combo.count())]
+            == ["Intro", "Marea", "Bis"] and combo.currentText() == "Bis",
+            "a disabled CURRENT song is still shown, selected")
+
+
+def test_setlist_opens_below():
+    print("test_setlist_opens_below")
+    manager = ToolbarManager(Config())
+    bar = manager.create_toolbar(None)
+    # The theme on this widget only: the app-wide stylesheet is shared by
+    # every test in the run.
+    bar.setStyleSheet(theme.load_qss())
+    bar.resize(1500, 120)
+    bar.move(50, 50)
+    bar.show()
+    combo = manager.song_combo
+    manager.set_setlist([f"Tema {i}" for i in range(12)], 9)
+
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    _assert(combo.style().styleHint(QStyle.StyleHint.SH_ComboBox_Popup,
+                                    option, combo) == 0,
+            "a plain drop-down list, not the menu laid over the selector")
+    combo.showPopup()
+    top = combo.view().window().geometry().top()
+    combo.hidePopup()
+    _assert(top >= combo.mapToGlobal(combo.rect().bottomLeft()).y(),
+            "a late song still opens the list below the selector")
+    bar.close()
+
+
+def test_new_and_playlist_actions():
+    print("test_new_and_playlist_actions")
     manager = _manager()
     fired = []
     manager.new_song_requested.connect(lambda: fired.append("new"))
-    manager.remove_song_requested.connect(lambda: fired.append("remove"))
+    manager.playlist_requested.connect(lambda: fired.append("playlist"))
 
     manager.new_song_button.click()
     _assert(fired == ["new"], "+ requests a new song")
-    manager.remove_button.click()
-    _assert(fired == ["new", "remove"], "🗑 requests the removal")
+    manager.playlist_button.click()
+    _assert(fired == ["new", "playlist"], "the playlist button opens the manager")
 
     manager.set_setlist([], 0)
     manager.set_navigation_enabled(False, False)
@@ -117,8 +160,10 @@ def test_counter_and_footer():
 
 def main():
     test_setlist_populate_is_silent()
-    test_setlist_pick_and_rename()
-    test_new_and_remove_actions()
+    test_setlist_pick()
+    test_setlist_leaves_out_disabled_songs()
+    test_setlist_opens_below()
+    test_new_and_playlist_actions()
     test_counter_and_footer()
     print("\nALL TESTS PASSED")
 

@@ -105,6 +105,13 @@ def test_build_setlist():
     _assert(all(s["key"] is None and s["precount"] is True
                 for s in setlist["songs"]),
             "songs without metadata expose null key and default precount")
+    _assert(all(s["enabled"] is True for s in setlist["songs"]),
+            "songs without the flag are enabled")
+    off = FakeSong(audio="/no/such/dir/Humo.mp3")
+    off.enabled = False
+    listed = build_setlist([off], 0)["songs"][0]
+    _assert(listed["enabled"] is False and listed["index"] == 0,
+            "a disabled song is still listed, flagged, at its real index")
 
     keyed = FakeSong(audio="/no/such/dir/Marea.mp3")
     keyed.key = "Am"
@@ -154,24 +161,30 @@ def test_build_state_schema():
         sections=[], cues=[{"index": 0, "label": "Warm", "color": "#fff"}])
 
     expected_keys = {"type", "show_name", "shows", "playing", "position",
-                     "duration", "bpm", "beats_per_bar", "blackout", "countin",
+                     "duration", "bpm", "beats_per_bar", "beat_note",
+                     "blackout", "countin", "free_run",
                      "setlist", "sections", "cues"}
     _assert(set(state) == expected_keys, "state message has the frozen schema keys")
     _assert(state["type"] == "state", "type tag is 'state'")
     _assert(state["show_name"] is None, "show name is a Phase-3 placeholder (null)")
     _assert(state["shows"] == [], "the show list defaults to empty")
-    _assert(state["beats_per_bar"] == 4, "beats_per_bar is constant 4 this phase")
+    _assert(state["beats_per_bar"] == 4 and state["beat_note"] == 4,
+            "the meter defaults to 4/4")
     _assert(state["countin"] == {"enabled": False, "bars": 2},
             "countin defaults to disabled / 2 bars when not provided")
+    _assert(state["free_run"] is None, "no free-run unless one is given")
     _assert(state["bpm"] == 142 and state["position"] == 12.5,
             "values pass through")
 
     state = build_state(
         playing=True, position=-3.2, duration=200.0, bpm=142, blackout=False,
         setlist={"current": 0, "songs": []}, sections=[], cues=[],
-        countin={"enabled": True, "bars": 4})
+        countin={"enabled": True, "bars": 4},
+        free_run={"bpm": 90, "meter": "3/4"})
     _assert(state["countin"] == {"enabled": True, "bars": 4},
             "countin block passes through")
+    _assert(state["free_run"] == {"bpm": 90, "meter": "3/4"},
+            "free_run block passes through")
     _assert(state["position"] == -3.2,
             "negative position (count-in countdown) passes through")
 

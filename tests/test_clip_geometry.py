@@ -12,8 +12,10 @@ Run with:
 
 import sys
 import os
+import subprocess
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, ROOT)
 
 from timeline.tracks.clip_geometry import (
     Occupant, ClipBounds,
@@ -148,7 +150,24 @@ def test_compute_bounds_blackout_absorbed():
             "right edge can extend through the BLACKOUT to the next real clip")
 
 
+def test_imports_without_the_stage_engine():
+    print("test_imports_without_the_stage_engine")
+    # Importing a timeline submodule runs the package __init__ above it. That
+    # must not re-export the Timeline, whose clip editor drags in the whole
+    # stage render engine. Checked in a subprocess because the shared test
+    # QApplication has already imported the stage into THIS one.
+    probe = ("import sys; import timeline.tracks.clip_geometry; "
+             "sys.exit(1 if any(m == 'stage' or m.startswith('stage.') "
+             "for m in sys.modules) else 0)")
+    result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT,
+                            capture_output=True, text=True)
+    _assert(result.returncode == 0,
+            f"importing timeline.tracks.clip_geometry loads no stage module "
+            f"({result.stderr.strip()})")
+
+
 def main():
+    test_imports_without_the_stage_engine()
     test_zone_at()
     test_nearest_beat_x()
     test_snap_to_targets()

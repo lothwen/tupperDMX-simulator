@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional
 from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget, QGraphicsPixmapItem
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
@@ -10,6 +11,7 @@ from stage import (
     CLOCK, Atmosphere, BlinderFixture, PixelBarFixture, body_count,
     body_spacing, renderer_for,
 )
+from stage.debug_overlay import StageDebugOverlay
 from core.fixture_library import resolve_fixture
 from core.fixture_state import resolve_state
 
@@ -44,6 +46,7 @@ class StageView(QGraphicsView):
         self._grid_visible = False
         self._background_item: Optional[QGraphicsPixmapItem] = None
         self._light_layer = None
+        self._frame_probe = None
 
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -89,7 +92,8 @@ class StageView(QGraphicsView):
                     reference: str = "viewport", margin: int = 8) -> None:
         """Float a widget over a corner of the view.
 
-        ``anchor`` is ``"top-left"`` / ``"top-right"``; ``reference`` is
+        ``anchor`` names a corner — ``"top-left"`` / ``"top-right"`` /
+        ``"bottom-left"`` / ``"bottom-right"``; ``reference`` is
         ``"viewport"`` (the full widget) or ``"background"`` (the letterboxed
         stage image). The caller controls visibility — repositioning a hidden
         widget is harmless."""
@@ -122,7 +126,12 @@ class StageView(QGraphicsView):
                 x = cursors.get(key, rect.right() - margin) - widget.width()
             else:
                 x = cursors.get(key, rect.left() + margin)
-            widget.move(x, rect.top() + margin)
+            # A bottom-anchored overlay hangs its own height off the bottom
+            # edge, so its size has to be settled before it is placed — which
+            # is why the debug readout re-asks for a layout when its text grows.
+            y = (rect.bottom() - margin - widget.height() if "bottom" in anchor
+                 else rect.top() + margin)
+            widget.move(x, y)
             if widget.isHidden():
                 continue   # placed for when it is shown, but takes no room
             cursors[key] = (x - OVERLAY_GAP if "right" in anchor
@@ -143,8 +152,14 @@ class StageView(QGraphicsView):
         released = None
         try:
             from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+            from stage.gpu.layer import apply_surface_format
             released = self._release_overlays()
-            self.setViewport(QOpenGLWidget())
+            viewport = QOpenGLWidget()
+            # Before it is given a parent, which is when it builds its context:
+            # the application default only carries the layer's format when the
+            # preference was already on at startup.
+            apply_surface_format(viewport)
+            self.setViewport(viewport)
         except Exception as exc:
             if released is not None:
                 self._readopt_overlays(released)   # back onto the raster viewport
@@ -225,6 +240,27 @@ class StageView(QGraphicsView):
         matrix.translate(view.dx(), view.dy())
         matrix.scale(view.m11(), view.m22())
         return matrix
+
+    def set_frame_probe(self, probe) -> None:
+        """Time every repaint of this view, or stop.
+
+        `probe(started_at, ended_at)` — both `time.perf_counter()` — is called
+        once per paint. Installed only while the debug readout is showing, so
+        an app that isn't debugging pays one `is None` test per frame and
+        nothing else: this measures the very thing it must not cost, since a
+        repaint of this view is what takes the Qt thread away from the audio
+        feed for tens of milliseconds at a time.
+        """
+        self._frame_probe = probe
+
+    def paintEvent(self, event):
+        probe = self._frame_probe
+        if probe is None:
+            super().paintEvent(event)
+            return
+        started = time.perf_counter()
+        super().paintEvent(event)
+        probe(started, time.perf_counter())
 
     def set_grid_visible(self, visible: bool) -> None:
         """Show/hide the designer grid drawn over the stage image."""
@@ -375,6 +411,13 @@ class StageController(QObject):
         if config.window.stage_gpu:
             self._enable_gpu_light()
 
+        # The debug readout, in the stage image's bottom-right corner. It shows
+        # itself whenever logging is at DEBUG and hides again when it isn't, so
+        # there is nothing here to turn it on with.
+        self.debug_overlay = StageDebugOverlay(self)
+        self.stage_view.add_overlay(self.debug_overlay, anchor="bottom-right",
+                                    reference="background")
+
         self.logger.info("Stage controller initialized")
 
     # ------------------------------------------------------------------
@@ -412,6 +455,40 @@ class StageController(QObject):
         gpu_layer.STAGE_GPU_ACTIVE = True
         return True
 
+    def _disable_gpu_light(self) -> None:
+        """Tear the GPU light down and put the raster path back."""
+        if self.light_layer is None:
+            return
+        self.light_layer = None
+        for obj in self.render_objs:
+            obj.set_light_on_gpu(False)
+            obj._light_sink = None
+        self.stage_view.detach_light_layer()
+        # Write-once no longer: the scene preview gates its own GL on this, and
+        # while the stage has no context the honest answer is False.
+        from stage.gpu import layer as gpu_layer
+        gpu_layer.STAGE_GPU_ACTIVE = False
+
+    def set_gpu_light(self, enabled: bool) -> bool:
+        """Turn the GPU light path on or off on a running stage.
+
+        Returns whether it is on afterwards, which is not always what was
+        asked: a machine with no usable GL fails soft to raster, here exactly
+        as it does at startup.
+
+        A *decision*, unlike `suspend_gpu_light` below, which is a pause — so
+        it clears the suspend flag rather than setting it. Otherwise turning
+        the renderer off while the stage happened to be undocked would leave a
+        pending resume to bring it back.
+        """
+        self._gpu_suspended = False
+        if enabled == (self.light_layer is not None):
+            return self.light_layer is not None
+        if not enabled:
+            self._disable_gpu_light()
+            return False
+        return self._enable_gpu_light()
+
     def suspend_gpu_light(self) -> None:
         """Give up the GPU light so the view can be reparented.
 
@@ -429,15 +506,7 @@ class StageController(QObject):
         if self.light_layer is None:
             return
         self._gpu_suspended = True
-        self.light_layer = None
-        for obj in self.render_objs:
-            obj.set_light_on_gpu(False)
-            obj._light_sink = None
-        self.stage_view.detach_light_layer()
-        # Write-once no longer: the scene preview gates its own GL on this, and
-        # while the stage has no context the honest answer is False.
-        from stage.gpu import layer as gpu_layer
-        gpu_layer.STAGE_GPU_ACTIVE = False
+        self._disable_gpu_light()
 
     def resume_gpu_light(self) -> None:
         """Rebuild the GPU light after a reparent. Fails soft to raster."""
@@ -643,6 +712,30 @@ class StageController(QObject):
             f"Added fixture '{type_name}' at DMX {dmx_start} (channel {channel})")
         return instance
 
+    def _detach_fixture(self, instance: FixtureInstance) -> bool:
+        """Drop one fixture's bodies and its patch entry, announcing nothing.
+
+        The two public removers announce at different moments — `remove_selected`
+        detaches the whole selection before emitting for any of it — so the
+        signal is deliberately not in here."""
+        self._remove_render_group(instance)
+        if instance in self.config.fixtures:
+            self.config.fixtures.remove(instance)
+            return True
+        return False
+
+    def remove_fixture(self, instance: FixtureInstance) -> bool:
+        """Remove one patched fixture BY IDENTITY, selected or not.
+
+        `remove_selected` answers the stage's selection; this answers a dialog
+        opened from the timeline or the clip library, where there is none."""
+        if instance is None:
+            return False
+        removed = self._detach_fixture(instance)
+        if removed:
+            self.fixture_removed.emit(instance)
+        return removed
+
     def remove_selected(self) -> List[FixtureInstance]:
         """Remove the instance(s) backing the current selection (incrementally)."""
         instances: List[FixtureInstance] = []
@@ -651,9 +744,7 @@ class StageController(QObject):
             if inst is not None and inst not in instances:
                 instances.append(inst)
         for inst in instances:
-            self._remove_render_group(inst)
-            if inst in self.config.fixtures:
-                self.config.fixtures.remove(inst)
+            self._detach_fixture(inst)
         for inst in instances:
             self.fixture_removed.emit(inst)
         return instances
@@ -843,8 +934,9 @@ class StageController(QObject):
         editing the one that is there, so the light layer went on holding the
         old one: ticking "Volumetric fog" did nothing at all until the app was
         restarted, which is not what the dialog says and not what anyone
-        expects of a switch. `stage_gpu` genuinely does need a relaunch — there
-        is a GL context to build — and the dialog says so.
+        expects of a switch. `stage_gpu` is not read here at all — building or
+        dropping a GL context is `set_gpu_light`'s job, and the settings dialog
+        calls it directly.
         """
         if self.light_layer is None:
             return

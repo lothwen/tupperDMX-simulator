@@ -4,9 +4,19 @@ Base track class for timeline tracks.
 Provides common functionality and interface for all timeline track types.
 """
 
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, Qt
 from typing import List, Any
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsScene
+
+
+def elided_label(text: str, clip_width: float, view) -> str:
+    """`text` shortened to fit a clip `clip_width` scene px wide, leaving 5px
+    of padding each side: ending in "…", or empty when not even that fits.
+
+    Clip labels ignore the view transform, so the room is measured in device
+    px — the clip's width at `view`'s horizontal zoom."""
+    room = int((clip_width - 10) * view.transform().m11())
+    return view.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, room)
 
 
 class BaseTrack(QObject):

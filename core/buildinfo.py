@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,3 +59,13 @@ BUILD_DATE: str = _resolved[0]
 GIT_COMMIT: str = _resolved[1]
 GIT_TAG: str = _resolved[2]
 GIT_BRANCH: str = _resolved[3]
+
+# `git describe` appends "-<commits>-g<hash>" when HEAD is past the tag, and
+# "-dirty" when the tree has local edits.
+_DESCRIBE_SUFFIX_RE = re.compile(r"(-\d+-g[0-9a-f]+)?(-dirty)?$")
+
+
+def release_of(tag: str) -> str:
+    """The tag a `git describe` string names: "v1.1-rc1-3-gabc1234-dirty" is
+    "v1.1-rc1". A bare tag, a commit hash or "dev" comes back unchanged."""
+    return _DESCRIBE_SUFFIX_RE.sub("", tag, count=1)

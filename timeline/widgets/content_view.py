@@ -10,8 +10,9 @@ from PyQt6.QtWidgets import QGraphicsView, QMenu, QRubberBand
 from PyQt6.QtGui import QPainter, QKeySequence
 from PyQt6.QtCore import Qt, QRect
 
-from ui.clip_library import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
-                             SCENE_MIME_TYPE)
+from core import note_layout
+from core.clips import (CLIP_MIME_TYPE, DEFAULT_DROP_VELOCITY,
+                        SCENE_MIME_TYPE)
 
 # Drag distance (viewport pixels) before an empty-space press becomes a
 # rubber-band selection instead of a plain click (which seeks).
@@ -53,6 +54,16 @@ class ContentView(QGraphicsView):
         # Which fixture lane (if any) is under the cursor? None = ruler/waveform.
         fixture_index = self.timeline.fixture_at_y(scene_pos.y())
 
+        if fixture_index is None and self.timeline._in_waveform_band(scene_pos.y()):
+            # A section box opens its own menu on the press; this is the band
+            # around them — the waveform strip below, the lead-in before.
+            from ..tracks.song_sections import SongSectionItem
+            if not any(isinstance(item, SongSectionItem)
+                       for item in self.scene().items(scene_pos)):
+                self.timeline.waveform_track.sections.band_menu(
+                    scene_pos.x(), self.mapToGlobal(position))
+            return
+
         if fixture_index is not None:
             # Check if we clicked on an empty area (no MIDI event at this position)
             item_at_pos = self.scene().itemAt(scene_pos, self.transform())
@@ -93,6 +104,10 @@ class ContentView(QGraphicsView):
     def _selected_clips(self):
         return [it for it in self._all_clips() if it.isSelected()]
 
+    def _sections(self):
+        """The song-section overlay on the waveform band."""
+        return self.timeline.waveform_track.sections
+
     def _clip_at(self, scene_pos):
         """Topmost non-BLACKOUT clip under a scene position, or None."""
         from ..tracks.midi_events import DraggableMidiEvent
@@ -115,7 +130,11 @@ class ContentView(QGraphicsView):
                 self._rubber_ctrl = bool(
                     event.modifiers() & Qt.KeyboardModifier.ControlModifier)
                 if self._rubber_ctrl:
-                    self._rubber_base_ids = {c.event_id for c in self._selected_clips()}
+                    # Clips and sections are events of one document, so one id
+                    # set carries both halves of the selection being added to.
+                    self._rubber_base_ids = (
+                        {c.event_id for c in self._selected_clips()}
+                        | {b.event_id for b in self._sections().selected_boxes()})
                 else:
                     self._rubber_base_ids = set()
                     self.scene().clearSelection()
@@ -163,22 +182,27 @@ class ContentView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def _update_rubber_selection(self, viewport_rect):
-        """Select clips intersecting the band (plus the additive-mode base)."""
+        """Select the clips AND the song sections intersecting the band (plus
+        the additive-mode base). The band starts in a lane, so it reaches the
+        sections only once it is dragged up into the waveform strip."""
         scene_rect = self.mapToScene(viewport_rect).boundingRect()
         for clip in self._all_clips():
             inside = clip.sceneBoundingRect().intersects(scene_rect)
             clip.setSelected(inside or clip.event_id in self._rubber_base_ids)
+        self._sections().select_in_rect(scene_rect, self._rubber_base_ids)
 
     def keyPressEvent(self, event):
-        """Delete / copy / paste selected MIDI clips.
+        """Delete / copy / paste the timeline selection.
 
         Delete and copy route through Timeline so the selection logic, BLACKOUT
         conversion, and clipboard live in one place (shared with the right-click
         menu); paste drops the clipboard at the current playhead. Scoped to the
-        timeline view so text fields keep their native copy/paste.
+        timeline view so text fields keep their native copy/paste. Delete takes
+        the song sections the band caught with it; copy/paste are the clips'
+        alone — a section is a point in the arrangement, not a clip to repeat.
         """
         if event.key() == Qt.Key.Key_Delete:
-            if self._selected_clips():
+            if self._selected_clips() or self._sections().selected_boxes():
                 self.timeline.delete_selected()
                 event.accept()
                 return
@@ -226,7 +250,10 @@ class ContentView(QGraphicsView):
     # --- Clip library drag & drop ----------------------------------------
 
     def _decode_clip_payload(self, mime):
-        """Return (note, velocity) from a clip-library MIME, or None."""
+        """Return (note, velocity, fixture_type) from a clip-library MIME, or
+        None. `fixture_type` is None unless the clip is scoped to the fixture it
+        was built from (channel clips are), in which case only that fixture's
+        lanes accept it."""
         if not mime.hasFormat(CLIP_MIME_TYPE):
             return None
         try:
@@ -234,7 +261,8 @@ class ContentView(QGraphicsView):
             payload = json.loads(raw)
             note = int(payload["note"])
             velocity = int(payload.get("velocity", DEFAULT_DROP_VELOCITY))
-            return note, velocity
+            fixture_type = payload.get("fixture_type")
+            return note, velocity, fixture_type
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
@@ -279,8 +307,17 @@ class ContentView(QGraphicsView):
         if clip_decoded is None:
             event.ignore()
             return
-        note, _ = clip_decoded
-        if self.timeline.can_accept_clip_drop(note, scene_pos.y()):
+        note, _, fixture_type = clip_decoded
+        if note_layout.is_song_part(note):
+            # Global, so any lane will do: the band previews where it lands.
+            if self.timeline.waveform_track.sections.preview_drop(
+                    note, scene_pos.x(), self._whole_bar(event)):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
+        if self.timeline.can_accept_clip_drop(note, scene_pos.y(),
+                                              fixture_type):
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -295,7 +332,13 @@ class ContentView(QGraphicsView):
         # Wayland, where a spurious leave is delivered when the drag passes over
         # a rejected lane or ends. Accepting here keeps the view's drag handling
         # self-consistent and skips that broken path.
+        self.timeline.waveform_track.sections.clear_drop_preview()
         event.accept()
+
+    @staticmethod
+    def _whole_bar(event) -> bool:
+        """Shift drops a song part on a whole bar rather than a beat."""
+        return bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
     def dropEvent(self, event):
         mime = event.mimeData()
@@ -316,9 +359,10 @@ class ContentView(QGraphicsView):
         if clip_decoded is None:
             event.ignore()
             return
-        note, velocity = clip_decoded
+        note, velocity, fixture_type = clip_decoded
         if self.timeline.handle_clip_drop(note, velocity,
-                                          scene_pos.x(), scene_pos.y()):
+                                          scene_pos.x(), scene_pos.y(),
+                                          fixture_type, self._whole_bar(event)):
             event.acceptProposedAction()
         else:
             event.ignore()

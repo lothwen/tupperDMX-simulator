@@ -39,6 +39,9 @@ DEFAULT_OUTPUT = HERE.parent / "Manual_TupperDMX.pdf"
 
 TITLE = "TupperDMX Simulator"
 SUBTITLE = "User manual"
+# The manual's own edition, printed on the cover. Bumped when the manual is
+# revised; the application's version comes from its git tag, not from here.
+VERSION = "1.1"
 CHROME_CANDIDATES = ("chromium", "chromium-browser", "google-chrome",
                      "google-chrome-stable", "chrome")
 
@@ -144,28 +147,15 @@ def cover_html() -> str:
     logo = REPO / "assets" / "icons" / "TupperDMX-icon.png"
     logo_tag = (f'<img class="logo" src="{logo.as_uri()}" alt="">'
                 if logo.exists() else "")
-    version = read_version()
     return f"""<header class="cover">
 {logo_tag}
 <h1>{TITLE}</h1>
 <p class="subtitle">{SUBTITLE} · audio, MIDI and DMX on one timeline</p>
 <div class="meta">
-<div><strong>Version</strong> &nbsp; {version}</div>
+<div><strong>Version</strong> &nbsp; {VERSION}</div>
 <div><strong>Built</strong> &nbsp; {date.today().isoformat()}</div>
 </div>
 </header>"""
-
-
-def read_version() -> str:
-    """The version from pyproject.toml, or a placeholder."""
-    try:
-        text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-        match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-        if match:
-            return match.group(1)
-    except OSError:
-        pass
-    return "—"
 
 
 def build_html() -> str:

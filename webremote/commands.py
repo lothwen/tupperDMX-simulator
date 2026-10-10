@@ -4,9 +4,11 @@ import json
 import math
 from typing import Any, Optional
 
+from core.tempo_map import MAX_BPM, METERS, MIN_BPM
+
 ACTIONS = frozenset({
     "play_pause", "stop", "next", "prev", "seek", "cue", "select_song",
-    "blackout", "panic", "set_precount", "set_countin_bars", "open_show",
+    "blackout", "panic", "free_run", "free_run_stop", "open_show",
 })
 
 MAX_SHOW_NAME = 200
@@ -46,17 +48,19 @@ def parse_command(raw: Any) -> Optional[dict]:
             return None
         cmd["index"] = index
 
-    if action == "set_precount":
-        on = raw.get("on")
-        if not isinstance(on, bool):
+    if action == "free_run":
+        # Start the click on its own, or retime the one running. The page
+        # never leaves the app's tempo range, so anything outside it is not a
+        # tempo to clamp but a message to drop.
+        bpm = raw.get("bpm")
+        if isinstance(bpm, bool) or not isinstance(bpm, int) \
+                or not MIN_BPM <= bpm <= MAX_BPM:
             return None
-        cmd["on"] = on
-
-    if action == "set_countin_bars":
-        bars = raw.get("bars")
-        if isinstance(bars, bool) or not isinstance(bars, int) or bars < 1:
+        meter = raw.get("meter")
+        if meter not in METERS:
             return None
-        cmd["bars"] = bars  # upper clamp happens at execution time
+        cmd["bpm"] = bpm
+        cmd["meter"] = meter
 
     if action == "open_show":
         # A show's display name, never a path: it is looked up in the published

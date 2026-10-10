@@ -55,7 +55,7 @@ MULTIMODE = {
     ],
 }
 
-# A mode wide enough to overflow the controller's 96-channel universe.
+# A mode wide enough to overflow the controller's 512-channel universe.
 HUNGRY = {
     "$schema": SCHEMA,
     "name": "hungry",
@@ -216,11 +216,11 @@ def test_patch_refuses_a_fixture_past_the_universe():
 
     def body():
         controller = sc.DMXController()
-        # 60 channels at address 1 fits; at address 50 it would run off the end
-        # of the 96-channel universe and index out of range in the DMX thread.
+        # 60 channels at address 1 fits; at address 460 it would run off the end
+        # of the 512-channel universe and index out of range in the DMX thread.
         controller.init_fixtures([
             FixtureInstance(type="hungry", dmx_start=1, channel=0),
-            FixtureInstance(type="hungry", dmx_start=50, channel=1),
+            FixtureInstance(type="hungry", dmx_start=460, channel=1),
         ])
         _assert(len(controller.fixtures) == 1,
                 "the fixture that would overflow the universe is skipped")

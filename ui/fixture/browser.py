@@ -8,8 +8,11 @@ by *manufacturer* (the folder a definition lives in, see
 where a fixture legitimately belongs to several groups at once). The detail
 panel renders the OFL document — physical data, metadata, links, the channel
 layout of the selected mode, and every mode the fixture declares — plus the
-Scenes tab (`ui/fixture_scenes_tab.py`), which edits the type's sidecar scene
-banks rather than the patch.
+Scenes tab (`ui/fixture/scenes_tab.py`) and the Chases tab
+(`ui/fixture/chases_tab.py`), which edit the type's sidecar scene banks and the
+chases over them rather than the patch, and — for a Color Changer only — the
+Palette tab (`ui/fixture/palette_tab.py`), which is this INSTANCE's palette in
+the song that is loaded.
 
 The footer is the actual patch decision: where in the universe the fixture lands
 and which MIDI channel drives it. Both are validated live against the current
@@ -19,24 +22,30 @@ patch, and OK stays disabled until the choice is legal.
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from PyQt6.QtCore import QRect, QRectF, Qt, QUrl
+from PyQt6.QtCore import QRect, QRectF, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter,
 )
 from PyQt6.QtWidgets import (
     QButtonGroup, QDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QPushButton, QRadioButton, QScrollArea, QSizePolicy, QSpinBox,
-    QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTabWidget, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QMessageBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
-from core import ofl
+from core import note_layout, ofl
 from core.fixture_library import (
     FixtureDef, fixture_document, load_fixture_defs, resolve_fixture,
 )
 from core.channel_families import channel_family as _channel_family
+from core.config import fixture_channel_count
+from ui.widgets import icons
 from ui.widgets.chips import FlowLayout, chip as _chip
 from ui.widgets.sizing import fit_to_screen
+from ui.widgets.toggle_switch import ToggleSwitch
+from ui.fixture.chases_tab import FixtureChasesTab
+from ui.fixture.palette_tab import FixturePaletteTab, applies_to as _has_palette
 from ui.fixture.scenes_tab import FixtureScenesTab
 
 UNIVERSE_SIZE = 512
@@ -148,12 +157,26 @@ def used_midi_channels(config, exclude=None) -> set:
             if f is not exclude and f.channel >= 0}
 
 
-def used_dmx_spans(config) -> List[Tuple[str, int, int]]:
-    """Patched (name, first, last) DMX spans, 1-based and inclusive."""
+def used_dmx_spans(config, exclude=None) -> List[Tuple[str, int, int]]:
+    """Patched (name, first, last) DMX spans, 1-based and inclusive.
+
+    `exclude` drops one instance BY IDENTITY: the fixture an edit is being made
+    against already occupies its own span, and without this the footer would
+    report it as overlapping itself the moment the dialog opened. The ordinal in
+    each name still counts the excluded fixture, so leaving it out does not
+    renumber the ones after it.
+    """
     spans: List[Tuple[str, int, int]] = []
-    for name, channels in config.get_used_dmx_channels().items():
-        if channels:
-            spans.append((name, min(channels), max(channels)))
+    type_counts: Dict[str, int] = {}
+    for fixture in config.fixtures:
+        type_counts[fixture.type] = type_counts.get(fixture.type, 0) + 1
+        if fixture is exclude:
+            continue
+        count = fixture_channel_count(fixture.type, fixture.mode)
+        if count:
+            spans.append((f"{fixture.type.capitalize()} "
+                          f"{type_counts[fixture.type]}",
+                          fixture.dmx_start, fixture.dmx_start + count - 1))
     return spans
 
 
@@ -288,6 +311,38 @@ class PatchBar(QWidget):
         painter.end()
 
 
+class _TitleLabel(QLabel):
+    """The big fixture title, which doubles as a rename target when the dialog
+    is editing a patched fixture."""
+
+    double_clicked = pyqtSignal()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class _TitleEdit(QLineEdit):
+    """The in-place editor the title turns into.
+
+    Escape is caught here rather than left to bubble: reaching the dialog it
+    would close it, throwing away every other edit on the way out — which is
+    not what "cancel this rename" means to anyone typing.
+    """
+
+    cancelled = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 @dataclass(frozen=True)
 class LibraryEntry:
     """One pickable fixture type, flattened for the browser."""
@@ -322,15 +377,40 @@ def library_entries() -> List[LibraryEntry]:
 class AddFixtureDialog(QDialog):
     """Pick a fixture type + mode from the library, and where to patch it."""
 
-    def __init__(self, stage_controller, parent=None):
+    # The Scenes tab wrote the fixture library. Re-emitted so the caller can
+    # refresh what reads it without waiting for OK — Cancel saves scenes too.
+    library_changed = pyqtSignal()
+
+    def __init__(self, stage_controller, parent=None, *, instance=None,
+                 midi_manager=None):
         super().__init__(parent)
-        self.setWindowTitle("Add fixture")
         self.setObjectName("AddFixtureDialog")
         self.setModal(True)
         fit_to_screen(self, 1180, 800)
         self.setMinimumSize(940, 600)
 
+        self._stage = stage_controller
         self._config = stage_controller.config
+        # Where the palette tab reads and writes: the CURRENT song's .mid, which
+        # is the only thing that knows a fixture's palette. None for a dialog
+        # opened with no song loaded (and in the tests), which simply hides the
+        # tab — there is nowhere to put the answer.
+        self._midi = midi_manager
+        # EDIT MODE. `instance` is a fixture the show already has, so the two
+        # questions the browser exists to ask are already answered: the library
+        # rail is hidden (you cannot swap a patched fixture for another type)
+        # and the footer edits that instance instead of describing a new one.
+        # Everything else — the header, all five tabs, the whole footer — is
+        # the same dialog, because it is the same set of answers.
+        self._instance = instance
+        self._editing = instance is not None
+        self._deleted = False
+        self._can_rig = False
+        self._fold_measured = False
+        self._renaming = False
+        self.setWindowTitle("Add fixture" if not self._editing
+                            else f"Edit fixture — {instance.name or instance.type}")
+
         self._entries = library_entries()
         self._by_key = {entry.key: entry for entry in self._entries}
         self._entry: Optional[LibraryEntry] = None
@@ -338,8 +418,10 @@ class AddFixtureDialog(QDialog):
         self._group_by = GROUP_BY_MANUFACTURER
         self._channel_rows: List[Tuple[QTreeWidgetItem, int]] = []
         self._mode_buttons: List[Tuple[QRadioButton, str, QFrame, QLabel]] = []
-        self._used_spans = used_dmx_spans(self._config)
-        self._used_channels = used_midi_channels(self._config)
+        # The fixture being edited already occupies its own span and channel;
+        # measured against itself it would collide the moment this opened.
+        self._used_spans = used_dmx_spans(self._config, exclude=instance)
+        self._used_channels = used_midi_channels(self._config, exclude=instance)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -348,10 +430,16 @@ class AddFixtureDialog(QDialog):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        body.addWidget(self._build_library_panel())
+        # Built either way, hidden when editing: `self.tree` is what
+        # `_sync_tree_selection` and `_rebuild_tree` talk to, and a panel that
+        # exists but is hidden costs the layout nothing while sparing every one
+        # of them a "unless we are editing" guard.
+        self._library_panel = self._build_library_panel()
+        body.addWidget(self._library_panel)
         body.addWidget(self._build_detail_panel(), 1)
         layout.addLayout(body, 1)
-        layout.addWidget(self._build_footer())
+        self._footer = self._build_footer()
+        layout.addWidget(self._footer)
 
         # The bar is as tall as the buttons beside it, and only the stylesheet
         # knows how tall that is — so ask once the dialog is assembled and its
@@ -359,10 +447,29 @@ class AddFixtureDialog(QDialog):
         self.ok_button.ensurePolished()
         self.patch_bar.setFixedHeight(self.ok_button.sizeHint().height())
 
-        self._rebuild_tree()
-        self.dmx_spin.setValue(suggest_free_dmx_start(self._config))
-        self.channel_spin.setValue(self._config.next_free_channel())
-        self._select_first()
+        # Provisional: enough for a dialog that is driven without ever being
+        # shown (the tests), and replaced by the real numbers on first show.
+        self._measure_fold_thresholds()
+
+        if self._editing:
+            self._library_panel.hide()
+            self.dmx_spin.setValue(int(instance.dmx_start))
+            self.channel_spin.setValue(max(0, int(instance.channel)))
+            self.select_type(instance.type)
+            if getattr(instance, "mode", ""):
+                self.set_mode(instance.mode)
+            # select_type is a no-op for a type the library cannot resolve, and
+            # the footer would then never have been filled in.
+            self._on_patch_changed()
+            self._populate_instance_fields()
+            if self._midi is not None:
+                self.palette_tab.set_velocity(
+                    self._midi.fixture_palette(int(instance.channel)))
+        else:
+            self._rebuild_tree()
+            self.dmx_spin.setValue(suggest_free_dmx_start(self._config))
+            self.channel_spin.setValue(self._config.next_free_channel())
+            self._select_first()
 
     # ------------------------------------------------------------------
     # Library panel
@@ -510,16 +617,64 @@ class AddFixtureDialog(QDialog):
         header.setSpacing(16)
         identity = QVBoxLayout()
         identity.setSpacing(4)
+
+        # Manufacturer, and — once the title below is carrying a name of the
+        # operator's own — the model beside it. It only earns a place there
+        # when the title has stopped showing it.
+        origin = QHBoxLayout()
+        origin.setSpacing(8)
         self.detail_manufacturer = QLabel()
         self.detail_manufacturer.setObjectName("AddFxDetailManufacturer")
-        identity.addWidget(self.detail_manufacturer)
-        self.detail_name = QLabel()
+        origin.addWidget(self.detail_manufacturer)
+        self.detail_model = QLabel()
+        self.detail_model.setObjectName("AddFxDetailModel")
+        self.detail_model.hide()
+        origin.addWidget(self.detail_model)
+        origin.addStretch(1)
+        identity.addLayout(origin)
+
+        # The title: the fixture's own name when it has one, else the model.
+        # In edit mode it is also where the name is changed — a pencil beside
+        # it, and a double-click on the title itself.
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        self.detail_name = _TitleLabel()
         self.detail_name.setObjectName("AddFxDetailName")
-        identity.addWidget(self.detail_name)
+        title_row.addWidget(self.detail_name)
+        if self._editing:
+            self.detail_name.setToolTip("Double-click to rename this fixture")
+            self.detail_name.double_clicked.connect(self.begin_rename)
+            self.rename_button = QToolButton()
+            self.rename_button.setObjectName("AddFxRename")
+            self.rename_button.setIcon(icons.icon("pencil", "#8a8a8a"))
+            self.rename_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.rename_button.setToolTip("Rename this fixture")
+            self.rename_button.clicked.connect(self.begin_rename)
+            title_row.addWidget(self.rename_button)
+            # Same row, hidden until the rename starts: the editor stands in
+            # the title's place rather than opening somewhere else on screen.
+            self.name_edit = _TitleEdit()
+            self.name_edit.setObjectName("AddFxNameEdit")
+            self.name_edit.setPlaceholderText("Unnamed fixture")
+            self.name_edit.setMinimumWidth(220)
+            self.name_edit.hide()
+            self.name_edit.editingFinished.connect(self._end_rename)
+            self.name_edit.cancelled.connect(self._cancel_rename)
+            title_row.addWidget(self.name_edit)
+        title_row.addStretch(1)
+        identity.addLayout(title_row)
+
         self.category_chips = QWidget()
         self._category_layout = FlowLayout(self.category_chips)
         identity.addWidget(self.category_chips)
         header.addLayout(identity, 1)
+
+        # EDIT MODE ONLY: the two things that belong to the INSTANCE rather than
+        # to the type. They sit up here with the identity, not in the footer —
+        # the footer is the patch decision (where in the universe, which MIDI
+        # channel) and is already full at the 1280px minimum window.
+        if self._editing:
+            header.addLayout(self._build_instance_fields())
 
         self.stat_channels = self._add_stat(header, "CHANNELS")
         self.stat_modes = self._add_stat(header, "MODES")
@@ -531,12 +686,152 @@ class AddFixtureDialog(QDialog):
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_channels_tab(), "Channels")
         self.tabs.addTab(self._build_modes_tab(), "Modes")
-        # Edits the fixture *library* (its sidecar scene banks), not the patch
-        # this dialog is building — so it is unaffected by OK/Cancel.
+        # These two edit the fixture *library* (its sidecar scene banks and the
+        # chases over them), not the patch this dialog is building — so they are
+        # unaffected by OK/Cancel. They also share a sidecar, and each holds its
+        # own copy of it, so a write by either hands the other a fresh
+        # definition before it can save a stale one back over the top.
         self.scenes_tab = FixtureScenesTab()
+        self.chases_tab = FixtureChasesTab()
+        self.scenes_tab.library_changed.connect(
+            lambda: self._on_library_changed(self.scenes_tab))
+        self.chases_tab.library_changed.connect(
+            lambda: self._on_library_changed(self.chases_tab))
         self.tabs.addTab(self.scenes_tab, "Scenes")
+        self.tabs.addTab(self.chases_tab, "Chases")
+        # The instance's palette in the song that is loaded — unlike the two
+        # above it IS one of the dialog's answers, so it waits for OK. Built
+        # unconditionally and hidden per fixture (`_sync_palette_tab`): only a
+        # Color Changer has a palette to walk.
+        self.palette_tab = FixturePaletteTab()
+        self._palette_index = self.tabs.addTab(self.palette_tab, "Palette")
+        self.tabs.setTabVisible(self._palette_index, False)
         layout.addWidget(self.tabs, 1)
         return panel
+
+    def _on_library_changed(self, writer: QWidget) -> None:
+        """One of the library tabs wrote the sidecar: re-read it into the other.
+
+        The Scenes tab rewrites the chases naming a renamed bank, and the
+        Chases tab is the authority on everything else in them — so whichever
+        did not write is now holding a stale copy of the half it doesn't own.
+        """
+        fdef = self._current_def()
+        if writer is not self.scenes_tab:
+            self.scenes_tab.refresh_chases(fdef)
+        if writer is not self.chases_tab:
+            self.chases_tab.reload(fdef)
+        self.library_changed.emit()
+
+    def _build_instance_fields(self) -> QHBoxLayout:
+        """Rigging, for the fixture being edited.
+
+        The name used to sit here too; it is the title on the left now, which
+        is where the fixture's identity already was.
+
+        Not applied as you toggle it: like the DMX address and the MIDI channel
+        below, it is the dialog's answer and OK is what commits it."""
+        row = QHBoxLayout()
+        row.setSpacing(18)
+
+        # Offered only for a fixture whose profile can hang upside down at all —
+        # a smoke machine always sits on its own feet.
+        self._mounting = QWidget()
+        mounting = QVBoxLayout(self._mounting)
+        mounting.setContentsMargins(0, 0, 0, 0)
+        mounting.setSpacing(4)
+        mounting.addWidget(self._footer_label("MOUNTING"))
+        switch_row = QHBoxLayout()
+        switch_row.setSpacing(8)
+        self.hanging_switch = ToggleSwitch()
+        self.hanging_switch.toggled.connect(self._on_hanging_toggled)
+        self._hanging_label = QLabel()
+        self._hanging_label.setObjectName("AddFxStatus")
+        switch_row.addWidget(self.hanging_switch)
+        switch_row.addWidget(self._hanging_label)
+        switch_row.addStretch(1)
+        mounting.addLayout(switch_row)
+        mounting.addStretch(1)
+        row.addWidget(self._mounting)
+        return row
+
+    def _on_hanging_toggled(self, hanging: bool) -> None:
+        """One word on a toggle only ever names half of it, and the half it
+        names is the state you are not in — so say what this one does."""
+        self._hanging_label.setText("Hanging · beam at the stage" if hanging
+                                    else "On the floor · beam at the ceiling")
+
+    # --- the title, and renaming in place -----------------------------
+    def _refresh_identity(self) -> None:
+        """Say who this fixture is, in the two lines on the left.
+
+        Named by its operator, the title is that name and the model steps back
+        beside the manufacturer — a rig has three Wash 12s and calling them all
+        "Wash 12" is what the name was for. Unnamed, the title IS the model and
+        there is nothing to put beside the manufacturer.
+        """
+        entry = self._entry
+        model = entry.name if entry else ""
+        manufacturer = (entry.manufacturer if entry else "") or GENERIC_MANUFACTURER
+        self.detail_manufacturer.setText(manufacturer.upper())
+        custom = self.name_edit.text().strip() if self._editing else ""
+        self.detail_name.setText(custom or model)
+        self.detail_model.setText(model if custom else "")
+        self.detail_model.setVisible(bool(custom))
+        if self._editing:
+            self.setWindowTitle(f"Edit fixture — {custom or model}")
+
+    def begin_rename(self) -> None:
+        """Swap the title for its editor, primed and selected."""
+        if not self._editing or self._renaming:
+            return
+        self._renaming = True
+        self.detail_name.hide()
+        self.rename_button.hide()
+        self.name_edit.show()
+        self.name_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.name_edit.selectAll()
+
+    def _end_rename(self) -> None:
+        """Put the title back, carrying whatever was typed.
+
+        `editingFinished` also fires on focus-out — including the focus-out
+        that hiding the editor causes — so this has to be re-entrant-safe or
+        it recurses through the widget it is in the middle of hiding.
+        """
+        if not self._renaming:
+            return
+        self._renaming = False
+        self.name_edit.hide()
+        self.detail_name.show()
+        self.rename_button.show()
+        self._refresh_identity()
+
+    def _cancel_rename(self) -> None:
+        """Escape: drop what was typed and put the title back as it was."""
+        if not self._renaming:
+            return
+        self.name_edit.setText(self._name_before_rename())
+        self._end_rename()
+
+    def _name_before_rename(self) -> str:
+        """The name the fixture is still patched under — nothing has been
+        applied yet, so the instance is the record of what to go back to."""
+        return self._instance.name if self._instance is not None else ""
+
+    def _populate_instance_fields(self) -> None:
+        instance = self._instance
+        self.name_edit.setText(instance.name)
+        self._refresh_identity()
+        hanging = bool(getattr(instance, "hanging", True))
+        # Remembered rather than re-asked as a visibility query: the dialog is
+        # driven headless in tests, where nothing is visible.
+        self._can_rig = self._stage.can_rig_inverted(instance)
+        self._mounting.setVisible(self._can_rig)
+        self.hanging_switch.blockSignals(True)
+        self.hanging_switch.setChecked(hanging)
+        self.hanging_switch.blockSignals(False)
+        self._on_hanging_toggled(hanging)
 
     def _add_stat(self, layout: QHBoxLayout, title: str) -> QLabel:
         block = QVBoxLayout()
@@ -703,7 +998,12 @@ class AddFixtureDialog(QDialog):
         self.channel_spin.setFixedWidth(78)
         self.channel_spin.valueChanged.connect(lambda _value: self._on_patch_changed())
         channel_row.addWidget(self.channel_spin)
-        buttons = QHBoxLayout()
+        # All sixteen channels at a glance, in their own container so the row
+        # can fold them away on a narrow window — see `_fold_channel_buttons`.
+        # The spin box beside them is the control; these are the overview.
+        self._channel_box = QWidget()
+        buttons = QHBoxLayout(self._channel_box)
+        buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(2)
         self._channel_buttons: List[QPushButton] = []
         for channel in range(16):
@@ -716,7 +1016,7 @@ class AddFixtureDialog(QDialog):
                 lambda _checked, c=channel: self.channel_spin.setValue(c))
             self._channel_buttons.append(button)
             buttons.addWidget(button)
-        channel_row.addLayout(buttons)
+        channel_row.addWidget(self._channel_box)
         self.channel_status_label = QLabel()
         self.channel_status_label.setObjectName("AddFxStatus")
         channel_row.addWidget(self.channel_status_label)
@@ -752,6 +1052,15 @@ class AddFixtureDialog(QDialog):
         cancel.clicked.connect(self.reject)
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
+        # Deleting is not a patch decision to be confirmed with OK — it takes
+        # effect on its own confirmation and closes the dialog, so it sits
+        # apart from the pair that answers "keep these edits?".
+        if self._editing:
+            self.delete_button = QPushButton("Delete")
+            self.delete_button.setObjectName("AddFxDelete")
+            self.delete_button.clicked.connect(self._on_delete)
+            buttons.addWidget(self.delete_button)
+            buttons.addSpacing(12)
         buttons.addWidget(self.ok_button)
         buttons.addWidget(cancel)
         actions = QVBoxLayout()
@@ -764,6 +1073,66 @@ class AddFixtureDialog(QDialog):
         label = QLabel(text)
         label.setObjectName("AddFxFieldLabel")
         return label
+
+    def _measure_footer(self) -> int:
+        """The footer's minimum width, as it will actually be drawn.
+
+        `ensurePolished` first, or the spin boxes and buttons are measured with
+        the default font and no padding — around 200px short of what the
+        stylesheet gives them — and the fold threshold comes out low enough
+        never to fire. `invalidate()` then defeats the layout's own cache,
+        which would otherwise hand back the previous answer.
+        """
+        self._footer.ensurePolished()
+        layout = self._footer.layout()
+        layout.invalidate()
+        layout.activate()
+        return layout.totalMinimumSize().width()
+
+    def _measure_fold_thresholds(self) -> None:
+        """What the footer needs with and without the channel overview.
+
+        Measured rather than guessed in pixels: it depends on the stylesheet's
+        own padding and font sizes, and on whether this dialog carries a Delete
+        button, so a hard-coded threshold goes stale the first time either
+        moves.
+        """
+        self._channel_box.hide()
+        self._footer_min_folded = self._measure_footer()
+        self._channel_box.show()
+        self._footer_min_full = self._measure_footer()
+        self._fold_channel_buttons()
+
+    def showEvent(self, event):
+        # Re-measure on the FIRST show and not before. A widget is polished by
+        # the style when it is shown, and until then every padded spin box and
+        # button measures at its unstyled size — around 200px short across the
+        # row, which is low enough that the fold would never fire.
+        super().showEvent(event)
+        if not self._fold_measured:
+            self._fold_measured = True
+            self._measure_fold_thresholds()
+
+    def _fold_channel_buttons(self) -> None:
+        """Drop the sixteen channel buttons when the footer cannot fit them.
+
+        Both toolbars fold their low-priority half on a narrow window and this
+        row is no different: at 1280 — the supported minimum display — an edit
+        dialog carries a Delete button the add one does not, and the row is
+        already the widest thing here. Squeezed instead of folded, the buttons
+        render as an unreadable smear and clip the actions off the end. The
+        spin box and its "already used" status say everything they say.
+        """
+        self._channel_box.setVisible(self.width() >= self._footer_min_full)
+        # `used` reads off the same set either way, so nothing is lost but the
+        # glance — but the row must be told the tooltip now carries it.
+        self.channel_spin.setToolTip(
+            "MIDI channel 0-15" if self._channel_box.isVisible() else
+            "MIDI channel 0-15 — widen the dialog to see all sixteen at once")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fold_channel_buttons()
 
     # ------------------------------------------------------------------
     # Population
@@ -806,7 +1175,7 @@ class AddFixtureDialog(QDialog):
             card.style().polish(card)
         self._populate_channels()
         self._populate_stats()
-        self._populate_scenes()
+        self._populate_library_tabs()
         self._on_patch_changed()
 
     def _current_def(self) -> Optional[FixtureDef]:
@@ -818,8 +1187,7 @@ class AddFixtureDialog(QDialog):
         entry = self._entry
         if entry is None:
             return
-        self.detail_manufacturer.setText(entry.manufacturer.upper())
-        self.detail_name.setText(entry.name)
+        self._refresh_identity()
 
         _clear_layout(self._category_layout)
         for category in entry.categories:
@@ -860,14 +1228,30 @@ class AddFixtureDialog(QDialog):
         self._populate_modes()
         self._populate_channels()
         self._populate_stats()
-        self._populate_scenes()
+        self._populate_library_tabs()
+        self._sync_palette_tab()
 
-    def _populate_scenes(self) -> None:
-        """Point the Scenes tab at the type + mode now on screen. The channel
-        set — and so every scene value — depends on the mode, so this follows
-        both."""
-        self.scenes_tab.set_fixture(self._entry.key if self._entry else "",
-                                    self._current_def(), self.dmx_spin.value())
+    def _populate_library_tabs(self) -> None:
+        """Point the Scenes and Chases tabs at the type + mode now on screen.
+        The channel set — and so every scene value, and every step naming one —
+        depends on the mode, so this follows both."""
+        key = self._entry.key if self._entry else ""
+        fdef = self._current_def()
+        self.scenes_tab.set_fixture(key, fdef, self.dmx_spin.value())
+        self.chases_tab.set_fixture(key, fdef)
+
+    def _sync_palette_tab(self) -> None:
+        """Show the Palette tab for a Color Changer, hide it for anything else.
+
+        Asked on every def/mode change, because a mode can move a fixture in or
+        out of the category. The value is loaded ONCE per fixture, not per
+        re-sync: re-reading it here would throw away a choice the user made and
+        then switched modes on.
+        """
+        visible = self._midi is not None and _has_palette(self._current_def())
+        self.tabs.setTabVisible(self._palette_index, visible)
+        if not visible and self.tabs.currentIndex() == self._palette_index:
+            self.tabs.setCurrentIndex(0)
 
     def _populate_stats(self) -> None:
         fdef = self._current_def()
@@ -1042,11 +1426,131 @@ class AddFixtureDialog(QDialog):
         mode = self._mode if len(self._mode_buttons) > 1 else ""
         return (key, self.dmx_spin.value(), self.channel_spin.value(), mode)
 
+    def select_tab(self, name: str) -> None:
+        """Open on a named tab ("scenes", "chases", …). Unknown names are
+        ignored: a caller asking for a tab that is not here wants the default
+        one, not an exception."""
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index).lower() == str(name).lower():
+                self.tabs.setCurrentIndex(index)
+                return
+
+    def reveal(self, ref) -> None:
+        """Open on the scene or chase a clip names, not merely on its tab.
+
+        `ref` is the clip model's own descriptor, so this is the one place that
+        has to know both shapes: a scene names its bank and itself, while a
+        chase rides a note ref whose velocity IS its index — because note 70
+        loads a chase by index and by nothing else. Anything else (a channel
+        control, a colour macro, a blackout) names no scene, so the tab it
+        landed on is as close as this can get.
+        """
+        if not isinstance(ref, dict) or not ref:
+            return
+        if ref.get("kind") == "scene":
+            self.select_tab("scenes")
+            self.scenes_tab.select_scene(str(ref.get("bank") or ""),
+                                         str(ref.get("name") or ""),
+                                         int(ref.get("index", -1)))
+            return
+        if (ref.get("kind") == "note"
+                and int(ref.get("note", -1)) == note_layout.CHASE_LOAD):
+            self.select_tab("chases")
+            self.chases_tab.select_chase(int(ref.get("velocity", -1)))
+
+    def apply_edits(self) -> bool:
+        """Write this dialog's answer onto the fixture it was opened on.
+
+        Called by the host after an accepted EDIT. Nothing above has touched the
+        instance: the footer, the name and the rigging are all answers held in
+        widgets until here, which is what makes Cancel mean something. Returns
+        whether anything actually moved, so a host can skip the persist.
+        """
+        instance = self._instance
+        if not self._editing or self._deleted or instance is None:
+            return False
+        _key, dmx_start, channel, mode = self.values()
+        changed = False
+
+        name = self.name_edit.text().strip()
+        if name != instance.name:
+            instance.name = name
+            changed = True
+        if dmx_start != instance.dmx_start:
+            instance.dmx_start = int(dmx_start)
+            changed = True
+        if channel != instance.channel:
+            instance.channel = int(channel)
+            changed = True
+        # Mode and rigging both decide how the fixture's bodies are BUILT, so
+        # they are rebuilds rather than writes — and each is a no-op when the
+        # value has not moved, so asking unconditionally is safe.
+        if mode != getattr(instance, "mode", ""):
+            self._stage.change_fixture_mode(instance, mode)
+            changed = True
+        if self._can_rig:
+            hanging = self.hanging_switch.isChecked()
+            if hanging != bool(getattr(instance, "hanging", True)):
+                self._stage.set_fixture_hanging(instance, hanging)
+                changed = True
+        if changed:
+            self._stage.refresh_labels()
+        # Not folded into `changed`: the palette is not part of the patch, and
+        # writing it already committed the .mid. Applied against the channel the
+        # footer just settled on, so re-channelling a fixture takes its palette
+        # with it.
+        self.apply_palette(int(channel))
+        return changed
+
+    def apply_palette(self, channel: int) -> bool:
+        """Write this dialog's palette answer onto `channel`'s note 60.
+
+        Public because ADD mode has no instance to apply to until the caller has
+        patched one — the designer calls this with the channel it just used. A
+        no-op when the tab was never offered (no song loaded, or a fixture with
+        no colour to cycle).
+        """
+        if self._midi is None or not self.tabs.isTabVisible(self._palette_index):
+            return False
+        return self._midi.set_fixture_palette(channel,
+                                              self.palette_tab.velocity())
+
+    def _on_delete(self) -> None:
+        """Remove the fixture being edited, once. Confirmed, then closed —
+        there is nothing left for OK to apply."""
+        instance = self._instance
+        if instance is None:
+            return
+        name = instance.name or instance.type
+        detail = ""
+        bar_count = len(instance.bars)
+        if bar_count > 1:
+            detail = f" All {bar_count} bars will be removed."
+        reply = QMessageBox.question(
+            self, "Delete fixture", f"Delete '{name}'?{detail}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        # By identity: this dialog is opened from the timeline and the clip
+        # library, where the stage has no selection to remove.
+        if self._stage.remove_fixture(instance):
+            self._deleted = True
+            self.accept()
+
+    def was_deleted(self) -> bool:
+        """Whether OK came from a confirmed Delete rather than from the button."""
+        return self._deleted
+
     def done(self, result: int) -> None:
-        # Scene edits are library edits, so neither button here decides their
-        # fate: an unsaved one asks on the way out, whichever closed the dialog.
+        # Scene and chase edits are library edits, so neither button here
+        # decides their fate: an unsaved one asks on the way out, whichever
+        # closed the dialog.
         self.scenes_tab.save_pending_changes()
+        self.chases_tab.save_pending_changes()
         self.scenes_tab.preview.clear()
+        self.chases_tab.preview.clear()
         super().done(result)
 
 

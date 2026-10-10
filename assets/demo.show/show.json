@@ -1,0 +1,197 @@
+{
+  "format_version": 1,
+  "name": "demo",
+  "songs": [
+    {
+      "id": "033036de-0b5d-42d3-93ba-50834380677f",
+      "title": "The Final Stand",
+      "audio": null,
+      "midi": "midis/the-final-stand.mid",
+      "offset": 0.0,
+      "guide": "audio/The Final Stand.mp3",
+      "guide_offset": -0.07542335133966845,
+      "key": "",
+      "precount": true,
+      "meter": "4/4",
+      "voice_tts": [],
+      "control_markers": [],
+      "segue": false,
+      "segue_time": 0.0,
+      "enabled": true,
+      "cache": {
+        "bpm": 138,
+        "duration": null,
+        "audio_mtime": null
+      }
+    }
+  ],
+  "current_song_index": 0,
+  "fixtures": [
+    {
+      "type": "ledbar",
+      "dmx_start": 1,
+      "name": "",
+      "channel": 0,
+      "mode": "",
+      "x": 0,
+      "y": 0,
+      "hanging": true,
+      "order": -1,
+      "bars": [
+        {
+          "x": 150,
+          "y": 350
+        },
+        {
+          "x": 325,
+          "y": 350
+        },
+        {
+          "x": 500,
+          "y": 350
+        },
+        {
+          "x": 675,
+          "y": 350
+        },
+        {
+          "x": 875,
+          "y": 350
+        },
+        {
+          "x": 1025,
+          "y": 350
+        },
+        {
+          "x": 1200,
+          "y": 350
+        },
+        {
+          "x": 1375,
+          "y": 350
+        }
+      ]
+    },
+    {
+      "type": "blinder",
+      "dmx_start": 33,
+      "name": "",
+      "channel": 1,
+      "mode": "",
+      "x": 575,
+      "y": 500,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "blinder",
+      "dmx_start": 65,
+      "name": "",
+      "channel": 2,
+      "mode": "",
+      "x": 925,
+      "y": 500,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "smoke-machine",
+      "dmx_start": 73,
+      "name": "",
+      "channel": 3,
+      "mode": "1ch",
+      "x": 673,
+      "y": 928,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "par-rgbw",
+      "dmx_start": 74,
+      "name": "",
+      "channel": 4,
+      "mode": "",
+      "x": 215,
+      "y": 183,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "par-rgbw",
+      "dmx_start": 80,
+      "name": "",
+      "channel": 5,
+      "mode": "",
+      "x": 744,
+      "y": 184,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "par-rgbw",
+      "dmx_start": 86,
+      "name": "",
+      "channel": 6,
+      "mode": "",
+      "x": 1265,
+      "y": 188,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "moving-head",
+      "dmx_start": 92,
+      "name": "",
+      "channel": 7,
+      "mode": "12ch",
+      "x": 466,
+      "y": 193,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "moving-head",
+      "dmx_start": 92,
+      "name": "",
+      "channel": 8,
+      "mode": "12ch",
+      "x": 1060,
+      "y": 191,
+      "hanging": true,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "moving-head",
+      "dmx_start": 116,
+      "name": "",
+      "channel": 9,
+      "mode": "12ch",
+      "x": 31,
+      "y": 815,
+      "hanging": false,
+      "order": -1,
+      "bars": []
+    },
+    {
+      "type": "moving-head",
+      "dmx_start": 116,
+      "name": "",
+      "channel": 10,
+      "mode": "12ch",
+      "x": 1413,
+      "y": 841,
+      "hanging": false,
+      "order": -1,
+      "bars": []
+    }
+  ],
+  "favorites": []
+}

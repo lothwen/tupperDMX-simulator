@@ -5,7 +5,7 @@ Covers create_show folder layout, load/save roundtrip through show.json,
 atomic_write_json (valid content, no leftover temp files), ShowError on
 missing/corrupt manifests, duplicate_show (versions/ history excluded, copy
 retitled, relative paths re-resolve under the new root), allocate_midi_path
-uniqueness, and is_show_dir.
+uniqueness, is_show_dir, and which of a song's files the show owns alone.
 
 Run with:
     uv run python tests/test_show_store.py
@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.config import FixtureInstance, SongConfig, WebCueConfig
+from core import clips
+from core.config import FixtureInstance, SongConfig
 from core.show import model
 from core.show.model import ShowError
 from core.show.store import (
@@ -32,6 +33,7 @@ from core.show.store import (
     is_show_dir,
     load_show,
     save_manifest,
+    song_owned_files,
 )
 
 
@@ -75,8 +77,9 @@ def test_save_load_roundtrip():
         external_audio.write_bytes(b"a")
 
         show = create_show(tmp, "Gira",
-                           fixtures=[FixtureInstance(type="ledbar", dmx_start=1, channel=0)],
-                           cues=[WebCueConfig("Warm", "#ffb86b", [[0, 73, 127]])])
+                           fixtures=[FixtureInstance(type="ledbar", dmx_start=1,
+                                                     channel=0, order=2)])
+        show.favorites.append(clips.note_ref("ledbar", "", 73, 127))
         midi_path = allocate_midi_path(show, "El Acantilado")
         Path(midi_path).write_bytes(b"m")
         show.playlist.songs.append(SongConfig(
@@ -99,8 +102,11 @@ def test_save_load_roundtrip():
                 and song.precount is False and song.cache["bpm"] == 142
                 and abs(song.offset - 0.32) < 1e-9,
                 "song metadata roundtrips")
-        _assert(loaded.fixtures[0].type == "ledbar" and loaded.cues[0].label == "Warm",
-                "fixtures and cues roundtrip")
+        _assert(loaded.fixtures[0].type == "ledbar"
+                and loaded.favorites == show.favorites,
+                "fixtures and favourites roundtrip")
+        # The timeline row a lane was dragged to is show data, like the address.
+        _assert(loaded.fixtures[0].order == 2, "the fixture's track row roundtrips")
 
 
 def test_load_errors():
@@ -210,6 +216,37 @@ def test_allocate_midi_path():
                 "unsluggable titles fall back to 'song'")
 
 
+def test_song_owned_files():
+    print("test_song_owned_files")
+    with tempfile.TemporaryDirectory() as tmp:
+        show = create_show(tmp, "Gira")
+
+        def put(path):
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_bytes(b"x")
+            return str(path)
+
+        external = put(Path(tmp) / "music" / "marea.wav")
+        shared = put(show.audio_dir / "shared.wav")
+        song = SongConfig(id="s1", midi=put(show.midis_dir / "marea.mid"),
+                          audio=put(show.audio_dir / "marea.wav"), guide=external)
+        other = SongConfig(id="s2", audio=shared)
+        show.playlist.songs.extend([song, other])
+
+        owned = song_owned_files(show, song)
+        _assert(owned == [str(show.midis_dir / "marea.mid"),
+                          str(show.audio_dir / "marea.wav")],
+                "the .mid and the in-show backing belong to the song")
+        _assert(external not in owned, "audio referenced in place is never the show's")
+
+        song.guide = shared
+        _assert(shared not in song_owned_files(show, song),
+                "a file another song still uses is kept")
+        song.audio = str(show.audio_dir / "gone.wav")
+        _assert(song_owned_files(show, song) == [str(show.midis_dir / "marea.mid")],
+                "a missing file is nothing to delete")
+
+
 def main():
     test_create_show_layout()
     test_save_load_roundtrip()
@@ -218,6 +255,7 @@ def main():
     test_atomic_write_json()
     test_duplicate_show()
     test_allocate_midi_path()
+    test_song_owned_files()
     print("\nALL TESTS PASSED")
 
 

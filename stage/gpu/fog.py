@@ -154,6 +154,11 @@ class FogPass:
                     scene_rect, fog, haze, seconds)
         return self._blend(fog_width, fog_height, scene_to_clip)
 
+    @property
+    def march_size(self) -> Tuple[int, int]:
+        """The march's own resolution, which is a fraction of the surface's."""
+        return self._fog_size
+
     def _key(self, size, scene_to_clip) -> tuple:
         """What the history is only valid for: this size, this view."""
         return (size, tuple(round(scene_to_clip.column(i)[j], 4)

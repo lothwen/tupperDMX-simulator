@@ -1,11 +1,10 @@
 # 9. Settings
 
-**☰ ▸ Settings…** Five pages, chosen from the sidebar. Everything here describes
+**☰ ▸ Settings…** Six pages, chosen from the sidebar. Everything here describes
 **this machine**, never the show — so a laptop and the rack box can be routed
 completely differently while running the same project.
 
-Changes take effect on **OK**. Two of them explicitly wait for the next launch,
-and say so.
+Changes take effect on **OK**, straight away — nothing waits for a restart.
 
 ## 9.1 Input / Output
 
@@ -94,12 +93,16 @@ channel to the PA and the other to the in-ears, and the room never hears the
 click.
 
 **Count-in** sets how many bars (1–8) and whether the last bar is **spoken
-aloud**. Whether a *particular song* gets a count-in at all is a per-song switch
-on the timeline toolbar — the hint beside the checkbox says so.
+aloud**. Whether a *particular song* gets a count-in at all is a per-song switch:
+**COUNT-IN** in the click panel ([6.1.2](#612-centre-transport)), or the
+**PRECOUNT** column of the playlist manager ([7.2](#72-setlist-the-songs)). (The
+hint beside the checkbox still points at the SETLIST toolbar, where the switch
+used to be.)
 
 **Voice** picks the text-to-speech voice used for the spoken count-in and for
-voice cues. Voices are about 60 MB and are **downloaded on demand** — they are
-never bundled with the application. **Download** fetches the selected one;
+voice-TTS markers: three Spanish voices, one Basque and two English, each
+counting in its own language. Voices are about 60 MB and are **downloaded on
+demand** — they are never bundled with the application. **Download** fetches the selected one;
 **Test** speaks a phrase through the voice bus. The status line below says where
 you stand: *"Voice installed."*, *"Voice not downloaded yet (~60 MB, one
 time)."*, or *"TTS engine (piper) not installed — voice features disabled."*
@@ -109,16 +112,35 @@ cached — so a missing voice degrades to silence rather than to a stutter.
 
 ## 9.4 Virtual stage
 
-![The Virtual stage page: the GPU renderer and the cost of volumetric fog.](images/settings-stage.png)
+![The Virtual stage page: one quality slider over the GPU renderer and the cost of volumetric fog, and the experimental 3D stage.](images/settings-stage.png)
+
+**Quality** is one handle over everything below it, the way a game's graphics
+preset works:
+
+| Stop | What it sets |
+|---|---|
+| **Off** | The plain renderer, which draws on any machine. Nothing below applies |
+| **Low** | The GPU renderer, no volumetric fog |
+| **Mid** | GPU + fog, marched at quarter resolution with 24 steps — meant for integrated graphics. **The default** |
+| **High** | GPU + fog at half resolution, 32 steps |
+| **Ultra** | GPU + fog at full resolution, 48 steps |
+| **Custom** | Not something you pick: it is where the handle sits when the values below match no preset |
+
+The fog stops are real steps, not nudges: Mid, High and Ultra cost very
+roughly 1 : 5 : 30. The slider is as
+much a read-out as a control — change a value below by hand and the handle
+moves to **Custom**, rather than lying about what the stage is doing. A preset
+only ever sets what things *cost*; how the stage *looks* (haze, exposure, the
+fog's shape) is left alone.
 
 **Render the stage light on the GPU** accumulates every fixture's light into one
 high-dynamic-range buffer and tonemaps it with a filmic curve, so beams *add*
 where they cross and blow out instead of flattening to white. It needs a working
-OpenGL driver, and falls back to the normal renderer if there is not one.
-**It applies on the next launch.**
+OpenGL driver; on a machine without one the stage keeps the plain renderer and
+a message says so.
 
-**Volumetric fog** needs the GPU renderer above, and takes effect immediately.
-Its cost controls live here because they are a property of the machine:
+**Volumetric fog** needs the GPU renderer above. Its cost controls live here
+because they are a property of the machine:
 
 | Setting | Notes |
 |---|---|
@@ -134,20 +156,75 @@ Its cost controls live here because they are a property of the machine:
 > And there is no density control anywhere on this page, because density is the
 > **HAZE** slider on that same toolbar.
 
-## 9.5 Logging
+**Experimental: 3D stage** shows the three-dimensional prototype in the 2D
+stage's place ([4.7](#47-the-experimental-3d-stage)). It sits outside the
+Quality presets because it is a different renderer, not a setting of this one,
+and it needs OpenGL 4.1.
 
-![The Logging page: one setting, and it waits for the next launch.](images/settings-logging.png)
+## 9.5 Interface
 
-The log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). **It applies on the next
-launch.** Logs are written to a dated file in the `logs/` folder next to the
-application — the first place to look when the autosave chip goes red.
+![The Interface page: one slider for how big the whole interface is drawn.](images/settings-interface.png)
 
-Leave it on INFO for normal use. DEBUG is worth turning on before reproducing a
-problem you intend to report, and worth turning off again afterwards.
+**UI scale** makes the interface's type and spacing smaller or larger, from
+75 % to 150 %. **The application is laid out for a 1280 × 800 display at
+100 %.** Below that, the whole window fits a small screen more comfortably;
+above it suits a large or high-DPI one, though past about 125 % the window needs
+more than 1280 pixels of width.
 
-## 9.6 Resetting
+The window restyles as you drag, so you can judge it in place — but the new
+size is **kept only if you press OK**. **Reset** goes back to 100 %.
 
-Every setting on these five pages lives in one file:
+## 9.6 Logging
+
+![The Logging page: the level, where the files go, and what is being written right now.](images/settings-logging.png)
+
+| Setting | What it does |
+|---|---|
+| **Level** | DEBUG, INFO, WARNING, ERROR, CRITICAL |
+| **Folder** | Where the dated log files are written. The readout on the right is what that folder holds today |
+
+**Both take effect the moment you press OK** — no restart. Leave the level on
+INFO for normal use, and switch to DEBUG when something is misbehaving *right
+now*: the detail starts arriving in the live pane below without losing the state
+you were trying to reproduce. Turn it off again afterwards, or the log fills
+with note-by-note traffic.
+
+**Leave the folder empty** and logs go where they always have: a `logs/` folder
+next to the application. That is the right answer on a laptop. Set it when the
+application lives somewhere you would rather not write to — a read-only install,
+or a rack box whose logs you want on the share you can reach from the desk. Type
+a path or pick one with the folder button inside the field; **Open folder** shows
+it in the file manager and **Copy path** puts it on the clipboard for an email.
+A folder change takes effect as soon as you press OK too — files already written
+stay where they are.
+
+The line under the field names the file being written and when it rotates: once
+the current file reaches the size shown it is renamed and a fresh one started,
+and the oldest is dropped past the kept count.
+
+### The live log
+
+The pane at the bottom is `tail -f` for the file the application is writing
+**right now** — the first place to look when the autosave chip goes red, without
+leaving the application to find it.
+
+| Control | What it does |
+|---|---|
+| **Follow tail** | Keeps the newest line in view. Turn it off to read back through what has scrolled past |
+| **Pause** | Stops reading. The log keeps being written — press Resume and the pane catches up |
+| **Clear view** | Empties the pane only. **The file is never touched** |
+
+Levels are coloured, so a WARNING or an ERROR is visible in a wall of DEBUG.
+Nothing here can delete a log or lose a line: the pane only ever reads.
+
+At **DEBUG** the stage also prints what it is costing in the bottom-right corner
+of its picture — frame rate, how long a repaint takes and, on the GPU
+renderer, what it is drawing and what the fog costs. It goes away with the
+level.
+
+## 9.7 Resetting
+
+Every setting on these six pages lives in one file:
 
 | Platform | Path |
 |---|---|

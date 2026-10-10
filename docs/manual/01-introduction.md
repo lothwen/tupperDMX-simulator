@@ -22,6 +22,10 @@ hear the click on in-ears while the room hears only the music.
 *clips* on a timeline — one lane per patched fixture. A clip is not a note in the
 musical sense: it is an instruction to a light.
 
+**Automatic programming.** Point the auto program at a song and it listens
+to the recording — beat grid, sections, repeats, builds, climax — and writes a
+complete light show for your rig, as ordinary clips you can then edit by hand.
+
 **A virtual stage.** Every patched fixture is drawn in real time from the DMX
 that is actually being sent, with beams, haze, smoke and — on machines with a
 usable OpenGL driver — a high-dynamic-range renderer with volumetric fog. What
@@ -34,8 +38,9 @@ all** — no interface, no MIDI cable, no lights. When there *is* a rig, the sam
 controller drives it over Art-Net or a USB DMX interface.
 
 **A tablet remote.** An optional web page on the local network shows the
-setlist, the current section, a visual metronome, a scrubbable waveform and a
-grid of manual light cues. It is how the show is actually run from the stage.
+setlist, the current section, a visual metronome, a scrubbable waveform, a
+free-running click and a grid of manual light cues. It is how the show is
+actually run from the stage.
 
 ## 1.2 The five words you need
 
@@ -47,9 +52,9 @@ show-local fixture definitions and a `versions/` history. Opening a show
 replaces the setlist and the patch. One folder is the whole gig.
 
 **Song** — one entry in the setlist. A song carries a backing track, a MIDI
-file, a BPM, a time offset, an optional musical key, an optional count-in and an
-optional *guide* track (a full-mix reference used for design that is never
-played live).
+file, a BPM and a meter, a time offset, an optional musical key, an optional
+count-in and an optional *guide* track (a full-mix reference used for design
+that is never played live).
 
 **Fixture and patch** — a fixture is one light. *Patching* it means giving it a
 DMX start address, a MIDI channel and a place on the stage. The patch lives in
@@ -75,9 +80,9 @@ show that uses that type shares them.
 | Audio | any output device the system exposes |
 | Lighting hardware | **none required** — optional Art-Net node or USB DMX interface |
 | MIDI hardware | **none required** — optional MIDI output port |
-| Graphics | any; the HDR stage renderer additionally wants a working OpenGL driver |
+| Graphics | any. The HDR stage renderer (on by default) wants a working OpenGL driver and falls back to a plain one without it; the experimental 3D stage needs OpenGL 4.1 |
 
-The spoken count-in and voice cues need a text-to-speech voice, downloaded on
+The spoken count-in and voice TTS need a text-to-speech voice, downloaded on
 demand (about 60 MB, once) from **Settings ▸ Audio**. Everything else works
 without it.
 
@@ -105,8 +110,11 @@ small box in the rack with no screen, where **the web remote is the only
 interface**. It force-enables the remote in memory without writing that choice
 to your preferences, and never downloads a TTS voice.
 
-`--headless` is the only flag the app defines; anything else on the command line
-is handed to Qt, so `-platform`, `-style` and friends still work.
+The app defines four flags — `--headless`, `--show PATH` (open a specific show
+folder), `--list-dmx-usb` (print the USB DMX interfaces this machine can see)
+and `--dmx-usb INDEX|auto` (send DMX out of one of them for this run, without
+touching your preferences). Anything else on the command line is handed to Qt,
+so `-platform`, `-style` and friends still work.
 
 ## 1.5 Where things are stored
 
@@ -115,7 +123,8 @@ Two locations, with a strict division of labour.
 **The show folder** holds everything about *the gig*: the setlist, each song's
 files and settings, the fixture patch and the web-remote cues. It is
 self-contained and portable — copy the folder, or export a `.showpack` bundle.
-By default new shows are created under `Documents/TupperDMX/`.
+By default new shows are created under `Documents/TupperDMX/`. The very first
+launch puts one there for you, `demo.show`: a programmed song to try everything on.
 
 **The preferences file** holds everything about *this machine*: audio device,
 I/O routing, log level, window sizes, and whether this box has a GPU worth using
@@ -136,7 +145,8 @@ history.
 
 Chapter 2 lays out the three ways this software gets used, because which one you
 are in decides how much of the rest matters. Chapters 3 to 10 then describe the
-interface surface by surface, and chapter 11 walks a complete show from an empty
+interface surface by surface, chapter 11 the auto program that writes a song's
+lighting from its audio, and chapter 12 walks a complete show from an empty
 project to a gig, cross-referencing the rest. Appendix A is the raw MIDI note
 layout, for when you need to read or write the notes directly; appendix B builds
 the bootable image for a rack box.

@@ -44,6 +44,7 @@ REAL_SHOW = Path.home() / "Documents" / "TupperDMX" / "Billares2026.show"
 WINDOW_GEOMETRY = (150, 55, 2240, 1290)  # x, y, w, h on the desktop
 DEMO_SONG_INDEX = 8                      # "10-supersubmarina" — a busy .mid
 DEMO_SEEK_SECONDS = 74.0
+REMOTE_SONG_INDEX = 3                    # the first song from here with a backing
 
 #: The look the stage figures are shot under. Note 48 takes manual control of
 #: a fixture so the song-part program cannot overwrite the next frame; notes
@@ -109,6 +110,9 @@ def build_sandbox(tmp: Path) -> tuple[Path, int]:
     prefs["io"]["dmx_to_artnet"] = False
     prefs["io"]["dmx_to_usb"] = False
     prefs["io"]["stage_source"] = "internal"
+    # At DEBUG the stage prints what it costs in its corner, into every stage
+    # figure; INFO is also what the manual tells people to run at.
+    prefs.setdefault("logging", {})["level"] = "INFO"
     # The web remote figure needs a live server on a port nobody else holds.
     prefs.setdefault("webremote", {})["enabled"] = True
     prefs["webremote"]["port"] = port
@@ -195,7 +199,6 @@ class Shooter:
             self.failed.append(name)
             return
 
-        scale = self._screen_scale(full)
         if widget is None:
             geo = top.frameGeometry()
             x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
@@ -203,9 +206,25 @@ class Shooter:
             origin = widget.mapToGlobal(QPoint(0, 0))
             x, y = origin.x(), origin.y()
             w, h = widget.width(), widget.height()
-        x, y = int((x - pad) * scale), int((y - pad) * scale)
-        w, h = int((w + 2 * pad) * scale), int((h + 2 * pad) * scale)
-        x, y = max(0, x), max(0, y)
+        self._crop(full, name, x - pad, y - pad, w + 2 * pad, h + 2 * pad)
+
+    def shoot_rect(self, name: str, rect, window=None) -> None:
+        """Capture a global rectangle, in logical points — for a figure that is
+        part of one widget, or spans a widget and the popup it opened."""
+        self.settle(top=window or self.window)
+        full = self._full_screen()
+        if full is None:
+            print(f"   ✗ {name}: spectacle produced nothing")
+            self.failed.append(name)
+            return
+        self._crop(full, name, rect.x(), rect.y(), rect.width(), rect.height())
+
+    def _crop(self, full: Path, name: str, x, y, w, h) -> None:
+        """Cut the logical rectangle (x, y, w, h) out of a full-screen capture
+        into images/<name>.png, and refuse a flat result."""
+        scale = self._screen_scale(full)
+        x, y = max(0, int(x * scale)), max(0, int(y * scale))
+        w, h = int(w * scale), int(h * scale)
 
         out = IMAGES / f"{name}.png"
         crop = subprocess.run(
@@ -307,6 +326,19 @@ class Session:
         for _ in range(8):
             self.app.processEvents()
         return dlg
+
+    def wait_until(self, predicate, timeout: float) -> bool:
+        """Pump events until `predicate()` holds — for work on a worker thread
+        whose end no fixed wait can promise — or `timeout` seconds pass."""
+        import time
+        from PyQt6.QtCore import QEventLoop
+        deadline = time.monotonic() + timeout
+        while not predicate():
+            if time.monotonic() > deadline:
+                return False
+            self.app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+            time.sleep(0.02)
+        return True
 
     def close_dialog(self, dlg):
         try:
@@ -438,9 +470,45 @@ def build_script(session: Session) -> None:
     session.add("_tab-modes", browser_tab(2), wait=0.8)
     session.add("add-fixture-modes",
                 lambda: shot.shoot("add-fixture-modes", window=state["browser"]))
-    session.add("_tab-scenes", browser_tab(3), wait=1.2)
+    def show_scenes():
+        # Pin the type: the Scenes and Chases figures are only worth shooting
+        # on a definition that HAS banks and chases, and whichever entry the
+        # search happened to land on may declare neither — an empty tree shows
+        # none of what either tab is for.
+        dlg = state["browser"]
+        dlg.select_type("moving-head")
+        dlg.tabs.setCurrentIndex(3)
+        # And open one, so the faders and the preview carry a real look rather
+        # than a blank draft.
+        tree = dlg.scenes_tab.tree
+        if tree.topLevelItemCount():
+            bank = tree.topLevelItem(0)
+            bank.setExpanded(True)
+            if bank.childCount():
+                tree.setCurrentItem(bank.child(1))
+        for _ in range(8):
+            app.processEvents()
+
+    session.add("_tab-scenes", show_scenes, wait=1.4)
     session.add("add-fixture-scenes",
                 lambda: shot.shoot("add-fixture-scenes", window=state["browser"]))
+
+    def show_chases():
+        dlg = state["browser"]
+        dlg.select_type("moving-head")      # a no-op after the Scenes step
+        dlg.tabs.setCurrentIndex(4)
+        # And pick one: unselected, the whole right half is empty, which shows
+        # none of what the tab is for. Selecting also starts it running, so the
+        # preview is caught mid-chase — which is the point of the tab.
+        tree = dlg.chases_tab.tree
+        if tree.topLevelItemCount():
+            tree.setCurrentItem(tree.topLevelItem(1))
+        for _ in range(8):
+            app.processEvents()
+
+    session.add("_tab-chases", show_chases, wait=1.6)
+    session.add("add-fixture-chases",
+                lambda: shot.shoot("add-fixture-chases", window=state["browser"]))
 
     def collide_patch():
         dlg = state["browser"]
@@ -457,9 +525,67 @@ def build_script(session: Session) -> None:
 
     def close_browser():
         session.close_dialog(state.pop("browser"))
-        w.exit_edit_mode()
 
     session.add("_close-browser", close_browser, wait=1.0)
+
+    # The same dialog in EDIT mode: no library rail, the fixture's own name as
+    # the title, and Delete in the footer. Shot on a named fixture where the
+    # show has one, since "the title is the name" is the half worth seeing.
+    def open_editor():
+        from core.fixture_library import resolve_fixture
+        from ui.fixture.browser import AddFixtureDialog
+        from ui.fixture.palette_tab import applies_to
+        patched = list(w.config.fixtures)
+        # A Color Changer where the show has one: the Palette tab, the figure
+        # after this one, is offered for nothing else.
+        instance = (next((f for f in patched
+                          if applies_to(resolve_fixture(f.type, f.mode))), None)
+                    or next((f for f in patched if f.name), None) or patched[0])
+        # The headline of that section is "the title becomes the fixture", and
+        # a demo show whose fixtures are all unnamed shows the model instead —
+        # which illustrates the other half. Borrow a name for the shot and put
+        # it back afterwards, so the later figures see the show unchanged.
+        state["editor_named"] = (instance, instance.name)
+        if not instance.name:
+            instance.name = "Front bar"
+        dlg = AddFixtureDialog(w.stage_controller, w, instance=instance,
+                               midi_manager=w.midi_manager)
+        state["editor"] = session.open_dialog(dlg, 1180, 800)
+        for _ in range(6):
+            app.processEvents()
+
+    session.add("_open-editor", open_editor, wait=2.0)
+    session.add("edit-fixture",
+                lambda: shot.shoot("edit-fixture", window=state["editor"]))
+
+    # The Palette tab of that same dialog — the fixture's colour palette, which
+    # used to be a dialog of its own behind a START clip. Offered for a Color
+    # Changer only, so the shot is skipped when the borrowed fixture is not one.
+    def show_palette_tab():
+        dlg = state.get("editor")
+        if dlg is None or not dlg.tabs.isTabVisible(dlg._palette_index):
+            return
+        dlg.select_tab("palette")
+        state["palette_shown"] = True
+        for _ in range(6):
+            app.processEvents()
+
+    session.add("_show-palette-tab", show_palette_tab, wait=1.2)
+    session.add("fixture-palette",
+                lambda: state.pop("palette_shown", False)
+                and shot.shoot("fixture-palette", window=state.get("editor")))
+
+    def close_editor():
+        # `close()` rejects, which is the point: this dialog applies its patch
+        # edits on OK, and a figure must not repatch the show it was shot
+        # against. Nothing here calls accept(), so nothing is applied.
+        session.close_dialog(state.pop("editor"))
+        instance, original = state.pop("editor_named")
+        instance.name = original
+        w.stage_controller.refresh_labels()
+        w.exit_edit_mode()
+
+    session.add("_close-editor", close_editor, wait=1.0)
 
     # -- chapter 6: the top toolbar ---------------------------------------
     session.add("top-toolbar",
@@ -468,26 +594,74 @@ def build_script(session: Session) -> None:
                 lambda: shot.shoot("toolbar-song-files",
                                    w.toolbar_manager.autosave_status_label
                                    .parentWidget(), pad=2))
-    session.add("toolbar-versions-section",
-                lambda: shot.shoot("toolbar-versions-section",
-                                   w.toolbar_manager.restore_button
-                                   .parentWidget(), pad=2))
     session.add("toolbar-setlist",
                 lambda: shot.shoot("toolbar-setlist",
                                    w.toolbar_manager.song_combo
                                    .parentWidget().parentWidget(), pad=2))
 
-    def open_versions():
-        w.toolbar_manager.versions_combo.showPopup()
+    def open_app_menu():
+        from PyQt6.QtCore import QPoint
+        button = w.toolbar_manager.menu_button
+        menu = button.menu()
+        # popup(), not showMenu(): the latter spins its own event loop and
+        # would not return until the menu closed, stalling the step chain.
+        # Right-aligned on the button — the ☰ sits at the far right of the bar,
+        # so a left-aligned popup hangs off the window and the crop cuts it.
+        menu.adjustSize()
+        menu.popup(button.mapToGlobal(
+            QPoint(button.width() - menu.width(), button.height())))
         for _ in range(4):
             app.processEvents()
 
-    def close_versions():
-        w.toolbar_manager.versions_combo.hidePopup()
+    def close_app_menu():
+        w.toolbar_manager.menu_button.menu().close()
 
-    session.add("_versions-open", open_versions, wait=0.8)
-    session.add("toolbar-versions", lambda: shot.shoot("toolbar-versions"))
-    session.add("_versions-close", close_versions, wait=0.5)
+    session.add("_menu-open", open_app_menu, wait=0.8)
+    session.add("toolbar-menu", lambda: shot.shoot("toolbar-menu"))
+    session.add("_menu-close", close_app_menu, wait=0.5)
+
+    # The playlist manager, and its import picker over it. Neither is
+    # accepted: the manager applies an edit only when one is made, and the
+    # picker only reads the other shows (song_import.peek_show).
+    def open_playlist():
+        from ui.playlist_dialog import PlaylistDialog
+        state["playlist"] = session.open_dialog(
+            PlaylistDialog(w.playlist_controller, w), 1240, 640)
+
+    session.add("_open-playlist", open_playlist, wait=1.2)
+    session.add("playlist-dialog",
+                lambda: shot.shoot("playlist-dialog", window=state["playlist"]))
+
+    def open_import():
+        from PyQt6.QtCore import Qt
+        from ui.import_songs_dialog import ImportSongsDialog
+        ctl = w.playlist_controller
+        dlg = ImportSongsDialog(ctl.other_shows(), ctl.patch(), state["playlist"])
+        state["import"] = session.open_dialog(dlg, 820, 520)
+        # A project with songs to pick, one whose patch differs where there is
+        # one (the warning is half of what the dialog is for), and a few
+        # ticked, so the figure shows a selection rather than an empty form.
+        readable = [i for i, s in enumerate(dlg._sources)
+                    if s.error is None and len(s.songs) >= 3]
+        row = next((i for i in readable if dlg._sources[i].patch_differences),
+                   readable[0] if readable else -1)
+        if row < 0:
+            return
+        dlg.projects.setCurrentRow(row)
+        for i in range(min(3, dlg.song_list.topLevelItemCount())):
+            dlg.song_list.topLevelItem(i).setCheckState(0, Qt.CheckState.Checked)
+        for _ in range(6):
+            app.processEvents()
+
+    session.add("_open-import", open_import, wait=1.2)
+    session.add("import-songs",
+                lambda: shot.shoot("import-songs", window=state.get("import")))
+
+    def close_playlist():
+        session.close_dialog(state.pop("import", None))
+        session.close_dialog(state.pop("playlist", None))
+
+    session.add("_close-playlist", close_playlist, wait=1.0)
 
     # -- chapter 7: the sidebar -------------------------------------------
     def sidebar(index):
@@ -497,6 +671,27 @@ def build_script(session: Session) -> None:
                 app.processEvents()
         return go
 
+    # The web remote's cue grid IS the show's starred library cards, so a show
+    # that stars nothing photographs as an empty grid there, and as a library
+    # with no Favourites group here. Star one scene per fixture type in the
+    # sandbox copy — the real show is never opened.
+    def star_some_scenes():
+        from core import clips as clip_model
+        if w.show_manager.favorites():
+            return
+        starred = set()
+        for group in clip_model.build_groups(w.config):
+            fixture = group.get("fixture")
+            scene = next((c for c in group["clips"]
+                          if c["ref"].get("kind") == "scene"), None)
+            if scene is None or fixture in starred:
+                continue
+            w.show_manager.toggle_favorite(scene["ref"])
+            starred.add(fixture)
+            if len(starred) == 6:
+                break
+
+    session.add("_star-scenes", star_some_scenes, wait=0.8)
     session.add("_lib-tab", sidebar(0), wait=0.8)
     session.add("clip-library", lambda: shot.shoot("clip-library", w.right_sidebar))
     session.add("_dmx-tab", sidebar(1), wait=0.8)
@@ -520,6 +715,27 @@ def build_script(session: Session) -> None:
     session.add("_seek", lambda: w.seek_playback(DEMO_SEEK_SECONDS), wait=1.2)
     session.add("timeline-toolbar",
                 lambda: shot.shoot("timeline-toolbar", w.timeline_toolbar))
+
+    def open_click_popup():
+        toolbar = w.timeline_toolbar
+        toolbar.click_popup.open_above(toolbar.click_button)
+        for _ in range(4):
+            app.processEvents()
+
+    def shoot_click_popup():
+        from PyQt6.QtCore import QPoint, QRect
+        toolbar = w.timeline_toolbar
+        button = toolbar.click_button
+        # The panel and the button it rises from, so the figure says where
+        # it lives.
+        rect = toolbar.click_popup.frameGeometry().united(
+            QRect(button.mapToGlobal(QPoint(0, 0)), button.size()))
+        shot.shoot_rect("click-popup", rect.adjusted(-8, -8, 8, 8))
+
+    session.add("_click-open", open_click_popup, wait=0.8)
+    session.add("click-popup", shoot_click_popup)
+    session.add("_click-close", lambda: w.timeline_toolbar.click_popup.close(),
+                wait=0.6)
     session.add("timeline-full",
                 lambda: shot.shoot("timeline-full",
                                    w.timeline_toolbar.parentWidget()))
@@ -563,14 +779,58 @@ def build_script(session: Session) -> None:
                 lambda: shot.shoot("timeline-multi-selection",
                                    w.timeline_toolbar.parentWidget()))
 
+    # The arrangement strip with one section selected and its menu open.
+    # `_section_menu` runs the menu's own event loop, so the shot is queued
+    # BEFORE it is called and closes the menu once taken, which lets it return.
+    def shoot_sections():
+        from PyQt6.QtCore import QPoint, QPointF, QRect, QTimer
+        from PyQt6.QtWidgets import QApplication, QMenu
+        tl = w.timeline
+        overlay = tl.waveform_track.sections
+        view = tl.content_view
+        viewport = view.viewport()
+        tl.content_scene.clearSelection()
+        area = view.mapToScene(viewport.rect()).boundingRect()
+        boxes = [b for b in overlay.boxes if b.sceneBoundingRect().intersects(area)]
+        if not boxes:
+            print("   ·  no song sections on screen")
+            return
+        box = max(boxes[1:-1] or boxes, key=lambda b: b.sceneBoundingRect().width())
+        box.setSelected(True)
+        for _ in range(4):
+            app.processEvents()
+
+        scene_x = box.sceneBoundingRect().center().x()
+        header_y = overlay._y + overlay.header_height() / 2
+        at = viewport.mapToGlobal(view.mapFromScene(QPointF(scene_x, header_y)))
+        bottom = view.mapFromScene(QPointF(0, overlay._y + overlay._band_height)).y()
+        top_left = viewport.mapToGlobal(QPoint(0, 0))
+        left = max(top_left.x(), at.x() - 640)
+        right = min(top_left.x() + viewport.width(), at.x() + 640)
+        strip = QRect(left, top_left.y(), right - left, bottom + 14)
+
+        def shoot_and_close():
+            menu = QApplication.activePopupWidget()
+            rect = strip.united(menu.frameGeometry()) if menu is not None else strip
+            shot.shoot_rect("song-sections", rect.adjusted(0, 0, 0, 8))
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, QMenu) and widget.isVisible():
+                    widget.close()
+
+        QTimer.singleShot(900, shoot_and_close)
+        overlay._section_menu(box, scene_x, at)
+        tl.content_scene.clearSelection()
+
+    session.add("song-sections", shoot_sections, wait=1.0)
+
     # Clip editors, built the same way Timeline builds them.
     def open_clip_editor():
         from timeline.widgets.clip_edit import ClipEditDialog
         tl = w.timeline
 
         # Prefer a verb that actually has a parameter editor: a channel verb,
-        # then a chase, then a scene load. START (60) has its own dialog and
-        # renders as an empty page here, which makes a useless figure.
+        # then a chase, then a scene load. A verb with no parameter renders as
+        # an empty page here, which makes a useless figure.
         def rank(event):
             note = int(event.get('note', 0))
             for index, group in enumerate(((1, 23), (70, 70), (24, 35), (52, 59))):
@@ -626,32 +886,17 @@ def build_script(session: Session) -> None:
     session.add("_close-scene-editor",
                 lambda: session.close_dialog(state.pop("scene_dlg", None)), wait=0.8)
 
-    def open_start_editor():
-        from timeline.widgets.start_event_edit import StartEventEditDialog
-        tl = w.timeline
-        event = next((e for e in tl._cached_events
-                      if int(e.get('note', -1)) == 60), None)
-        if event is None:
-            event = {'note': 60, 'velocity': 12, 'time': 0.0, 'channel': 0}
-        state["start_dlg"] = session.open_dialog(StartEventEditDialog(event, w))
-
-    session.add("_open-start-editor", open_start_editor, wait=1.2)
-    session.add("start-event-edit",
-                lambda: shot.shoot("start-event-edit", window=state.get("start_dlg")))
-    session.add("_close-start-editor",
-                lambda: session.close_dialog(state.pop("start_dlg", None)), wait=0.8)
-
-    def open_voice_cues():
-        from core.config import ControlMarkerConfig, VoiceCueConfig
+    def open_voice_tts():
+        from core.config import ControlMarkerConfig, VoiceTTSConfig
         from ui.markers_dialog import MarkersDialog
         song = w.config.get_current_song()
-        cues = list(song.voice_cues) if song is not None else []
+        cues = list(song.voice_tts) if song is not None else []
         controls = list(song.control_markers) if song is not None else []
         if not cues and not controls:
             # An empty table photographs as nothing at all; show the shape of
             # a filled one instead. Nothing here is written back to the show.
-            cues = [VoiceCueConfig(time=12.0, text="entra batería"),
-                    VoiceCueConfig(time=48.5, text="solo de guitarra")]
+            cues = [VoiceTTSConfig(time=12.0, text="entra batería"),
+                    VoiceTTSConfig(time=48.5, text="solo de guitarra")]
             controls = [ControlMarkerConfig(time=96.0, kind="tempo", bpm=132),
                         ControlMarkerConfig(time=188.0, kind="click_stop")]
         songs = w.config.playlist.songs
@@ -665,11 +910,64 @@ def build_script(session: Session) -> None:
                            < len(songs) - 1))
         state["cues_dlg"] = session.open_dialog(dlg)
 
-    session.add("_open-cues", open_voice_cues, wait=1.0)
+    session.add("_open-cues", open_voice_tts, wait=1.0)
     session.add("voice-cues",
                 lambda: shot.shoot("voice-cues", window=state.get("cues_dlg")))
     session.add("_close-cues",
                 lambda: session.close_dialog(state.pop("cues_dlg", None)), wait=0.8)
+
+    # -- the auto program -------------------------------------------------
+    # The take is analysed on a worker thread, so the dialog is shot only once
+    # it has one. Nothing is applied: the Replace confirmation is opened on
+    # its own and closed, which rejects it.
+    def open_auto_program():
+        from ui.autoprogram_dialog import AutoProgramDialog
+        dlg = AutoProgramDialog(w.app_core.autoprogrammer, w.config.playlist.songs,
+                                w.config.get_current_song(), w)
+        state["auto"] = session.open_dialog(dlg)
+        if not session.wait_until(lambda: dlg._take is not None, 90):
+            print("   ·  the take did not arrive in time")
+
+    session.add("_open-auto", open_auto_program, wait=1.0)
+    session.add("autoprogram-dialog",
+                lambda: shot.shoot("autoprogram-dialog", window=state["auto"]))
+
+    def open_advanced():
+        state["auto"].advanced_button.setChecked(True)
+        for _ in range(6):
+            app.processEvents()
+
+    def shoot_advanced():
+        from PyQt6.QtCore import QPoint, QRect
+        dlg = state["auto"]
+        # From the Feel row down to the bottom of the panel it opens, across
+        # the dialog's width.
+        top = dlg.feel_slider.mapToGlobal(QPoint(0, 0)).y() - 26
+        panel = dlg.advanced_panel
+        bottom = panel.mapToGlobal(QPoint(0, panel.height())).y() + 10
+        left = dlg.mapToGlobal(QPoint(0, 0)).x()
+        shot.shoot_rect("autoprogram-advanced",
+                        QRect(left, top, dlg.width(), bottom - top), window=dlg)
+
+    session.add("_auto-advanced", open_advanced, wait=0.8)
+    session.add("autoprogram-advanced", shoot_advanced)
+
+    def open_replace():
+        from ui.autoprogram_dialog import ReplaceDialog
+        dlg = state["auto"]
+        dlg.advanced_button.setChecked(False)
+        if dlg._take is not None:
+            state["replace"] = session.open_dialog(ReplaceDialog(dlg._take, dlg))
+
+    session.add("_auto-replace", open_replace, wait=0.8)
+    session.add("autoprogram-replace",
+                lambda: shot.shoot("autoprogram-replace", window=state.get("replace")))
+
+    def close_auto_program():
+        session.close_dialog(state.pop("replace", None))
+        session.close_dialog(state.pop("auto", None))
+
+    session.add("_close-auto", close_auto_program, wait=1.0)
 
     # -- chapter 8: settings ----------------------------------------------
     def open_settings():
@@ -692,7 +990,8 @@ def build_script(session: Session) -> None:
     settings_page(1, "webremote")
     settings_page(2, "audio")
     settings_page(3, "stage")
-    settings_page(4, "logging")
+    settings_page(4, "interface")
+    settings_page(5, "logging")
     session.add("_close-settings",
                 lambda: session.close_dialog(state.pop("settings", None)), wait=1.0)
 
@@ -731,6 +1030,17 @@ def build_script(session: Session) -> None:
                 lambda: session.close_dialog(state.pop("about", None)), wait=0.8)
 
     # -- chapter 9: the web remote ----------------------------------------
+    # The remote draws the BACKING track's waveform — what plays live — so it
+    # is shot on a song that has one; the demo song carries only a guide.
+    def remote_song():
+        songs = w.config.playlist.songs
+        index = next((i for i, s in enumerate(songs)
+                      if i >= REMOTE_SONG_INDEX and s.audio and s.enabled), None)
+        if index is not None:
+            w.playlist_controller.go_to_song(index)
+
+    session.add("_remote-song", remote_song, wait=8.0)
+
     def shoot_remote():
         out = IMAGES / "webremote-tablet.png"
         out.unlink(missing_ok=True)
@@ -748,6 +1058,23 @@ def build_script(session: Session) -> None:
             shot.failed.append("webremote-tablet")
 
     session.add("webremote-tablet", shoot_remote, wait=1.0)
+
+    # -- chapter 4 again: the experimental 3D stage ------------------------
+    # Last, because it is the one figure that builds a renderer of its own:
+    # if this machine's GL cannot run it, every other figure is already
+    # taken. The preference is flipped in memory only (the prefs are a copy).
+    def show_3d():
+        w.app_core.preview_clip(SHOWCASE_LOOK)
+        w.config.window.stage_3d_experimental = True
+        w._sync_stage3d()
+
+    def hide_3d():
+        w.config.window.stage_3d_experimental = False
+        w._sync_stage3d()
+
+    session.add("_3d-on", show_3d, wait=8.0)
+    session.add("stage-3d", lambda: shot.shoot("stage-3d", w._stage_widget()))
+    session.add("_3d-off", hide_3d, wait=2.0)
 
     # Leave the rig dark and the transport stopped.
     session.add("_stop", lambda: w.stop_playback(), wait=0.6)
@@ -815,7 +1142,7 @@ def main() -> int:
         from core.config import Config
         from core.paths import asset_path
         from core.show.migrate import open_or_create_startup_show
-        from main import _stage_gpu_requested
+        from main import _setup_logging, _stage_gpu_requested
 
         if _stage_gpu_requested():
             from stage.gpu.layer import configure_surface_format
@@ -832,6 +1159,9 @@ def main() -> int:
             app.setStyleSheet(qss.read_text(encoding="utf-8"))
 
         config = Config.load()
+        # Like run_gui, and not only for tidiness: the Logging figure shows a
+        # live tail of the file this sets up, and without it the pane is empty.
+        _setup_logging(config)
         show = open_or_create_startup_show(config)
         print(f"·  show open    {show.root}")
 

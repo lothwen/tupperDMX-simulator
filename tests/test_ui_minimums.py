@@ -3,8 +3,8 @@ Characterization test: the app fits a 1280-wide display.
 
 Both toolbars are wider than 1280 when everything they hold is shown, so each
 one folds its low-priority half away on a narrow window — the top bar's SHOW
-and VERSIONS cards into the hamburger menu, the timeline row's view controls
-into a "View" popup. The mechanic that makes that possible is that a folding
+card into the hamburger menu, the timeline row's view controls into a "View"
+popup. The mechanic that makes that possible is that a folding
 bar reports its FOLDED minimum: a widget is never resized below its own
 minimum, so a bar that advertised its full width would never receive the
 resize event that tells it to fold.
@@ -102,17 +102,13 @@ def test_top_toolbar_folding_is_reversible(qapp):
 
     window.resize(TARGET_WIDTH, 800)
     _assert(manager._compact, "a 1280px window folds the bar")
-    _assert(not manager.show_section.isVisible()
-            and not manager.versions_section.isVisible(),
-            "SHOW and VERSIONS are gone")
+    _assert(not manager.show_section.isVisible(), "SHOW is gone")
     _assert(manager._compact_actions[0].isVisible(),
             "their menu stand-ins have appeared")
 
     window.resize(1920, 1080)
     _assert(not manager._compact, "a 1920px window brings the bar back")
-    _assert(manager.show_section.isVisible()
-            and manager.versions_section.isVisible(),
-            "SHOW and VERSIONS are back")
+    _assert(manager.show_section.isVisible(), "SHOW is back")
     _assert(not manager._compact_actions[0].isVisible(),
             "the menu stand-ins have stood down")
 
@@ -267,6 +263,24 @@ def test_scale_is_clamped_to_its_range(qapp):
             "and the default is the size the interface was designed at")
 
 
+def test_theme_asset_urls_are_absolute(qapp):
+    print("test_theme_asset_urls_are_absolute")
+    import re
+
+    # Qt resolves a relative url() against the process working directory, not
+    # against the sheet — so the combo arrows, the radio dot and the check mark
+    # drew in a dev run (started in the repo root) and vanished in a frozen
+    # build, whose assets sit in the PyInstaller extraction dir. Silent: a url
+    # that misses renders nothing rather than raising.
+    urls = re.findall(r"url\(\s*['\"]?([^'\"()]+)['\"]?\s*\)", theme.load_qss())
+    _assert(urls, "the theme still styles sub-controls with images")
+    for url in urls:
+        _assert(os.path.isabs(url), f"{url} is resolved against the bundle")
+        _assert(os.path.exists(url), f"{url} is a file that ships")
+        _assert("\\" not in url,
+                f"{url} uses forward slashes — QSS reads a backslash as an escape")
+
+
 def test_applying_the_same_scale_twice_is_free(qapp):
     print("test_applying_the_same_scale_twice_is_free")
     # The window only re-measures its toolbars when this returns True, and a
@@ -293,6 +307,7 @@ def main():
     test_scaling_is_a_no_op_at_one(app)
     test_scale_is_clamped_to_its_range(app)
     test_applying_the_same_scale_twice_is_free(app)
+    test_theme_asset_urls_are_absolute(app)
     print("\nALL TESTS PASSED")
 
 

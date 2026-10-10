@@ -2,7 +2,7 @@
 # ABOUTME: song's tempo map. Widgets are views of it; the .mid stays canonical.
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from core.tempo_map import TempoMap, clamp_bpm
+from core.tempo_map import DEFAULT_METER, TempoMap, clamp_bpm, valid_meter
 
 
 class BpmState(QObject):
@@ -18,7 +18,8 @@ class BpmState(QObject):
     song's tempo — so the TempoMap is built here rather than in each consumer:
     a map assembled independently by the metronome and by the ruler is a map
     that can disagree with itself. `bpm` stays the BASE tempo, the one the .mid
-    persists as its single set_tempo; the markers ride the show manifest.
+    persists as its single set_tempo; the markers ride the show manifest, and
+    so does the song's meter, which the map carries too.
     """
 
     bpm_changed = pyqtSignal(int)
@@ -28,6 +29,7 @@ class BpmState(QObject):
         super().__init__()
         self._bpm = self._clamp(initial)
         self._changes = []
+        self._meter = DEFAULT_METER
         self._map = TempoMap(self._bpm)
 
     @staticmethod
@@ -59,6 +61,14 @@ class BpmState(QObject):
         self._changes = [(float(t), self._clamp(b)) for t, b in changes]
         self._rebuild()
 
+    def set_meter(self, meter) -> None:
+        """Install the current song's meter ("6/8"); no-op if equal."""
+        meter = valid_meter(meter)
+        if meter == self._meter:
+            return
+        self._meter = meter
+        self._rebuild()
+
     def _rebuild(self) -> None:
-        self._map = TempoMap(self._bpm, self._changes)
+        self._map = TempoMap(self._bpm, self._changes, self._meter)
         self.tempo_map_changed.emit(self._map)

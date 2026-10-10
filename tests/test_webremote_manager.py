@@ -4,8 +4,9 @@ Characterization test: WebRemoteManager command execution + state building.
 Drives _execute() and _build_state() directly against a FakeWindow (recording
 fakes for the transport API, playlist controller, midi manager, timeline
 toolbar and software controller) — no server thread, no sockets, no timers
-running. Covers the action → window-call mapping, seek clamping, cue message
-pass-through, blackout-toggle semantics of panic, and snapshot shape.
+running. Covers the action → window-call mapping, seek clamping, the cue grid
+(the open show's starred library clips, resolved against the patch), the
+blackout-toggle semantics of panic, and snapshot shape.
 
 Run with:
     uv run python tests/test_webremote_manager.py
@@ -25,8 +26,10 @@ from PyQt6.QtWidgets import QApplication
 
 app = QApplication.instance() or QApplication([])
 
-from core.config import Config, SongConfig
+from core import clips
+from core.config import Config, SongConfig, shipped_fixtures
 from core.note_layout import NoteInfo
+from core.tempo_map import TempoMap
 from midi.constants import SONG_PART_NOTES
 from webremote.manager import WebRemoteManager
 from webremote.server import WebRemoteWorker, WAVEFORM_WAIT_S
@@ -78,13 +81,39 @@ class FakeMidiManager:
 
 class FakeBpmState:
     bpm_changed = FakeSignal()
+    tempo_map_changed = FakeSignal()
 
     def get_bpm(self):
         return 128
 
+    def tempo_map(self):
+        return TempoMap(128, meter="6/8")
 
-class FakeAudioController:
+
+class FakeMetronome:
     beat_occurred = FakeSignal()
+
+    def __init__(self):
+        self.free_map = None
+
+    def free_run_map(self):
+        return self.free_map
+
+
+class FakeWorker:
+    """Records what the manager publishes, in place of the server thread."""
+
+    def __init__(self):
+        self.states = []
+
+    def set_song_paths(self, paths):
+        pass
+
+    def publish_state(self, state):
+        self.states.append(state)
+
+    def publish_event(self, event):
+        pass
 
 
 class FakePlaylistController:
@@ -112,7 +141,7 @@ class FakeWindow:
         self.media_controller = FakeMediaController()
         self.midi_manager = FakeMidiManager()
         self.bpm_state = FakeBpmState()
-        self.audio_controller = FakeAudioController()
+        self.metronome = FakeMetronome()
         self.playlist_controller = FakePlaylistController(self)
         self.software_controller = FakeController()
 
@@ -128,11 +157,11 @@ class FakeWindow:
     def preview_clip(self, messages):
         self.calls.append(("preview", messages))
 
-    def on_song_precount_toggled(self, enabled):
-        self.calls.append(("precount", enabled))
+    def start_free_run(self, bpm, meter):
+        self.calls.append(("free_run", bpm, meter))
 
-    def set_count_in_bars(self, bars):
-        self.calls.append(("countin_bars", bars))
+    def stop_free_run(self):
+        self.calls.append("free_run_stop")
 
 
 def _wav(path, seconds, rate=8000):
@@ -143,6 +172,19 @@ def _wav(path, seconds, rate=8000):
         handle.setframerate(rate)
         handle.writeframes(b"\x00\x00" * int(rate * seconds))
     return str(path)
+
+
+def _attach_show(window, config, favorites, name="Gira"):
+    """Give the fake window an open show holding `favorites`, over the shipped
+    patch (which is what the refs resolve against)."""
+    import types
+    from pathlib import Path
+
+    config.fixtures = shipped_fixtures()
+    show = types.SimpleNamespace(name=name, favorites=list(favorites),
+                                 root=Path(f"/no/such/dir/{name}.show"))
+    window.show_manager = types.SimpleNamespace(show=show)
+    return show
 
 
 def _make_manager():
@@ -204,13 +246,22 @@ def test_duration_spans_the_longest_track():
                 "nothing readable still falls back to midi song_end_time")
 
 
-def test_cue_sends_config_messages():
-    print("test_cue_sends_config_messages")
+def test_cue_fires_the_resolved_favorite():
+    print("test_cue_fires_the_resolved_favorite")
     manager, config, window = _make_manager()
+
     manager._execute({"action": "cue", "index": 0})
-    expected = [tuple(m) for m in config.webremote.cues[0].messages]
-    _assert(window.calls == [("preview", expected)],
-            "cue fires its config messages through preview_clip")
+    _assert(window.calls == [],
+            "no show, no cues — favourites are show content, and prefs no "
+            "longer carry a set to fall back on")
+
+    # Note 5 is one of ledbar's own channel verbs ("Effect"): the ref names the
+    # fixture by TYPE and the MIDI channel comes from the patch, so what is
+    # asserted here is the resolution, not a stored payload.
+    _attach_show(window, config, [clips.note_ref("ledbar", "", 5, 127)])
+    manager._execute({"action": "cue", "index": 0})
+    _assert(window.calls == [("preview", [(0, 5, 127)])],
+            "cue fires the favourite resolved against the current patch")
 
     window.calls.clear()
     manager._execute({"action": "cue", "index": 99})
@@ -236,13 +287,45 @@ def test_blackout_and_panic():
             "panic with blackout already active does not un-toggle it")
 
 
-def test_countin_commands():
-    print("test_countin_commands")
+def test_free_run_commands():
+    print("test_free_run_commands")
     manager, config, window = _make_manager()
-    manager._execute({"action": "set_precount", "on": False})
-    manager._execute({"action": "set_countin_bars", "bars": 4})
-    _assert(window.calls == [("precount", False), ("countin_bars", 4)],
-            "count-in commands map to the window's precount/bars API")
+    manager._execute({"action": "free_run", "bpm": 96, "meter": "6/8"})
+    manager._execute({"action": "free_run_stop"})
+    _assert(window.calls == [("free_run", 96, "6/8"), "free_run_stop"],
+            "free-run commands map to AppCore's start/stop_free_run")
+
+
+def test_free_run_reaches_the_page():
+    """The desktop panel starts and retimes the free-run too, and a retime
+    emits nothing — so the tick polls it, like the blackout toggle."""
+    print("test_free_run_reaches_the_page")
+    manager, config, window = _make_manager()
+    worker = manager.worker = FakeWorker()
+
+    manager._publish_full()
+    _assert(worker.states[-1]["free_run"] is None,
+            "no free-run publishes as null")
+
+    window.metronome.free_map = TempoMap(90, meter="3/4")
+    manager._on_tick()
+    _assert(len(worker.states) == 2
+            and worker.states[-1]["free_run"] == {"bpm": 90, "meter": "3/4"},
+            "a free-run started elsewhere publishes its tempo and meter")
+
+    manager._on_tick()
+    _assert(len(worker.states) == 2, "an unchanged free-run publishes nothing")
+
+    window.metronome.free_map = TempoMap(140, meter="3/4")
+    manager._on_tick()
+    _assert(worker.states[-1]["free_run"] == {"bpm": 140, "meter": "3/4"},
+            "a retime publishes")
+
+    window.metronome.free_map = None
+    manager._on_tick()
+    _assert(len(worker.states) == 4 and worker.states[-1]["free_run"] is None,
+            "and so does its end (play or stop took the click)")
+    manager.worker = None
 
 
 def test_build_state_snapshot():
@@ -262,6 +345,9 @@ def test_build_state_snapshot():
     _assert(state["playing"] is True and state["position"] == 12.0,
             "playback state comes from the media controller")
     _assert(state["bpm"] == 128, "bpm comes from the BpmState holder")
+    _assert(state["beats_per_bar"] == 6 and state["beat_note"] == 8,
+            "the song's meter rides the state, off the tempo map")
+    _assert(state["bpm"] == 128, "while bpm stays the quarter-note tempo")
     _assert(state["duration"] == 100.0,
             "unreadable audio falls back to midi song_end_time")
     _assert([s["name"] for s in state["sections"]] == ["INTRO", "VERSE"],
@@ -270,10 +356,8 @@ def test_build_state_snapshot():
             "last section extends to the song end")
     _assert(state["setlist"]["songs"][0]["title"] == "Marea",
             "setlist is built from the playlist")
-    _assert(len(state["cues"]) == 6 and state["cues"][0]["label"] == "Warm",
-            "cues expose index/label/color from config")
-    _assert("messages" not in state["cues"][0],
-            "cue MIDI payloads never leave the server")
+    _assert(state["cues"] == [],
+            "a window with no show publishes no cues")
     _assert(state["blackout"] is False, "blackout state read from controller")
     _assert(state["countin"] == {"enabled": True, "bars": 2},
             "countin reflects the current song's precount + global bars")
@@ -289,35 +373,48 @@ def test_build_state_snapshot():
 
 
 def test_show_provides_cues_and_name():
-    """With an open show (window.show_manager.show), the cue set and the
-    show_name come from the show; config cues only serve showless windows."""
+    """With an open show (window.show_manager.show), the cue grid IS the show's
+    starred library clips and the show_name comes from the show."""
     print("test_show_provides_cues_and_name")
     import types
     from pathlib import Path
 
-    from core.config import WebCueConfig
-
     manager, config, window = _make_manager()
-    show = types.SimpleNamespace(
-        name="Directo Billares 2026",
-        root=Path("/no/such/dir/Directo Billares 2026.show"),
-        cues=[WebCueConfig("Solo", "#ffffff", [[1, 24, 100]])])
-    window.show_manager = types.SimpleNamespace(show=show)
+    scene = clips.scene_ref("ledbar", "", "FILLS", "Fuego", 3)
+    unpatched = clips.note_ref("no-such-fixture", "", 73, 127)
+    _attach_show(window, config, [scene, unpatched],
+                 name="Directo Billares 2026")
 
     state = manager._build_state()
     _assert(state["show_name"] == "Directo Billares 2026",
             "show_name comes from the open show")
-    _assert(len(state["cues"]) == 1 and state["cues"][0]["label"] == "Solo",
-            "cues come from the open show, not config")
+    _assert([c["label"] for c in state["cues"]] == ["Fuego", "Unavailable"],
+            "the grid is the show's favourites, labelled from the live clip")
+    _assert("messages" not in state["cues"][0] and "preview" not in state["cues"][0],
+            "cue MIDI payloads never leave the server")
+
+    _assert(state["cues"][0]["available"] is True
+            and state["cues"][1]["available"] is False,
+            "a favourite whose fixture is unpatched publishes as unavailable")
+    _assert(state["cues"][1]["index"] == 1,
+            "dead favourites keep their slot — dropping them would renumber "
+            "the live buttons under the operator between snapshots")
 
     manager._execute({"action": "cue", "index": 0})
-    _assert(window.calls[-1] == ("preview", [(1, 24, 100)]),
-            "cue actions fire the show's cue messages")
+    _assert(window.calls[-1][0] == "preview" and len(window.calls[-1][1]) > 1,
+            "a scene favourite fires its full expansion, re-read from the "
+            "fixture library rather than frozen when it was starred")
+
+    window.calls.clear()
+    manager._execute({"action": "cue", "index": 1})
+    _assert(window.calls == [],
+            "and an unavailable one is refused server-side, since a stale "
+            "page can still send its index")
 
     window.show_manager = types.SimpleNamespace(show=None)
     state = manager._build_state()
-    _assert(state["show_name"] is None and len(state["cues"]) == 6,
-            "no open show -> config cues and null show_name")
+    _assert(state["show_name"] is None and state["cues"] == [],
+            "no open show -> no cues and a null show_name")
 
 
 def test_open_show_by_name():
@@ -337,7 +434,8 @@ def test_open_show_by_name():
             (parent / name / "show.json").write_text("{}")
 
         show = types.SimpleNamespace(name="Gira 2026",
-                                     root=parent / "Gira 2026.show", cues=[])
+                                     root=parent / "Gira 2026.show",
+                                     favorites=[])
         opened = []
         window.show_manager = types.SimpleNamespace(
             show=show, open_show=lambda path: opened.append(path))
@@ -400,9 +498,10 @@ def main():
     test_select_song()
     test_seek_clamps_to_duration()
     test_duration_spans_the_longest_track()
-    test_cue_sends_config_messages()
+    test_cue_fires_the_resolved_favorite()
     test_blackout_and_panic()
-    test_countin_commands()
+    test_free_run_commands()
+    test_free_run_reaches_the_page()
     test_build_state_snapshot()
     test_show_provides_cues_and_name()
     test_open_show_by_name()

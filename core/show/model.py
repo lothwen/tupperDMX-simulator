@@ -2,10 +2,10 @@
 # ABOUTME: Name.show/ folder), ShowError, folder-layout constants, song_status().
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 import os
 
-from core.config import FixtureInstance, PlaylistConfig, SongConfig, WebCueConfig
+from core.config import FixtureInstance, PlaylistConfig, SongConfig
 
 FORMAT_VERSION = 1
 MANIFEST_NAME = "show.json"
@@ -39,7 +39,10 @@ class Show:
     name: str
     playlist: PlaylistConfig = field(default_factory=PlaylistConfig)
     fixtures: List[FixtureInstance] = field(default_factory=list)
-    cues: List[WebCueConfig] = field(default_factory=list)
+    # Starred library clips, in grid order — see core/clips.py for the ref
+    # vocabulary. Refs are kept even when they no longer resolve (an unpatched
+    # fixture), because repatching has to bring the favourite back.
+    favorites: List[Dict] = field(default_factory=list)
     format_version: int = FORMAT_VERSION
 
     @property

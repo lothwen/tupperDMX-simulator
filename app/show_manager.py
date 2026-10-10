@@ -6,16 +6,17 @@ import os
 import shutil
 import time
 import uuid
-from typing import Optional
+from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from core import fixture_library
+from core import clips, fixture_library
 from core.config import SongConfig
 from core.show import store, versions
 from core.show.manifest import show_to_manifest
 from core.show.migrate import remember_show
 from core.show.model import Show
+from midi.codec import MidiCodec
 from tupperlogger import get_logger
 from webremote import state as remote_state
 
@@ -42,6 +43,7 @@ class ShowManager(QObject):
     versions_changed = pyqtSignal()           # the snapshot list gained/lost an entry
     midi_path_allocated = pyqtSignal(str)     # a song got its owned .mid on first save
     setlist_changed = pyqtSignal()            # flush created an untitled song
+    favorites_changed = pyqtSignal()          # a library clip was starred/unstarred
 
     def __init__(self, config, core=None, snapshot_on_open=True):
         super().__init__()
@@ -239,8 +241,7 @@ class ShowManager(QObject):
             if not has_events:
                 self._midi_dirty = False
                 return False
-            song.midi = store.allocate_midi_path(self.show, song.title or "song")
-            self.midi_path_allocated.emit(song.midi)
+            self.allocate_song_midi(song)
 
         bpm = self.core.bpm_state.get_bpm()
         if not mm.export_to_file(song.midi, bpm):
@@ -248,6 +249,46 @@ class ShowManager(QObject):
         self._update_song_cache(song, bpm)
         self._midi_dirty = False
         return True
+
+    def allocate_song_midi(self, song: SongConfig) -> str:
+        """Give the song its owned midis/<slug>.mid path (not yet written)."""
+        song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        self.midi_path_allocated.emit(song.midi)
+        return song.midi
+
+    def write_song_tempo(self, song: SongConfig, bpm: int) -> bool:
+        """Set a song's tempo in its .mid on disk, creating a tempo-only one
+        when there is none. For a song whose .mid is not loaded: the current
+        song's tempo is bpm_state's, flushed from memory over this file (the
+        one exception is giving an event-less current song its first file)."""
+        if self.show is None:
+            return False
+        if not song.midi:
+            # Not allocate_song_midi: its signal speaks for the CURRENT song.
+            song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        if not MidiCodec().write_file_tempo(song.midi, bpm):
+            return False
+        self._update_song_cache(song, bpm)
+        self.notify_changed()
+        return True
+
+    def write_song_midi(self, song: SongConfig, source: str, bpm: int) -> None:
+        """Make the .mid at `source` the song's sequence: copied onto its
+        owned path (allocated when it has none), the setlist cache and the
+        manifest refreshed. For a song whose .mid is not loaded, or for the
+        current one right before it is reloaded from the file — flushed
+        first, or the autosave writes the old program back over it."""
+        if self.show is None:
+            return
+        if not song.midi:
+            if song is self.config.get_current_song():
+                self.allocate_song_midi(song)
+            else:
+                # Not allocate_song_midi: its signal speaks for the CURRENT song.
+                song.midi = store.allocate_midi_path(self.show, song.title or "song")
+        shutil.copyfile(source, song.midi)
+        self._update_song_cache(song, bpm)
+        self.notify_changed()
 
     def _create_untitled_song(self) -> SongConfig:
         song = SongConfig(id=str(uuid.uuid4()), title="Untitled")
@@ -282,12 +323,37 @@ class ShowManager(QObject):
         return dest
 
     # ------------------------------------------------------------------
+    # Favourites (the starred library clips — see core/clips.py)
+    # ------------------------------------------------------------------
+    def favorites(self) -> List[Dict]:
+        """The show's starred clip refs, in grid order. Empty without a show:
+        favourites are show content, so there is no machine-level fallback."""
+        return self.show.favorites if self.show is not None else []
+
+    def is_favorite(self, ref: Dict) -> bool:
+        key = clips.ref_key(ref)
+        return any(clips.ref_key(f) == key for f in self.favorites())
+
+    def toggle_favorite(self, ref: Dict) -> bool:
+        """Star/unstar one clip; returns the new state. Starring appends, so
+        the grid order is the order they were starred in."""
+        if self.show is None:
+            return False
+        key = clips.ref_key(ref)
+        existing = [f for f in self.show.favorites if clips.ref_key(f) == key]
+        if existing:
+            self.show.favorites = [f for f in self.show.favorites
+                                   if clips.ref_key(f) != key]
+            starred = False
+        else:
+            self.show.favorites.append(dict(ref))
+            starred = True
+        self.favorites_changed.emit()
+        self.notify_changed()
+        return starred
+
+    # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
-    def cues(self) -> list:
-        """The active cue set: the show's own (config.webremote.cues only
-        seeds new shows, and serves windows opened without a show)."""
-        return self.show.cues if self.show is not None else self.config.webremote.cues
-
     def _serialized(self) -> str:
         return json.dumps(show_to_manifest(self.show), sort_keys=True)

@@ -345,6 +345,26 @@ def color_slots(fdef: FixtureDef) -> Dict[str, int]:
     return slots
 
 
+def intensity_slot(fdef: FixtureDef) -> int:
+    """The slot index of the fixture's master dimmer, or -1 when it has none.
+
+    The other write-direction index next to `color_slots`: "which channel dims
+    the whole fixture". Per-pixel and per-group Intensity channels are skipped
+    because they dim one cell rather than the fixture — the same distinction
+    `fixture_state._intensity` draws between its cell/group/plain levels — and
+    fine bytes carry part of their coarse channel's value, not a level of their
+    own. Plenty of fixtures answer -1 (an RGBW wash with no master, a hazer):
+    they have nothing to dim, which is why a fade can't ride them.
+    """
+    for index, spec in enumerate(fdef.channels):
+        if spec.fine_of >= 0 or spec.pixel_key or spec.pixel_group:
+            continue
+        cap = dominant_capability(spec.capabilities)
+        if cap is not None and cap.type == "Intensity":
+            return index
+    return -1
+
+
 def capability_types(fdef: FixtureDef) -> Set[str]:
     """The dominant capability type of every slot — the coarse "what kind of
     light is this" summary (does it mix colour at all, does it dim, …)."""
@@ -619,11 +639,13 @@ def fixture_modes(type_name: str) -> List[str]:
     return [mode.name for mode in document.modes] if document else []
 
 
-# --- editing a definition's scene banks ---------------------------------------
+# --- editing a definition's scene banks and chases -----------------------------
 #
-# The scene editor is the only writer. It touches `banks` (and the `chases` that
-# name a renamed bank) and nothing else — never the OFL document, so a type's
+# The scene and chase editors are the only writers. Between them they touch
+# `banks` and `chases` and nothing else — never the OFL document, so a type's
 # DMX footprint, and with it every saved note binding, is untouchable from here.
+# Each writes only its own half, since the two editors hold separate copies of
+# the block and either would otherwise overwrite the other's unsaved work.
 
 
 def _is_persistable(directory: Path) -> bool:
@@ -675,7 +697,7 @@ def _fork_to_user_layer(source: _Source) -> Tuple[Path, Path]:
 
 
 def save_fixture_banks(type_name: str, mode: str,
-                       banks: Mapping[str, List[dict]],
+                       banks: Optional[Mapping[str, List[dict]]] = None,
                        chases: Optional[List[dict]] = None) -> Optional[Path]:
     """Persist a type's scene banks to its `.tdmx.json`, and reload the registry.
 
@@ -683,6 +705,10 @@ def save_fixture_banks(type_name: str, mode: str,
     persistable (a shipped def in a frozen build, a read-only install) the
     definition is forked into the user layer first and written there. `mode` is
     the RESOLVED mode name the banks were authored against.
+
+    Either half may be left out (`None`), which leaves whatever is on disk
+    alone — see `save_fixture_chases`, and `apply_banks` for why the two are
+    written apart.
 
     Returns the sidecar path written, or None if the type is unknown.
     """
@@ -713,9 +739,26 @@ def save_fixture_banks(type_name: str, mode: str,
     # Bumps the generation, so the software controller rebuilds its compiled
     # fixture types and the new scenes are live without a restart.
     clear_cache()
-    logger.info(f"Saved {sum(len(s) for s in banks.values())} scene(s) in "
-                f"{len(banks)} bank(s) for '{type_name}' to '{sidecar_path}'")
+    written = []
+    if banks is not None:
+        written.append(f"{sum(len(s) for s in banks.values())} scene(s) in "
+                       f"{len(banks)} bank(s)")
+    if chases is not None:
+        written.append(f"{len(chases)} chase(s)")
+    logger.info(f"Saved {' and '.join(written) or 'nothing'} for '{type_name}' "
+                f"to '{sidecar_path}'")
     return sidecar_path
+
+
+def save_fixture_chases(type_name: str, mode: str,
+                        chases: List[dict]) -> Optional[Path]:
+    """Persist a type's chases, leaving its scene banks exactly as they are.
+
+    The Chases tab's writer. It has to leave `banks` alone because the Scenes
+    tab holds its own copy of them, unsaved edits and all — a chase write that
+    also carried banks would put that copy on disk behind the user's back.
+    """
+    return save_fixture_banks(type_name, mode, None, chases)
 
 
 def clear_cache() -> None:

@@ -176,10 +176,9 @@ class SelectionEditor:
         for cap_time, fixture in caps:
             self._doc._insert_blackout_internal(cap_time, fixture)
 
-        for gid in {e['group_id'] for e in selected if e.get('group_id')}:
-            self._fades.regenerate_group(gid)
         for fixture in fixtures:
             self._doc.reconcile_blackouts(fixture)
+            self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Moved selection of {len(selected)} events by {delta:.3f}s"
@@ -215,7 +214,6 @@ class SelectionEditor:
             fixture = self._doc._event_fixture(members[0])
             affected_fixtures.add(fixture)
             group_time = members[0]['time']
-            self._fades.wipe_group(gid)
             for m in list(members):
                 self._doc._delete_event_internal(m['id'])
             self._doc._insert_blackout_internal(group_time, fixture)
@@ -229,6 +227,9 @@ class SelectionEditor:
 
         for fixture in affected_fixtures:
             self._doc.reconcile_blackouts(fixture)
+            # The deleted owners are gone from the owner set, so this is also
+            # what drops their ramps.
+            self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Deleted selection: {len(group_ids)} scene(s), "

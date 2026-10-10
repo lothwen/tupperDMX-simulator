@@ -21,18 +21,19 @@ from PyQt6.QtWidgets import (QGraphicsTextItem, QGraphicsObject,
                              QGraphicsItem, QMenu, QPushButton, QGraphicsProxyWidget,
                              QWidget, QFrame, QLabel, QHBoxLayout, QVBoxLayout)
 from PyQt6.QtGui import (QColor, QBrush, QPen, QLinearGradient, QPainter,
-                         QPolygonF, QIcon)
+                         QPolygonF, QIcon, QCursor)
 from PyQt6.QtCore import pyqtSignal, QRectF, Qt, QPointF, QSize
 
 from ui.widgets import icons
 
-from .base import BaseTrack
+from .base import BaseTrack, elided_label
 from .clip_geometry import (
     ClipBounds, Occupant,
     MODE_IDLE, MODE_MOVE, MODE_RESIZE_LEFT, MODE_RESIZE_RIGHT, MODE_GROUP_MOVE,
     zone_at, resolve_move_x, resolve_resize_x, compute_bounds,
 )
 from core import note_layout
+from core.config import dmx_clashes
 from core.fixture_library import color_for_type, GROUP_COLORS
 from tupperlogger import get_logger
 
@@ -273,7 +274,7 @@ class DraggableMidiEvent(QGraphicsObject):
                  bounds: ClipBounds, is_blackout: bool = False,
                  group_id: Optional[str] = None,
                  group_event_ids: Optional[List[str]] = None,
-                 locked: bool = False,
+                 locked: bool = False, fadeable: bool = True,
                  parent=None):
         super().__init__(parent)
         self.rect = QRectF(0, 0, max(width, MIN_HIT_WIDTH_PX), height)
@@ -345,7 +346,12 @@ class DraggableMidiEvent(QGraphicsObject):
         self.fade_out_seconds = float(event_data.get("fade_out", 0.0)) if event_data else 0.0
         self._fade_in_handle: Optional[FadeHandle] = None
         self._fade_out_handle: Optional[FadeHandle] = None
-        if not is_blackout and not locked:
+        # `fadeable` is false where a ramp has nothing to move: a scene on a
+        # fixture with no Intensity channel (an RGBW wash, a hazer), or a clip
+        # whose verb packs an index into velocity rather than a level (a chase,
+        # a bank, a song part). The handles stay off rather than offering a
+        # drag the manager would refuse.
+        if not is_blackout and not locked and fadeable:
             self._fade_in_handle = FadeHandle("in", self)
             self._fade_out_handle = FadeHandle("out", self)
             self._fade_in_handle.fade_committed.connect(self._on_handle_committed)
@@ -569,6 +575,14 @@ class DraggableMidiEvent(QGraphicsObject):
         return [it for it in scene.selectedItems()
                 if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip]
 
+    def _selection_size(self):
+        """How much is selected across the whole timeline — these clips plus
+        the song sections a rubber band caught with them, which a group drag
+        from here moves too."""
+        if self.timeline is None:
+            return len(self._selected_sibling_clips())
+        return self.timeline.selection_size()
+
     def set_multi_selected(self, value: bool):
         """Toggle multi-selection mode: hide fade handles, disable resize.
 
@@ -585,23 +599,20 @@ class DraggableMidiEvent(QGraphicsObject):
         """Capture peer positions + clamp range for a whole-selection move."""
         self._mode = self.MODE_GROUP_MOVE
         self._press_scene_pos = press_scene_pos
-        self._group_move_peers = []
-        for clip in self._selected_sibling_clips():
-            text_pos = clip.text_item.pos() if clip.text_item is not None else None
-            self._group_move_peers.append((clip, clip.pos(), text_pos))
         if self.timeline is not None:
+            self._group_move_peers = self.timeline.capture_selected_clip_positions()
             self._group_min_dx, self._group_max_dx = \
                 self.timeline.selection_move_bounds_px()
         else:
+            self._group_move_peers = []
             self._group_min_dx, self._group_max_dx = 0.0, 0.0
 
     def _apply_group_move_preview(self, delta_x: float):
-        """Slide every selected clip (and its label) by a clamped delta."""
+        """Slide the whole selection by a clamped delta — the selected clips
+        and the song sections riding with them."""
         clamped = max(self._group_min_dx, min(delta_x, self._group_max_dx))
-        for clip, start_pos, text_start in self._group_move_peers:
-            clip.setPos(start_pos.x() + clamped, start_pos.y())
-            if clip.text_item is not None and text_start is not None:
-                clip.text_item.setPos(text_start.x() + clamped, text_start.y())
+        if self.timeline is not None:
+            self.timeline.preview_selection_shift(self._group_move_peers, clamped)
 
     def mousePressEvent(self, event):
         if self.locked:
@@ -626,7 +637,7 @@ class DraggableMidiEvent(QGraphicsObject):
                 event.accept()
                 return
 
-            if self.isSelected() and len(self._selected_sibling_clips()) >= 2:
+            if self.isSelected() and self._selection_size() >= 2:
                 # Drag the whole multi-selection as a rigid block.
                 self._begin_group_move(event.scenePos())
                 event.accept()
@@ -644,7 +655,7 @@ class DraggableMidiEvent(QGraphicsObject):
         if event.button() == Qt.MouseButton.RightButton:
             # Keep the selection intact when right-clicking a clip that's part
             # of a multi-selection (so "Delete N events" acts on all of them).
-            if not (self.isSelected() and len(self._selected_sibling_clips()) >= 2):
+            if not (self.isSelected() and self._selection_size() >= 2):
                 self._select_exclusive()
             self.last_right_click_scene_pos = event.scenePos()
             self.show_context_menu(event.screenPos())
@@ -712,6 +723,10 @@ class DraggableMidiEvent(QGraphicsObject):
             elif self._mode == self.MODE_RESIZE_RIGHT:
                 new_right_x = self.pos().x() + self.rect.width()
                 self.right_edge_committed.emit(self.event_id, new_right_x / pps)
+        elif self._mode == self.MODE_GROUP_MOVE:
+            # Too short to commit, so nothing refreshes: put the preview back
+            # by hand, or the sections it slid stay where the drag left them.
+            self.timeline.preview_selection_shift(self._group_move_peers, 0.0)
 
         self._mode = self.MODE_IDLE
         self._press_scene_pos = None
@@ -810,13 +825,11 @@ class DraggableMidiEvent(QGraphicsObject):
     def _refresh_text_truncation(self, new_width: float):
         if self.text_item is None or self.timeline is None:
             return
-        zoom = self.timeline.content_view.transform().m11()
-        available = (new_width - 10) * zoom
         full_text = self.text_item.data(0)
         if not full_text:
             return
-        fm = self.timeline.content_view.fontMetrics()
-        self.text_item.setPlainText(self.timeline.get_truncated_text(full_text, available, fm))
+        self.text_item.setPlainText(
+            elided_label(full_text, new_width, self.timeline.content_view))
 
     # --- Hover ------------------------------------------------------------
 
@@ -864,10 +877,11 @@ class DraggableMidiEvent(QGraphicsObject):
             main_window = main_window.parent()
         menu = QMenu(main_window)
 
-        selected_clips = self._selected_sibling_clips()
-        if self.isSelected() and len(selected_clips) >= 2:
-            # Multi-selection: a single action that deletes them all at once.
-            delete_action = menu.addAction(f"Delete {len(selected_clips)} events")
+        if self.isSelected() and self._selection_size() >= 2:
+            # Multi-selection: a single action that deletes them all at once —
+            # song sections included, since the same rubber band selects both,
+            # so the count is the selection's and not just the lanes'.
+            delete_action = menu.addAction(f"Delete {self._selection_size()} events")
             if self.timeline is not None:
                 delete_action.triggered.connect(self.timeline.delete_selected)
             menu.exec(global_pos)
@@ -912,6 +926,8 @@ class AutoSceneClip(QGraphicsObject):
         self._border_color = ink
         self._hatch_color = QColor(ink)
         self._hatch_color.setAlpha(AUTO_CLIP_HATCH_ALPHA)
+        # Its label, full text in data(0) — a zoom re-fits it to the clip.
+        self.text_item = None
         self.setPos(x, y)
         # Ignore all input so it never steals hover/drag/clicks from the empty
         # space behind it or the manual clips painted on top.
@@ -919,6 +935,9 @@ class AutoSceneClip(QGraphicsObject):
         self.setAcceptHoverEvents(False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+
+    def set_text_item(self, text_item):
+        self.text_item = text_item
 
     def boundingRect(self):
         return QRectF(0, 0, self.rect.width(), self.rect.height())
@@ -964,9 +983,13 @@ class AutoSceneClip(QGraphicsObject):
 # background. The chevron points down when expanded and right when collapsed.
 def _header_button(object_name: str, tooltip: str, *, text: str = "",
                    icon: Optional[QIcon] = None,
-                   checkable: bool = False) -> QPushButton:
-    """A 22px header button showing an icon (or short text), styled by QSS."""
-    btn = QPushButton(text)
+                   checkable: bool = False,
+                   cls=QPushButton) -> QPushButton:
+    """A 22px header button showing an icon (or short text), styled by QSS.
+
+    `cls` swaps in a QPushButton subclass (the reorder grip) so every button in
+    the bar is measured and styled the same way whatever it does."""
+    btn = cls(text)
     if icon is not None:
         btn.setIcon(icon)
         btn.setIconSize(QSize(13, 13))
@@ -977,10 +1000,66 @@ def _header_button(object_name: str, tooltip: str, *, text: str = "",
     return btn
 
 
+class _TrackGrip(QPushButton):
+    """The reorder handle at the head of a track header.
+
+    Press-drag-release is the whole gesture — it never emits a click. The press
+    is all this reports: the timeline then follows the cursor through the header
+    VIEW's own mouse events, in viewport coordinates.
+
+    It cannot use the ones it is handed here. A widget inside a
+    QGraphicsProxyWidget is given a global (screen) position, and under Wayland
+    a client is never told where its window is: mapToGlobal/mapFromGlobal work
+    off a believed origin that can be stale, so round-tripping a screen y back
+    into the scene is not the identity. When that origin shifted mid-drag the
+    lane jumped the height of the whole strip and thrashed through rows.
+    """
+
+    drag_started = pyqtSignal()
+    drag_finished = pyqtSignal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        # A handle is not a tab stop, and more to the point a focused widget
+        # inside a proxy makes the view scroll to keep its ITEM visible — and
+        # this item is moved on every mouse event of the drag, which pulled the
+        # whole strip along under the cursor.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._dragging = False
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._dragging = True
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self.drag_started.emit()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if not self._dragging:
+            super().mouseReleaseEvent(event)
+            return
+        self._finish_drag()
+        event.accept()
+
+    def _finish_drag(self):
+        self.reset_drag_state()
+        self.drag_finished.emit()
+
+    def reset_drag_state(self):
+        """Forget a drag without announcing it — for a gesture that ended
+        somewhere this grip never saw (a release outside the window), which
+        would otherwise leave it holding a closed hand until the next press."""
+        self._dragging = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+
 class TrackHeaderWidget(QWidget):
     """The per-fixture timeline track header.
 
-    Left to right: a reorder grip (visual placeholder for now) and a collapse
+    Left to right: a reorder grip and a collapse
     chevron, a type-coloured swatch that matches the fixture's clip-library
     section, the fixture name over its MIDI/DMX address, and the eye (mute) /
     lock / A (auto) toggle bar. Each toggle emits a signal; the owning
@@ -992,28 +1071,56 @@ class TrackHeaderWidget(QWidget):
     lock_toggled = pyqtSignal(bool)     # True == locked
     auto_toggled = pyqtSignal(bool)     # True == auto
     collapse_toggled = pyqtSignal(bool)  # True == collapsed
+    # Reorder drag, forwarded from the grip: the press and the release. The
+    # carry in between rides the header view's own events (see _TrackGrip).
+    reorder_started = pyqtSignal()
+    reorder_finished = pyqtSignal()
+    # This lane's fixture should be opened for editing. Carries the fixture's
+    # stable MIDI channel — the binding key, never the display row. The dialog
+    # itself lives in `ui/`, which this package must not import, so the window
+    # is asked through the manager's own signal.
+    edit_requested = pyqtSignal(int)
 
     def __init__(self, label: str, channel: int, dmx_start: int, dmx_end: int,
                  accent: str, parent=None):
         super().__init__(parent)
         self.setObjectName("TrackHeader")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._channel = int(channel)
+        self._label_text = label
+        self.setToolTip("Double-click to edit this fixture")
         # Per-instance accent: the left border + swatch use the fixture colour;
         # the rest of the styling comes from the app stylesheet by objectName.
+        #
+        # Hover lightens that accent, which — with the address line below
+        # turning into a hint — is how the header says it opens onto something.
+        # Only the COLOUR moves, never the 4px: a border is outside the content
+        # rect, so widening it on hover would shove the whole row sideways and
+        # snap back, once per lane crossed.
+        #
+        # Lightened gently: this stripe is also the fixture's COLOUR CODE, the
+        # one the clip library pill and the DMX monitor section share, so a
+        # factor that washes every fixture toward the same pastel would answer
+        # "you can click this" by mislaying "this is the ledbar".
+        hover_accent = QColor(accent).lighter(130).name()
         self.setStyleSheet(
             "QWidget#TrackHeader { background-color: #242424; "
             f"border-left: 4px solid {accent}; "
             "border-bottom: 1px solid #444; "
-            "border-right: 1px solid #444; }")
+            "border-right: 1px solid #444; }"
+            "QWidget#TrackHeader:hover { "
+            f"border-left-color: {hover_accent}; }}")
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 4, 6, 4)
         root.setSpacing(4)
 
         self.grip = _header_button("TrackGrip",
-                                   "Drag to reorder (coming soon)",
-                                   icon=icons.icon("drag", "#8a8a8a"))
-        self.grip.setEnabled(False)
+                                   "Drag to reorder this track",
+                                   icon=icons.icon("drag", "#8a8a8a"),
+                                   cls=_TrackGrip)
+        self.grip.drag_started.connect(self.reorder_started.emit)
+        self.grip.drag_finished.connect(self.reorder_finished.emit)
         # Checked (collapsed) swaps the icon to the right-pointing chevron.
         self.chevron = _header_button("TrackChevron",
                                       "Collapse track", checkable=True,
@@ -1042,6 +1149,7 @@ class TrackHeaderWidget(QWidget):
         addr = f"Ch. {channel}"
         if dmx_end >= dmx_start:
             addr += f"  ·  DMX {dmx_start}–{dmx_end}"
+        self._address_text = addr
         self.info_label = QLabel(addr)
         self.info_label.setObjectName("TrackInfo")
 
@@ -1095,6 +1203,24 @@ class TrackHeaderWidget(QWidget):
             btn.blockSignals(False)
         self.auto_btn.setEnabled(auto_enabled)
 
+    def set_dmx_clash(self, others: List[str]) -> None:
+        """Flag this lane's fixture as sharing DMX slots with `others`.
+
+        The address row is what the clash is ABOUT, so the address row is what
+        reports it — red and bold, with the fixtures it collides with in the
+        tooltip. **The words are left alone on purpose**: the row has ~94px and
+        the address already spends 89 of them, so any marker added to the text
+        clips the span it is warning about. Weight is the second channel colour
+        alone would not give, and the fixture's own Inspector spells the clash
+        out in full. Re-asked on every reflow, so it clears itself as soon as
+        the patch is fixed.
+        """
+        self.info_label.setToolTip(
+            ("Shares DMX channels with " + ", ".join(others)) if others else "")
+        self.info_label.setProperty("state", "clash" if others else "")
+        self.info_label.style().unpolish(self.info_label)
+        self.info_label.style().polish(self.info_label)
+
     def _on_chevron_toggled(self, collapsed: bool):
         """Hide the MIDI/DMX address row (the checked chevron icon flips to
         point right by itself), then let the owning track restack the timeline
@@ -1111,6 +1237,73 @@ class TrackHeaderWidget(QWidget):
         self.chevron.blockSignals(False)
         self.info_label.setVisible(not collapsed)
 
+    # ------------------------------------------------------------------
+    # Opening the fixture
+    # ------------------------------------------------------------------
+    def enterEvent(self, event):
+        """Say what the header is for, in the line that is already there.
+
+        The address is the one thing here with room to spare — it is a
+        read-out, not a control — so borrowing it costs no chrome in a row that
+        has none to give, and nothing moves.
+        """
+        super().enterEvent(event)
+        self.info_label.setText("Double-click to edit")
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.info_label.setText(self._address_text)
+
+    def mousePressEvent(self, event):
+        """Right-click offers the menu; a left press is accepted so that the
+        double-click can arrive.
+
+        Accepting is load-bearing: QWidget.mousePressEvent IGNORES by default,
+        and an ignored press inside a QGraphicsProxyWidget means no
+        double-click is ever delivered to the widget. Nothing else wants a
+        press on the header background — the grip, chevron and toggles are
+        children that take their own, and the manager's event filter only acts
+        once the grip has started a reorder.
+        """
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.edit_requested.emit(self._channel)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _show_context_menu(self):
+        """One action, on the fixture this lane is.
+
+        **The menu must have no parent.** This widget lives inside a
+        QGraphicsProxyWidget, and a popup parented to a proxied widget is not
+        given a window of its own: Qt embeds it in the graphics SCENE, through
+        a child proxy, where the view's viewport clips it. A header is 30-odd
+        pixels tall, so all that survived was the sliver of menu overlapping
+        the lane it came from. Unparented it is a real popup again, and the
+        app stylesheet reaches it regardless — the `QMenu` rules are global.
+
+        `QCursor.pos()` rather than the event's own global position, for the
+        neighbouring reason: a proxied widget's idea of where the window
+        starts is not to be trusted under Wayland (see _TrackGrip).
+
+        Comparing the returned action rather than connecting `triggered` puts
+        the emit after the menu's nested event loop instead of inside it.
+        """
+        menu = QMenu(None)
+        edit_action = menu.addAction(f"Edit '{self._label_text}'…")
+        if menu.exec(QCursor.pos()) is edit_action:
+            self.edit_requested.emit(self._channel)
+
 
 class MidiEventsTrack(BaseTrack):
     """Track for displaying and managing MIDI events."""
@@ -1120,14 +1313,17 @@ class MidiEventsTrack(BaseTrack):
         super().__init__(timeline_manager, content_scene, header_scene)
         # This track owns one patched fixture, identified by its stable MIDI
         # channel (the binding key — independent of the track's display row,
-        # which is ordered by DMX address). label is the header text shown for
-        # the fixture.
+        # which is the row it was dragged to, else DMX order). label is the
+        # header text shown for the fixture.
         self.fixture_index = fixture_index
         self.label = label
         # View-only collapse state (not persisted): when True the lane shrinks
         # to a single header row (MIN_TRACK_HEIGHT), hiding the MIDI/DMX address.
         self.collapsed = False
         self._stale_items = []  # prevents premature C++ destruction (see redraw_events)
+        # Where this lane's content currently sits, so a reorder drag can
+        # translate it rather than rebuild it (see move_content_to).
+        self._content_y = None
         # Persistent header proxy — the whole TrackHeaderWidget lives on one
         # QGraphicsProxyWidget that survives per-reflow header redraws (like the
         # waveform's audio-controls proxy) so its QWidget isn't destroyed.
@@ -1136,7 +1332,7 @@ class MidiEventsTrack(BaseTrack):
         self.logger = get_logger("timeline.tracks.midi_events")
 
     def clear_items(self):
-        """Tear down for a patch rebuild / timeline cleanup. The header proxy
+        """Tear down for a patch rebuild. The header proxy
         lives outside header_items (so per-redraw header clears don't destroy
         it), so dispose it explicitly here."""
         super().clear_items()
@@ -1189,6 +1385,51 @@ class MidiEventsTrack(BaseTrack):
         self.collapsed = collapsed
         self.timeline_manager.reflow_tracks()
 
+    def _on_reorder_started(self):
+        self.timeline_manager.begin_track_reorder(self)
+
+    def _on_reorder_finished(self):
+        self.timeline_manager.end_track_reorder()
+
+    def set_header_lifted(self, lifted: bool):
+        """Raise (or settle) the header proxy for a reorder drag, so the lane
+        being carried draws over the ones sliding past it.
+
+        Settling also clears the grip: the drag it belongs to is often ended
+        for it, by a release the grip itself never received."""
+        if not lifted and self._header_widget is not None:
+            self._header_widget.grip.reset_drag_state()
+        if self._header_proxy is None:
+            return
+        # Above the other headers (z=1), below the height-resize grip (z=6).
+        self._header_proxy.setZValue(5 if lifted else 1)
+        self._header_proxy.setOpacity(0.85 if lifted else 1.0)
+
+    def move_content_to(self, y: int):
+        """Restack this lane at `y` WITHOUT rebuilding a single clip.
+
+        A reorder drag crosses rows under a moving cursor, and redrawing every
+        lane's clips costs tens of milliseconds — enough to swallow whole
+        batches of mouse events, so the lane lurches to wherever the cursor got
+        to instead of following it. Translating the items already on the scene
+        is a transform update; the release then does one honest redraw."""
+        if self._header_proxy is not None:
+            self._header_proxy.setPos(0, y)
+        if self._content_y is None:
+            return
+        dy = y - self._content_y
+        if not dy:
+            return
+        for item in self.items:
+            item.moveBy(0, dy)
+        self._content_y = y
+
+    def float_header_to(self, y: float):
+        """Park the header proxy at an arbitrary y, off the row grid that
+        draw_header puts it on — it follows the cursor mid-reorder."""
+        if self._header_proxy is not None:
+            self._header_proxy.setPos(0, y)
+
     def set_collapsed(self, collapsed: bool):
         """Set collapse state and sync the header, WITHOUT reflowing — the caller
         (a collapse-all/expand-all pass) batches a single reflow. Safe before the
@@ -1211,6 +1452,12 @@ class MidiEventsTrack(BaseTrack):
             mute=bool(mm is not None and mm.is_fixture_muted(self.fixture_index)),
             lock=bool(mm is not None and mm.is_fixture_locked(self.fixture_index)),
             auto_enabled=controller is not None)
+        # A patch clash is a property of the whole patch, not of this lane, so
+        # it is re-asked here (on every reflow) rather than baked in when the
+        # header was built. n is bounded by the 16 MIDI channels.
+        inst = self.timeline_manager._fixture_for_channel(self.fixture_index)
+        self._header_widget.set_dmx_clash(
+            dmx_clashes(self.timeline_manager.fixtures, inst) if inst else [])
 
     def matches_filter(self, event) -> bool:
         """True if `event` belongs on this fixture's lane.
@@ -1264,6 +1511,12 @@ class MidiEventsTrack(BaseTrack):
             self._header_widget.lock_toggled.connect(self._on_lock_toggled)
             self._header_widget.auto_toggled.connect(self._on_auto_toggled)
             self._header_widget.collapse_toggled.connect(self._on_collapse_toggled)
+            self._header_widget.reorder_started.connect(self._on_reorder_started)
+            self._header_widget.reorder_finished.connect(self._on_reorder_finished)
+            # Straight through to the manager's own signal: the window opens the
+            # dialog, not this track (and not this package).
+            self._header_widget.edit_requested.connect(
+                self.timeline_manager.fixture_edit_requested)
             self._header_proxy = QGraphicsProxyWidget()
             self._header_proxy.setWidget(self._header_widget)
             self._header_proxy.setZValue(1)
@@ -1301,6 +1554,27 @@ class MidiEventsTrack(BaseTrack):
                      for u in units]
         return compute_bounds(occupants, idx, song_end_time, pps,
                               MIN_EVENT_DURATION)
+
+    def _clip_label(self, rep: dict) -> str:
+        """Text drawn on one single-event clip.
+
+        A channel-control clip names the channel AND the slot it drives — "Tilt
+        (ch.2)" — because the name alone is ambiguous the moment a fixture
+        repeats one (the shipped blinder has two "Cold White" slots) and a clip
+        on the timeline, unlike a library card, carries no ordered channel list
+        around it to read the slot off. The condition mirrors `describe_note`'s
+        channel branch, so a note it labelled generically ("CH 8" on a lane
+        whose fixture is narrower, a scene verb on a wide one) is left alone —
+        appending a slot number to those would name a channel that isn't
+        there."""
+        label = rep["info"].part
+        note = int(rep.get("note", 0))
+        fdef = (self.timeline_manager._fdef(rep.get("channel"))
+                if self.timeline_manager else None)
+        lo, hi = note_layout.CHANNEL_OFFSET_RANGE
+        if fdef and lo <= note <= min(hi, fdef.channel_count):
+            return f"{label} (ch.{note})"
+        return label
 
     def _scene_clip_color(self, members: List[dict]) -> QColor:
         """Derive a clip color from a scene group's channel values, using each
@@ -1407,10 +1681,7 @@ class MidiEventsTrack(BaseTrack):
 
         brightness = color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114
         text_color = QColor(235, 235, 235) if brightness < 128 else QColor(20, 20, 20)
-        zoom = self.timeline_manager.content_view.transform().m11()
-        available_width = (width - 10) * zoom
-        fm = self.timeline_manager.content_view.fontMetrics()
-        text = self.timeline_manager.get_truncated_text(label, available_width, fm)
+        text = elided_label(label, width, self.timeline_manager.content_view)
 
         text_item = QGraphicsTextItem(text)
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
@@ -1422,6 +1693,8 @@ class MidiEventsTrack(BaseTrack):
         text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
         text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         text_item.setAcceptHoverEvents(False)
+        text_item.setData(0, label)
+        clip.set_text_item(text_item)
         if muted:
             text_item.setOpacity(MUTED_CLIP_OPACITY)
         self.content_scene.addItem(text_item)
@@ -1434,6 +1707,7 @@ class MidiEventsTrack(BaseTrack):
         # tooltip would be left orphaned on screen.
         if self.timeline_manager:
             self.timeline_manager.hide_clip_tooltip()
+        self._content_y = y_offset
 
         # Safely dispose of old scene items.  The scene's BSP spatial index
         # and internal dirty-item bookkeeping can retain pointers to items
@@ -1551,6 +1825,9 @@ class MidiEventsTrack(BaseTrack):
                     group_id=unit["group_id"] if is_group else None,
                     group_event_ids=unit["event_ids"] if is_group else None,
                     locked=locked,
+                    fadeable=(not mm or (mm.can_fade_scene(unit["group_id"])
+                                         if is_group
+                                         else mm.can_fade_event(rep["id"]))),
                 )
                 event_rect.set_timeline(self.timeline_manager)
 
@@ -1591,14 +1868,12 @@ class MidiEventsTrack(BaseTrack):
                     color = self._scene_clip_color(members)
                 else:
                     info = rep['info']
-                    label_text = info.part
+                    label_text = self._clip_label(rep)
                     color = QColor(info.color)
                 brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
                 text_color = QColor(255, 255, 255) if brightness < 128 else QColor(0, 0, 0)
-                zoom_factor = self.timeline_manager.content_view.transform().m11()
-                available_width = (width - 10) * zoom_factor
-                fm = self.timeline_manager.content_view.fontMetrics()
-                text_to_display = self.timeline_manager.get_truncated_text(label_text, available_width, fm)
+                text_to_display = elided_label(label_text, width,
+                                               self.timeline_manager.content_view)
 
                 text_item = QGraphicsTextItem(text_to_display)
                 text_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
@@ -1611,7 +1886,6 @@ class MidiEventsTrack(BaseTrack):
                 text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 text_item.setAcceptHoverEvents(False)
                 text_item.setData(0, label_text)
-                text_item.setData(1, rep['id'])
 
                 event_rect.set_text_item(text_item)
 

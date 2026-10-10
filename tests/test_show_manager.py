@@ -5,7 +5,7 @@ coordinator of the open show.
 Covers attach() aliasing (config.playlist/config.fixtures ARE the show's
 objects), the compare-based manifest dirty tracking (in-place mutations reach
 show.json; prefs-only saves don't rewrite it), autosave_state_changed
-emissions, and the cues() accessor.
+emissions, and the favourites toggle.
 
 Run with:
     uv run python tests/test_show_manager.py
@@ -27,10 +27,13 @@ app = QApplication.instance() or QApplication([])
 import pytest
 
 from core import config as config_module, fixture_library
-from core.config import Config, FixtureInstance, SongConfig, WebCueConfig
+from core import clips
+from core.config import Config, FixtureInstance, SongConfig
 from core.show import store
 from core.show.model import ShowError
 from app.show_manager import ShowManager
+from midi.codec import MidiCodec
+from webremote.state import probe_bpm
 
 
 @pytest.fixture(autouse=True)
@@ -145,17 +148,67 @@ def test_open_show_switches_and_reloads():
                 "a failed open keeps the current show attached")
 
 
-def test_cues_accessor():
-    print("test_cues_accessor")
+def test_favorites_toggle():
+    print("test_favorites_toggle")
     with tempfile.TemporaryDirectory() as tmp:
-        show = store.create_show(tmp, "Gira",
-                                 cues=[WebCueConfig("Solo", "#fff", [[1, 24, 100]])])
+        show = store.create_show(tmp, "Gira")
+        config = Config()
+        manager = ShowManager(config, snapshot_on_open=False)
+        ref = clips.note_ref("ledbar", "", 73, 127)
+
+        _assert(manager.favorites() == [] and manager.toggle_favorite(ref) is False,
+                "without a show there is nothing to star — favourites are "
+                "show content, so there is no machine-level fallback")
+
+        manager.attach(show)
+        emitted = []
+        manager.favorites_changed.connect(lambda: emitted.append(True))
+
+        _assert(manager.toggle_favorite(ref) is True and manager.is_favorite(ref),
+                "starring a clip adds it to the show's set")
+        _assert(json.loads(show.manifest_path.read_text())["favorites"] == [ref],
+                "and reaches show.json through the normal save funnel")
+
+        manager.toggle_favorite(clips.show_ref(51))
+        _assert([f["kind"] for f in manager.favorites()] == ["note", "show"],
+                "starring appends, so the grid keeps the order they were "
+                "starred in")
+
+        _assert(manager.toggle_favorite(ref) is False
+                and not manager.is_favorite(ref),
+                "starring again unstars")
+        _assert(len(emitted) == 3, "every toggle announces itself")
+
+
+def test_write_song_tempo():
+    print("test_write_song_tempo")
+    with tempfile.TemporaryDirectory() as tmp:
+        config_module.userprefs_path = lambda: Path(tmp) / "userprefs.json"
+        show = store.create_show(tmp, "Gira")
+        with_midi = SongConfig(id="a", title="Con MIDI")
+        with_midi.midi = store.allocate_midi_path(show, with_midi.title)
+        MidiCodec().write_file_tempo(with_midi.midi, 100)
+        without = SongConfig(id="b", title="Sin MIDI")
+        show.playlist.songs.extend([with_midi, without])
         config = Config()
         manager = ShowManager(config)
-        _assert(manager.cues() is config.webremote.cues,
-                "without a show, cues() falls back to config")
         manager.attach(show)
-        _assert(manager.cues() is show.cues, "with a show, cues() is the show's set")
+        allocated = []
+        manager.midi_path_allocated.connect(allocated.append)
+
+        _assert(manager.write_song_tempo(with_midi, 88), "existing .mid rewritten")
+        _assert(probe_bpm(with_midi.midi) == 88 and with_midi.cache["bpm"] == 88,
+                "the file and the manifest cache both carry the new tempo")
+
+        _assert(manager.write_song_tempo(without, 140), "tempo-only .mid created")
+        _assert(without.midi and Path(without.midi).parent == show.midis_dir,
+                "the new file is owned by the show (midis/)")
+        _assert(probe_bpm(without.midi) == 140, "and carries the tempo")
+        _assert(allocated == [],
+                "no midi_path_allocated: that signal speaks for the current song")
+        saved = json.loads(show.manifest_path.read_text())
+        _assert(saved["songs"][1]["midi"] == f"midis/{Path(without.midi).name}",
+                "the manifest records the new owned .mid")
 
 
 def main():
@@ -164,7 +217,8 @@ def main():
         test_attach_aliases_config()
         test_manifest_saved_only_on_change()
         test_open_show_switches_and_reloads()
-        test_cues_accessor()
+        test_favorites_toggle()
+        test_write_song_tempo()
     finally:
         config_module.userprefs_path = orig_prefs
         fixture_library.set_show_fixtures_dir(None)

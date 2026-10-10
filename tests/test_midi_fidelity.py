@@ -33,7 +33,9 @@ class FakeFixture:
 
 PATCH = [FakeFixture("ledbar"), FakeFixture("blinder")]
 LEDBAR_CH, BLINDER_CH = 0, 1
-BLINDER_CLIP = 26  # standalone blinder verb; never scene-clustered
+BLINDER_CLIP = 2   # the blinder's cool1 channel: a standalone clip that
+                   # never scene-clusters (clustering needs 2+ at one time)
+                   # and whose velocity is a LEVEL, so it can carry a fade
 
 SCENE_CH = {"brightness": 255, "blue": 255, "green": 0, "red": 0,
             "animation": 0, "speed": 0, "direction": 0}
@@ -193,6 +195,30 @@ def test_interop_export_is_clean_and_nondestructive():
                 "the interop export left the document's own data intact")
 
 
+def test_a_chase_clip_on_the_first_chase_survives(qapp=None):
+    print("test_a_chase_clip_on_the_first_chase_survives")
+    from core.note_layout import CHASE_LOAD
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "t.mid")
+        # velocity IS the chase index, so the FIRST chase is velocity 0 — and a
+        # fixture with only one chase can address it no other way.
+        for index in (0, 1):
+            m = _make_manager()
+            m.add_event(CHASE_LOAD, 4.0, index, channel=BLINDER_CH)
+            m2 = _roundtrip(m, path)
+            kept = [e for e in m2.midi_events if e["note"] == CHASE_LOAD]
+            _assert(len(kept) == 1 and kept[0]["velocity"] == index,
+                    f"a clip loading chase {index} survives save+load — "
+                    f"velocity {index} is a chase index, not a note_off")
+            # and again, because rebuild() writes from midi_notes: an event
+            # that never paired with its note_off is dropped on the NEXT save.
+            m3 = _roundtrip(m2, path)
+            _assert(len([e for e in m3.midi_events if e["note"] == CHASE_LOAD]) == 1,
+                    f"…and survives a second cycle (chase {index} keeps its "
+                    f"duration entry, which is what rebuild writes from)")
+
+
 def test_legacy_file_without_metas_unaffected():
     print("test_legacy_file_without_metas_unaffected")
     with tempfile.TemporaryDirectory() as tmp:
@@ -214,6 +240,7 @@ def main():
     test_scene_fades_still_roundtrip_with_metas()
     test_repeated_cycles_do_not_accumulate_metas()
     test_interop_export_is_clean_and_nondestructive()
+    test_a_chase_clip_on_the_first_chase_survives()
     test_legacy_file_without_metas_unaffected()
     print("\nALL TESTS PASSED")
 

@@ -34,6 +34,29 @@ _PIXELS = re.compile(r"(-?\d+)px")
 # value that was already 0 stays 0 (see _scale_px).
 _MIN_FONT_PX = 8
 
+# Qt resolves a relative `url()` in a stylesheet against the process working
+# directory, NOT against the sheet that holds it — so `assets/icons/x.svg`
+# resolves only because a dev run happens to start in the repo root. A frozen
+# build's assets live in the PyInstaller extraction dir while the working
+# directory is wherever the user launched from, and a url that misses renders
+# nothing at all rather than failing: the combo arrows, the radio dot and the
+# check mark simply vanish. So the paths are made absolute on the way in, the
+# same way the pixel values are.
+_ASSET_URL = re.compile(r"""url\(\s*(['"]?)assets/([^'"()]+)\1\s*\)""")
+
+
+def _absolute_urls(qss: str) -> str:
+    r"""The stylesheet with every `url(assets/...)` resolved against the bundle.
+
+    Forward slashes in the result on every platform: QSS reads a backslash as
+    an escape, so a Windows path written with `\` loses its separators.
+    """
+    def one(match: re.Match) -> str:
+        path = asset_path(*match.group(2).split("/"))
+        return "url('%s')" % path.replace(os.sep, "/")
+
+    return _ASSET_URL.sub(one, qss)
+
 
 def _scale_px(value: str, factor: float, minimum: int) -> str:
     """Scale every `Npx` in one declaration's value, keeping bare numbers
@@ -71,7 +94,7 @@ _applied_scale = 1.0
 
 
 def load_qss() -> str:
-    """The theme as shipped, or "" if it isn't there (the app runs unstyled
+    """The theme, asset urls made absolute, or "" if it isn't there (the app runs unstyled
     rather than not at all — same tolerance `main.run_gui` has always had).
 
     Memoized: the settings slider re-scales on every step, and re-reading 2500
@@ -84,7 +107,7 @@ def load_qss() -> str:
             _source = ""
         else:
             with open(path, "r", encoding="utf-8") as handle:
-                _source = handle.read()
+                _source = _absolute_urls(handle.read())
     return _source
 
 

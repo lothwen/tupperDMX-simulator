@@ -213,13 +213,19 @@ class USBDMXWorker(DMXWorkerBase):
 
     @staticmethod
     def list_available_devices() -> list[str]:
-        """List all available FTDI devices as "manufacturer:description:serial"."""
+        """List all available FTDI devices as "manufacturer:description:serial".
+
+        Sorted, because `list_ports.comports()` globs /dev and hands back
+        whatever order the directory yields: two identical dongles could swap
+        places between boots, and `--dmx-usb <index>` addresses this list by
+        position.
+        """
         try:
-            return [
+            return sorted(
                 f"{p.manufacturer or 'FTDI'}:{p.product or p.description}:{p.serial_number}"
                 for p in list_ports.comports()
                 if p.vid == FTDI_VID and p.serial_number
-            ]
+            )
         except Exception as e:
             logger = get_logger("dmx.usb")
             logger.error(f"Error listing FTDI devices: {e}")

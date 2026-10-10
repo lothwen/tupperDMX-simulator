@@ -499,8 +499,14 @@ class ClipEditDialog(QDialog):
         self._push_live()
 
     def _sync_color_wheel(self) -> None:
-        """Follow the faders. `set_rgb` does not emit, so no feedback loop."""
-        if not self.color_row.isVisible():
+        """Follow the faders. `set_rgb` does not emit, so no feedback loop.
+
+        Asked with `isVisibleTo`, not `isVisible`: the first sync happens while
+        the dialog is still being built, where every child reports itself
+        invisible — so `isVisible` skipped exactly the call that loads the
+        scene's own colour onto the wheel.
+        """
+        if not self.color_row.isVisibleTo(self):
             return
         red, green, blue = current_color(self._fdef, self.scene_faders.values())
         self.color_wheel.set_rgb(red, green, blue)

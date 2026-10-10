@@ -159,6 +159,52 @@ def test_replace_with_blackout():
             "BLACKOUT marker sits at the old clip time")
 
 
+def _note_on_by_channel(m, note):
+    """{channel: (time, velocity)} for `note` in the REBUILT file — what the
+    worker plays and the show saves, built from midi_notes, not midi_events."""
+    out, now = {}, 0.0
+    for msg in m.midi_data:
+        now += msg.time
+        if msg.type == "note_on" and msg.note == note and msg.velocity > 0:
+            out[msg.channel] = (round(now, 3), msg.velocity)
+    return out
+
+
+def test_ops_touch_their_own_channel_only():
+    """The same note at the same time on two lanes: an op on one lane's clip
+    must change that lane's note in the file, never its neighbour's."""
+    print("test_ops_touch_their_own_channel_only")
+    note = 1   # a channel verb on both the ledbar and the blinder
+
+    m = _make_manager()
+    m.add_event(note, 5.0, 40, channel=LEDBAR_CH)
+    blinder = m.add_event(note, 5.0, 60, channel=BLINDER_CH)
+    m.edit_event(blinder, velocity=100)
+    played = _note_on_by_channel(m, note)
+    _assert(played.get(BLINDER_CH, (None, None))[1] == 100,
+            "edit_event writes the edited lane's note")
+    _assert(played.get(LEDBAR_CH, (None, None))[1] == 40,
+            "edit_event leaves the other lane's note alone")
+
+    m = _make_manager()
+    m.add_event(note, 5.0, 40, channel=LEDBAR_CH)
+    blinder = m.add_event(note, 5.0, 60, channel=BLINDER_CH)
+    m.update_event_timing(blinder, 7.0)
+    played = _note_on_by_channel(m, note)
+    _assert(played.get(BLINDER_CH, (None,))[0] == 7.0,
+            "update_event_timing moves the edited lane's note")
+    _assert(played.get(LEDBAR_CH, (None,))[0] == 5.0,
+            "update_event_timing leaves the other lane's note in place")
+
+    m = _make_manager()
+    m.add_event(note, 5.0, 40, channel=LEDBAR_CH)
+    blinder = m.add_event(note, 5.0, 60, channel=BLINDER_CH)
+    m.delete_event(blinder)
+    played = _note_on_by_channel(m, note)
+    _assert(BLINDER_CH not in played, "delete_event removes the edited lane's note")
+    _assert(LEDBAR_CH in played, "delete_event keeps the other lane's note")
+
+
 def main():
     test_add_and_delete_event()
     test_move_event_free_placement()
@@ -167,6 +213,7 @@ def main():
     test_set_event_right_edge_inserts_blackout()
     test_set_event_left_edge_moves_start()
     test_replace_with_blackout()
+    test_ops_touch_their_own_channel_only()
     print("\nALL TESTS PASSED")
 
 

@@ -7,9 +7,10 @@ import threading
 import mido
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from app.audio_controller import AudioController
+from app.autoprogram import AutoProgrammer
 from app.bpm import BpmState
 from app.media_controller import MediaController
+from app.metronome import Metronome
 from app.playlist import PlaylistCore
 from app.prefs_watcher import PrefsWatcher
 from app.show_manager import ShowManager
@@ -21,6 +22,7 @@ from core import markers as core_markers
 from core import note_layout
 from core.config import Config, userprefs_path
 from core.io_routing import midi_routing_from_io
+from core.tempo_map import TempoMap, valid_meter
 from dmx import DMXManager
 from midi import MidiManager
 from tupperlogger import get_logger, setup_logging
@@ -30,7 +32,7 @@ from webremote.manager import WebRemoteManager
 class AppCore(QObject):
     """Owns and wires every widget-free collaborator, exposing the façade the
     web remote (and the desktop window) consume: media_controller,
-    midi_manager, audio_controller, audio_engine, playlist_controller,
+    midi_manager, metronome, audio_engine, playlist_controller,
     show_manager, software_controller, bpm_state, the transport methods and
     preview_clip. Widget-facing halves of its work ride the signals below."""
 
@@ -50,9 +52,9 @@ class AppCore(QObject):
     # The song's tempo map (base BPM + tempo markers) changed: the timeline
     # re-grids off this, the metronome is already retimed by the time it fires.
     tempo_map_changed = pyqtSignal(object)
-    # Rendered voice cues arriving from the TTS worker thread (song_id, list of
+    # Rendered voice-TTS lines arriving from the worker thread (song_id, list of
     # (time_sec, samples)); queued back onto the Qt thread before installing.
-    _voice_cues_rendered = pyqtSignal(str, object)
+    _voice_tts_rendered = pyqtSignal(str, object)
 
     def __init__(self, config: Config, show=None, force_webremote=False,
                  snapshot_on_open=True):
@@ -61,10 +63,7 @@ class AppCore(QObject):
         self.logger = get_logger("app.core")
         self._shutdown_done = False
         self._prefs_watcher = None
-        # The current song's control markers — the state a stop-click leaves
-        # behind, which a seek has to re-resolve rather than replay.
-        self._control_markers = []
-        self._voice_cues_rendered.connect(self._on_voice_cues_rendered)
+        self._voice_tts_rendered.connect(self._on_voice_tts_rendered)
 
         # The open show project (attach FIRST: it aliases config.playlist /
         # config.fixtures onto the show's objects, and the managers below
@@ -116,10 +115,10 @@ class AppCore(QObject):
             self._on_control_marker_fired)
         self.media_controller.segue_reached.connect(self._on_segue_reached)
 
-        self.audio_controller = AudioController(
-            self.audio_engine, config.volume.metronome)
-        self.audio_controller.beat_occurred.connect(self._on_metronome_beat)
-        self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
+        self.metronome = Metronome(self.audio_engine, config.volume.metronome)
+        self.metronome.set_accent(config.audio.click_accent)
+        self.metronome.beat_scheduled.connect(self._on_beat_scheduled)
+        self.metronome.audio_error_occurred.connect(self._on_audio_error)
 
         # Core half of a BPM change first, then the autosave arming.
         self.bpm_state.bpm_changed.connect(self._on_bpm_changed)
@@ -131,15 +130,23 @@ class AppCore(QObject):
         self.bpm_state.set_tempo_changes([])  # seed both controllers
 
         self.playlist_controller = PlaylistCore(self)
+        # A song's show generated from its audio (desktop only; idle until asked).
+        self.autoprogrammer = AutoProgrammer(self)
 
-        # The running software controller (None until DMXManager spawns one).
+        # The running software controller (None until DMXManager spawns one),
+        # and the patch signature it was last handed (see on_patch_edited).
         self.software_controller = None
+        self._last_dmx_sig = self._patch_dmx_signature()
 
         # Embedded web remote (tablet UI); created here, served on start().
         # force_webremote overrides config.webremote.enabled in memory only
         # (headless: the remote is the only interface) — never persisted.
         self.webremote_manager = WebRemoteManager(
             config, self, force_enabled=force_webremote)
+        # A reorder, removal or edit of a song that is not loaded changes the
+        # remote's setlist without any media/MIDI signal it already hears.
+        self.playlist_controller.setlist_changed.connect(
+            self.webremote_manager._publish_full)
 
     def start(self) -> None:
         """Bring the core up: current song, persisted I/O routing, web remote
@@ -153,9 +160,15 @@ class AppCore(QObject):
     # Config application
     # ------------------------------------------------------------------
     def apply_io_config(self):
-        """Apply config.io end to end: MIDI routing + controller/sinks/stage."""
-        self.media_controller.set_midi_routing(midi_routing_from_io(self.config.io))
-        self.dmx_manager.apply_io(self.config.io)
+        """Apply config.io end to end: MIDI routing + controller/sinks/stage.
+
+        Through effective_io(), so a command-line pick (`--dmx-usb`) is
+        re-applied on every pass — including the one a live prefs reload
+        triggers, which replaces config.io wholesale.
+        """
+        io = self.config.effective_io()
+        self.media_controller.set_midi_routing(midi_routing_from_io(io))
+        self.dmx_manager.apply_io(io)
 
     def apply_audio_config(self):
         """Apply config.audio to the live engine + count-in wiring."""
@@ -164,13 +177,42 @@ class AppCore(QObject):
         song = self.config.get_current_song()
         self.media_controller.set_count_in(
             song.precount if song else False, self.config.audio.count_in_bars)
+        self.metronome.set_accent(self.config.audio.click_accent)
         self._refresh_count_words()
+
+    def apply_logging_config(self):
+        """(Re-)install the log handlers from config.logging: level, console,
+        and the file in config.logging.log_dir.
+
+        Both halves take effect immediately — a level change starts filtering
+        the very next record, and a folder change starts a file in the new
+        place. Files already written stay where they are.
+        """
+        setup_logging(
+            level=self.config.logging.level,
+            console_output=self.config.logging.console_output,
+            file_output=self.config.logging.file_output,
+            log_dir=self.config.logging.log_dir,
+            max_file_size=self.config.logging.max_file_size,
+            backup_count=self.config.logging.backup_count)
 
     def apply_volume_config(self):
         """Apply config.volume to the three live buses."""
         self.media_controller.set_audio_volume(self.config.volume.audio)
-        self.audio_controller.set_metronome_volume(self.config.volume.metronome)
+        self.metronome.set_metronome_volume(self.config.volume.metronome)
         self.audio_engine.set_bus_volume(BUS_VOICE, self.config.volume.voice)
+
+    def set_volume(self, **volumes):
+        """Set bus volumes (0.0–1.0) by name — `audio`, `metronome`, `voice`,
+        as the timeline header's sliders move them — then apply and persist.
+
+        Applied through apply_volume_config, the same route a prefs reload
+        takes, so which controller owns which bus is written down once. It
+        re-applies all three: each is a stored level, so the two that did not
+        move are simply set to the value they already hold."""
+        self.config.update_volume(**volumes)
+        self.apply_volume_config()
+        self.save_config()
 
     # ------------------------------------------------------------------
     # Live prefs reload
@@ -218,13 +260,7 @@ class AppCore(QObject):
             f"userprefs.json edited outside the app — adopting: {', '.join(adopted)}")
 
         if "logging" in adopted:
-            setup_logging(
-                level=self.config.logging.level,
-                console_output=self.config.logging.console_output,
-                file_output=self.config.logging.file_output,
-                log_dir=self.config.logging.log_dir,
-                max_file_size=self.config.logging.max_file_size,
-                backup_count=self.config.logging.backup_count)
+            self.apply_logging_config()
         if "volume" in adopted:
             self.apply_volume_config()
         if "audio" in adopted:
@@ -266,32 +302,38 @@ class AppCore(QObject):
     def seek_playback(self, time_seconds):
         """Seek to position using media controller."""
         was_playing = self.media_controller.get_playback_state()
-        metronome_was_running = self.audio_controller.is_metronome_running()
 
         self.media_controller.seek_to_position(time_seconds)
 
-        # Resynchronize the metronome. A stop-click marker outlives its own
-        # crossing, so the seek target decides whether the click runs at all —
-        # landing before the marker brings it back, landing past it does not.
+        # Resynchronize the metronome on the seek target (which also decides
+        # whether a stop-click has silenced it there).
         if was_playing:
-            stopped = self._click_stopped_at(time_seconds)
-            if metronome_was_running:
-                self.audio_controller.stop_metronome()
-            if not stopped:
-                self.audio_controller.start_metronome(time_seconds)
+            # The anchor, not "now": seek_to_position() has just run a whole
+            # transport tick, and the click would start that far behind the
+            # music if it phased itself here.
+            self.metronome.follow(
+                time_seconds, self.media_controller.monotonic_at(time_seconds))
 
     def _on_playback_state_changed(self, is_playing):
-        """Keep the metronome locked to the transport."""
+        """Keep the metronome locked to the transport.
+
+        Also the natural pair of edges for the timing record: armed when the
+        transport starts, reported when it stops. One line per pass is what
+        makes a glitch at a show answerable the next morning."""
         if is_playing:
             # Start metronome synchronized to current timeline position —
             # unless a stop-click marker already silenced it there.
             current_position = self.media_controller.get_current_position()
-            if self._click_stopped_at(current_position):
-                self.audio_controller.stop_metronome()
-            else:
-                self.audio_controller.start_metronome(current_position)
+            self.audio_engine.monitor.reset()
+            self.metronome.follow(
+                current_position,
+                self.media_controller.monotonic_at(current_position))
         else:
-            self.audio_controller.stop_metronome()
+            self.metronome.stop_metronome()
+            monitor = self.audio_engine.monitor
+            if monitor.had_activity():
+                self.logger.info(monitor.summary())
+                monitor.reset()
 
     def _on_bpm_changed(self, value):
         """Core half of a base-BPM change. The metronome and the count-in read
@@ -304,60 +346,129 @@ class AppCore(QObject):
 
         Restarting a running metronome is what re-phases the beat: the map may
         have changed under the playhead (a tempo marker edited mid-playback),
-        and its beat grid no longer lines up with the one being counted."""
-        was_running = self.audio_controller.is_metronome_running()
+        and its beat grid no longer lines up with the one being counted. A
+        free-run is left alone — it is counting a tempo of its own."""
+        was_running = (self.metronome.is_metronome_running()
+                       and not self.metronome.is_free_running())
         position = (self.media_controller.get_current_position()
                     if was_running else 0.0)
 
-        self.audio_controller.set_tempo_map(tempo_map)
+        self.metronome.set_tempo_map(tempo_map)
         self.media_controller.set_tempo_map(tempo_map)
 
         if was_running:
-            self.audio_controller.stop_metronome()
-            self.audio_controller.start_metronome(position)
+            self.metronome.follow(
+                position, self.media_controller.monotonic_at(position))
 
         self.tempo_map_changed.emit(tempo_map)
 
     # ------------------------------------------------------------------
+    # The click on its own (the desktop's click popup)
+    # ------------------------------------------------------------------
+    def start_free_run(self, bpm: int, meter: str):
+        """Run the click alone at `bpm` in `meter`, off the transport — or
+        retime a free-run already going. Refused while the song plays: the
+        click then is the song's, and it is the one a show needs. Playing
+        ends a free-run (the metronome's follow() does it)."""
+        if self.media_controller.get_playback_state():
+            return
+        self.metronome.start_free_run(TempoMap(bpm, meter=meter))
+
+    def stop_free_run(self):
+        if self.metronome.is_free_running():
+            self.metronome.stop_metronome()
+
+    def set_song_tempo(self, bpm: int, meter: str):
+        """Make `bpm` and `meter` the current song's ("Set as song tempo").
+
+        The BPM goes through bpm_state like the toolbar spinbox's, so the .mid
+        stays its home; the meter rides the song entry in show.json. Both
+        rebuild the tempo map, which is what re-grids the ruler."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        meter = valid_meter(meter)
+        if song.meter != meter:
+            song.meter = meter
+            self.bpm_state.set_meter(meter)
+            self.save_config()
+        self.bpm_state.set_bpm(bpm)
+
+    def set_click_accent(self, accent: bool):
+        """Accent beat 1 of every click, or not — a machine-level preference."""
+        if self.config.audio.click_accent == bool(accent):
+            return
+        self.config.audio.click_accent = bool(accent)
+        self.metronome.set_accent(accent)
+        self.save_config()
+
+    # ------------------------------------------------------------------
+    # Current song's details
+    # ------------------------------------------------------------------
+    def set_song_title(self, title: str, song=None) -> bool:
+        """Rename a song — the current one unless `song` is given (the
+        playlist manager): persisted and published to the web remote. Returns
+        whether anything changed, so the view knows to redraw its setlist."""
+        song = song or self.config.get_current_song()
+        title = title.strip()
+        if song is None or song.title == title:
+            return False
+        song.title = title
+        self.save_config()
+        self.webremote_manager._publish_full()
+        return True
+
+    def set_song_key(self, key: str, song=None):
+        """Set a song's musical key — the current one's unless `song` is given
+        (the TONO chip, the playlist manager): persisted and published to the
+        web remote."""
+        song = song or self.config.get_current_song()
+        if song is None or song.key == key:
+            return
+        song.key = key
+        self.save_config()
+        self.webremote_manager._publish_full()
+
+    # ------------------------------------------------------------------
     # Count-in + spoken guide (Fase 4)
     # ------------------------------------------------------------------
-    def on_song_precount_toggled(self, enabled: bool):
-        """Persist the current song's count-in flag and apply it live
-        (triggered by the toolbar chip or the web remote)."""
-        song = self.config.get_current_song()
+    def on_song_precount_toggled(self, enabled: bool, song=None):
+        """Persist a song's count-in flag — the current one's unless `song` is
+        given (the click panel, the playlist manager) — and, for the current
+        song, apply it live."""
+        current = self.config.get_current_song()
+        song = song or current
         if song is None or song.precount == bool(enabled):
             return
         song.precount = bool(enabled)
-        self.media_controller.set_count_in(enabled, self.config.audio.count_in_bars)
         self.save_config()
-        self.precount_changed.emit(song.precount)
+        if song is current:
+            self.media_controller.set_count_in(
+                enabled, self.config.audio.count_in_bars)
+            self.precount_changed.emit(song.precount)
         self.webremote_manager._publish_full()
 
-    def set_count_in_bars(self, bars: int):
-        """Set the global count-in length (Settings ▸ AUDIO / web remote)."""
-        bars = max(1, min(8, int(bars)))
-        if bars == self.config.audio.count_in_bars:
-            return
-        self.config.audio.count_in_bars = bars
-        song = self.config.get_current_song()
-        self.media_controller.set_count_in(
-            song.precount if song else False, bars)
-        self.save_config()
-
-    def _on_metronome_beat(self, beat_number):
+    def _on_beat_scheduled(self, beat_number, beat_time, frame):
         """During the LAST count-in bar, speak the beat number on the voice bus
-        so the musician hears the song coming ("uno, dos, tres, cuatro")."""
-        if not self.media_controller.is_counting_in():
-            return
+        so the musician hears the song coming ("uno, dos, tres, cuatro" in
+        4/4 — one word per beat of the song's meter).
+
+        Scheduled at the beat's OWN output frame, so the word lands on the beep
+        rather than near it, and keyed off the beat's own time rather than a
+        sampled transport position — which is what makes it impossible for a
+        late reading to speak a count into the song."""
+        if beat_time >= 0:
+            return                       # count-in beats are the negative ones
         if not self.config.audio.count_in_voice or not self._count_words:
             return
-        # Which count-in beat is this? Derived from the position, not the beat
-        # counter, so timer jitter around t=0 can never speak into the song.
-        position = self.media_controller.get_current_position()
-        beat_len = self.audio_controller.tempo_map.beat_seconds_at(position)
-        beats_remaining = round(-position / beat_len)
-        if 1 <= beats_remaining <= 4:
-            self.audio_engine.play_voice(self._count_words[4 - beats_remaining])
+        tempo_map = self.metronome.tempo_map
+        bar = tempo_map.beats_per_bar
+        if bar > len(self._count_words):
+            return                       # a cache older than this meter
+        beats_remaining = round(-beat_time / tempo_map.beat_seconds_at(beat_time))
+        if 1 <= beats_remaining <= bar:
+            self.audio_engine.schedule_voice(
+                self._count_words[bar - beats_remaining], frame)
 
     def _refresh_count_words(self):
         """Pre-render the spoken count-in numbers in the background (cache-first;
@@ -377,47 +488,46 @@ class AppCore(QObject):
         threading.Thread(target=work, daemon=True, name="tts-count-words").start()
 
     # ------------------------------------------------------------------
-    # Voice cues (Fase 4)
+    # Voice TTS (Fase 4)
     # ------------------------------------------------------------------
-    def apply_voice_cues(self, song):
-        """(Re-)render the song's cues to PCM in the background; the rendered
-        clips install via _voice_cues_rendered. Ruler markers are the UI
-        layer's half (PlaylistController / the Cues dialog)."""
-        cues = list(song.voice_cues)
-        self.media_controller.set_voice_cues([])  # drop stale clips meanwhile
-        if not cues:
+    def apply_voice_tts(self, song):
+        """(Re-)render the song's spoken lines to PCM in the background; the
+        rendered clips install via _voice_tts_rendered. Ruler markers are the
+        UI layer's half (PlaylistController / the Markers dialog)."""
+        lines = list(song.voice_tts)
+        self.media_controller.set_voice_tts([])  # drop stale clips meanwhile
+        if not lines:
             return
         voice = self.config.audio.tts_voice
         song_id = song.id
 
         def work():
             rendered = []
-            for cue in cues:
-                samples = tts.render(cue.text, voice)
+            for line in lines:
+                samples = tts.render(line.text, voice)
                 if samples is not None:
-                    rendered.append((cue.time, samples))
-            self._voice_cues_rendered.emit(song_id, rendered)
+                    rendered.append((line.time, samples))
+            self._voice_tts_rendered.emit(song_id, rendered)
 
-        threading.Thread(target=work, daemon=True, name="tts-cues").start()
+        threading.Thread(target=work, daemon=True, name="tts-voice").start()
 
     def apply_song_markers(self, song):
-        """Install a song's control markers and segue across the core.
+        """Install a song's meter, control markers and segue across the core.
 
         The tempo half goes through bpm_state (which rebuilds the map every
         consumer reads), the rest straight onto the transport. Called on every
         song load and after every edit in the markers dialog."""
         markers = list(getattr(song, "control_markers", []))
-        self._control_markers = markers
+        self.metronome.set_control_markers(markers)
+        # The meter first: set_tempo_changes always rebuilds the map, so the
+        # map it announces carries both.
+        self.bpm_state.set_meter(getattr(song, "meter", None))
         self.bpm_state.set_tempo_changes(core_markers.tempo_changes(markers))
         self.media_controller.set_control_markers(
             [(m.time, m.kind, m.bpm) for m in markers])
         self.media_controller.set_segue(
             bool(getattr(song, "segue", False)),
             float(getattr(song, "segue_time", 0.0)))
-
-    def _click_stopped_at(self, position) -> bool:
-        """Whether a stop-click marker has already silenced the click there."""
-        return core_markers.click_stopped_at(self._control_markers, position)
 
     def _on_control_marker_fired(self, kind, bpm):
         """Act on a marker the transport just crossed.
@@ -428,7 +538,7 @@ class AppCore(QObject):
         time it played past the marker."""
         if kind == core_markers.KIND_CLICK_STOP:
             self.logger.info("Stop-click marker — click off for the rest of the song")
-            self.audio_controller.stop_metronome()
+            self.metronome.stop_metronome()
         elif kind == core_markers.KIND_TEMPO:
             # Nothing to DO: the metronome schedules each beat off the tempo
             # map, which already carries this change, so the interval after the
@@ -443,22 +553,21 @@ class AppCore(QObject):
         No next song means the segue is a no-op rather than an error: a setlist
         gets reordered far more often than its markers do, and the last song
         silently keeping its own ending is the harmless reading."""
-        songs = self.config.playlist.songs
-        if self.config.playlist.current_song_index >= len(songs) - 1:
-            self.logger.info("Segue reached on the last song — nothing to segue to")
+        if self.config.playlist.neighbour(+1) is None:
+            self.logger.info("Segue reached on the last enabled song — nothing to segue to")
             return
         self.playlist_controller.next_song()
         self.media_controller.start_playback(force_no_count_in=True)
 
-    def _on_voice_cues_rendered(self, song_id, rendered):
-        """Install rendered cue clips — only if the song is still current."""
+    def _on_voice_tts_rendered(self, song_id, rendered):
+        """Install the rendered clips — only if the song is still current."""
         song = self.config.get_current_song()
         if song is not None and song.id == song_id:
-            self.media_controller.set_voice_cues(rendered)
-            if len(rendered) < len(song.voice_cues):
+            self.media_controller.set_voice_tts(rendered)
+            if len(rendered) < len(song.voice_tts):
                 self.logger.info(
-                    f"{len(song.voice_cues) - len(rendered)} voice cue(s) not "
-                    "rendered (TTS voice not ready)")
+                    f"{len(song.voice_tts) - len(rendered)} voice-TTS line(s) "
+                    "not rendered (TTS voice not ready)")
 
     # ------------------------------------------------------------------
     # MIDI/DMX routing
@@ -490,6 +599,23 @@ class AppCore(QObject):
             return
         self.software_controller.repatch(self.config.fixtures)
         self.midi_manager.seed_controller_auto(self.software_controller)
+
+    def on_patch_edited(self):
+        """A patch edit landed (the stage designer, the fixture dialog): hot-swap
+        it onto the software controller — but only when it changed something
+        the controller depends on, since a stage drag-move or a rename edits
+        the patch too and must not re-patch (and so black out) the rig."""
+        dmx_sig = self._patch_dmx_signature()
+        if self.software_controller is not None and dmx_sig != self._last_dmx_sig:
+            self._last_dmx_sig = dmx_sig
+            self.repatch_controller()
+
+    def _patch_dmx_signature(self):
+        """What the software DMX engine depends on (per fixture). Excludes the
+        name so a rename never re-patches (and never blacks out) the rig;
+        includes `mode`, which changes the fixture's DMX footprint."""
+        return tuple((f.type, f.mode, f.dmx_start, f.channel)
+                     for f in self.config.fixtures)
 
     def preview_clip(self, messages):
         """Audition clip-library items live: route note_on(s) through the
@@ -557,6 +683,7 @@ class AppCore(QObject):
         and show_reloaded (counters/title/autosave chip)."""
         self.midi_manager.update_fixtures(self.config.fixtures)
         self.repatch_controller()
+        self._last_dmx_sig = self._patch_dmx_signature()
         self.patch_reloaded.emit()
 
         self.playlist_controller.load_current_song()
@@ -611,9 +738,10 @@ class AppCore(QObject):
         # Stop playback and cleanup components — guard each so one failure
         # doesn't abort the rest of the shutdown.
         for name, cleanup in (
+            ("autoprogrammer", self.autoprogrammer.cleanup),
             ("webremote_manager", self.webremote_manager.cleanup),
             ("media_controller", self.media_controller.cleanup),
-            ("audio_controller", self.audio_controller.cleanup),
+            ("metronome", self.metronome.cleanup),
             ("audio_engine", self.audio_engine.cleanup),
             ("dmx_manager", self.dmx_manager.cleanup),
             ("midi_manager", self.midi_manager.cleanup),

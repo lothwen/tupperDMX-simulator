@@ -18,9 +18,11 @@ from core.paths import asset_path
 _REPO_URL = "https://github.com/lothwen/tupperDMX-simulator"
 _CHANGELOG_URL = _REPO_URL + "/commits"
 
-# A clean release tag like "v3.4.2"; anything else (describe output, "dev",
-# "unknown") is treated as a development build.
+# A clean release tag like "v3.4.2", and a pre-release like "v1.1-rc1", whose
+# word names its channel. Anything else (describe output, "dev", "unknown") is
+# treated as a development build.
 _RELEASE_TAG_RE = re.compile(r"^v?\d+(\.\d+)+$")
+_PRERELEASE_TAG_RE = re.compile(r"^v?\d+(\.\d+)+-(?P<channel>[a-z]+)\d*$")
 
 
 def _platform_line() -> str:
@@ -100,10 +102,14 @@ class AboutDialog(QDialog):
 
     def _version_pill(self) -> QLabel:
         tag = buildinfo.GIT_TAG
-        stable = bool(_RELEASE_TAG_RE.match(tag))
-        version_match = re.match(r"v?\d+(\.\d+)+", tag)
-        version = version_match.group(0) if version_match else tag
-        dot_color, channel = ("#43d17c", "STABLE") if stable else ("#f0b429", "DEV")
+        version = buildinfo.release_of(tag)
+        prerelease = _PRERELEASE_TAG_RE.match(tag)
+        if _RELEASE_TAG_RE.match(tag):
+            dot_color, channel = "#43d17c", "STABLE"
+        elif prerelease:
+            dot_color, channel = "#79cdf0", prerelease.group("channel").upper()
+        else:
+            dot_color, channel = "#f0b429", "DEV"
 
         pill = QLabel(
             f'<span style="color:{dot_color}">●</span>'

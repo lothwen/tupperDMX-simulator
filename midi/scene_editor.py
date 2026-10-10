@@ -16,7 +16,7 @@ import uuid
 
 from tupperlogger import get_logger
 from core.fixture_library import cache_generation
-from core.note_layout import TAKE_MANUAL
+from core.note_layout import TAKE_MANUAL, TAKE_MANUAL_VELOCITY
 from software_controller.scene_loader import Scene, load_scenes
 from .constants import (
     MIN_EVENT_DURATION,
@@ -25,12 +25,6 @@ from .constants import (
     DEFAULT_FIXTURE_TYPE,
     _channel_to_velocity,
 )
-
-# Velocity for the take-manual verb folded into each scene group. The runtime
-# ignores it (take_manual_control reads no parameter), but it must be non-zero
-# so the codec doesn't treat the note_on as a note_off. Matches the value the
-# v2 MIDI migration injects.
-TAKE_MANUAL_VELOCITY = 64
 
 
 class SceneEditor:
@@ -185,7 +179,12 @@ class SceneEditor:
         # clear the now-zero-duration BLACKOUT.
         members = self._doc._group_members(group_id)
         if members:
-            self._doc.reconcile_blackouts(self._doc._event_fixture(members[0]))
+            fixture = self._doc._event_fixture(members[0])
+            self._doc.reconcile_blackouts(fixture)
+            # A new scene shortens whatever clip used to run up to it, and a
+            # fade-out is anchored on its clip's right edge — so the neighbour
+            # has to be re-derived too, not just this group.
+            self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Added scene '{name}' at {time:.3f}s ({added} channels, "
@@ -303,8 +302,8 @@ class SceneEditor:
             if group_actual_end > new_target_end + BLACKOUT_EPSILON:
                 self._doc._insert_blackout_internal(new_target_end, fixture)
 
-        self._fades.regenerate_group(group_id)
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Moved scene {group_id} from {old_time:.3f}s to "
@@ -410,8 +409,8 @@ class SceneEditor:
             # reconcile can drop a trailing BLACKOUT, which moves the group's
             # right edge — and that edge is the fade-out ramp's anchor.
             self._doc.reconcile_blackouts(self._doc._event_fixture(anchor))
-        # Brightness V may have changed → fade ramp endpoint changes.
-        self._fades.regenerate_group(group_id)
+        # The scene's level may have changed → the ramp endpoint changes.
+        self._fades.regenerate_fixture(self._doc._event_fixture(anchor))
         self._commit()
         self.logger.info(
             f"Updated scene {group_id}"
@@ -428,13 +427,13 @@ class SceneEditor:
             return False
         fixture = self._doc._event_fixture(members[0])
         group_time = members[0]["time"]
-        # Wipe fade notes BEFORE deleting the members; once members are gone
-        # _regenerate_group_fades wouldn't know what to wipe (no group anchor).
-        self._fades.wipe_group(group_id)
         for e in list(members):
             self._doc._delete_event_internal(e["id"])
         self._doc._insert_blackout_internal(group_time, fixture)
         self._doc.reconcile_blackouts(fixture)
+        # The group is no longer an owner, so this drops its ramp as well as
+        # re-deriving what the freed span did to its neighbours.
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(f"Deleted scene {group_id} (replaced with BLACKOUT)")
         return True
@@ -486,8 +485,8 @@ class SceneEditor:
             self._doc._insert_blackout_internal(old_time, fixture)
 
         self._fades.clamp_group_to_visible(group_id)
-        self._fades.regenerate_group(group_id)
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Resized scene {group_id} left edge {old_time:.3f}s → "
@@ -538,8 +537,8 @@ class SceneEditor:
                 return False
 
         self._fades.clamp_group_to_visible(group_id)
-        self._fades.regenerate_group(group_id)
         self._doc.reconcile_blackouts(fixture)
+        self._fades.regenerate_fixture(fixture)
         self._commit()
         self.logger.info(
             f"Resized scene {group_id} right edge to {new_right_time:.3f}s"

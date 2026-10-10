@@ -2,7 +2,7 @@
 ; Requires NSIS 3.0 or later
 
 !define APP_NAME "TupperDMX Simulator"
-!define APP_VERSION "1.0.0"
+!define APP_VERSION "1.1.0-rc1"
 !define APP_PUBLISHER "TupperDMX"
 !define APP_URL "https://github.com/your-repo/tupperdmx-simulator"
 !define APP_EXE "TupperDMX-Simulator.exe"
@@ -40,7 +40,7 @@ RequestExecutionLevel admin
 !insertmacro MUI_LANGUAGE "English"
 
 ; Version information
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.1.0.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "FileDescription" "${APP_NAME} Installer"

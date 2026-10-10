@@ -27,6 +27,13 @@ from .constants import (
 )
 
 
+# The notes that are per-fixture STATE rather than authored music: the palette
+# (60) and the track setup flags (71). Both sit at t=0, one per MIDI channel, in
+# ``midi_notes`` only — so a rigid shift of the show must leave them where they
+# are (see shift_all_events).
+_PINNED_NOTES = frozenset({note_layout.START, note_layout.FIXTURE_SETUP})
+
+
 class MidiDocument:
     """Mutable MIDI editing state + integrity primitives."""
 
@@ -96,14 +103,33 @@ class MidiDocument:
         return part.upper().startswith(BLACKOUT_PART_NAME)
 
     def _event_fixture(self, event: Dict[str, Any]):
-        """Scoping key for the fixture an event belongs to.
+        """Scoping key for the fixture an event belongs to, or None for the
+        global verbs that belong to no lane.
 
         Real-app events carry a MIDI channel (= the fixture instance's index in
         the patch), which scopes each fixture independently. Synthetic / legacy
         events without a channel fall back to the note map's fixture-type hint
         ('ledbar', 'blinder', ...). Either way the value is only ever compared
         against other _event_fixture() results, so the int/str mix is internal.
+
+        A SONG PART is asked of its note, not of its channel, and belongs to no
+        lane — the same answer `MidiEventsTrack.matches_filter` gives, so the
+        document and the timeline agree on who occupies a lane. It has to be
+        asked of the note because the channel lies: a song part is authored
+        global (`add_event(..., channel=None)`), but a .mid can only carry a
+        note on a real channel, so `MidiCodec.rebuild` writes it to 0 and the
+        next load stamps 0 back onto it. Without this every section would claim
+        the lane of whichever fixture is patched at MIDI channel 0 and act as
+        an obstacle there: a clip dragged across the arrangement landed in the
+        sliver between two sections and took its width, while the timeline —
+        which had filtered the sections off the lane — offered the whole song.
+
+        BLACKOUT ALL is global at RUNTIME but not in the timeline: it is
+        dropped on a lane and stamped with that lane's channel, so it stays
+        scoped to it (and keeps working as that lane's gap marker).
         """
+        if event and note_layout.is_song_part(event.get('note', -1)):
+            return None
         if event:
             ch = event.get('channel')
             if ch is not None:
@@ -162,12 +188,22 @@ class MidiDocument:
         """UI metadata for a (note, channel) — the synthetic/test note map
         takes precedence (it carries the .fixture scoping hint); otherwise the
         data-driven reverse lookup resolves the verb against the channel's
-        fixture def. Returns None for notes with no defined meaning."""
+        fixture def. Returns None for notes with no defined meaning.
+
+        The one verb that OUTRANKS the map is a channel control on a resolved
+        fixture: the map is fixture-agnostic, so it can only ever say "CH 2",
+        while the patch knows that slot is the moving head's Tilt and colours it
+        as such. The map still answers for every other verb, and for a note past
+        the fixture's channel count — and for synthetic data with no patch,
+        where there is no def to ask."""
+        fdef = self._fdef_for_channel(channel)
+        lo, hi = note_layout.CHANNEL_OFFSET_RANGE
+        if fdef is not None and lo <= int(note) <= min(hi, fdef.channel_count):
+            return note_layout.describe_note(note, fdef, velocity)
         info = self.midi_note_map.get(str(note))
         if info is not None:
             return info
-        return note_layout.describe_note(note, self._fdef_for_channel(channel),
-                                         velocity)
+        return note_layout.describe_note(note, fdef, velocity)
 
     def channel_note_map(self, channel) -> Tuple[Tuple[str, int], ...]:
         """``((channel_field, note), ...)`` used to expand a scene into channel-
@@ -508,6 +544,58 @@ class MidiDocument:
                 break
         return True
 
+    def earliest_event_time(self):
+        """Time of the first non-BLACKOUT event, or None when there is none.
+
+        A BLACKOUT is a gap marker — dark, not content — so it is never where
+        the show starts."""
+        times = [e['time'] for e in self.midi_events if not self.is_blackout(e)]
+        return min(times) if times else None
+
+    def shift_all_events(self, delta_sec: float) -> bool:
+        """Slide the WHOLE document by `delta_sec`. No rebuild/emit.
+
+        Rigid by construction, which is why this is not a `move_selection` over
+        every id: with nothing left unselected there are no obstacles to clamp
+        against and no gap to reconcile — every clip, every BLACKOUT marker and
+        every fade ramp keeps its neighbour, so the relative arrangement that
+        makes the BLACKOUT invariants hold is exactly the one that survives.
+        Fade notes shift too: they are absolute times parented by id, not
+        offsets from their clip.
+
+        Refuses rather than clamps when the block would cross t=0 — clamping
+        here would silently break the rigidity the caller is relying on.
+        BLACKOUTs are the exception: a gap marker is no content, so it never
+        blocks the shift, and one pushed before t=0 is simply dropped
+        (`reconcile_blackouts` tidies up after).
+
+        The two per-fixture state notes — the setup flags (note 71) and the
+        palette (note 60) — are the one thing that does NOT travel: they are
+        timeless persistence pinned at the top of the file, not something
+        authored against the music. They also live in ``midi_notes`` only, so
+        ``earliest_event_time`` cannot see them — a leftward shift used to push
+        them negative behind the guard's back, and `rebuild` then wrote a
+        negative delta that only blew up at save time ("message time must be
+        non-negative in MIDI file"), losing the write.
+        """
+        if not delta_sec:
+            return False
+        earliest = self.earliest_event_time()
+        if earliest is None or earliest + delta_sec < 0.0:
+            return False
+        for event in [e for e in self.midi_events
+                      if self.is_blackout(e) and e['time'] + delta_sec < 0.0]:
+            self._delete_event_internal(event['id'])
+        for event in self.midi_events:
+            event['time'] += delta_sec
+        for note in self.midi_notes:
+            if note.get('note') in _PINNED_NOTES:
+                continue
+            note['time'] += delta_sec
+        self.midi_events.sort(key=lambda x: x['time'])
+        self.midi_notes.sort(key=lambda x: x['time'])
+        return True
+
     # --- per-track setup persistence (note 71) -------------------------------
 
     def _setup_note_for(self, channel: int):
@@ -599,6 +687,73 @@ class MidiDocument:
     def set_fixture_lock_flag(self, channel: int, lock: bool) -> bool:
         """Persist `channel`'s lock flag into its setup note (note 71)."""
         return self._set_setup_flags(channel, lock=lock)
+
+    # --- per-fixture palette persistence (note 60 / START) -------------------
+
+    def _palette_note_for(self, channel: int):
+        """The note-60 palette entry for `channel` in ``midi_notes``, or None.
+
+        Legacy files can hold SEVERAL (START used to be a draggable clip that
+        could be dropped anywhere, any number of times); the first in time wins,
+        which is the one a playing show hears first."""
+        return next(
+            (n for n in sorted(self.midi_notes, key=lambda x: x.get('time', 0.0))
+             if n.get('note') == note_layout.START
+             and n.get('channel') == channel),
+            None)
+
+    def fixture_palette(self, channel: int) -> int:
+        """`channel`'s packed palette velocity, 0 when it has no palette note.
+
+        0 is a real palette (hue 0, mode 0) AND the absence marker, exactly as
+        an all-flags-off setup note is absent rather than written — velocity 0
+        is a note_off on any note outside VALUE_BEARING_NOTES, so a default
+        palette has no representation on disk to begin with."""
+        n = self._palette_note_for(channel)
+        return int(n.get('velocity', 0)) if n else 0
+
+    def set_fixture_palette(self, channel: int, velocity: int) -> bool:
+        """Insert/update/remove `channel`'s palette note (note 60) at t=0.
+
+        midi_notes only; no rebuild/emit. Returns True if anything changed.
+        Any EXTRA note-60s on the channel go with it: one fixture has one
+        palette, and a legacy file's second START (a re-palette mid-song) is
+        exactly what this replaces.
+        """
+        velocity = max(0, min(127, int(velocity)))
+        existing = [n for n in self.midi_notes
+                    if n.get('note') == note_layout.START
+                    and n.get('channel') == channel]
+
+        if velocity == 0:
+            if not existing:
+                return False
+            for n in existing:
+                self.midi_notes.remove(n)
+            return True
+
+        keep = self._palette_note_for(channel)
+        changed = False
+        for n in existing:
+            if n is not keep:
+                self.midi_notes.remove(n)
+                changed = True
+        if keep is not None:
+            if keep.get('velocity') == velocity and keep.get('time') == 0.0:
+                return changed
+            keep['velocity'] = velocity
+            keep['time'] = 0.0
+        else:
+            self.midi_notes.append({
+                "id": str(uuid.uuid4()),
+                "note": note_layout.START,
+                "time": 0.0,
+                "velocity": velocity,
+                "duration": 0.1,
+                "channel": channel,
+            })
+        self.midi_notes.sort(key=lambda x: x['time'])
+        return True
 
     # --- integrity -----------------------------------------------------------
 

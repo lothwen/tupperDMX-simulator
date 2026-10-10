@@ -90,12 +90,15 @@ GOLDEN_BANKS = {
                ("STROBES", 8), ("TUBES", 8), ("RADARS", 8)],
     "blinder": [("BLINDER_SCENES", 8)],
     "par-rgbw": [("COLORS", 8), ("STROBES", 8)],
-    "Wild Wash Pro 648 RGBW": [],
+    # The wild wash was migrated with no banks and had its 4ch ones authored
+    # afterwards, so its three golden entries pin content rather than a
+    # pre-OFL capture; editing those scenes is expected to move them.
+    "Wild Wash Pro 648 RGBW": [("COLORS", 8), ("WHITES", 8), ("PALETTE", 3)],
 }
 
 GOLDEN_CHASES = {
     "ledbar": 15, "blinder": 2, "par-rgbw": 5,
-    "Wild Wash Pro 648 RGBW": 0,
+    "Wild Wash Pro 648 RGBW": 9,
 }
 
 # song part -> [(is_chase, bank, index)], from the "song_parts" tags on scenes
@@ -133,7 +136,20 @@ GOLDEN_SONG_PARTS = {
         "OUTRO": [(False, "STROBES", 3), (True, "", 3)],
         "END": [(True, "", 4)],
     },
-    "Wild Wash Pro 648 RGBW": {},
+    "Wild Wash Pro 648 RGBW": {
+        "INTRO": [(False, "COLORS", 4), (False, "WHITES", 3), (True, "", 1)],
+        "VERSE": [(False, "COLORS", 2), (False, "WHITES", 1),
+                  (False, "PALETTE", 1), (True, "", 2)],
+        "CHORUS": [(False, "COLORS", 0), (False, "PALETTE", 0),
+                   (True, "", 3), (True, "", 8)],
+        "BREAK": [(False, "COLORS", 1), (True, "", 4)],
+        "BRIDGE": [(False, "COLORS", 5), (False, "WHITES", 6),
+                   (False, "PALETTE", 2), (True, "", 5)],
+        "INST": [(True, "", 0), (True, "", 7)],
+        "SOLO": [(False, "COLORS", 6)],
+        "OUTRO": [(True, "", 6)],
+        "END": [(False, "WHITES", 2)],
+    },
 }
 
 

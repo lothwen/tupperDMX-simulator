@@ -8,7 +8,13 @@ The rules being pinned:
     note 36+n selects the n-th bank and 24+n the n-th scene inside it;
   * the tab opens on a blank DRAFT — nothing selected, faders at their channel
     defaults — and the one button reads "Create" there and "Save" on a scene
-    picked from the list; nothing reaches the sidecar until it is pressed;
+    picked from the list;
+  * "Save as new" branches instead of overwriting: the edits become the next
+    scene and the one they came from goes back the way it was written;
+  * the Save button carries ONLY the scene on the faders: edits to the list itself
+    (new, duplicate, delete, drag, bank rename) are written as they happen, and
+    edits to a scene are settled — saved or put back — before anything can move
+    the faders off it;
   * an edit round-trips the RAW sidecar JSON: keys this app doesn't model, and
     other modes' blocks, survive untouched;
   * which mode block the banks land in follows whoever already supplies them,
@@ -28,6 +34,7 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -93,10 +100,40 @@ def _assert(cond, msg):
     print(f"  ok: {msg}")
 
 
+@contextmanager
+def _answers(button, log=None):
+    """Answer every confirmation with `button`, recording what was asked.
+
+    The tab asks before discarding or deleting, and an unanswered modal would
+    hang the run — so `_with_tree` makes an unexpected one an assertion, and a
+    test that expects one wraps it in here.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+    original = QMessageBox.question
+
+    def stub(_parent, _title, text, *args, **kwargs):
+        if log is not None:
+            log.append(text)
+        return getattr(QMessageBox.StandardButton, button)
+
+    QMessageBox.question = staticmethod(stub)
+    try:
+        yield
+    finally:
+        QMessageBox.question = original
+
+
 def _with_tree(tree, body, user_tree=None):
     """Run `body(shipped_dir, user_dir)` with `tree` as the shipped fixtures."""
+    from PyQt6.QtWidgets import QMessageBox
     orig_shipped = fixture_library.fixtures_dir_shipped
     orig_user = fixture_library.fixtures_dir_user
+    orig_question = QMessageBox.question
+
+    def unexpected(_parent, _title, text, *args, **kwargs):
+        raise AssertionError(f"unexpected confirmation, which would hang: {text}")
+
+    QMessageBox.question = staticmethod(unexpected)
     try:
         with tempfile.TemporaryDirectory() as tmp:
             shipped, user = Path(tmp) / "shipped", Path(tmp) / "user"
@@ -116,6 +153,7 @@ def _with_tree(tree, body, user_tree=None):
             load_fixture_defs(force_reload=True)
             body(shipped, user)
     finally:
+        QMessageBox.question = orig_question
         fixture_library.fixtures_dir_shipped = orig_shipped
         fixture_library.fixtures_dir_user = orig_user
         clear_cache()
@@ -410,23 +448,48 @@ def test_the_faders_compose_a_new_scene_and_create_writes_it(qapp):
         _assert(tab.save_button.text() == "Save" and not tab.save_button.isEnabled(),
                 "so the button becomes an ordinary, idle Save")
 
-        # An unnamed draft falls back to a placeholder name.
-        tab._new_draft()
-        _assert(tab._drafting() and tab.name_input.text() == "",
-                "+ New scene clears back to a blank draft")
+        # "New scene" creates one on the spot rather than arming a draft.
+        tab._new_scene()
+        _assert(not tab._drafting() and tab._selected == ("FILLS", 3),
+                "+ New scene puts a real scene in the target bank at once")
+        _assert(tab.tree.topLevelItem(0).childCount() == 4,
+                "so the list shows it without waiting for a button")
+        _assert(tab.name_input.text() == "Scene 4"
+                and tab.focusWidget() is tab.name_input
+                and tab.name_input.hasSelectedText(),
+                "named for its slot, with that name focused and selected to "
+                "be typed over")
+        _assert([s["name"] for s in sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]]
+                == ["Red wash", "Blue wash", "Sunrise", "Scene 4"],
+                "and the sidecar has it: adding to the list is not what the "
+                "Save button is for")
+        _assert(tab.save_button.text() == "Save" and not tab.save_button.isEnabled(),
+                "so the button is idle — the new scene has no edits yet")
         tab._faders[0].slider.setValue(5)
+        _assert(tab.save_button.isEnabled(), "dialling it in is what wakes it")
         tab.save_button.click()
-        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][3]["name"]
-                == "Scene 4", "an unnamed one gets a placeholder name")
+        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][3]
+                == {"brightness": 5, "red": 0, "green": 0, "blue": 0,
+                    "name": "Scene 4"},
+                "and Save writes it with whatever was dialled in")
 
         # Modifying an existing scene overwrites it instead.
+        from PyQt6.QtTest import QTest
         _select(tab, "FILLS", 0)
-        tab.name_input.setText("Crimson")
-        tab._on_name_edited()
+        tab.name_input.selectAll()
+        QTest.keyClicks(tab.name_input, "C")
+        _assert(tab.save_button.isEnabled(),
+                "the button wakes on the first character typed, not on the "
+                "name field losing focus")
+        QTest.keyClicks(tab.name_input, "rimson")
+        _assert(tab.tree.topLevelItem(0).child(0).text(0) == "Crimson",
+                "and the row keeps up with the typing")
         tab._faders[0].slider.setValue(64)
         _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["name"]
                 == "Red wash",
                 "edits to it stay in memory until the button is pressed")
+        _assert("Crimson" in tab.status_label.text(),
+                "and the status line names the scene they belong to")
         _assert(tab.save_button.isEnabled() and tab.save_button.text() == "Save",
                 "which now offers to update that scene, not add one")
         tab.save_button.click()
@@ -445,17 +508,21 @@ def test_the_faders_compose_a_new_scene_and_create_writes_it(qapp):
 
         _select(tab, "FILLS", 0)
         tab._duplicate()
-        tab.save_button.click()
         scenes = sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]
         _assert(len(scenes) == 5 and scenes[1]["name"] == "Crimson copy",
-                "Duplicate inserts the copy right after its original")
+                "Duplicate inserts the copy right after its original, written")
+        _assert(not tab.save_button.isEnabled(),
+                "with nothing left owing on the button")
 
         _select(tab, "FILLS", 1)
-        tab._delete()
-        tab.save_button.click()
+        asked = []
+        with _answers("Yes", asked):
+            tab._delete()
+        _assert(len(asked) == 1 and "Crimson copy" in asked[0],
+                "Delete confirms by name — it is a write, not a pending edit")
         _assert([s["name"] for s in sidecar(shipped)["modes"]["*"]["banks"]["FILLS"]]
                 == ["Crimson", "Blue wash", "Sunrise", "Scene 4"],
-                "Delete removes just that scene, leaving the rest in order")
+                "and removes just that scene, leaving the rest in order")
 
         # Stepping off a scene onto a bank header starts a fresh scene there.
         _select(tab, "STROBES")
@@ -469,6 +536,108 @@ def test_the_faders_compose_a_new_scene_and_create_writes_it(qapp):
                 "and moving between bank headers only re-targets it, keeping "
                 "what has been dialled in")
         _assert(tab._target_bank() == "FILLS", "now aimed at the other bank")
+
+    _with_tree({"wash-12.json": _doc("Wash 12"),
+                "wash-12.tdmx.json": SIDECAR}, body)
+
+
+def test_save_as_new_branches_the_scene_it_was_edited_from(qapp):
+    print("test_save_as_new_branches_the_scene_it_was_edited_from")
+
+    def banks(shipped):
+        return json.loads((shipped / "wash-12.tdmx.json").read_text()
+                          )["modes"]["*"]["banks"]
+
+    def body(shipped, _user):
+        tab = _tab()
+        tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
+        _assert(not tab.save_as_button.isEnabled(),
+                "a draft has nothing to branch from — Create is that")
+
+        _select(tab, "FILLS", 0)
+        _assert(tab.save_as_button.isEnabled(),
+                "a scene picked from the list does")
+        tab._faders[1].slider.setValue(0)
+        tab._faders[2].slider.setValue(255)
+        tab.name_input.setText("Green wash")
+        tab._on_name_edited()
+        tab.save_as_button.click()
+
+        scenes = banks(shipped)["FILLS"]
+        _assert([s["name"] for s in scenes]
+                == ["Red wash", "Green wash", "Blue wash"],
+                "the edits land as a new scene right after their source")
+        _assert(scenes[0] == {"brightness": 255, "red": 255, "green": 0,
+                              "blue": 0, "name": "Red wash",
+                              "song_parts": ["CHORUS"]},
+                "which is left exactly as it was written")
+        _assert(scenes[1]["red"] == 0 and scenes[1]["green"] == 255
+                and scenes[1]["song_parts"] == ["CHORUS"],
+                "and the new one carries the changes, over the rest of the "
+                "scene it came from")
+        _assert(tab._selected == ("FILLS", 1)
+                and tab.focusWidget() is tab.name_input,
+                "the editor moves onto the new scene, name ready to be typed")
+        _assert(not tab.save_button.isEnabled(),
+                "with nothing owing — it was written, not left pending")
+
+        # Round two comes off the scene just made, so a run of them comes out
+        # in the order it was dialled.
+        tab._faders[0].slider.setValue(12)
+        tab.save_as_button.click()
+        _assert([s["name"] for s in banks(shipped)["FILLS"]]
+                == ["Red wash", "Green wash", "Green wash copy", "Blue wash"],
+                "an unrenamed branch is named for its source, as Duplicate is")
+
+    _with_tree({"wash-12.json": _doc("Wash 12"),
+                "wash-12.tdmx.json": SIDECAR}, body)
+
+
+def test_leaving_an_edited_scene_settles_it(qapp):
+    print("test_leaving_an_edited_scene_settles_it")
+
+    def sidecar(shipped):
+        return json.loads((shipped / "wash-12.tdmx.json").read_text())
+
+    def body(shipped, _user):
+        tab = _tab()
+        tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
+        row = tab.tree.topLevelItem(0).child(0)
+
+        # Declining puts the scene back the way the sidecar has it.
+        _select(tab, "FILLS", 0)
+        tab.name_input.setText("Scarlet")
+        tab._on_name_edited()
+        tab._faders[0].slider.setValue(9)
+        _assert(row.text(0) == "Scarlet",
+                "the row follows the edit while it is pending")
+        asked = []
+        with _answers("No", asked):
+            _select(tab, "FILLS", 1)
+        _assert(len(asked) == 1 and "Scarlet" in asked[0],
+                "stepping onto another scene asks about the one being left, "
+                "named as the editor and the row are showing it")
+        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]
+                == {"brightness": 255, "red": 255, "green": 0, "blue": 0,
+                    "name": "Red wash", "song_parts": ["CHORUS"]},
+                "declining writes nothing")
+        _assert(row.text(0) == "Red wash",
+                "and puts the row back with it")
+        _select(tab, "FILLS", 0)      # nothing pending now, so nothing is asked
+        _assert(tab.name_input.text() == "Red wash"
+                and [f.slider.value() for f in tab._faders] == [255, 255, 0, 0],
+                "the scene itself is back the way it was written")
+
+        # Accepting writes the edit before the faders move on.
+        tab._faders[1].slider.setValue(3)
+        _assert(tab.save_button.isEnabled(),
+                "the button carries the scene on the faders")
+        with _answers("Yes"):
+            _select(tab, "FILLS", 1)
+        _assert(sidecar(shipped)["modes"]["*"]["banks"]["FILLS"][0]["red"] == 3,
+                "and accepting is the same write the button would have made")
+        _assert(not tab.save_button.isEnabled(),
+                "which leaves it carrying the newly picked scene, owing nothing")
 
     _with_tree({"wash-12.json": _doc("Wash 12"),
                 "wash-12.tdmx.json": SIDECAR}, body)
@@ -490,7 +659,6 @@ def test_renaming_a_bank_follows_through_into_its_chases(qapp):
         _assert(item.data(0, _ROLE_BANK) == "FILLS", "the first bank is FILLS")
         item.setText(0, "WASHES")
         QCoreApplication.processEvents()
-        tab.save_button.click()
 
         written = json.loads((shipped / "wash-12.tdmx.json").read_text())
         banks = written["modes"]["*"]["banks"]
@@ -512,7 +680,7 @@ def test_a_drag_reorders_scenes_and_banks(qapp):
         tab.set_fixture("Wash 12", resolve_fixture("Wash 12"), dmx_start=1)
 
         def saved_banks():
-            tab.save_button.click()
+            # A drag is a change to the list, so it is on disk already.
             return json.loads(
                 (shipped / "wash-12.tdmx.json").read_text())["modes"]["*"]["banks"]
 
@@ -532,14 +700,11 @@ def test_a_drag_reorders_scenes_and_banks(qapp):
 
         # Drag STROBES above FILLS (index -1 marks the bank itself).
         tab._on_move("STROBES", -1, "", 0)
-        _assert(tab.save_button.text() == "Save",
-                "a bank edit deselects, but the button still offers to Save it "
-                "— otherwise the reorder could never be written")
         banks = saved_banks()
         _assert(list(banks) == ["STROBES", "FILLS"],
                 "a bank drag reorders the banks — what note 36+n addresses")
         _assert(sum(len(scenes) for scenes in banks.values()) == 3,
-                "and pressing it invents no scene out of the open draft")
+                "and the open draft is not swept in as a scene")
 
     _with_tree({"wash-12.json": _doc("Wash 12"),
                 "wash-12.tdmx.json": SIDECAR}, body)
@@ -555,9 +720,10 @@ def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
         config = Config()
         config.fixtures = []
         dialog = AddFixtureDialog(StageController(config))
-        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
-                == ["General", "Channels", "Modes", "Scenes"],
-                "Scenes joins the detail panel's tabs")
+        _assert([dialog.tabs.tabText(i) for i in range(dialog.tabs.count())
+                 if dialog.tabs.isTabVisible(i)]
+                == ["General", "Channels", "Modes", "Scenes", "Chases"],
+                "Scenes joins the detail panel's tabs, with Chases after it")
 
         dialog.select_type("Wash 12")
         _assert(list(dialog.scenes_tab._banks) == ["FILLS", "STROBES"],
@@ -579,6 +745,57 @@ def test_the_dialog_shows_the_tab_and_follows_its_selection(qapp):
                 "two-modes.json": dict(TWO_MODES, name="Two Modes")}, body)
 
 
+def test_every_sidecar_write_announces_itself(qapp):
+    print("test_every_sidecar_write_announces_itself")
+    from PyQt6.QtWidgets import QDialog, QMessageBox
+    from core.config import Config
+    from ui.fixture.browser import AddFixtureDialog
+    from stage.controller import StageController
+
+    def body(_shipped, _user):
+        config = Config()
+        config.fixtures = []
+        dialog = AddFixtureDialog(StageController(config))
+        writes = []
+        dialog.library_changed.connect(lambda: writes.append(True))
+        dialog.select_type("Wash 12")
+        tab = dialog.scenes_tab
+
+        tab._faders[0].slider.setValue(120)
+        _assert(writes == [], "dialling in a draft writes nothing, announces "
+                              "nothing")
+        tab.save_button.click()
+        _assert(len(writes) == 1, "Create writes the sidecar and says so")
+
+        _select(tab, "FILLS", 0)
+        tab._faders[0].slider.setValue(64)
+        tab.save_button.click()
+        _assert(len(writes) == 2, "so does Save on an edited scene")
+
+        _select(tab, "FILLS", 0)
+        with _answers("Yes"):
+            tab._delete()
+        _assert(len(writes) == 3, "a delete writes as it happens, and says so")
+
+        # The whole point: the Scenes tab writes the LIBRARY, so Cancel settles
+        # its pending work exactly as OK does — and must announce it too.
+        _select(tab, "FILLS", 0)
+        tab._faders[0].slider.setValue(32)
+        original = QMessageBox.question
+        QMessageBox.question = staticmethod(
+            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        try:
+            dialog.done(QDialog.DialogCode.Rejected)
+        finally:
+            QMessageBox.question = original
+        _assert(len(writes) == 4,
+                "closing on Cancel saves the pending scene edit and announces "
+                "the write — the clip library reads those banks")
+
+    _with_tree({"wash-12.json": _doc("Wash 12"),
+                "wash-12.tdmx.json": SIDECAR}, body)
+
+
 def main():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
@@ -591,9 +808,12 @@ def main():
     test_the_preview_is_the_stage_render_engine(app)
     test_the_readout_follows_a_switching_channel(app)
     test_the_faders_compose_a_new_scene_and_create_writes_it(app)
+    test_save_as_new_branches_the_scene_it_was_edited_from(app)
+    test_leaving_an_edited_scene_settles_it(app)
     test_renaming_a_bank_follows_through_into_its_chases(app)
     test_a_drag_reorders_scenes_and_banks(app)
     test_the_dialog_shows_the_tab_and_follows_its_selection(app)
+    test_every_sidecar_write_announces_itself(app)
     print("ALL TESTS PASSED")
 
 

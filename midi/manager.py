@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any, Iterable, Tuple
 from contextlib import contextmanager
+import logging
 from PyQt6.QtCore import QObject, pyqtSignal
 import mido
 import copy
@@ -19,7 +20,6 @@ from .constants import (
     # no longer references these (they live in midi/constants.py).
     MIN_EVENT_DURATION,
     BLACKOUT_EPSILON,
-    FADE_BRIGHTNESS_NOTE,
     SONG_PART_NOTES,
     _channel_to_velocity,
 )
@@ -65,7 +65,8 @@ class MidiManager(QObject):
                                  notify_changed=self.data_changed.emit)
 
         # Editing collaborators (all share the document; commit via callback).
-        self._clips = ClipEditor(self._doc, commit=self._commit)
+        self._clips = ClipEditor(self._doc, self._fades,
+                                 commit=self._commit)
         self._scenes = SceneEditor(self._doc, self._fades, commit=self._commit)
         self._selection = SelectionEditor(self._doc, self._fades,
                                           commit=self._commit)
@@ -85,6 +86,8 @@ class MidiManager(QObject):
         self._restoring: bool = False
         self._batching: bool = False
         self._batch_dirty: bool = False
+        self._bulk: bool = False
+        self._bulk_dirty: bool = False
 
         # In-memory clip clipboard (list of unit payloads). See copy_selection.
         self._clipboard: List[Dict[str, Any]] = []
@@ -161,6 +164,25 @@ class MidiManager(QObject):
         """Persist `channel`'s lock flag (note 71) and commit so its lane
         redraws read-only (clips become non-interactive, drops are blocked)."""
         if self._doc.set_fixture_lock_flag(channel, on):
+            self._commit()
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Per-fixture palette (persisted in the .mid via note 60 / START)
+    # ------------------------------------------------------------------
+    def fixture_palette(self, channel) -> int:
+        """`channel`'s packed palette velocity (0 = the default palette)."""
+        return self._doc.fixture_palette(channel)
+
+    def set_fixture_palette(self, channel, velocity: int) -> bool:
+        """Persist `channel`'s palette (note 60 at t=0) and commit, so the
+        rebuilt .mid replays it at the top of the song and the show autosaves.
+
+        Unlike the setup flags there is no live mirror to push: the palette only
+        means anything once the note reaches the controller, and it does that on
+        the next playback like every other note in the file."""
+        if self._doc.set_fixture_palette(channel, velocity):
             self._commit()
             return True
         return False
@@ -326,10 +348,18 @@ class MidiManager(QObject):
         # legacy files without metas.
         self._apply_sidecar_meta()
 
+        # Ramps are derived from the fade durations that the two passes above
+        # settled, so re-emit them all. This is also the migration: a file
+        # written before a fade resolved the fixture's own dimmer has its ramp
+        # on the wrong note and MIDI channel, and gets it rewritten here.
+        self._fades.rebuild_all()
+
     def _apply_sidecar_meta(self) -> None:
-        """Pin stable scene group ids + custom names, and restore per-clip
-        fades (which have no note representation in the file). Scene fade
-        durations stay ramp-derived — the ramps are what actually plays."""
+        """Pin stable scene group ids + custom names, and restore fade
+        durations (a clip's have no note representation in the file at all; a
+        scene's are exact here, where the ramp heuristic only approximates
+        them and misses entirely when the ramp was written to the wrong
+        fixture)."""
         for meta in self._doc.sidecar_meta:
             at = meta.get("at")
             if not isinstance(at, (int, float)):
@@ -350,11 +380,15 @@ class MidiManager(QObject):
             return  # externally edited / moved — heuristics stay in charge
         gid = str(meta.get("gid") or heuristic_gid)
         name = meta.get("name")
+        fade_in = max(0.0, float(meta.get("fi", 0.0) or 0.0))
+        fade_out = max(0.0, float(meta.get("fo", 0.0) or 0.0))
         for e in self._doc.midi_events:
             if e.get("group_id") == heuristic_gid:
                 e["group_id"] = gid
                 if isinstance(name, str) and name:
                     e["scene_name"] = name
+                e["fade_in"] = fade_in
+                e["fade_out"] = fade_out
         for n in self._doc.midi_notes:
             if n.get("parent_group_id") == heuristic_gid:
                 n["parent_group_id"] = gid
@@ -393,6 +427,18 @@ class MidiManager(QObject):
 
     def set_scene_fade_out(self, group_id: str, seconds: float) -> bool:
         return self._fades.set_scene_fade_out(group_id, seconds)
+
+    def can_fade_scene(self, group_id: str) -> bool:
+        """Whether this scene's fixture has a dimmer for a ramp to ride —
+        false for an RGBW wash or a hazer, which the timeline reads to leave
+        the fade handles off a clip that could never honour them."""
+        return self._fades.can_fade_group(group_id)
+
+    def can_fade_event(self, event_id: str) -> bool:
+        """Whether this clip's verb takes a level a ramp could move — true for
+        a direct-channel clip, false for a chase, a bank or a song part, whose
+        velocity is an index rather than a brightness."""
+        return self._fades.can_fade_event(event_id)
 
     # ------------------------------------------------------------------
     # Editing API — delegated to the clip / scene / selection editors
@@ -454,6 +500,25 @@ class MidiManager(QObject):
     def delete_selection(self, event_ids) -> bool:
         return self._selection.delete_selection(event_ids)
 
+    def earliest_event_time(self):
+        """Time of the first event, or None when the document is empty."""
+        return self._doc.earliest_event_time()
+
+    def shift_all(self, delta_sec: float) -> bool:
+        """Slide the whole sequence by `delta_sec` as one undoable edit.
+
+        The audio offset moved and the show is following it (see
+        MainWindow.on_waveform_offset_committed): everything authored against
+        the music has to travel the same distance, so this is a document-wide
+        shift rather than a selection move.
+        """
+        if not self._doc.shift_all_events(delta_sec):
+            return False
+        self._doc.reconcile_blackouts()
+        self._commit()
+        self.logger.info(f"Shifted the whole sequence by {delta_sec:+.3f}s")
+        return True
+
     def get_events_for_ui(self) -> List[Dict[str, Any]]:
         """Get MIDI events formatted for Timeline display."""
         return copy.deepcopy(self.midi_events)
@@ -499,6 +564,10 @@ class MidiManager(QObject):
             self._doc.midi_data = copy.deepcopy(snap["midi_data"])
             self._doc.midi_events = copy.deepcopy(snap["midi_events"])
             self._doc.midi_notes = copy.deepcopy(snap["midi_notes"])
+            # The auto flags just came back with the note-71 setup notes; the
+            # live controller is their runtime mirror (and what the lane's 'A'
+            # button shows), so it has to follow them.
+            self.seed_controller_auto()
             self._auto_update_worker()
             self.data_changed.emit()
         finally:
@@ -544,6 +613,44 @@ class MidiManager(QObject):
             self._batching = False
             if self._batch_dirty and not self._restoring:
                 self._push_history()
+
+    @contextmanager
+    def bulk_edit(self):
+        """Many edits as one undo step, with the work each edit otherwise
+        repeats done once, when the block ends: rebuilding the .mid,
+        refreshing the worker, notifying data_changed and re-deriving the
+        fade ramps of every lane an edit touched. For authoring at scale —
+        the auto program places thousands of clips, where that per-edit work
+        costs minutes.
+
+        Inside the block the document's event lists are exact; midi_data, and
+        the file length song_end_time() reads from it, stay as the block found
+        them. A scene's fade setter still writes its own ramp at once.
+
+        The editors' line per edit is held back to warnings: it narrates a
+        hand edit, and a block authors thousands. Their loggers are swapped on
+        this manager alone, so another manager's edits still log meanwhile.
+        """
+        if self._bulk:
+            yield
+            return
+        self._bulk, self._bulk_dirty = True, False
+        editors = (self._clips, self._scenes, self._selection)
+        loggers = [editor.logger for editor in editors]
+        for editor, logger in zip(editors, loggers):
+            editor.logger = get_logger(f"{logger.name}.bulk")
+            editor.logger.setLevel(logging.WARNING)
+        self._fades.defer_lanes()
+        with self.history_batch():
+            try:
+                yield
+            finally:
+                self._bulk = False
+                for editor, logger in zip(editors, loggers):
+                    editor.logger = logger
+                self._fades.regenerate_deferred()
+                if self._bulk_dirty:
+                    self._commit()
 
     # ------------------------------------------------------------------
     # Clip clipboard — copy/paste of clips and scene groups
@@ -637,6 +744,21 @@ class MidiManager(QObject):
         self.logger.info(f"Copied {len(units)} clip unit(s) to clipboard")
         return len(units)
 
+    def clipboard_span(self) -> float:
+        """Length of the clipboard block: first unit's start to last unit's end.
+
+        This is what a repeat-paste steps by, so a copied section repeats as a
+        loop. A unit whose clip runs to the song end has no end to measure
+        (`width` is None) and contributes only its start; a block made purely
+        of those spans 0.0, and the caller then has nothing to step by.
+        """
+        span = 0.0
+        for unit in self._clipboard:
+            width = unit.get('width')
+            end = float(unit['rel_time']) + (0.0 if width is None else float(width))
+            span = max(span, end)
+        return span
+
     def paste(self, at_time: float) -> bool:
         """Recreate clipboard units starting at at_time, as one undo step.
 
@@ -682,6 +804,9 @@ class MidiManager(QObject):
 
     def _commit(self) -> None:
         """Final step of any mutation: rebuild MIDI, push to worker, notify."""
+        if self._bulk:
+            self._bulk_dirty = True          # bulk_edit() does all of it once, at its end
+            return
         self._rebuild_midi_data()
         self._auto_update_worker()
         self.data_changed.emit()

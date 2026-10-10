@@ -28,6 +28,1203 @@
           ]
         }
       }
+    },
+    "1ch": {
+      "banks": {
+        "SHUTTER": [
+          {
+            "Strobe": 3,
+            "name": "Open",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "Strobe": 8,
+            "name": "Blackout"
+          },
+          {
+            "Strobe": 14,
+            "name": "Pulse slow",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "Strobe": 31,
+            "name": "Pulse fast",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Strobe": 44,
+            "name": "Ramp up",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Strobe": 68,
+            "name": "Ramp down",
+            "song_parts": [
+              "OUTRO"
+            ]
+          },
+          {
+            "Strobe": 92,
+            "name": "Random strobe",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "Strobe": 199,
+            "name": "Strobe fast",
+            "song_parts": [
+              "CHORUS"
+            ]
+          }
+        ],
+        "STROBES": [
+          {
+            "Strobe": 128,
+            "name": "Strobe 1 Hz"
+          },
+          {
+            "Strobe": 141,
+            "name": "Strobe 3 Hz"
+          },
+          {
+            "Strobe": 154,
+            "name": "Strobe 5 Hz"
+          },
+          {
+            "Strobe": 173,
+            "name": "Strobe 8 Hz"
+          },
+          {
+            "Strobe": 199,
+            "name": "Strobe 12 Hz"
+          },
+          {
+            "Strobe": 250,
+            "name": "Strobe 20 Hz",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "Strobe": 106,
+            "name": "Burst long"
+          },
+          {
+            "Strobe": 124,
+            "name": "Burst short",
+            "song_parts": [
+              "BREAK"
+            ]
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Speed ramp",
+          "banks": [
+            "STROBES",
+            "STROBES",
+            "STROBES",
+            "STROBES",
+            "STROBES"
+          ],
+          "scenes": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Pulse build",
+          "banks": [
+            "SHUTTER",
+            "SHUTTER"
+          ],
+          "scenes": [
+            2,
+            3
+          ],
+          "song_parts": [
+            "INTRO"
+          ]
+        },
+        {
+          "name": "Blinder hits",
+          "banks": [
+            "SHUTTER",
+            "SHUTTER"
+          ],
+          "scenes": [
+            0,
+            1
+          ],
+          "song_parts": [
+            "BREAK"
+          ]
+        },
+        {
+          "name": "Chorus stabs",
+          "banks": [
+            "SHUTTER",
+            "SHUTTER"
+          ],
+          "scenes": [
+            7,
+            1
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "name": "Ramp sweep",
+          "banks": [
+            "SHUTTER",
+            "SHUTTER"
+          ],
+          "scenes": [
+            4,
+            5
+          ],
+          "song_parts": [
+            "BRIDGE"
+          ]
+        },
+        {
+          "name": "Burst pair",
+          "banks": [
+            "STROBES",
+            "STROBES"
+          ],
+          "scenes": [
+            6,
+            7
+          ],
+          "song_parts": [
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Fade out",
+          "banks": [
+            "SHUTTER",
+            "SHUTTER"
+          ],
+          "scenes": [
+            5,
+            1
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        }
+      ]
+    },
+    "4ch": {
+      "banks": {
+        "COLORS": [
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "name": "White wash",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "name": "Deep red",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 90,
+            "blue": 0,
+            "white": 40,
+            "name": "Amber glow",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "red": 130,
+            "green": 255,
+            "blue": 0,
+            "white": 0,
+            "name": "Lime"
+          },
+          {
+            "red": 0,
+            "green": 200,
+            "blue": 255,
+            "white": 0,
+            "name": "Cyan",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 255,
+            "white": 0,
+            "name": "Deep blue",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 0,
+            "blue": 170,
+            "white": 0,
+            "name": "Magenta",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "name": "Blackout"
+          }
+        ],
+        "WHITES": [
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 255,
+            "name": "Cold white"
+          },
+          {
+            "red": 255,
+            "green": 120,
+            "blue": 30,
+            "white": 120,
+            "name": "Warm white",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 128,
+            "name": "Half white",
+            "song_parts": [
+              "END"
+            ]
+          },
+          {
+            "red": 70,
+            "green": 25,
+            "blue": 0,
+            "white": 20,
+            "name": "Low glow",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 150,
+            "blue": 90,
+            "white": 80,
+            "name": "Peach"
+          },
+          {
+            "red": 60,
+            "green": 160,
+            "blue": 255,
+            "white": 110,
+            "name": "Ice blue"
+          },
+          {
+            "red": 140,
+            "green": 90,
+            "blue": 255,
+            "white": 50,
+            "name": "Lavender",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "red": 0,
+            "green": 0,
+            "blue": 0,
+            "white": 0,
+            "name": "Blackout"
+          }
+        ],
+        "PALETTE": [
+          {
+            "red": 255,
+            "green": 255,
+            "blue": 255,
+            "white": 0,
+            "name": "Palette",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 255,
+            "blue": 255,
+            "white": 70,
+            "name": "Palette glow",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "red": 255,
+            "green": 255,
+            "blue": 255,
+            "white": 170,
+            "name": "Palette pastel",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Colour cycle",
+          "banks": [
+            "COLORS",
+            "COLORS",
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            1,
+            3,
+            5,
+            6
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Sunrise",
+          "banks": [
+            "WHITES",
+            "COLORS",
+            "WHITES",
+            "WHITES"
+          ],
+          "scenes": [
+            3,
+            2,
+            4,
+            0
+          ],
+          "song_parts": [
+            "INTRO"
+          ]
+        },
+        {
+          "name": "Warm/cold pump",
+          "banks": [
+            "WHITES",
+            "WHITES"
+          ],
+          "scenes": [
+            1,
+            0
+          ],
+          "song_parts": [
+            "VERSE"
+          ]
+        },
+        {
+          "name": "Chorus blink",
+          "banks": [
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            0,
+            7
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "name": "Red alert",
+          "banks": [
+            "COLORS",
+            "COLORS"
+          ],
+          "scenes": [
+            1,
+            7
+          ],
+          "song_parts": [
+            "BREAK"
+          ]
+        },
+        {
+          "name": "Ocean drift",
+          "banks": [
+            "COLORS",
+            "COLORS",
+            "WHITES"
+          ],
+          "scenes": [
+            4,
+            5,
+            5
+          ],
+          "song_parts": [
+            "BRIDGE"
+          ]
+        },
+        {
+          "name": "Last light",
+          "banks": [
+            "WHITES",
+            "WHITES"
+          ],
+          "scenes": [
+            2,
+            7
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "name": "Palette breathe",
+          "banks": [
+            "PALETTE",
+            "PALETTE",
+            "PALETTE",
+            "PALETTE"
+          ],
+          "scenes": [
+            0,
+            1,
+            2,
+            1
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Palette pulse",
+          "banks": [
+            "PALETTE",
+            "PALETTE"
+          ],
+          "scenes": [
+            0,
+            2
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        }
+      ]
+    },
+    "16Ch": {
+      "banks": {
+        "SEGMENTS": [
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 255,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Segment 1"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 255,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Segment 2"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 255,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Segment 3"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 255,
+            "name": "Segment 4"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 255,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 255,
+            "name": "Outer pair",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 255,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 255,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Inner pair",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 255,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 255,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Left half"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 255,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 255,
+            "name": "Right half"
+          }
+        ],
+        "GRADIENTS": [
+          {
+            "Red 1": 255,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 255,
+            "Green 2": 60,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 255,
+            "Green 3": 130,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 255,
+            "Green 4": 200,
+            "Blue 4": 30,
+            "White 4": 0,
+            "name": "Sunset",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 30,
+            "Blue 1": 255,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 110,
+            "Blue 2": 255,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 190,
+            "Blue 3": 220,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 255,
+            "Blue 4": 160,
+            "White 4": 0,
+            "name": "Ocean",
+            "song_parts": [
+              "INTRO"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 40,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 255,
+            "Green 2": 120,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 255,
+            "Green 3": 10,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 255,
+            "Green 4": 90,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Fire",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Red 1": 90,
+            "Green 1": 170,
+            "Blue 1": 255,
+            "White 1": 60,
+            "Red 2": 150,
+            "Green 2": 210,
+            "Blue 2": 255,
+            "White 2": 90,
+            "Red 3": 90,
+            "Green 3": 170,
+            "Blue 3": 255,
+            "White 3": 60,
+            "Red 4": 150,
+            "Green 4": 210,
+            "Blue 4": 255,
+            "White 4": 90,
+            "name": "Ice",
+            "song_parts": [
+              "BRIDGE"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 255,
+            "Green 2": 200,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 255,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 255,
+            "White 4": 0,
+            "name": "Rainbow",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 0,
+            "Blue 1": 170,
+            "White 1": 0,
+            "Red 2": 255,
+            "Green 2": 0,
+            "Blue 2": 170,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 200,
+            "Blue 3": 255,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 200,
+            "Blue 4": 255,
+            "White 4": 0,
+            "name": "Magenta / cyan",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 110,
+            "Blue 1": 20,
+            "White 1": 40,
+            "Red 2": 255,
+            "Green 2": 110,
+            "Blue 2": 20,
+            "White 2": 40,
+            "Red 3": 255,
+            "Green 3": 110,
+            "Blue 3": 20,
+            "White 3": 40,
+            "Red 4": 255,
+            "Green 4": 110,
+            "Blue 4": 20,
+            "White 4": 40,
+            "name": "Warm wash",
+            "song_parts": [
+              "VERSE"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Blackout"
+          }
+        ],
+        "HITS": [
+          {
+            "Red 1": 250,
+            "Green 1": 250,
+            "Blue 1": 250,
+            "White 1": 255,
+            "Red 2": 250,
+            "Green 2": 250,
+            "Blue 2": 250,
+            "White 2": 255,
+            "Red 3": 250,
+            "Green 3": 250,
+            "Blue 3": 250,
+            "White 3": 255,
+            "Red 4": 250,
+            "Green 4": 250,
+            "Blue 4": 250,
+            "White 4": 255,
+            "name": "Full white",
+            "song_parts": [
+              "CHORUS"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 255,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 255,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 255,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Full red",
+            "song_parts": [
+              "BREAK"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 255,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 255,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 255,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 255,
+            "White 4": 0,
+            "name": "Full blue"
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 110,
+            "Blue 1": 0,
+            "White 1": 60,
+            "Red 2": 255,
+            "Green 2": 110,
+            "Blue 2": 0,
+            "White 2": 60,
+            "Red 3": 255,
+            "Green 3": 110,
+            "Blue 3": 0,
+            "White 3": 60,
+            "Red 4": 255,
+            "Green 4": 110,
+            "Blue 4": 0,
+            "White 4": 60,
+            "name": "Amber punch"
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 255,
+            "Blue 1": 60,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 255,
+            "Blue 2": 60,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 255,
+            "Blue 3": 60,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 255,
+            "Blue 4": 60,
+            "White 4": 0,
+            "name": "Green punch",
+            "song_parts": [
+              "SOLO"
+            ]
+          },
+          {
+            "Red 1": 255,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 255,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 255,
+            "White 3": 0,
+            "Red 4": 255,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Cross",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 255,
+            "Red 2": 255,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 255,
+            "Red 4": 255,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Zebra",
+            "song_parts": [
+              "INST"
+            ]
+          },
+          {
+            "Red 1": 0,
+            "Green 1": 0,
+            "Blue 1": 0,
+            "White 1": 0,
+            "Red 2": 0,
+            "Green 2": 0,
+            "Blue 2": 0,
+            "White 2": 0,
+            "Red 3": 0,
+            "Green 3": 0,
+            "Blue 3": 0,
+            "White 3": 0,
+            "Red 4": 0,
+            "Green 4": 0,
+            "Blue 4": 0,
+            "White 4": 0,
+            "name": "Blackout"
+          }
+        ]
+      },
+      "chases": [
+        {
+          "name": "Sweep right",
+          "banks": [
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS"
+          ],
+          "scenes": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Ping pong",
+          "banks": [
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS",
+            "SEGMENTS"
+          ],
+          "scenes": [
+            0,
+            1,
+            2,
+            3,
+            2,
+            1
+          ],
+          "song_parts": [
+            "SOLO"
+          ]
+        },
+        {
+          "name": "Split flash",
+          "banks": [
+            "SEGMENTS",
+            "SEGMENTS"
+          ],
+          "scenes": [
+            6,
+            7
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "name": "Outside in",
+          "banks": [
+            "SEGMENTS",
+            "SEGMENTS"
+          ],
+          "scenes": [
+            4,
+            5
+          ],
+          "song_parts": [
+            "BRIDGE"
+          ]
+        },
+        {
+          "name": "Warm build",
+          "banks": [
+            "GRADIENTS",
+            "GRADIENTS",
+            "GRADIENTS"
+          ],
+          "scenes": [
+            6,
+            0,
+            2
+          ],
+          "song_parts": [
+            "INTRO"
+          ]
+        },
+        {
+          "name": "Colour roll",
+          "banks": [
+            "GRADIENTS",
+            "GRADIENTS",
+            "GRADIENTS",
+            "GRADIENTS"
+          ],
+          "scenes": [
+            0,
+            1,
+            4,
+            5
+          ],
+          "song_parts": [
+            "INST"
+          ]
+        },
+        {
+          "name": "Chorus punch",
+          "banks": [
+            "HITS",
+            "HITS"
+          ],
+          "scenes": [
+            0,
+            7
+          ],
+          "song_parts": [
+            "CHORUS"
+          ]
+        },
+        {
+          "name": "Alarm",
+          "banks": [
+            "HITS",
+            "HITS"
+          ],
+          "scenes": [
+            5,
+            7
+          ],
+          "song_parts": [
+            "BREAK"
+          ]
+        },
+        {
+          "name": "Fade down",
+          "banks": [
+            "GRADIENTS",
+            "GRADIENTS"
+          ],
+          "scenes": [
+            3,
+            7
+          ],
+          "song_parts": [
+            "OUTRO"
+          ]
+        },
+        {
+          "name": "End blink",
+          "banks": [
+            "SEGMENTS",
+            "HITS"
+          ],
+          "scenes": [
+            4,
+            7
+          ],
+          "song_parts": [
+            "END"
+          ]
+        }
+      ]
     }
   }
 }

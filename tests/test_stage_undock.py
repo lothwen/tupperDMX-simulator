@@ -35,6 +35,10 @@ def _assert(cond, msg):
 def _stage():
     from stage.controller import StageController
     cfg = Config()
+    # Start on the raster path. Offscreen Qt refuses GL only at the first
+    # paint, which nothing here reaches, so the GPU default would leave a
+    # light layer up.
+    cfg.window.stage_gpu = False
     cfg.fixtures = [
         FixtureInstance(type="ledbar", dmx_start=1, bars=[FixturePosition(150, 350)]),
         FixtureInstance(type="blinder", dmx_start=33, x=575, y=500),
@@ -151,6 +155,50 @@ def test_gpu_suspend_resume_without_gl(qapp):
     _assert(sc._gpu_suspended is False, "nothing is owed a resume")
 
 
+def test_set_gpu_light_reports_what_it_did(qapp):
+    print("test_set_gpu_light_reports_what_it_did")
+    sc, _ = _stage()
+    _assert(sc.light_layer is None, "the stage opens on the raster path")
+
+    # Whether a context can be built at all is the platform's answer, not ours.
+    # What Settings needs is that the return value IS that answer rather than
+    # an echo of what was asked for — that is what it reports to the user.
+    got = sc.set_gpu_light(True)
+    _assert(got == (sc.light_layer is not None), "reports what it actually did")
+
+    _assert(sc.set_gpu_light(False) is False, "turning it off reports raster")
+    _assert(sc.light_layer is None, "and there is no layer left")
+    _assert(sc.set_gpu_light(False) is False, "off again is a no-op")
+
+
+def test_set_gpu_light_tears_a_live_layer_down(qapp):
+    print("test_set_gpu_light_tears_a_live_layer_down")
+    sc, _ = _stage()
+    view = sc.get_stage_view()
+    sc.light_layer = object()             # pretend GL came up
+    view._light_layer = sc.light_layer
+
+    _assert(sc.set_gpu_light(False) is False, "turning it off reports raster")
+    _assert(sc.light_layer is None, "the layer is dropped")
+    _assert(view._light_layer is None, "and the view's reference with it")
+    _assert(type(view.viewport()) is QWidget, "back to a raster viewport")
+
+
+def test_turning_the_gpu_off_cancels_a_pending_resume(qapp):
+    print("test_turning_the_gpu_off_cancels_a_pending_resume")
+    sc, _ = _stage()
+    sc.light_layer = object()
+    sc.get_stage_view()._light_layer = sc.light_layer
+
+    sc.suspend_gpu_light()                # the stage is being undocked
+    _assert(sc._gpu_suspended is True, "undocking owes a resume")
+
+    sc.set_gpu_light(False)               # ...and Settings turns it off meanwhile
+    _assert(sc._gpu_suspended is False, "the decision cancels the pause")
+    sc.resume_gpu_light()
+    _assert(sc.light_layer is None, "docking back does not resurrect it")
+
+
 def test_detach_restores_a_raster_viewport(qapp):
     print("test_detach_restores_a_raster_viewport")
     sc, _ = _stage()
@@ -195,6 +243,9 @@ def main():
     test_different_corners_are_independent(app)
     test_overlays_survive_a_reparent(app)
     test_gpu_suspend_resume_without_gl(app)
+    test_set_gpu_light_reports_what_it_did(app)
+    test_set_gpu_light_tears_a_live_layer_down(app)
+    test_turning_the_gpu_off_cancels_a_pending_resume(app)
     test_detach_restores_a_raster_viewport(app)
     test_viewport_swap_preserves_overlay_visibility(app)
     print("\nALL TESTS PASSED")

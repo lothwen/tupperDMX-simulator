@@ -49,12 +49,11 @@ jobs:
     needs: test
     strategy:
       matrix:
-        # os: [ubuntu-latest, windows-latest, macos-latest]
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
-          # - os: ubuntu-latest
-          #  platform: linux
-          #  artifact_name: TupperDMX-Simulator-linux
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: TupperDMX-Simulator-linux
           - os: windows-latest  
             platform: windows
             artifact_name: TupperDMX-Simulator-windows

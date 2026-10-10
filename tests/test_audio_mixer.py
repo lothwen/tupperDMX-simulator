@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 
-from audio.mixer import (Mixer, bus_channel_gains, make_beep, resample,
+from audio.click import make_beep
+from audio.mixer import (Mixer, bus_channel_gains, resample,
                          ROUTING_STEREO, ROUTING_SPLIT_BACKING_LEFT,
                          ROUTING_SPLIT_BACKING_RIGHT,
                          BUS_BACKING, BUS_CLICK, BUS_VOICE, SAMPLE_RATE)

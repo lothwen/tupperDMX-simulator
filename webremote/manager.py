@@ -5,9 +5,15 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer
 
+from core import clips
 from tupperlogger import get_logger
 from webremote import state as remote_state
 from webremote.server import WebRemoteWorker
+
+# Swatch for a favourite that no longer resolves — its fixture was unpatched or
+# its scene renamed. The button stays on the page, dimmed and unfireable, so the
+# operator sees WHY it is gone instead of watching the grid silently renumber.
+_UNAVAILABLE_COLOR = "#4a4a4a"
 
 
 class WebRemoteManager(QObject):
@@ -27,6 +33,7 @@ class WebRemoteManager(QObject):
         self.thread: Optional[QThread] = None
         self._last_pos = -1.0
         self._last_blackout = False
+        self._last_free_run = None
         # In-memory override of config.webremote.enabled (headless mode: the
         # remote is the only interface) — never persisted to prefs.
         self._force_enabled = bool(force_enabled)
@@ -41,8 +48,13 @@ class WebRemoteManager(QObject):
         w.media_controller.playback_state_changed.connect(self._publish_full)
         w.media_controller.media_loaded.connect(self._publish_full)
         w.midi_manager.data_changed.connect(self._publish_full)
-        w.bpm_state.bpm_changed.connect(self._publish_full)
-        w.audio_controller.beat_occurred.connect(self._on_beat)
+        # The map, not the base BPM: it is rebuilt by every BPM change AND by
+        # a song's meter, which the state's beats_per_bar carries.
+        w.bpm_state.tempo_map_changed.connect(self._publish_full)
+        w.metronome.beat_occurred.connect(self._on_beat)
+        show_manager = getattr(w, "show_manager", None)
+        if show_manager is not None:
+            show_manager.favorites_changed.connect(self._publish_full)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -127,10 +139,14 @@ class WebRemoteManager(QObject):
                 target = min(target, duration)
             w.seek_playback(target)
         elif action == "cue":
-            cues = self._cues()
+            favorites = self._favorites()
             index = cmd.get("index", -1)
-            if 0 <= index < len(cues):
-                w.preview_clip([tuple(m) for m in cues[index].messages])
+            clip = favorites[index] if 0 <= index < len(favorites) else None
+            # An unresolvable favourite publishes as available:false and its
+            # button is dead on the page; refuse it here too, since a stale
+            # page can still send the index.
+            if clip is not None:
+                w.preview_clip([tuple(m) for m in clip["preview"]])
         elif action == "blackout":
             w.preview_clip([(0, 51, 0)])  # blackout-all verb (a toggle)
         elif action == "panic":
@@ -139,10 +155,11 @@ class WebRemoteManager(QObject):
             w.stop_playback()
             if not self._blackout_state():
                 w.preview_clip([(0, 51, 0)])
-        elif action == "set_precount":
-            w.on_song_precount_toggled(bool(cmd.get("on")))
-        elif action == "set_countin_bars":
-            w.set_count_in_bars(cmd.get("bars", 2))
+        elif action == "free_run":
+            # Refused by AppCore while the song plays: its click is the song's.
+            w.start_free_run(cmd["bpm"], cmd["meter"])
+        elif action == "free_run_stop":
+            w.stop_free_run()
         elif action == "open_show":
             self._open_show_by_name(cmd.get("name", ""))
         # Immediate feedback: every command ends with a fresh snapshot.
@@ -154,6 +171,15 @@ class WebRemoteManager(QObject):
     def _blackout_state(self) -> bool:
         controller = getattr(self.core, "software_controller", None)
         return bool(getattr(controller, "blackout_all_state", False))
+
+    def _free_run_state(self) -> Optional[dict]:
+        """The click running on its own (the desktop click panel's free-run,
+        which the remote starts too) as {'bpm', 'meter'}; None while the click
+        follows the song or is stopped."""
+        tempo_map = self.core.metronome.free_run_map()
+        if tempo_map is None:
+            return None
+        return {"bpm": tempo_map.base_bpm, "meter": tempo_map.meter}
 
     def _open_show(self):
         """The open show project, or None (e.g. test fakes without one)."""
@@ -180,11 +206,16 @@ class WebRemoteManager(QObject):
         self.core.stop_playback()
         manager.open_show(root)
 
-    def _cues(self) -> list:
-        """Active cue set: the open show's; config only serves showless
-        windows (the cues in userprefs just seed new shows)."""
+    def _favorites(self) -> list:
+        """The open show's starred library clips, resolved against the current
+        patch — one entry per favourite, None where it no longer resolves (its
+        fixture was unpatched, its scene renamed). Positional on purpose: the
+        page addresses a button by index, so dropping the dead ones would
+        renumber the live ones between snapshots."""
         show = self._open_show()
-        return show.cues if show is not None else self.config.webremote.cues
+        if show is None:
+            return []
+        return clips.resolve_all(self.config, show.favorites)
 
     def _current_duration(self) -> Optional[float]:
         """The current song's length: the longest of its audio tracks and its
@@ -210,6 +241,8 @@ class WebRemoteManager(QObject):
                    if w.midi_manager.is_song_part(e) and e.get("info")]
         blackout = self._blackout_state()
         self._last_blackout = blackout
+        free_run = self._free_run_state()
+        self._last_free_run = free_run
         show = self._open_show()
         song = self.config.get_current_song()
         return remote_state.build_state(
@@ -217,15 +250,23 @@ class WebRemoteManager(QObject):
             position=w.media_controller.get_current_position(),
             duration=duration,
             bpm=w.bpm_state.get_bpm(),
+            beats_per_bar=w.bpm_state.tempo_map().beats_per_bar,
+            beat_note=w.bpm_state.tempo_map().beat_note,
             blackout=blackout,
             countin={"enabled": bool(song.precount) if song else False,
                      "bars": self.config.audio.count_in_bars},
+            free_run=free_run,
             setlist=remote_state.build_setlist(
                 self.config.playlist.songs,
                 self.config.playlist.current_song_index),
             sections=remote_state.compute_sections(markers, duration or 0.0),
-            cues=[{"index": i, "label": c.label, "color": c.color}
-                  for i, c in enumerate(self._cues())],
+            # Wire name kept as "cues": on the page these are still the cue
+            # buttons — "favourite" is how they are authored, not what they do.
+            cues=[{"index": i,
+                   "label": c["title"] if c else "Unavailable",
+                   "color": c["accent"] if c else _UNAVAILABLE_COLOR,
+                   "available": c is not None}
+                  for i, c in enumerate(self._favorites())],
             show_name=show.name if show is not None else None,
             shows=remote_state.build_shows(
                 show.root if show is not None else None),
@@ -276,7 +317,10 @@ class WebRemoteManager(QObject):
             self.worker.publish_event(event)
         # The blackout toggle can flip outside our commands (timeline note-51
         # events, desktop clip previews) — poll it so the web button tracks.
-        if self._blackout_state() != self._last_blackout:
+        # Same for the free-run: the desktop panel starts and retimes it (a
+        # retime emits nothing), and play or stop ends it.
+        if (self._blackout_state() != self._last_blackout
+                or self._free_run_state() != self._last_free_run):
             self._publish_full()
 
     def _on_beat(self, beat: int) -> None:

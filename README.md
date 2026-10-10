@@ -5,6 +5,12 @@
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)](https://www.python.org/)
 [![License: WTFPL](https://img.shields.io/badge/license-WTFPL-lightgrey)](LICENSE.txt)
 
+> [!NOTE]
+> This is a personal project, fully “vibe coded” as part of my learning process, and developed to
+> help my own band improve our live performances.
+> The app is provided for personal and experimental use.
+> Feedback, bug reports, and help with testing the app are greatly appreciated! Have fun!
+
 A lighting-control application for live bands. It plays the backing track, runs the
 click for the drummer, fires DMX cues from a MIDI timeline and draws the result on a
 virtual stage — all from one clock, so the lights land on the beat whether or not any
@@ -135,3 +141,6 @@ make build           # standalone executable in dist/
 ## License
 
 [WTFPL](LICENSE.txt) — do what the fuck you want to.
+
+The one exception is the demo song's audio, which is non-commercial only: see
+[assets/demo.show/README.md](assets/demo.show/README.md).

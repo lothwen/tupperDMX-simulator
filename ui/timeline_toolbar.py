@@ -1,14 +1,15 @@
 from typing import Optional
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QPushButton, QLabel, QSpinBox,
-                             QComboBox, QSlider, QButtonGroup, QFrame, QSizePolicy)
+                             QComboBox, QSlider, QFrame, QSizePolicy)
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import QObject, Qt, pyqtSignal, QSize
 
 from app.media_controller import MONITOR_BACKING, MONITOR_GUIDE
 from tupperlogger import get_logger
+from ui.click_popup import ClickPopup
 from ui.widgets import icons
-from ui.widgets.toggle_switch import ToggleSwitch
+from ui.widgets.segmented import Segment, segmented
 
 
 class TimelineToolbar(QWidget):
@@ -24,7 +25,6 @@ class TimelineToolbar(QWidget):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     bpm_changed = pyqtSignal(int)  # new_bpm
-    song_precount_toggled = pyqtSignal(bool)  # current song's count-in on/off
     # View signals (wired to the timeline)
     zoom_changed = pyqtSignal(float)  # horizontal scale factor
     fit_requested = pyqtSignal()
@@ -68,7 +68,6 @@ class TimelineToolbar(QWidget):
         self.play_pause_button: Optional[QPushButton] = None
         self.time_display: Optional[QLabel] = None
         self.bpm_spinbox: Optional[QSpinBox] = None
-        self.precount_toggle: Optional[ToggleSwitch] = None
         self.monitor_backing_btn: Optional[QPushButton] = None
         self.monitor_guide_btn: Optional[QPushButton] = None
 
@@ -247,41 +246,22 @@ class TimelineToolbar(QWidget):
         row.addWidget(self.beat_combo)
 
         # Bars | Time segmented toggle
-        bars_time = QButtonGroup(self)
-        bars_time.setExclusive(True)
-        bars_btn = QPushButton("Bars")
-        bars_btn.setObjectName("TTSegment")
-        bars_btn.setProperty("seg", "left")
-        bars_btn.setCheckable(True)
-        bars_btn.setChecked(True)
-        time_btn = QPushButton("Time")
-        time_btn.setObjectName("TTSegment")
-        time_btn.setProperty("seg", "right")
-        time_btn.setCheckable(True)
-        bars_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("bars"))
-        time_btn.clicked.connect(lambda: self.ruler_mode_changed.emit("time"))
-        bars_time.addButton(bars_btn)
-        bars_time.addButton(time_btn)
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        seg.addWidget(bars_btn)
-        seg.addWidget(time_btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
+        seg_wrap, _buttons = segmented(
+            [Segment("bars", "Bars"), Segment("time", "Time")],
+            on_pick=self.ruler_mode_changed.emit, checked="bars", parent=self)
         row.addWidget(seg_wrap)
 
         row.addWidget(self._separator())
 
-        cues_btn = QPushButton("Cues")
-        cues_btn.setIcon(icons.icon("speech", "#e0e0e0"))
-        cues_btn.setIconSize(QSize(14, 14))
-        cues_btn.setObjectName("TTToolButton")
-        cues_btn.setToolTip("Voice cues & control markers: spoken guide "
-                            "messages, tempo changes, stop-click and the segue "
-                            "out of this song")
-        cues_btn.clicked.connect(self.markers_requested.emit)
-        row.addWidget(cues_btn)
+        markers_btn = QPushButton("Markers")
+        markers_btn.setIcon(icons.icon("speech", "#e0e0e0"))
+        markers_btn.setIconSize(QSize(14, 14))
+        markers_btn.setObjectName("TTToolButton")
+        markers_btn.setToolTip("The song's marker track: spoken voice-TTS "
+                               "lines, tempo changes, stop-click and the segue "
+                               "out of this song")
+        markers_btn.clicked.connect(self.markers_requested.emit)
+        row.addWidget(markers_btn)
 
         return zone
 
@@ -311,14 +291,21 @@ class TimelineToolbar(QWidget):
         self.time_display.setObjectName("TimeDisplay")
         row.addWidget(self.time_display)
 
-        # BPM cluster: decorative tempo glyph + spinbox. (Metronome mute now
-        # lives solely on the timeline header's CLICK row, so this is a
-        # non-interactive label.)
-        tempo_glyph = QLabel()
-        tempo_glyph.setPixmap(icons.pixmap("note", 18, "#cfcfcf"))
-        tempo_glyph.setObjectName("MetronomeButton")
-        tempo_glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        row.addWidget(tempo_glyph)
+        # BPM cluster: the click button + spinbox. The button opens the click
+        # panel upward (tempo/TAP, meter, accent, count-in, level, free-run);
+        # metronome mute stays on the timeline header's CLICK row.
+        self.click_button = QPushButton("▴")
+        self.click_button.setIcon(icons.icon("note", "#cfcfcf"))
+        self.click_button.setIconSize(QSize(18, 18))
+        self.click_button.setObjectName("TTClickButton")
+        self.click_button.setToolTip(
+            "Click: tempo, meter, accent, count-in and level — free-run it, or "
+            "set it as the song's tempo")
+        self.click_popup = ClickPopup(self)
+        self.click_button.clicked.connect(
+            lambda: self.click_popup.open_above(self.click_button))
+        self.click_popup.open_changed.connect(self._on_click_popup_open)
+        row.addWidget(self.click_button)
 
         self.bpm_spinbox = QSpinBox()
         self.bpm_spinbox.setRange(40, 300)
@@ -327,55 +314,24 @@ class TimelineToolbar(QWidget):
         self.bpm_spinbox.valueChanged.connect(self.bpm_changed.emit)
         row.addWidget(self.bpm_spinbox)
 
-        # Count-in toggle (moved here from the top toolbar's SETLIST footer):
-        # per-song precount flag, shown as an iOS-style switch.
-        precount_tooltip = ("Play a count-in before this song "
-                            "(off = segue from the previous one)")
-        precount_label = QLabel(
-            f'{icons.img_tag("bell", "#aaaaaa", 12)} Count-in')
-        precount_label.setObjectName("TTCountInLabel")
-        precount_label.setToolTip(precount_tooltip)
-        row.addWidget(precount_label)
-
-        self.precount_toggle = ToggleSwitch()
-        self.precount_toggle.setToolTip(precount_tooltip)
-        self.precount_toggle.toggled.connect(self.song_precount_toggled.emit)
-        row.addWidget(self.precount_toggle)
-
         row.addWidget(self._separator())
 
         # Editor monitor: which track you HEAR (and see as the waveform).
         # BACKING = the live master; GUIDE = the song's full-mix reference.
         # Session-only — live surfaces always play the backing.
-        self.monitor_backing_btn = QPushButton("BACKING")
-        self.monitor_backing_btn.setObjectName("TTSegment")
-        self.monitor_backing_btn.setProperty("seg", "left")
-        self.monitor_backing_btn.setCheckable(True)
-        self.monitor_backing_btn.setChecked(True)
-        self.monitor_backing_btn.setToolTip("Monitor the backing track (the live master)")
-        self.monitor_guide_btn = QPushButton("GUIDE")
-        self.monitor_guide_btn.setObjectName("TTSegment")
-        self.monitor_guide_btn.setProperty("seg", "right")
+        seg_wrap, monitor_buttons = segmented(
+            [Segment(MONITOR_BACKING, "BACKING",
+                     "Monitor the backing track (the live master)"),
+             Segment(MONITOR_GUIDE, "GUIDE",
+                     "Monitor the guide track (full-mix design reference; "
+                     "never played live)")],
+            on_pick=self.monitor_changed.emit, checked=MONITOR_BACKING,
+            parent=self)
+        self.monitor_backing_btn = monitor_buttons[MONITOR_BACKING]
+        self.monitor_guide_btn = monitor_buttons[MONITOR_GUIDE]
         self.monitor_guide_btn.setProperty("monitor", "guide")
-        self.monitor_guide_btn.setCheckable(True)
+        # Enabled by set_monitor_state once a song declares a guide.
         self.monitor_guide_btn.setEnabled(False)
-        self.monitor_guide_btn.setToolTip(
-            "Monitor the guide track (full-mix design reference; never played live)")
-        monitor_group = QButtonGroup(self)
-        monitor_group.setExclusive(True)
-        monitor_group.addButton(self.monitor_backing_btn)
-        monitor_group.addButton(self.monitor_guide_btn)
-        self.monitor_backing_btn.clicked.connect(
-            lambda: self.monitor_changed.emit(MONITOR_BACKING))
-        self.monitor_guide_btn.clicked.connect(
-            lambda: self.monitor_changed.emit(MONITOR_GUIDE))
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        seg.addWidget(self.monitor_backing_btn)
-        seg.addWidget(self.monitor_guide_btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
         row.addWidget(seg_wrap)
 
         return zone
@@ -404,39 +360,11 @@ class TimelineToolbar(QWidget):
         row.addWidget(rows_label)
 
         # S / M / L segmented preset for fixture-track height
-        self.rows_group = QButtonGroup(self)
-        self.rows_group.setExclusive(True)
-        self._row_buttons = {}
-        seg = QHBoxLayout()
-        seg.setContentsMargins(0, 0, 0, 0)
-        seg.setSpacing(0)
-        labels = ("S", "M", "L")
-        for i, label in enumerate(labels):
-            btn = QPushButton(label)
-            btn.setObjectName("TTSegment")
-            # Round only the outer corners of the segmented control.
-            if i == 0:
-                btn.setProperty("seg", "left")
-            elif i == len(labels) - 1:
-                btn.setProperty("seg", "right")
-            btn.setCheckable(True)
-            btn.setProperty("rows", "true")
-            if label == "M":
-                btn.setChecked(True)
-            if label == "S":
-                # "S" collapses every lane to a single header row (the smallest
-                # possible row) rather than picking a height preset.
-                btn.setToolTip("Collapse all tracks")
-                btn.clicked.connect(lambda _checked: self.collapse_all_requested.emit())
-            else:
-                height = self.ROW_HEIGHT_PRESETS[label]
-                btn.clicked.connect(
-                    lambda _checked, h=height: self.row_height_changed.emit(h))
-            self.rows_group.addButton(btn)
-            self._row_buttons[label] = btn
-            seg.addWidget(btn)
-        seg_wrap = QWidget()
-        seg_wrap.setLayout(seg)
+        seg_wrap, self._row_buttons = segmented(
+            [Segment("S", "S", "Collapse all tracks"),
+             Segment("M", "M"), Segment("L", "L")],
+            on_pick=self._pick_row_preset, checked="M", compact=True,
+            parent=self)
         row.addWidget(seg_wrap)
 
         row.addWidget(self._separator())
@@ -483,18 +411,21 @@ class TimelineToolbar(QWidget):
             return self.bpm_spinbox.value()
         return 120
 
-    def set_song_precount(self, enabled: bool,
-                          has_song: Optional[bool] = None) -> None:
-        """Reflect a precount change driven elsewhere (song load, the web
-        remote) without re-emitting song_precount_toggled. Pass ``has_song``
-        to also enable/disable the toggle (no song = greyed out)."""
-        if self.precount_toggle is None:
-            return
-        self.precount_toggle.blockSignals(True)
-        self.precount_toggle.setChecked(bool(enabled))
-        if has_song is not None:
-            self.precount_toggle.setEnabled(bool(has_song))
-        self.precount_toggle.blockSignals(False)
+    def _on_click_popup_open(self, is_open: bool) -> None:
+        """Press the click button in while its panel is open, the chevron
+        pointing the way it will go."""
+        self.click_button.setText("▾" if is_open else "▴")
+        self.click_button.setProperty("open", bool(is_open))
+        self.click_button.style().unpolish(self.click_button)
+        self.click_button.style().polish(self.click_button)
+
+    def set_click_free_running(self, running: bool) -> None:
+        """Light the click button while the click free-runs — the panel may be
+        closed, and this is the one sign left that the click is its own."""
+        self.click_button.setProperty("running", bool(running))
+        self.click_button.style().unpolish(self.click_button)
+        self.click_button.style().polish(self.click_button)
+        self.click_popup.set_free_running(running)
 
     def set_zoom_value(self, factor: float) -> None:
         """Move the zoom slider to reflect a zoom change driven elsewhere
@@ -504,6 +435,14 @@ class TimelineToolbar(QWidget):
         self.zoom_slider.blockSignals(True)
         self.zoom_slider.setValue(value)
         self.zoom_slider.blockSignals(False)
+
+    def _pick_row_preset(self, label: str) -> None:
+        """"S" collapses every lane to a single header row (the smallest row
+        there is) rather than picking a height preset; M and L are heights."""
+        if label == "S":
+            self.collapse_all_requested.emit()
+        else:
+            self.row_height_changed.emit(self.ROW_HEIGHT_PRESETS[label])
 
     def set_row_height(self, height: int) -> None:
         """Check the M/L segment whose preset is closest to `height` (used on

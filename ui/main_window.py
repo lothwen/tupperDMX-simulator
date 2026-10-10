@@ -2,14 +2,16 @@
 # ABOUTME: widget tree and wires the widget halves of the core's signals. The
 # ABOUTME: thin entry point lives in main.py.
 import os
-from copy import deepcopy
+import time
 from dataclasses import asdict
+from functools import partial
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QFileDialog, QSplitter, QMessageBox,
                              QStyle, QTabWidget, QDialog, QInputDialog,
+                             QAbstractItemView, QAbstractSlider,
                              QAbstractSpinBox, QComboBox, QLineEdit,
-                             QPlainTextEdit, QTextEdit)
+                             QPlainTextEdit, QTabBar, QTextEdit)
 from PyQt6.QtGui import QGuiApplication, QShortcut, QKeySequence
 from PyQt6.QtCore import (Qt, QSize, QTimer, QEvent, QVariantAnimation,
                           QAbstractAnimation, QEasingCurve)
@@ -19,16 +21,19 @@ from app.media_controller import MONITOR_GUIDE
 from audio.mixer import BUS_VOICE
 from core.config import Config, shipped_fixtures
 from core.io_routing import midi_routing_from_io
-from core.paths import default_shows_dir
+from core.paths import default_shows_dir, is_audio_path
 from core.show import store as show_store
 from core.show.model import ShowError
-from timeline import Timeline
+from core.tempo_map import DEFAULT_METER
+from timeline.manager import Timeline
 from tupperlogger import get_logger
 from ui.widgets import icons
 from ui.about_dialog import AboutDialog
+from ui.autoprogram_dialog import AutoProgramDialog
 from ui.clip_library import ClipLibraryWidget
 from ui.dmx_display import DMXDisplayWidget
 from ui.error_dialogs import ErrorDialogManager
+from ui.fixture.browser import AddFixtureDialog
 from ui.fixture.designer import StageEditToolbar, FixtureInspector
 from ui.playlist_controller import PlaylistController
 from ui.settings_dialog import SettingsDialog
@@ -38,8 +43,33 @@ from ui import theme
 from ui.timeline_toolbar import TimelineToolbar
 from ui.toolbar_manager import ToolbarManager
 from ui.markers_dialog import MarkersDialog
+from ui.offset_dialog import (CHOICE_AUDIO_ONLY, CHOICE_CANCEL,
+                              CHOICE_MOVE_SHOW, OffsetRippleDialog)
 from core import markers as core_markers
+from core import note_layout
 from webremote.state import probe_duration, song_duration
+
+# ←/→ scrub the playhead. A tap nudges by ARROW_SEEK_STEP; holding ramps the
+# step up to ARROW_SEEK_MAX_STEP over ARROW_SEEK_RAMP seconds of hold. The
+# OS key-repeat rate is not ours to pick, so ARROW_SEEK_INTERVAL sets the pace
+# instead: every step is a real seek, repositioning MIDI, audio and the
+# metronome, and none of that wants to run at a 30 Hz repeat rate.
+ARROW_SEEK_STEP = 0.5
+ARROW_SEEK_MAX_STEP = 5.0
+ARROW_SEEK_RAMP = 3.0
+ARROW_SEEK_INTERVAL = 0.08
+
+# Widgets that type text, so a Space or an arrow is a keystroke for them and
+# never a transport command.
+TEXT_ENTRY_WIDGETS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+
+
+def audio_paths_from_mime(mime):
+    """Local audio files carried by a drag, in the order they were dropped."""
+    if not mime.hasUrls():
+        return []
+    return [url.toLocalFile() for url in mime.urls()
+            if url.isLocalFile() and is_audio_path(url.toLocalFile())]
 
 
 class MainWindow(QMainWindow):
@@ -60,7 +90,7 @@ class MainWindow(QMainWindow):
         self.dmx_manager = core.dmx_manager
         self.midi_manager = core.midi_manager
         self.media_controller = core.media_controller
-        self.audio_controller = core.audio_controller
+        self.metronome = core.metronome
         self.playlist_core = core.playlist_controller
         self.webremote_manager = core.webremote_manager
 
@@ -90,6 +120,8 @@ class MainWindow(QMainWindow):
         # 1280-wide display. Declaring 1200x800 here used to add a height floor
         # taller than the 1280x800 screens this is meant to run on.
         self.setMinimumSize(1024, 600)
+        # Audio files can be dropped anywhere on the window (see dropEvent).
+        self.setAcceptDrops(True)
         self.setGeometry(100, 100, self.config.window.width, self.config.window.height)
 
         # Setup main layout
@@ -99,13 +131,17 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove all margins
         self.main_layout.setSpacing(0)  # Remove spacing between widgets
 
+        # The Edit-fixture dialog while it is up, so a second request queued
+        # behind the first raises it instead of opening a rival.
+        self._fixture_editor = None
+
         # Create UI
         self.setup_ui()
 
-        # Live-patch baselines: the last-applied patch signatures, so
-        # _on_patch_changed only propagates real changes.
+        # Live-patch baseline: the last-applied patch signature, so
+        # _on_patch_changed only rebuilds the views on real changes (the
+        # controller's half keeps its own, in AppCore.on_patch_edited).
         self._last_ui_sig = self._patch_ui_signature()
-        self._last_dmx_sig = self._patch_dmx_signature()
 
         # Widget fan-out of BPM changes (the metronome/count-in half already
         # rides bpm_state inside the core). Connected before the initial song
@@ -119,11 +155,25 @@ class MainWindow(QMainWindow):
         # routing, web remote.
         self.app_core.start()
 
+        # After start(), whose show load would otherwise rebuild it straight away.
+        self._sync_stage3d()
+
         # Update song counter in toolbar
         self.playlist_controller.update_song_counter()
 
-        # Install global event filter for spacebar handling
+        # Install global event filter for spacebar / Esc / arrow / F handling
         QApplication.instance().installEventFilter(self)
+
+        # Arrow-key scrub: when the current hold began and when its last step
+        # landed (see _arrow_seek).
+        self._arrow_held_since = 0.0
+        self._arrow_last_step = 0.0
+
+        # Start with the timeline holding focus. Left to itself the focus chain
+        # opens on the setlist combo, which is an editable rename field — so
+        # ←/→ (and Space) would go to its caret and the transport would look
+        # dead until the operator clicked somewhere else.
+        self.timeline.content_view.setFocus()
 
         # Undo / redo shortcuts (Ctrl+Z / Ctrl+Shift+Z)
         self.undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
@@ -160,10 +210,15 @@ class MainWindow(QMainWindow):
 
         self.dmx_display = DMXDisplayWidget(self.config)
         self.dmx_display.channel_value_edited.connect(self._on_dmx_channel_edited)
-        self.clip_library = ClipLibraryWidget(self.config)
+        self.clip_library = ClipLibraryWidget(self.config, self.show_manager)
         self.clip_library.preview_requested.connect(self.app_core.preview_clip)
+        # A card's menu or the "+ New" tile. Deferred inside the opener: the
+        # dialog can rebuild the very card that asked.
+        self.clip_library.edit_fixture_requested.connect(self.open_fixture_editor)
 
-        self.audio_controller.audio_error_occurred.connect(self._on_audio_error)
+        # The core already logged it; the window only owes the dialog.
+        self.metronome.audio_error_occurred.connect(
+            partial(ErrorDialogManager.show_audio_hardware_error, self))
 
         self.stage_controller = StageController(self.config)
 
@@ -182,14 +237,15 @@ class MainWindow(QMainWindow):
         # Show project signals
         self.toolbar_manager.new_show_requested.connect(self.new_show_dialog)
         self.toolbar_manager.open_show_requested.connect(self.open_show_dialog)
-        self.toolbar_manager.save_show_requested.connect(self.save_show_now)
+        # Manual Save: a forced flush (autosave already covers the rest).
+        self.toolbar_manager.save_show_requested.connect(
+            partial(self.show_manager.flush, "manual"))
         self.toolbar_manager.save_show_as_requested.connect(self.save_show_as_dialog)
         self.toolbar_manager.snapshot_requested.connect(self.take_snapshot_dialog)
         self.toolbar_manager.restore_version_requested.connect(self.restore_version_from_toolbar)
         self.toolbar_manager.export_bundle_requested.connect(self.export_bundle_dialog)
         self.toolbar_manager.import_bundle_requested.connect(self.import_bundle_dialog)
-        self.toolbar_manager.song_title_edited.connect(self.on_song_title_edited)
-        self.toolbar_manager.song_key_edited.connect(self.on_song_key_edited)
+        self.toolbar_manager.song_key_edited.connect(self.app_core.set_song_key)
         self.show_manager.autosave_state_changed.connect(
             self.toolbar_manager.set_autosave_state)
         self.show_manager.versions_changed.connect(self._refresh_versions_ui)
@@ -201,10 +257,6 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.play_pause_requested.connect(self.play_pause_playback)
         self.timeline_toolbar.stop_requested.connect(self.stop_playback)
         self.timeline_toolbar.bpm_changed.connect(self.bpm_changed)
-        self.timeline_toolbar.song_precount_toggled.connect(
-            self.app_core.on_song_precount_toggled)
-        self.app_core.precount_changed.connect(
-            self.timeline_toolbar.set_song_precount)
         # Editor monitor (backing | guide): toggle → controller → waveform.
         # The editor re-picks it per song (the guide when the song has one);
         # only the desktop does — headless always plays the backing.
@@ -216,7 +268,9 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.prev_song_requested.connect(self.playlist_controller.prev_song)
         self.toolbar_manager.next_song_requested.connect(self.playlist_controller.next_song)
         self.toolbar_manager.new_song_requested.connect(self.playlist_controller.add_empty_song)
-        self.toolbar_manager.remove_song_requested.connect(self.playlist_controller.remove_current_song)
+        self.toolbar_manager.playlist_requested.connect(self.playlist_controller.open_manager)
+        self.toolbar_manager.auto_program_requested.connect(self.open_auto_program)
+        self.app_core.autoprogrammer.applied.connect(self._on_auto_program_applied)
         self.toolbar_manager.song_selected.connect(self.playlist_controller.go_to_song)
         # Application menu signals
         self.toolbar_manager.settings_requested.connect(self.show_settings_dialog)
@@ -228,9 +282,7 @@ class MainWindow(QMainWindow):
         # Create and add toolbar
         toolbar = self.toolbar_manager.create_toolbar(self)
         self.addToolBar(toolbar)
-        show = self.show_manager.show
-        self.toolbar_manager.set_show_name(show.name if show else "")
-        self.toolbar_manager.set_autosave_state("saved")
+        self._refresh_show_status()
         self._refresh_versions_ui()
 
         # Create main content splitter (stage | sidebar); added to the vertical
@@ -258,6 +310,7 @@ class MainWindow(QMainWindow):
             initial_voice_volume=self.config.volume.voice,
             initial_waveform_track_height=self.config.window.waveform_track_height,
             initial_midi_events_track_height=self.config.window.midi_events_track_height,
+            initial_header_width=self.config.window.timeline_header_width,
             fixtures=self.config.fixtures,
             ui_scale=self.config.window.ui_scale,
         )
@@ -265,22 +318,39 @@ class MainWindow(QMainWindow):
         # The decode the song change kicked off lands after the band is drawn.
         self.audio_engine.backing_loaded.connect(self._on_backing_decoded)
         self.timeline.seek_requested.connect(self.seek_playback)
-        self.timeline.bpm_detected.connect(self.on_bpm_detected_from_timeline)
+        self.timeline.play_from_requested.connect(self._play_from)
+        self.timeline.bpm_detected.connect(self.bpm_state.set_bpm)
         self.timeline.waveform_offset_changed.connect(self.on_waveform_offset_changed)
-        self.timeline.metronome_volume_changed.connect(self.on_metronome_volume_changed)
-        self.timeline.metronome_mute_toggled.connect(self.on_metronome_mute_toggled)
-        self.timeline.audio_volume_changed.connect(self.on_audio_volume_changed)
-        self.timeline.audio_mute_toggled.connect(self.on_audio_mute_toggled)
-        self.timeline.voice_volume_changed.connect(self.on_voice_volume_changed)
-        self.timeline.voice_mute_toggled.connect(self.on_voice_mute_toggled)
+        self.timeline.waveform_offset_committed.connect(
+            self.on_waveform_offset_committed)
+        self.timeline.offset_edit_requested.connect(self.open_offset_editor)
+        # The header's sliders run 0–100; the core takes 0.0–1.0, applies it
+        # to the bus and persists it.
+        self.timeline.metronome_volume_changed.connect(
+            lambda value: self.app_core.set_volume(metronome=value / 100.0))
+        self.timeline.metronome_mute_toggled.connect(
+            self.metronome.set_metronome_muted)
+        self.timeline.audio_volume_changed.connect(
+            lambda value: self.app_core.set_volume(audio=value / 100.0))
+        self.timeline.audio_mute_toggled.connect(self.media_controller.set_audio_muted)
+        self.timeline.voice_volume_changed.connect(
+            lambda value: self.app_core.set_volume(voice=value / 100.0))
+        self.timeline.voice_mute_toggled.connect(
+            partial(self.audio_engine.set_bus_muted, BUS_VOICE))
         self.timeline.track_heights_changed.connect(self.on_track_heights_changed)
+        self.timeline.header_width_changed.connect(self.on_header_width_changed)
+        self.timeline.track_order_changed.connect(self.on_track_order_changed)
+        # A lane header wants its fixture edited. Deferred inside the opener:
+        # the dialog can rebuild the very header that asked.
+        self.timeline.fixture_edit_requested.connect(self.open_fixture_editor)
         # The clip editor can write a fixture's scene banks, which the library
         # panel has already read — rebuild it rather than wait for a restart.
-        self.timeline.library_changed.connect(
-            lambda: self.clip_library.refresh_configuration(self.config))
+        self.timeline.library_changed.connect(self._refresh_clip_library)
         # Auditioning a clip from the editor takes the same route as the clip
         # library's click-to-preview, so config.io routing applies.
         self.timeline.preview_requested.connect(self.app_core.preview_clip)
+        self.timeline.marker_move_committed.connect(self.on_marker_moved)
+        self.timeline.marker_edit_requested.connect(self.on_marker_edit_requested)
         # Timeline no longer emits midi_data_changed - handled by MidiManager
         # Wire the timeline toolbar's view controls to the timeline view, and
         # mirror live zoom (Fit / Ctrl+wheel) back onto the toolbar slider.
@@ -294,6 +364,7 @@ class MainWindow(QMainWindow):
         self.timeline_toolbar.snap_toggled.connect(self.timeline.set_snap_enabled)
         self.timeline_toolbar.markers_requested.connect(self.show_markers_dialog)
         self.timeline_toolbar.add_track_requested.connect(self.add_fixture_from_timeline)
+        self._connect_click_popup()
 
         # Bundle the timeline toolbar + tracks into one resizable section. The
         # layout is kept because undocking flips the two (see _set_toolbar_at_bottom).
@@ -384,6 +455,9 @@ class MainWindow(QMainWindow):
         self._stage_window = None
         self._docked_content_sizes = None
         self._collapsed_before_undock = False
+        self._docked_before_fullscreen = False
+        # The experimental 3D stage while it stands in the 2D stage's place.
+        self._stage3d = None
         self.dock_stage_button = QPushButton()
         self.dock_stage_button.setObjectName("StageDockButton")
         self.dock_stage_button.setIconSize(QSize(18, 18))
@@ -395,7 +469,12 @@ class MainWindow(QMainWindow):
         self.dock_stage_button.show()
 
         self.edit_toolbar = StageEditToolbar(
-            self.stage_controller, self._on_patch_changed, self.exit_edit_mode)
+            self.stage_controller, self._on_patch_changed, self.exit_edit_mode,
+            midi_manager=self.midi_manager)
+        # The fixture browser's Scenes tab writes a type's scene banks whichever
+        # button closes it, so the library panel is rebuilt on the write, not on
+        # OK — the same route the timeline's clip editor takes.
+        self.edit_toolbar.library_changed.connect(self._refresh_clip_library)
         stage_view.add_overlay(self.edit_toolbar, anchor="top-left", reference="background")
         self.edit_toolbar.hide()
 
@@ -496,16 +575,203 @@ class MainWindow(QMainWindow):
             self.dmx_toggle_button.setToolTip("Hide DMX panel")
 
     def on_waveform_offset_changed(self, offset_sec):
-        """Handle waveform offset changes from timeline: the drag edits the
-        offset of whichever track is being monitored."""
+        """Live preview of a waveform drag — a LABEL and nothing else.
+
+        This fires on every mouse-move frame, so it must stay free of anything
+        with a side effect: the drag is a proposal until the release, where the
+        dialog decides what it meant. In particular it does NOT move the
+        controller's offsets, which is what keeps a drag out of the audio path
+        (and out of the log) and what lets Cancel put everything back by simply
+        repositioning the item.
+
+        The SETLIST chip shows the BACKING offset, so a guide drag leaves it
+        alone; the chip is also why this runs at all on a programmatic
+        set_waveform_offset (song load, monitor switch, Cancel's revert).
+        """
+        if not self._monitoring_guide():
+            self.toolbar_manager.update_offset_display(offset_sec)
+
+    def open_offset_editor(self) -> None:
+        """Set the offset by typing it: the waveform band's "Set audio
+        offset…", which asks the drag's own question with the offset where it
+        already is and the field it is typed in already open.
+
+        The band's menus are the only other way in, and they need to be: a
+        song sectioned end to end leaves the waveform little to grab, and a
+        drag is otherwise what opens this dialog at all.
+        """
         mc = self.media_controller
-        if mc.monitor == MONITOR_GUIDE and mc.guide_file:
-            mc.set_guide_offset(offset_sec)
-            self.config.update_current_song(guide_offset=offset_sec)
+        offset = (mc.guide_offset_sec if self._monitoring_guide()
+                  else mc.audio_offset_sec)
+        self.on_waveform_offset_committed(offset, offset, typed=True)
+
+    def on_waveform_offset_committed(self, old_sec, new_sec, typed=False):
+        """A waveform drag finished: ask what should follow the audio, then
+        persist that decision. `typed` for the menu's way in, where the offset
+        has not moved yet and the dialog is the whole edit.
+
+        The offset moves ONE audio track (`audio_time = timeline_time -
+        active_offset()`); every clip, song part and marker is anchored in
+        timeline seconds, and the other track has its own offset — so nothing
+        else moves on its own. That is what you want the first time a track is
+        aligned, and wrong every time after, which is why the drag asks.
+
+        Nothing is written before the answer: Cancel has to be able to put the
+        offset back, and the drag itself only ever changed it in memory.
+        """
+        mc = self.media_controller
+        moved_guide = self._monitoring_guide()
+        choice, move_other, offset = self._ask_offset_ripple(
+            old_sec, new_sec, moved_guide, typed)
+
+        if choice == CHOICE_CANCEL:
+            # The controller never saw the drag, so putting the item back (which
+            # re-emits the preview, restoring the chip) is the whole revert.
+            self.timeline.set_waveform_offset(old_sec)
+            return
+
+        if offset != new_sec:
+            # Advanced overrode where the drag landed; the item has to agree.
+            self.timeline.set_waveform_offset(offset)
+
+        if moved_guide:
+            mc.set_guide_offset(offset)
+            self.config.update_current_song(guide_offset=offset)
         else:
-            mc.set_audio_offset(offset_sec)
-            self.config.update_current_song(offset=offset_sec)
+            mc.set_audio_offset(offset)
+            self.config.update_current_song(offset=offset)
+            self.toolbar_manager.update_offset_display(offset)
+
+        delta = offset - old_sec
+        if move_other:
+            self._move_other_track(moved_guide, delta)
+        if choice == CHOICE_MOVE_SHOW:
+            self.move_show_with_audio(delta)
         self.save_config()
+
+    def _monitoring_guide(self) -> bool:
+        """Whether the waveform band is showing (and so editing) the guide."""
+        mc = self.media_controller
+        return mc.monitor == MONITOR_GUIDE and bool(mc.guide_file)
+
+    def _other_track(self, moved_guide: bool):
+        """`(label, current offset)` of the track the drag did NOT move, or
+        `(None, None)` when there is none — the checkbox has nothing to offer
+        for a song with one track. The offset comes along because the dialog
+        quotes absolutes: it shows where that track would LAND, not by how far
+        it would shift."""
+        mc = self.media_controller
+        if moved_guide:
+            return (("backing track", mc.audio_offset_sec) if mc.audio_file
+                    else (None, None))
+        return (("guide track", mc.guide_offset_sec) if mc.guide_file
+                else (None, None))
+
+    def _move_other_track(self, moved_guide: bool, delta: float) -> None:
+        """Slide the track the drag did not touch by the same delta.
+
+        Relative, not absolute: the two files have their own lead-ins, so what
+        transfers between them is the CORRECTION, never the offset itself."""
+        mc = self.media_controller
+        if moved_guide:
+            offset = mc.audio_offset_sec + delta
+            mc.set_audio_offset(offset)
+            self.config.update_current_song(offset=offset)
+            self.toolbar_manager.update_offset_display(offset)
+        else:
+            offset = mc.guide_offset_sec + delta
+            mc.set_guide_offset(offset)
+            self.config.update_current_song(guide_offset=offset)
+        self.logger.info(
+            f"Moved the {'backing' if moved_guide else 'guide'} track with it "
+            f"({delta:+.3f}s -> {offset:+.3f}s)")
+
+    def _show_start(self):
+        """`(time, label)` of the earliest thing the show has anywhere on this
+        song's timeline — a clip, a song part or a marker — or None when the
+        song is still empty. The label is what the offset dialog quotes when
+        that item is the one keeping the show from following a drag left.
+        BLACKOUTs never count: a shift drops the ones it pushes before t=0."""
+        song = self.config.get_current_song()
+        firsts = []
+        events = [e for e in self.midi_manager.midi_events
+                  if not self.midi_manager.is_blackout(e)]
+        if events:
+            event = min(events, key=lambda e: e["time"])
+            firsts.append((event["time"], self._describe_event(event)))
+        marker = core_markers.earliest_marker(song)
+        if marker is not None:
+            firsts.append(marker)
+        return min(firsts, key=lambda first: first[0]) if firsts else None
+
+    def _describe_event(self, event) -> str:
+        """Name one timeline event the way its lane shows it: the song part, or
+        the scene/clip label plus the fixture whose lane it sits on and that
+        lane's MIDI channel."""
+        note = int(event["note"])
+        label = getattr(event.get("info"), "part", None) or f"Note {note}"
+        if note_layout.is_song_part(note):
+            return f"song part “{label}”"
+        if event.get("group_id"):
+            what = f"scene “{event.get('scene_name') or 'Scene'}”"
+        else:
+            what = f"clip “{label}”"
+        channel = event.get("channel")
+        if channel is None:
+            return what
+        fixture = next((f for f in self.config.fixtures
+                        if f.channel == channel), None)
+        where = f" on {fixture.name or fixture.type}" if fixture else ""
+        return f"{what}{where} (MIDI channel {channel})"
+
+    def _ask_offset_ripple(self, old_sec: float, new_sec: float,
+                           moved_guide: bool, typed: bool = False):
+        """Ask what follows the track a drag moved. Returns
+        `(choice, move_other_track, offset)`.
+
+        Silent — and AUDIO_ONLY at the dragged offset — when there is nothing
+        to offer: aligning a lone track on a song with no clips or markers is
+        the normal first step and must not nag. `typed` is asked anyway, since
+        the offset itself is what it came for.
+        """
+        start = self._show_start()
+        other_label, other_offset = self._other_track(moved_guide)
+        if start is None and other_label is None and not typed:
+            return CHOICE_AUDIO_ONLY, False, new_sec
+
+        start_time, start_item = start if start is not None else (None, None)
+        dialog = OffsetRippleDialog(
+            self,
+            moved_label="guide track" if moved_guide else "backing track",
+            other_label=other_label, other_offset=other_offset or 0.0,
+            old_offset=old_sec, new_offset=new_sec,
+            show_start=start_time, show_start_item=start_item,
+            # Beats are counted at the tempo sounding where the track started.
+            bpm=self.bpm_state.tempo_map().bpm_at(old_sec),
+            advanced=typed)
+        dialog.exec()
+        return dialog.choice(), dialog.move_other(), dialog.offset()
+
+    def move_show_with_audio(self, delta: float) -> None:
+        """Slide everything authored against the music by `delta`: the whole
+        sequence and the whole marker track, in that order.
+
+        Both halves are checked to be movable before either one moves (see
+        OffsetRippleDialog) — a shift that applied to only one of them
+        would put the clips and the markers out of sync with each other, which
+        is worse than the staleness this fixes."""
+        song = self.config.get_current_song()
+        moved_events = self.midi_manager.shift_all(delta)
+        moved_markers = core_markers.shift_markers(song, delta) if song else False
+        if moved_markers:
+            # Persists, redraws the ruler and re-applies the tempo map / cues.
+            self.apply_marker_edits(song)
+        elif moved_events:
+            self.save_config()
+        if moved_events or moved_markers:
+            self.logger.info(
+                f"Moved the show with the audio by {delta:+.3f}s "
+                f"(events={moved_events}, markers={moved_markers})")
 
     def _waveform_audio_info(self, audio_file):
         """(duration, PCM) for the timeline's waveform band.
@@ -565,35 +831,56 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.set_song_bpm(value)
         self.timeline_toolbar.set_bpm(value)
 
-    def _on_audio_error(self, error_message, error_type):
-        """Handle audio system errors (the core already logged them)."""
-        ErrorDialogManager.show_audio_hardware_error(self, error_message, error_type)
+    def _connect_click_popup(self):
+        """The toolbar's click panel. Its level IS the header's CLICK slider,
+        so each follows the other; free-run, the song's tempo, the accent and
+        the song's count-in are the core's."""
+        popup = self.timeline_toolbar.click_popup
+        popup.set_level(round(self.config.volume.metronome * 100))
+        popup.set_accent(self.config.audio.click_accent)
+        popup.level_changed.connect(self._on_click_popup_level)
+        self.timeline.metronome_volume_changed.connect(popup.set_level)
+        popup.accent_toggled.connect(self.app_core.set_click_accent)
+        popup.precount_toggled.connect(self.app_core.on_song_precount_toggled)
+        self.app_core.precount_changed.connect(popup.set_precount)
+        popup.free_run_requested.connect(self.app_core.start_free_run)
+        popup.free_run_stop_requested.connect(self.app_core.stop_free_run)
+        popup.apply_requested.connect(self.app_core.set_song_tempo)
+        self.metronome.free_run_changed.connect(
+            self.timeline_toolbar.set_click_free_running)
+        # Every BPM, meter and song change rebuilds the map.
+        self.app_core.tempo_map_changed.connect(self._refresh_click_popup)
+        self._refresh_click_popup()
 
-    def on_bpm_detected_from_timeline(self, value):
-        """Handle BPM detection from timeline analysis."""
-        self.bpm_state.set_bpm(value)
-    
+    def _on_click_popup_level(self, value):
+        self.app_core.set_volume(metronome=value / 100.0)
+        self.timeline.set_volumes(metronome=value / 100.0)
+
+    def _refresh_click_popup(self, *_):
+        """Hand the click panel the current song's own tempo and meter."""
+        song = self.config.get_current_song()
+        self.timeline_toolbar.click_popup.set_song_tempo(
+            self.bpm_state.get_bpm(), song.meter if song else DEFAULT_METER,
+            song is not None)
+
     def _on_playback_state_changed(self, is_playing):
         """Handle playback state changes from media controller."""
         self.timeline_toolbar.update_play_pause_icon(is_playing)
+        self.timeline_toolbar.click_popup.set_transport_playing(is_playing)
         # A clip editor's live output must not fight the sequencer for the
         # same DMX slots, so it is disarmed for the duration.
         self.timeline.set_transport_playing(is_playing)
-        
-        if is_playing:
-            # Start metronome synchronized to current timeline position
-            current_position = self.media_controller.get_current_position()
-            self.audio_controller.start_metronome(current_position)
-        else:
-            self.audio_controller.stop_metronome()
-    
+
     def _on_position_changed(self, position_seconds):
         """Handle position changes from media controller. Negative time is the
         count-in: the playhead waits at 0 and the display counts down."""
         self.timeline.update_playhead(max(0.0, position_seconds))
         if position_seconds < 0:
+            # One minute digit, not two: the fixed-width box holds nine
+            # characters and the sign takes one.
+            minutes, seconds = divmod(-position_seconds, 60)
             self.timeline_toolbar.update_time_display(
-                f"COUNT-IN −{-position_seconds:04.1f}")
+                f"−{int(minutes)}:{seconds:06.3f}")
             return
         # Update toolbar time display
         minutes = int(position_seconds // 60)
@@ -603,12 +890,8 @@ class MainWindow(QMainWindow):
     
     def _on_media_error(self, error_message, file_path=None):
         """Handle media errors from media controller (the core logged them)."""
-        # Show user-friendly error dialog
-        if file_path:
-            ErrorDialogManager.show_media_file_error(self, file_path, error_message)
-        else:
-            # Generic media error
-            ErrorDialogManager.show_media_file_error(self, "Unknown file", error_message)
+        ErrorDialogManager.show_media_file_error(
+            self, file_path or "Unknown file", error_message)
 
     def on_dmx_error(self, source, error):
         """Handle DMX errors (the core logged them) with a retry dialog."""
@@ -641,36 +924,48 @@ class MainWindow(QMainWindow):
         """Apply a manual value dragged in the DMX monitor to the live software
         controller. Transient: the normal workflow (scenes, chases, MIDI)
         overwrites it on its next frame; a no-op if no controller is active."""
-        controller = getattr(self, "software_controller", None)
+        controller = self.software_controller
         if controller is not None:
             controller.set_manual_channel(channel, value)
 
     def update_dmx(self, dmx_data):
         """Update DMX data across all components."""
-        # Update stage fixtures
-        self.stage_controller.update_fixtures_with_dmx(dmx_data)
+        # Update stage fixtures — only the one on show: a hidden 2D stage
+        # needn't pay for every frame.
+        if self._stage3d is not None:
+            self._stage3d.update_dmx(dmx_data)
+        else:
+            self.stage_controller.update_fixtures_with_dmx(dmx_data)
         
         # Update DMX display
         self.dmx_display.update_dmx_data(dmx_data)
 
-    def on_metronome_volume_changed(self, value):
-        """Handle metronome volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.audio_controller.set_metronome_volume(volume)
-        self.config.update_volume(metronome=volume)
-        self.save_config()
-
-    def on_metronome_mute_toggled(self, muted):
-        """Handle metronome mute toggle from the timeline header's CLICK row."""
-        self.audio_controller.set_metronome_muted(muted)
-
     def show_settings_dialog(self):
         """Open the preferences editor and apply any changes live."""
-        old_io = asdict(self.config.io)
-        old_artnet = asdict(self.config.artnet)
-        old_webremote = asdict(self.config.webremote)
-        old_audio = asdict(self.config.audio)
-        old_fog = asdict(self.config.window.fog)
+        cfg = self.config
+        # What the dialog can change, read afresh each time (it hands back new
+        # objects), and what re-applies it — run in THIS order when it did.
+        watched = (
+            # Swap the experimental 3D stage in or out before anything else, so
+            # the 2D stage is back in its place before its renderer is touched.
+            (lambda: cfg.window.stage_3d_experimental, self._sync_stage3d),
+            # Build or drop the GL context first: the light layer that fog is
+            # then handed to is the one this call decides the existence of.
+            (lambda: cfg.window.stage_gpu, self._apply_stage_gpu),
+            # The dialog hands back a NEW fog object, so the light layer is
+            # still holding the old one until it is told otherwise.
+            (lambda: asdict(cfg.window.fog), self.stage_controller.apply_stage_config),
+            # The routing, or the Art-Net target the sinks and listener read.
+            (lambda: (asdict(cfg.io), asdict(cfg.artnet)), self.app_core.apply_io_config),
+            (lambda: asdict(cfg.webremote), self.webremote_manager.apply_config),
+            (lambda: asdict(cfg.audio), self.app_core.apply_audio_config),
+            # Level and folder both take effect now rather than at the next
+            # launch: turning DEBUG on to chase something has to help with the
+            # thing happening in front of you, and the page's own live pane
+            # would otherwise sit tailing a file nothing writes to.
+            (lambda: asdict(cfg.logging), self.app_core.apply_logging_config),
+        )
+        before = [read() for read, _ in watched]
 
         dialog = SettingsDialog(self.config, self, audio_engine=self.audio_engine)
         # The Interface page previews its slider live and puts the old scale
@@ -680,25 +975,30 @@ class MainWindow(QMainWindow):
             return
 
         self.apply_ui_scale()
-
-        # The dialog hands back a NEW fog object, so the light layer is still
-        # holding the old one until it is told otherwise.
-        if asdict(self.config.window.fog) != old_fog:
-            self.stage_controller.apply_stage_config()
-
-        # Re-apply the routing when it (or the Art-Net target the sinks and
-        # listener read from) changed.
-        if asdict(self.config.io) != old_io or asdict(self.config.artnet) != old_artnet:
-            self.app_core.apply_io_config()
-
-        if asdict(self.config.webremote) != old_webremote:
-            self.webremote_manager.apply_config()
-
-        if asdict(self.config.audio) != old_audio:
-            self.app_core.apply_audio_config()
+        for (read, apply), old in zip(watched, before):
+            if read() != old:
+                apply()
 
         self.save_config()
         self.logger.info("Settings updated")
+
+    def _apply_stage_gpu(self):
+        """Turn the stage's GPU renderer on or off, now rather than on the next
+        launch. Says so when the box cannot honour it — the fallback is silent
+        at startup, but here it is the answer to something just asked for."""
+        if self._stage3d is not None:
+            return      # the 2D stage is put away; _drop_stage3d re-applies it
+        wanted = self.config.window.stage_gpu
+        if self.stage_controller.set_gpu_light(wanted) == wanted:
+            return
+        self.logger.warning("Could not turn the GPU renderer %s",
+                            "on" if wanted else "off")
+        if wanted:
+            QMessageBox.warning(
+                self, "GPU renderer unavailable",
+                "The stage's light could not be moved onto the GPU on this "
+                "machine.\n\nIt is still being drawn by the normal renderer. "
+                "This usually means there is no usable OpenGL driver.")
 
     def apply_ui_scale(self, scale=None):
         """Show the interface at `scale`, or at whatever the config says.
@@ -716,7 +1016,27 @@ class MainWindow(QMainWindow):
         if scale is None:
             scale = self.config.window.ui_scale
         if theme.apply_scale(QApplication.instance(), scale):
+            # Neither of these is styled, so neither follows a restyle: a
+            # painted header strip, and a width the config only holds once the
+            # divider has been dragged.
+            self.timeline.set_ui_scale(scale)
+            self._apply_sidebar_scale(scale)
             QTimer.singleShot(0, self._remeasure_toolbars)
+
+    def _apply_sidebar_scale(self, scale):
+        """Re-derive the sidebar's width from the UI scale.
+
+        Only while it is still the derived width: once the divider has been
+        dragged, `config.window.sidebar_width` holds a size the user chose and
+        the scale has no business overruling it.
+        """
+        if self.config.window.sidebar_width:
+            return
+        self._sidebar_width = round(250 * scale)
+        sizes = self._sidebar_splitter.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._sidebar_splitter.setSizes(
+                [sum(sizes) - self._sidebar_width, self._sidebar_width])
 
     def _remeasure_toolbars(self):
         self.toolbar_manager.remeasure_breakpoint()
@@ -724,24 +1044,26 @@ class MainWindow(QMainWindow):
 
     def _on_prefs_reloaded(self, adopted):
         """View half of a live userprefs reload — the core has already applied
-        its own. Mirrors what show_settings_dialog() re-applies, minus what a
-        running window cannot change: `stage_gpu` needs a GL context built
-        before the stage exists (the dialog says so too), and the window
-        geometry belongs to the window, not to the file."""
+        its own. Mirrors what show_settings_dialog() re-applies, minus the
+        window geometry, which belongs to the window rather than to the file."""
         if "window" in adopted:
+            self._sync_stage3d()
             self.stage_controller.set_haze_baseline(self.config.window.stage_haze)
+            if self._stage3d is None and self.config.window.stage_gpu != (
+                    self.stage_controller.light_layer is not None):
+                self.stage_controller.set_gpu_light(self.config.window.stage_gpu)
             self.stage_controller.apply_stage_config()
             self.apply_ui_scale()
-            if self.config.window.stage_gpu != (self.stage_controller.light_layer
-                                                is not None):
-                self.logger.warning(
-                    "userprefs stage_gpu changed — it only takes effect on the "
-                    "next launch")
         if "volume" in adopted:
             self.timeline.set_volumes(
                 audio=self.config.volume.audio,
                 metronome=self.config.volume.metronome,
                 voice=self.config.volume.voice)
+            self.timeline_toolbar.click_popup.set_level(
+                round(self.config.volume.metronome * 100))
+        if "audio" in adopted:
+            self.timeline_toolbar.click_popup.set_accent(
+                self.config.audio.click_accent)
 
     def show_about_dialog(self):
         """Show the About dialog with build provenance."""
@@ -750,6 +1072,8 @@ class MainWindow(QMainWindow):
 
     def enter_edit_mode(self):
         """Enter the stage scenario designer: grid on, swap button for toolbar."""
+        # The designer is the 2D stage's; exit_edit_mode brings the 3D one back.
+        self._drop_stage3d()
         stage_view = self.stage_controller.get_stage_view()
         self.stage_controller.set_design_mode(True)
         stage_view.set_grid_visible(True)
@@ -767,6 +1091,87 @@ class MainWindow(QMainWindow):
         self.edit_toolbar.hide()
         self.edit_stage_button.show()
         stage_view.reposition_overlays()
+        self._sync_stage3d()
+
+    # ------------------------------------------------------------------
+    # The experimental 3D stage (stage/stage3d/)
+    # ------------------------------------------------------------------
+    def _sync_stage3d(self, rebuild=False):
+        """Show the experimental 3D stage in the 2D stage's place, or put the
+        2D stage back, as the preference and edit mode say — the one entry
+        for launch, Settings, a prefs reload and the designer. `rebuild` builds
+        it afresh for a changed patch, which it reads only when built."""
+        wanted = (self.config.window.stage_3d_experimental
+                  and self.edit_toolbar.isHidden())
+        if not wanted:
+            self._drop_stage3d()
+        elif self._stage3d is None or rebuild:
+            self._show_stage3d()
+
+    def _show_stage3d(self):
+        from stage.stage3d import embedded   # here: the 2D path never pays for it
+        view = embedded.create(self.config.fixtures)
+        if view is None:
+            self._give_up_stage3d("The 3D stage could not be built (see the log).")
+            return
+        old = self._stage3d
+        if old is not None:
+            # Before the swap reparents it: Qt drops a reparented GL widget's
+            # context, and its textures must go while that context is current.
+            old.dispose()
+        else:
+            old = self.stage_controller.get_stage_view()
+            # A decision, not a suspend: a resume that dock/undock queued must
+            # not rebuild the light on a stage nobody can see.
+            self.stage_controller.set_gpu_light(False)
+        self._swap_stage_widget(old, view)
+        view.render_failed.connect(self._on_stage3d_render_failed,
+                                   Qt.ConnectionType.QueuedConnection)
+        self._stage3d = view
+        self.logger.info("Experimental 3D stage shown")
+
+    def _drop_stage3d(self):
+        view, self._stage3d = self._stage3d, None
+        if view is None:
+            return
+        view.dispose()      # before the swap, as in _show_stage3d
+        self._swap_stage_widget(view, self.stage_controller.get_stage_view())
+        # The GPU light _show_stage3d turned off; deferred like dock_stage's.
+        QTimer.singleShot(0, self._apply_stage_gpu)
+        self.logger.info("2D stage back in place of the 3D stage")
+
+    def _stage_widget(self):
+        """Whichever stage is on show: the 3D one, or the 2D view."""
+        if self._stage3d is not None:
+            return self._stage3d
+        return self.stage_controller.get_stage_view()
+
+    def _swap_stage_widget(self, old, new):
+        """Put `new` where `old` stands — slot 0 of main_content, or the floating
+        stage window — leaving `old` parentless and hidden (stage_controller
+        keeps the 2D view alive; its overlays go with it)."""
+        if self._stage_window is not None:
+            self._stage_window.layout().replaceWidget(old, new)
+            old.setParent(None)
+            new.show()
+        else:
+            # Replace, never insert: main_content is also _sidebar_splitter,
+            # which holds exactly two widgets.
+            self.main_content.replaceWidget(0, new)
+
+    def _on_stage3d_render_failed(self):
+        self._give_up_stage3d("The 3D stage cannot render with this machine's "
+                              "OpenGL driver (it needs OpenGL 4.1).")
+
+    def _give_up_stage3d(self, why):
+        """Put the 2D stage back and turn the preference off, so a machine
+        that cannot run it is not asked again at every patch edit."""
+        self.config.window.stage_3d_experimental = False
+        self._drop_stage3d()
+        self.save_config()
+        QMessageBox.warning(self, "3D stage unavailable",
+                            f"{why}\n\nThe 2D stage is back, and the experimental "
+                            "3D stage has been turned off in Settings.")
 
     # ------------------------------------------------------------------
     # Stage docking
@@ -824,7 +1229,7 @@ class MainWindow(QMainWindow):
         """
         if self._stage_window is not None:
             return
-        stage_view = self.stage_controller.get_stage_view()
+        stage_view = self._stage_widget()
 
         # A collapsed sidebar would be stranded: its toggle is a stage overlay,
         # which is about to leave with the stage. Remember the state rather than
@@ -871,7 +1276,7 @@ class MainWindow(QMainWindow):
         """Put the stage back into the main window."""
         if self._stage_window is None:
             return
-        stage_view = self.stage_controller.get_stage_view()
+        stage_view = self._stage_widget()
         self.stage_controller.suspend_gpu_light()
         self._set_toolbar_at_bottom(False)
 
@@ -898,6 +1303,27 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.stage_controller.resume_gpu_light)
         self.logger.info("Stage docked back into the main window")
 
+    def toggle_stage_fullscreen(self):
+        """F: the stage alone on a whole screen, and back (Esc also comes back).
+
+        Fullscreen belongs to the floating window, so a docked stage undocks
+        for it first and docks again on the way out — docked is where the
+        operator had it. One that was already floating returns to its window.
+        """
+        window = self._stage_window
+        if window is not None and window.isFullScreen():
+            if self._docked_before_fullscreen:
+                self.dock_stage()
+            else:
+                window.showNormal()
+            self.logger.info("Stage left fullscreen")
+            return
+        self._docked_before_fullscreen = window is None
+        if window is None:
+            self.undock_stage()
+        self._stage_window.showFullScreen()
+        self.logger.info("Stage fullscreen")
+
     def add_fixture_from_timeline(self):
         """Timeline toolbar's "+ Add track": a timeline lane IS a patched
         fixture, so this enters the stage designer and opens the same fixture
@@ -906,12 +1332,72 @@ class MainWindow(QMainWindow):
         self.enter_edit_mode()
         self.edit_toolbar.open_add_fixture()
 
+    def open_fixture_editor(self, channel: int, tab: str = "scenes",
+                            ref: dict = None) -> None:
+        """The ONE entry point for the Edit-fixture dialog. `channel` is the
+        fixture's stable MIDI channel (the binding key, not a display row).
+
+        Deferred by a zero timer on purpose. Every caller emits from inside a
+        widget this dialog can destroy: an edit in it runs _on_patch_changed,
+        which rebuilds the timeline tracks — deleteLater()ing every
+        TrackHeaderWidget — and refreshes the clip library, which
+        deleteLater()s every pill and card. deleteLater posts to the event
+        loop, and a modal exec() IS an event loop, so a dialog opened straight
+        from a header's or a card's own handler returns into a freed C++
+        object. Letting the emitting stack unwind first is the whole fix.
+        """
+        QTimer.singleShot(
+            0, lambda: self._open_fixture_editor_now(channel, tab, ref))
+
+    def _open_fixture_editor_now(self, channel: int, tab: str,
+                                 ref: dict = None) -> None:
+        if self._fixture_editor is not None:
+            # A second request queued behind the first (an impatient
+            # double-click): show the one that is already up.
+            self._fixture_editor.raise_()
+            self._fixture_editor.activateWindow()
+            return
+        instance = next((f for f in self.config.fixtures
+                         if getattr(f, "channel", -1) == channel), None)
+        if instance is None:
+            # Repatched away between the request and this tick.
+            self.logger.info(f"No fixture on channel {channel} to edit")
+            return
+        dialog = AddFixtureDialog(self.stage_controller, self, instance=instance,
+                                  midi_manager=self.midi_manager)
+        dialog.select_tab(tab)
+        # A card names one scene or chase, not just a tab — open on it.
+        dialog.reveal(ref)
+        # The tabs write the library whichever button closes the dialog, so the
+        # panel rebuilds on the write — the same route the edit toolbar takes.
+        dialog.library_changed.connect(self._refresh_clip_library)
+        self._fixture_editor = dialog
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._fixture_editor = None
+        # A confirmed Delete already removed the fixture and accepted; anything
+        # else the dialog holds is answered by OK and discarded by Cancel.
+        if accepted and (dialog.was_deleted() or dialog.apply_edits()):
+            self._on_patch_changed()
+        dialog.deleteLater()
+
     def _on_fixture_selected(self, instance):
-        """Show + populate the inspector for the selected fixture (or hide it)."""
+        """Show + populate the overlay inspector for the selected fixture.
+
+        Gated on edit mode rather than assumed from the emission: a mode or
+        rigging change also emits this, and the fixture dialog's edit mode
+        drives both from the timeline and the clip library — with the stage not
+        in the designer at all, where an inspector card popping up over it
+        would be nonsense.
+        `isHidden` rather than `isVisible`, for the same reason
+        `_escape_backs_out` uses it: the toolbar is an overlay whose
+        ancestors may not be shown yet."""
+        editing = not self.edit_toolbar.isHidden()
         stage_view = self.stage_controller.get_stage_view()
-        self.fixture_inspector.set_instance(instance)
-        self.fixture_inspector.setVisible(instance is not None)
-        if instance is not None:
+        self.fixture_inspector.set_instance(instance if editing else None)
+        self.fixture_inspector.setVisible(editing and instance is not None)
+        if editing and instance is not None:
             self.fixture_inspector.adjustSize()
         stage_view.reposition_overlays()
 
@@ -922,35 +1408,37 @@ class MainWindow(QMainWindow):
         return tuple((f.type, f.mode, f.dmx_start, f.channel, f.name)
                      for f in self.config.fixtures)
 
-    def _patch_dmx_signature(self):
-        """What the software DMX engine depends on (per fixture). Excludes the
-        name so a rename never re-patches (and never blacks out) the rig;
-        includes `mode`, which changes the fixture's DMX footprint."""
-        return tuple((f.type, f.mode, f.dmx_start, f.channel)
-                     for f in self.config.fixtures)
-
     def _on_patch_changed(self):
         """Persist a fixture-patch edit and propagate it live: rebuild the
         timeline tracks, refresh the clip library + DMX monitor, and hot-swap the
         running software DMX engine — each gated by a cheap signature so stage
-        drag-moves (and, for the engine, renames) don't cause needless churn."""
+        drag-moves (and, for the engine, renames) don't cause needless churn.
+        The engine's half, signature included, is AppCore.on_patch_edited."""
         self.save_config()
 
         ui_sig = self._patch_ui_signature()
         if ui_sig != self._last_ui_sig:
             self._last_ui_sig = ui_sig
             self.midi_manager.update_fixtures(self.config.fixtures)
-            self.timeline.rebuild_for_patch(self.config.fixtures)
-            self.clip_library.refresh_configuration(self.config)
-            self.dmx_display.refresh_configuration(self.config)
+            self._rebuild_patch_views()
 
-        dmx_sig = self._patch_dmx_signature()
-        controller = getattr(self, "software_controller", None)
-        if controller is not None and dmx_sig != self._last_dmx_sig:
-            self._last_dmx_sig = dmx_sig
-            self.app_core.repatch_controller()
-
+        self.app_core.on_patch_edited()
         self.toolbar_manager.update_show_stats()
+        # The 3D stage reads its patch once, when it is built.
+        if self._stage3d is not None:
+            self._sync_stage3d(rebuild=True)
+
+    def _rebuild_patch_views(self):
+        """Rebuild every view laid out from the patch: the timeline lanes, the
+        clip library and the DMX monitor."""
+        self.timeline.rebuild_for_patch(self.config.fixtures)
+        self._refresh_clip_library()
+        self.dmx_display.refresh_configuration(self.config)
+
+    def _refresh_clip_library(self):
+        """Rebuild the library panel, after a patch edit or a write to a
+        fixture type's scene banks or chases."""
+        self.clip_library.refresh_configuration(self.config)
 
     # ------------------------------------------------------------------
     # Show project operations
@@ -960,25 +1448,28 @@ class MainWindow(QMainWindow):
         view (the core already propagated the patch to midi/controller).
         Reuses the exact propagation path of _on_patch_changed, unconditionally."""
         self._last_ui_sig = self._patch_ui_signature()
-        self._last_dmx_sig = self._patch_dmx_signature()
-        self.timeline.rebuild_for_patch(self.config.fixtures)
-        self.clip_library.refresh_configuration(self.config)
-        self.dmx_display.refresh_configuration(self.config)
+        self._rebuild_patch_views()
         # The stage too: opening a show rebinds config.fixtures to a new list,
         # and without this the previous show's rig stayed lit until a restart.
         self.stage_controller.sync_from_config(self.config)
+        if self._stage3d is not None:
+            self._sync_stage3d(rebuild=True)
 
     def _on_show_reloaded(self):
         """Counters, show name, autosave chip and title after a show reload."""
         self.playlist_controller.update_song_counter()
+        self._refresh_show_status()
+        self.update_window_title()
+
+    def _refresh_show_status(self):
+        """The top bar's show name, and its autosave chip back at "saved"."""
         show = self.show_manager.show
         self.toolbar_manager.set_show_name(show.name if show else "")
         self.toolbar_manager.set_autosave_state("saved")
-        self.update_window_title()
 
     def new_show_dialog(self):
-        """Create a new show project (seeded with the default patch and this
-        machine's default cues) and open it."""
+        """Create a new show project (seeded with the default patch) and open
+        it. Favourites start empty — they are starred per show."""
         name, ok = QInputDialog.getText(self, "New show", "Show name:")
         if not ok or not name.strip():
             return
@@ -989,9 +1480,7 @@ class MainWindow(QMainWindow):
         self.stop_playback()
         try:
             show = show_store.create_show(
-                parent, name.strip(),
-                fixtures=shipped_fixtures(),
-                cues=deepcopy(self.config.webremote.cues))
+                parent, name.strip(), fixtures=shipped_fixtures())
             self.show_manager.open_show(show.root)
         except ShowError as e:
             ErrorDialogManager.show_validation_error(
@@ -1012,10 +1501,6 @@ class MainWindow(QMainWindow):
             self.show_manager.open_show(path)
         except ShowError as e:
             ErrorDialogManager.show_media_file_error(self, path, str(e))
-
-    def save_show_now(self):
-        """Manual Save: a forced flush (autosave already covers the rest)."""
-        self.show_manager.flush("manual")
 
     def save_show_as_dialog(self):
         """Duplicate the show (without its versions/ history) and open the copy."""
@@ -1082,63 +1567,75 @@ class MainWindow(QMainWindow):
         except ShowError as e:
             ErrorDialogManager.show_media_file_error(self, path, str(e))
 
-    def on_song_title_edited(self, title: str):
-        """Persist an edited song title (feeds the setlist + web remote)."""
-        song = self.config.get_current_song()
-        if song is None or song.title == title.strip():
-            return
-        song.title = title.strip()
-        self.save_config()
-        # Refresh the setlist combobox so the renamed entry updates in place.
-        self.playlist_controller.update_song_counter()
-        webremote = getattr(self, "webremote_manager", None)
-        if webremote is not None:
-            webremote._publish_full()
+    def on_marker_edit_requested(self, kind: str, time_sec: float):
+        """A ruler flag was double-clicked: its editor, opened on it."""
+        self.show_markers_dialog(select=(kind, time_sec))
 
-    def show_markers_dialog(self):
-        """Open the per-song marker editor (timeline toolbar 🗣 Cues)."""
+    def show_markers_dialog(self, select=None):
+        """Open the per-song marker editor (timeline toolbar ▸ Markers).
+
+        `select` is the (kind, time) of the marker to open on, as a ruler flag
+        names it; the toolbar button passes none and lands on the first."""
         song = self.config.get_current_song()
         if song is None:
             return
         songs = self.config.playlist.songs
         dialog = MarkersDialog(
-            song.voice_cues, song.control_markers, self,
+            song.voice_tts, song.control_markers, self,
             audio_engine=self.audio_engine,
             tts_voice=self.config.audio.tts_voice,
             segue=song.segue, segue_time=song.segue_time,
-            base_bpm=self.bpm_state.get_bpm(),
+            base_bpm=self.bpm_state.get_bpm(), meter=song.meter,
             duration=song_duration(song) or self.midi_manager.get_duration() or 0.0,
             song_title=song.title,
             has_next_song=(self.config.playlist.current_song_index
-                           < len(songs) - 1))
+                           < len(songs) - 1),
+            select=select)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        song.voice_cues = dialog.voice_cues()
+        song.voice_tts = dialog.voice_tts()
         song.control_markers = dialog.control_markers()
         song.segue = dialog.segue_enabled()
         song.segue_time = dialog.segue_time()
+        self.apply_marker_edits(song)
+
+    def on_marker_moved(self, kind: str, old_time: float, new_time: float):
+        """A ruler marker was dragged: retime it on the song and re-apply.
+
+        The ruler hands back the kind and the time the flag sat at, which is
+        what identifies the marker — the flags are drawn from tuples, and the
+        segue is not in any list at all."""
+        song = self.config.get_current_song()
+        if song is None:
+            return
+        if kind == core_markers.KIND_SEGUE:
+            song.segue_time = new_time
+        elif kind == core_markers.KIND_VOICE:
+            cue = core_markers.marker_at(song.voice_tts, old_time)
+            if cue is None:
+                return
+            cue.time = new_time
+        else:
+            marker = core_markers.marker_at(song.control_markers, old_time, kind)
+            if marker is None:
+                return
+            marker.time = new_time
+        self.apply_marker_edits(song)
+
+    def apply_marker_edits(self, song):
+        """Persist and re-apply a song's marker track after an edit — the Cues
+        dialog's OK and a ruler drag both land here. Ruler markers are the
+        window's half; the PCM render and the transport half (tempo map, marker
+        firing, segue) ride the core."""
         self.save_config()
-        # Ruler markers are the window's half; the PCM render and the transport
-        # half (tempo map, marker firing, segue) ride the core.
         self.refresh_timeline_markers(song)
-        self.app_core.apply_voice_cues(song)
+        self.app_core.apply_voice_tts(song)
         self.app_core.apply_song_markers(song)
 
     def refresh_timeline_markers(self, song):
         """Redraw the ruler's marker track for `song` (also used on load)."""
-        self.timeline.set_voice_cues([(c.time, c.text) for c in song.voice_cues])
+        self.timeline.set_voice_tts([(c.time, c.text) for c in song.voice_tts])
         self.timeline.set_control_markers(core_markers.ruler_rows(song))
-
-    def on_song_key_edited(self, key: str):
-        """Persist the current song's musical key (TONO chip / web remote)."""
-        song = self.config.get_current_song()
-        if song is None or song.key == key:
-            return
-        song.key = key
-        self.save_config()
-        webremote = getattr(self, "webremote_manager", None)
-        if webremote is not None:
-            webremote._publish_full()
 
     def take_snapshot_dialog(self):
         """Take a named, pinned (never-pruned) snapshot of the show."""
@@ -1158,8 +1655,30 @@ class MainWindow(QMainWindow):
             return
         self._refresh_versions_ui()
 
+    def open_auto_program(self):
+        """The auto program, on the loaded song first. Modal; a show opened
+        meanwhile (the web remote can) closes it, as it does the playlist
+        manager — its songs would be the old show's."""
+        dialog = AutoProgramDialog(self.app_core.autoprogrammer,
+                                   self.config.playlist.songs,
+                                   self.config.get_current_song(), self)
+        self.app_core.show_reloaded.connect(dialog.reject)
+        dialog.exec()
+        self.app_core.show_reloaded.disconnect(dialog.reject)
+        dialog.deleteLater()
+
+    def _on_auto_program_applied(self, song, current):
+        """A take became `song`'s program: the loaded song's timeline shows
+        the document AutoProgrammer reloaded, as after loading a .mid."""
+        if not current:
+            return
+        self.timeline.refresh_from_manager(detect_bpm=True)
+        self.toolbar_manager.update_midi_file_display(song.midi)
+        self.toolbar_manager.set_export_midi_enabled(True)
+        self.update_window_title()
+
     def _refresh_versions_ui(self):
-        """Repopulate the toolbar's snapshot picker + counts from disk."""
+        """Repopulate the ☰ menu's Restore submenu from disk."""
         show = self.show_manager.show
         if show is None:
             self.toolbar_manager.set_versions([])
@@ -1168,7 +1687,7 @@ class MainWindow(QMainWindow):
         self.toolbar_manager.set_versions(versions.list_versions(show))
 
     def restore_version_from_toolbar(self, version_id: str):
-        """Restore the snapshot picked in the toolbar's VERSIONS combobox,
+        """Restore the snapshot picked in the ☰ menu's Restore submenu,
         confirming first (the rollback itself snapshots the current state, so
         it stays undoable from History)."""
         if self.show_manager.show is None or not version_id:
@@ -1187,32 +1706,30 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Restore failed", str(e))
 
-    def on_audio_volume_changed(self, value):
-        """Handle audio volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.media_controller.set_audio_volume(volume)
-        self.config.update_volume(audio=volume)
-        self.save_config()
-
-    def on_audio_mute_toggled(self, muted):
-        """Handle audio mute toggle from timeline."""
-        self.media_controller.set_audio_muted(muted)
-
-    def on_voice_volume_changed(self, value):
-        """Handle voice (TTS guide) volume changes from timeline."""
-        volume = float(value) / 100.0
-        self.audio_engine.set_bus_volume(BUS_VOICE, volume)
-        self.config.update_volume(voice=volume)
-        self.save_config()
-
-    def on_voice_mute_toggled(self, muted):
-        """Handle voice mute toggle from the timeline header's VOICE row."""
-        self.audio_engine.set_bus_muted(BUS_VOICE, muted)
-
     def on_track_heights_changed(self, waveform_height, midi_events_height):
         """Persist track heights when the user finishes resizing."""
         self.config.window.waveform_track_height = int(waveform_height)
         self.config.window.midi_events_track_height = int(midi_events_height)
+        self.save_config()
+
+    def on_header_width_changed(self, width):
+        """Persist the timeline's track-header width when the user finishes
+        dragging its divider."""
+        self.config.window.timeline_header_width = int(width)
+        self.save_config()
+
+    def on_track_order_changed(self, channels):
+        """Persist the track strip's order after a lane was dragged to a new row.
+
+        The row rides the patch entry (show data, like the fixture's address and
+        its rigging), so every fixture is stamped rather than only the moved
+        one — a half-filled order would leave the untouched lanes falling back
+        to DMX address and reshuffling behind the one that moved."""
+        by_channel = {f.channel: f for f in self.config.fixtures}
+        for row, channel in enumerate(channels):
+            instance = by_channel.get(channel)
+            if instance is not None:
+                instance.order = row
         self.save_config()
 
     def _on_row_height_preset(self, height):
@@ -1296,8 +1813,7 @@ class MainWindow(QMainWindow):
         # mouseReleaseEvent (via MidiManager.move_event → data_changed).
         # A synchronous refresh would destroy scene items while Qt is
         # still processing events on them, causing SIGSEGV.
-        if self.timeline:
-            self.timeline._schedule_refresh()
+        self.timeline._schedule_refresh()
 
         # Enable export button if we have MIDI data
         has_midi_data = self.midi_manager.midi_data is not None
@@ -1319,94 +1835,146 @@ class MainWindow(QMainWindow):
             filt = "All files (*)"
         path, _ = QFileDialog.getOpenFileName(self, title, "", filt)
         if path:
-            try:
-                # Validate file exists and is accessible
-                if not os.path.exists(path):
-                    ErrorDialogManager.show_media_file_error(self, path, "File not found")
+            self.load_media_file(file_type, path)
+
+    def load_media_file(self, file_type, path):
+        """Load `path` as the current song's backing ('audio'), 'guide' or 'midi'.
+
+        The picker's other half: everything the file dialog does once a path is
+        in hand, so a dropped file takes exactly the same route."""
+        try:
+            # Validate file exists and is accessible
+            if not os.path.exists(path):
+                ErrorDialogManager.show_media_file_error(self, path, "File not found")
+                return
+            
+            if file_type == 'audio':
+                # Validate file extension
+                if not is_audio_path(path):
+                    ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
                     return
                 
-                if file_type == 'audio':
-                    # Validate file extension
-                    file_ext = path.lower().split('.')[-1]
-                    if file_ext not in ['mp3', 'wav']:
-                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
-                        return
-                    
-                    # Backing track: sets it on the CURRENT song, replacing
-                    # whatever it had — exactly like the guide. Growing the
-                    # setlist is SETLIST ▸ + alone, so picking a file never
-                    # silently spawns a song beside the one being edited.
-                    self.stop_playback()
+                # Backing track: sets it on the CURRENT song, replacing
+                # whatever it had — exactly like the guide. Growing the
+                # setlist is SETLIST ▸ + alone, so picking a file never
+                # silently spawns a song beside the one being edited.
+                self.stop_playback()
+                song = self.config.get_current_song()
+                if song is None:
+                    new_index = self.config.add_song(audio=path)
+                    self.config.set_current_song_index(new_index)
                     song = self.config.get_current_song()
-                    if song is None:
-                        new_index = self.config.add_song(audio=path)
-                        self.config.set_current_song_index(new_index)
-                        song = self.config.get_current_song()
-                        self.logger.info(
-                            f"Added first song to the setlist at index {new_index}")
-                    else:
-                        self.config.update_current_song(audio=path, offset=0.0)
-                    self.playlist_controller.apply_song_config(song)
-                    self.playlist_controller.update_song_counter()
-                    self.save_config()
-                    self.logger.info(f"Backing track set: {path}")
-                    
-                elif file_type == 'guide':
-                    # Guide track: attaches to the CURRENT song — or starts one
-                    # of its own when the setlist is empty (a guide is as good
-                    # a reason for a song to exist as a backing).
-                    file_ext = path.lower().split('.')[-1]
-                    if file_ext not in ['mp3', 'wav']:
-                        ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
-                        return
-                    song = self.config.get_current_song()
-                    if song is None:
-                        self.stop_playback()
-                        new_index = self.config.add_song(guide=path)
-                        self.config.set_current_song_index(new_index)
-                        song = self.config.get_current_song()
-                        self.logger.info(
-                            f"Added guide-only song to playlist at index {new_index}")
-                    else:
-                        # A different file: its sync offset is not this one's.
-                        self.config.update_current_song(guide=path,
-                                                        guide_offset=0.0)
-                    # Full reload keeps engine/waveform/toolbar consistent
-                    self.playlist_controller.apply_song_config(song)
-                    self.playlist_controller.update_song_counter()
-                    self.save_config()
-                    self.logger.info(f"Guide track set: {path}")
-
-                elif file_type == 'midi':
-                    # Save pending edits of the current MIDI, then copy the
-                    # picked file into the show's midis/ — the show owns its
-                    # sequences; the user's original stays untouched.
-                    self.show_manager.flush("load-midi")
-                    owned = self.show_manager.import_midi_copy(path)
-                    load_path = owned or path
-                    self.config.update_current_song(midi=load_path)
-                    self.save_config()
-
-                    # Load MIDI file via MidiManager and update display
-                    self.show_manager.begin_song_load()
-                    try:
-                        loaded = self.midi_manager.load_from_file(load_path)
-                    finally:
-                        self.show_manager.end_song_load()
-                    if loaded:
-                        self.timeline.refresh_from_manager(detect_bpm=True)
-                        self.toolbar_manager.update_midi_file_display(load_path)
-                        self.toolbar_manager.set_export_midi_enabled(True)
-                    else:
-                        ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
-                        return
+                    self.logger.info(
+                        f"Added first song to the setlist at index {new_index}")
+                else:
+                    self.config.update_current_song(audio=path, offset=0.0)
+                self.playlist_controller.apply_song_config(song)
+                self.playlist_controller.update_song_counter()
+                self.save_config()
+                self.logger.info(f"Backing track set: {path}")
                 
-                self.update_window_title()
-                    
-            except PermissionError:
-                ErrorDialogManager.show_file_permission_error(self, path, "read")
-            except Exception as e:
-                ErrorDialogManager.show_media_file_error(self, path, str(e))
+            elif file_type == 'guide':
+                # Guide track: attaches to the CURRENT song — or starts one
+                # of its own when the setlist is empty (a guide is as good
+                # a reason for a song to exist as a backing).
+                if not is_audio_path(path):
+                    ErrorDialogManager.show_media_file_error(self, path, "Unsupported audio format. Please select an MP3 or WAV file.")
+                    return
+                song = self.config.get_current_song()
+                if song is None:
+                    self.stop_playback()
+                    new_index = self.config.add_song(guide=path)
+                    self.config.set_current_song_index(new_index)
+                    song = self.config.get_current_song()
+                    self.logger.info(
+                        f"Added guide-only song to playlist at index {new_index}")
+                else:
+                    # A different file: its sync offset is not this one's.
+                    self.config.update_current_song(guide=path,
+                                                    guide_offset=0.0)
+                # Full reload keeps engine/waveform/toolbar consistent
+                self.playlist_controller.apply_song_config(song)
+                self.playlist_controller.update_song_counter()
+                self.save_config()
+                self.logger.info(f"Guide track set: {path}")
+
+            elif file_type == 'midi':
+                # Save pending edits of the current MIDI, then copy the
+                # picked file into the show's midis/ — the show owns its
+                # sequences; the user's original stays untouched.
+                self.show_manager.flush("load-midi")
+                owned = self.show_manager.import_midi_copy(path)
+                load_path = owned or path
+                self.config.update_current_song(midi=load_path)
+                self.save_config()
+
+                # Load MIDI file via MidiManager and update display
+                self.show_manager.begin_song_load()
+                try:
+                    loaded = self.midi_manager.load_from_file(load_path)
+                finally:
+                    self.show_manager.end_song_load()
+                if loaded:
+                    self.timeline.refresh_from_manager(detect_bpm=True)
+                    self.toolbar_manager.update_midi_file_display(load_path)
+                    self.toolbar_manager.set_export_midi_enabled(True)
+                else:
+                    ErrorDialogManager.show_media_file_error(self, path, "Failed to load MIDI file")
+                    return
+            
+            self.update_window_title()
+                
+        except PermissionError:
+            ErrorDialogManager.show_file_permission_error(self, path, "read")
+        except Exception as e:
+            ErrorDialogManager.show_media_file_error(self, path, str(e))
+
+    def dragEnterEvent(self, event):
+        if audio_paths_from_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        # Same answer as the enter: a child that refuses the drag (the timeline
+        # takes clips and scenes, not files) propagates its moves up here too.
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        """Take a dropped audio file as the current song's backing or guide."""
+        paths = audio_paths_from_mime(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if len(paths) > 1:
+            self.logger.info(
+                f"Dropped {len(paths)} audio files, loading the first one: "
+                f"{paths[0]}")
+        # Ask AFTER the drop returns: a modal dialog opened while the drag
+        # session is still unwinding keeps the pointer grabbed.
+        QTimer.singleShot(0, lambda path=paths[0]: self._load_dropped_audio(path))
+
+    def _load_dropped_audio(self, path):
+        """Which of the two audio slots did the user mean? Only they know."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Load audio file")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"Load “{os.path.basename(path)}” as:")
+        box.setInformativeText(
+            "The backing track is what plays live; the guide track is a "
+            "full-mix reference for designing to.")
+        backing = box.addButton("Backing track",
+                                QMessageBox.ButtonRole.AcceptRole)
+        guide = box.addButton("Guide track", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(backing)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is backing:
+            self.load_media_file('audio', path)
+        elif clicked is guide:
+            self.load_media_file('guide', path)
 
     def clear_backing_track(self):
         """Remove the current song's backing track (the file stays on disk).
@@ -1499,10 +2067,6 @@ class MainWindow(QMainWindow):
     def _on_config_save_failed(self, prefs_file):
         ErrorDialogManager.show_file_permission_error(self, prefs_file, 'save')
 
-    def start_playback(self):
-        """Start media playback using media controller."""
-        self.media_controller.start_playback()
-
     def play_pause_playback(self):
         """Toggle playback via the core."""
         self.app_core.play_pause_playback()
@@ -1515,6 +2079,12 @@ class MainWindow(QMainWindow):
     def seek_playback(self, time_seconds):
         """Seek to position via the core (which resyncs the metronome)."""
         self.app_core.seek_playback(time_seconds)
+
+    def _play_from(self, time_seconds):
+        """Seek, then start the transport unless it is already running."""
+        self.seek_playback(time_seconds)
+        if not self.media_controller.is_playing:
+            self.play_pause_playback()
 
     def update_window_title(self):
         """Update window title with the open show and loaded file names."""
@@ -1535,23 +2105,169 @@ class MainWindow(QMainWindow):
         in the process: while a dialog is up, or a text field in this window has
         focus, Space belongs to them and must not reach the transport.
         """
+        return self._window_owns_key(TEXT_ENTRY_WIDGETS)
+
+    def _arrow_seeks_playhead(self):
+        """True when ←/→ mean "move the playhead" instead of a keystroke for a
+        widget.
+
+        More widgets steer with the arrows than with Space, and this filter is
+        installed on the QApplication, so it sees every key press in the
+        process: on top of Space's text fields and spin boxes, a slider moves
+        its value, an item view its current row, a tab bar its page. The line
+        is whether the widget has another way to do the same thing — it does
+        not, so it keeps the key, while a closed combo box (the setlist among
+        them, and it holds focus at launch) steers with Up/Down just as well
+        and hands ←/→ to the transport. An open menu and a dialog own the key
+        outright, which the popup and active-window checks answer.
+        """
+        if QApplication.activePopupWidget() is not None:
+            return False
+        return self._window_owns_key(
+            TEXT_ENTRY_WIDGETS + (QAbstractSlider, QAbstractItemView, QTabBar))
+
+    def _f_toggles_stage_fullscreen(self, event):
+        """True when F means "stage fullscreen" instead of a keystroke for a
+        widget.
+
+        Space's rule, with two additions. The floating stage window counts as
+        ours: fullscreen, it is the only window on that screen, and it has to
+        answer the key that takes it back out. And only a bare F — a modifier
+        leaves the key to whichever shortcut it spells, and an open popup (a
+        menu, a combo's list) is typing to find an entry.
+        """
+        if event.modifiers() != Qt.KeyboardModifier.NoModifier:
+            return False
+        if QApplication.activePopupWidget() is not None:
+            return False
+        return self._window_owns_key(TEXT_ENTRY_WIDGETS, also=self._stage_window)
+
+    def _window_owns_key(self, keepers, also=None):
+        """True unless the key belongs elsewhere: to another window that is
+        active (a dialog — `also` names one that is not), or to the focused
+        widget — one of the `keepers` types, or an editable combo box, whose
+        text caret it moves."""
         active = QApplication.activeWindow()
-        if active is not None and active is not self:
+        if active is not None and active is not self and active is not also:
             return False
         focus = QApplication.focusWidget()
-        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit,
-                              QAbstractSpinBox)):
+        if isinstance(focus, keepers):
             return False
         return not (isinstance(focus, QComboBox) and focus.isEditable())
 
+    def _arrow_seek(self, direction, new_hold):
+        """Move the playhead one step: `direction` -1 for ←, +1 for →.
+
+        The step grows with how long the key has been held, so a tap nudges and
+        a hold sweeps. Auto-repeat drives the hold, but ARROW_SEEK_INTERVAL
+        paces it — and a fresh press skips that throttle, so a tap always
+        lands. Pressing the other key is a fresh press, which is what restarts
+        the ramp on a direction change.
+
+        The upper bound is the song's own length (its longest audio track, else
+        its sequence), the same one the web remote's scrubber takes; a song
+        with neither is unbounded, since nothing measures it.
+        """
+        now = time.monotonic()
+        if new_hold:
+            self._arrow_held_since = now
+        elif now - self._arrow_last_step < ARROW_SEEK_INTERVAL:
+            return
+        self._arrow_last_step = now
+
+        ramp = min((now - self._arrow_held_since) / ARROW_SEEK_RAMP, 1.0)
+        step = ARROW_SEEK_STEP + (ARROW_SEEK_MAX_STEP - ARROW_SEEK_STEP) * ramp
+        target = max(0.0, self.media_controller.get_current_position()
+                     + direction * step)
+        end = (song_duration(self.config.get_current_song())
+               or self.midi_manager.get_duration() or 0.0)
+        if end:
+            target = min(target, end)
+
+        self.seek_playback(target)
+        # A seek while paused emits no position_changed (the tick returns early
+        # when the transport is stopped), so move the playhead and the clock
+        # here — watching them move is the whole point of the key.
+        self._on_position_changed(target)
+
+    def _escape_backs_out(self):
+        """True when Esc means "back out of the stage designer" or "leave the
+        fullscreen stage".
+
+        Every dialog cancels on Esc for free (QDialog routes it to reject()), and
+        so do combo/menu popups — so this filter, which sees every key press in
+        the process, must stand down while one of those is up and answer only for
+        the designer and fullscreen, which are modes rather than windows of
+        their own. Modality is asked
+        about directly and not left to `activeWindow`, because the Add-fixture
+        dialog opens FROM the designer's own toolbar: its Esc arrives with edit
+        mode still on, and eating it would strand the dialog.
+
+        The stage window counts as ours — the stage is designable undocked too,
+        and the toolbar rides the view into it. `isHidden` rather than
+        `isVisible` because the toolbar is an overlay whose ancestors may not be
+        up yet.
+        """
+        fullscreen = self._stage_window is not None and self._stage_window.isFullScreen()
+        if self.edit_toolbar.isHidden() and not fullscreen:
+            return False
+        if (QApplication.activePopupWidget() is not None
+                or QApplication.activeModalWidget() is not None):
+            return False
+        active = QApplication.activeWindow()
+        return active is None or active is self or active is self._stage_window
+
+    def _back_out_one_level(self):
+        """Esc backs out ONE level: the inspector first, then edit mode itself,
+        then fullscreen — the outermost, since the designer runs inside it.
+
+        Clearing the selection is what the inspector's own ✕ does — the card
+        hides in response to `fixture_selected(None)`, never on its own.
+        """
+        if not self.fixture_inspector.isHidden():
+            self.stage_controller.scene.clearSelection()
+            return
+        if not self.edit_toolbar.isHidden():
+            self.exit_edit_mode()
+            return
+        self.toggle_stage_fullscreen()
+
     def eventFilter(self, source, event):
-        """Global event filter to capture spacebar from any widget."""
-        if (event.type() == QEvent.Type.KeyPress and
-            event.key() == Qt.Key.Key_Space and
-            self._spacebar_toggles_playback()):
-            # Toggle play/pause when spacebar is pressed anywhere
-            self.play_pause_playback()
-            return True  # Event handled, don't pass to widget
+        """Global event filter to capture spacebar / Esc / ←→ / F from any widget.
+
+        Installed on the QApplication, so it runs for EVERY event on the GUI
+        thread — paints, timers, queued signals. The KeyPress test stays the
+        one gate in front of everything else: only a key event has `.key()`,
+        and an exception raised in here aborts the whole process (PyQt6's
+        qFatal on an unhandled exception in a virtual), on the next event.
+        """
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Space and self._spacebar_toggles_playback():
+                self.play_pause_playback()
+                return True  # Event handled, don't pass to widget
+            if key == Qt.Key.Key_Escape and self._escape_backs_out():
+                self._back_out_one_level()
+                return True
+            if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
+                    and event.modifiers() & Qt.KeyboardModifier.AltModifier
+                    and self._arrow_seeks_playhead()
+                    and self.timeline.waveform_track.sections.nudge_selected(
+                        1 if key == Qt.Key.Key_Right else -1,
+                        fine=bool(event.modifiers()
+                                  & Qt.KeyboardModifier.ShiftModifier))):
+                # Alt+←/→ nudge the selected song sections a bar (Shift: a
+                # beat); with none selected they seek like the bare arrows.
+                return True
+            if (key in (Qt.Key.Key_Left, Qt.Key.Key_Right)
+                    and self._arrow_seeks_playhead()):
+                self._arrow_seek(1 if key == Qt.Key.Key_Right else -1,
+                                 new_hold=not event.isAutoRepeat())
+                return True
+            if key == Qt.Key.Key_F and self._f_toggles_stage_fullscreen(event):
+                if not event.isAutoRepeat():   # a held F must not flicker
+                    self.toggle_stage_fullscreen()
+                return True
         return super().eventFilter(source, event)
 
     def closeEvent(self, event):
@@ -1565,6 +2281,8 @@ class MainWindow(QMainWindow):
         # app alive after the main window is gone.
         if self._stage_window is not None:
             self.dock_stage()
+        if self._stage3d is not None:
+            self._stage3d.dispose()
 
         # Flush the show first, clean up every component, save config — all
         # in the core (idempotent, shared with headless shutdown).

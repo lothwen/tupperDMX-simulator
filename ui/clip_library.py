@@ -3,45 +3,34 @@
 # ABOUTME: grouped data-driven from the patched fixtures' library definitions.
 
 import json
-from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
                              QLineEdit, QToolButton, QButtonGroup, QScrollArea,
-                             QLayout, QApplication, QSizePolicy)
-from PyQt6.QtGui import QColor, QPainter, QDrag
-from PyQt6.QtCore import Qt, QMimeData, QSize, QPoint, pyqtSignal
+                             QLayout, QApplication, QSizePolicy, QMenu)
+from PyQt6.QtGui import QColor, QPainter, QDrag, QCursor
+from PyQt6.QtCore import Qt, QMimeData, QRect, QSize, QPoint, pyqtSignal
 
+from core import clips as clip_model
 from core import note_layout
 from core.config import Config
-from core.fixture_library import GROUP_COLORS
-from core.fixture_library import FixtureDef, color_slots, resolve_fixture
-from midi.scene_editor import TAKE_MANUAL_VELOCITY
-from software_controller.scene_loader import Scene, load_scenes
 from tupperlogger import get_logger
 from ui.widgets import icons
 from ui.widgets.chips import FlowLayout
 
 
-# Custom MIME type carries a JSON payload {"note": int, "velocity": int}.
-# Plain-text fallback is also set so the payload is visible in tools that
-# only inspect text/plain (handy for debugging the drop chain).
-CLIP_MIME_TYPE = "application/x-tupperdmx-midi-clip"
-DEFAULT_DROP_VELOCITY = 127
+# The favourites star drawn on each card, and the gold it lights up in. Sized
+# so the 108px card keeps a readable title beside it.
+_STAR_SIZE = 12
+_STAR_ON_COLOR = '#f5c542'
+_STAR_OFF_COLOR = '#5a5a5a'
 
-# MIME type for scene drops. The payload is a JSON object with the scene's
-# name, per-channel value dict and owning fixture type; on drop the timeline
-# expands it into one channel-control note_on per channel, sharing a group_id.
-SCENE_MIME_TYPE = "application/x-tupperdmx-led-scene"
-
-# Per-fixture group colours (the pill dot). Indexed by the fixture's position in
-# the patch; every group belonging to a fixture — its channel page, each scene
-# bank and its chases — shares that fixture's colour. The global Show group uses
-# the neutral colour below.
-# Shared with the timeline track headers so a fixture's swatch matches its
-# library section (see core.fixture_library.GROUP_COLORS).
-_GROUP_COLORS = GROUP_COLORS
-_SHOW_COLOR = '#888888'
+# The Favourites category, pinned first in the pill bar.
+_FAVORITES_LABEL = 'Favorites'
+_FAVORITES_COLOR = _STAR_ON_COLOR
+# Accent for a favourite whose clip no longer resolves — matches the web
+# remote's dead-button swatch.
+_UNAVAILABLE_COLOR = '#4a4a4a'
 
 # Fixed pill size — long labels elide and reveal the full name on hover, the
 # same as the clip cards. Width keeps the pill grid two-up at the default panel
@@ -53,7 +42,8 @@ _PILL_HEIGHT = 28
 class ClipPill(QFrame):
     """A group-selection chip: a per-fixture colour dot, the group name and a
     clip-count badge. Toggling its ``selected`` property drives the QSS
-    highlight. The inert ``+ New`` tile is a pill with ``is_new=True``."""
+    highlight. The ``+ New`` tile is a pill with ``is_new=True``: no dot, no
+    badge, no elision, and it reports index -1 rather than a group."""
 
     clicked = pyqtSignal(int)
 
@@ -80,6 +70,9 @@ class ClipPill(QFrame):
         self._label = QLabel(label)
         self._label.setObjectName("ClipPillLabel")
         row.addWidget(self._label)
+        if is_new:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Add scenes and chases to a fixture")
         if not is_new:
             # Pin the count badge to the right edge; the label elides into the
             # space between the dot and the badge.
@@ -136,8 +129,9 @@ class ClipPill(QFrame):
         self._apply_elision()
 
     def mouseReleaseEvent(self, event):
-        if (not self._is_new
-                and event.button() == Qt.MouseButton.LeftButton
+        # The "+ New" tile reports index -1, which is not a group — the panel
+        # routes it to the fixture editor rather than to a selection.
+        if (event.button() == Qt.MouseButton.LeftButton
                 and self.rect().contains(event.position().toPoint())):
             self.clicked.emit(self._index)
         super().mouseReleaseEvent(event)
@@ -145,25 +139,45 @@ class ClipPill(QFrame):
 
 class ClipCard(QFrame):
     """A single draggable clip rendered as a card: a left accent box in the
-    clip's own colour, a title and a clip-type subtitle. Carries the drag
-    payload and the precomputed preview messages, so a click previews and a
-    drag drops with no per-card lookups (matching the old list-item behaviour).
-    """
+    clip's own accent colour, a title, a clip-type subtitle and a star that
+    adds it to the show's favourites. Carries the drag payload and the
+    precomputed preview messages, so a click previews and a drag drops with no
+    per-card lookups (matching the old list-item behaviour).
 
-    clicked = pyqtSignal(list)  # preview messages: [(channel, note, velocity)]
+    A card built from a favourite that no longer resolves is inert: no drag, no
+    preview, only the star, which is how the operator clears it."""
 
-    def __init__(self, clip: Dict, parent=None):
+    clicked = pyqtSignal(list)      # preview messages: [(channel, note, velocity)]
+    star_toggled = pyqtSignal(dict)  # the clip's ref
+    # Right-clicked: (the clip's ref, its clip type). The MENU is not built
+    # here — the panel knows the patch, so it can name the fixture that would
+    # open, and it is not one of the widgets a patch edit destroys.
+    context_menu_requested = pyqtSignal(dict, str)
+
+    def __init__(self, clip: Dict, starred: bool = False, parent=None):
         super().__init__(parent)
         self.setObjectName("ClipCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._accent = QColor(clip["accent"])
         self._sentinel = bool(clip.get("sentinel", False))
-        self._mime_type = clip["mime_type"]
-        self._payload = clip["payload"]
-        self._preview = clip["preview"]
+        self._mime_type = clip.get("mime_type")
+        self._payload = clip.get("payload")
+        self._preview = clip.get("preview") or []
+        self._ref = clip.get("ref")
+        self._available = bool(clip.get("available", True))
+        self._starred = bool(starred)
         self._press_pos = None
+        self._press_on_star = False
         self._title_text = clip["title"]
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._subtitle_text = clip["type"]
+        self.setProperty("available", "true" if self._available else "false")
+        self._base_cursor = (Qt.CursorShape.OpenHandCursor if self._available
+                             else Qt.CursorShape.ArrowCursor)
+        self._on_star = False
+        self.setCursor(self._base_cursor)
+        # Hover moves need to arrive with no button held, so the cursor can
+        # change over the star.
+        self.setMouseTracking(True)
         # Fixed width keeps the grid uniform (two columns); long titles elide.
         self.setFixedWidth(108)
 
@@ -184,12 +198,17 @@ class ClipCard(QFrame):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         fm = self.title.fontMetrics()
-        avail = max(10, self.width() - 16 - 8 - 2)
+        avail = max(10, self.width() - 16 - 8 - 2 - _STAR_SIZE - 2)
         elided = fm.elidedText(self._title_text, Qt.TextElideMode.ElideRight,
                                avail)
         self.title.setText(elided)
         # Reveal the full title on hover only when it's actually truncated.
         tip = self._title_text if elided != self._title_text else ""
+        if not self._available:
+            # An unresolved favourite carries its reason in the subtitle, which
+            # is far too long for a 108px card — hovering is the only way to
+            # read WHY the card is dead.
+            tip = f"{self._title_text} — {self._subtitle_text}"
         self.setToolTip(tip)
         self.title.setToolTip(tip)
         self.ctype.setToolTip(tip)
@@ -211,17 +230,42 @@ class ClipCard(QFrame):
             font.setBold(True)
             p.setFont(font)
             p.drawText(4, 15, "*")
+        # The star is painted rather than parented as a button: a child widget
+        # over a draggable card swallows the press that starts the drag.
+        if self._starred or self._available:
+            name = "star-filled" if self._starred else "star"
+            color = _STAR_ON_COLOR if self._starred else _STAR_OFF_COLOR
+            p.drawPixmap(self._star_rect().topLeft(),
+                         icons.pixmap(name, _STAR_SIZE, color))
         p.end()
 
+    def _star_rect(self) -> QRect:
+        return QRect(self.width() - _STAR_SIZE - 5, 5, _STAR_SIZE, _STAR_SIZE)
+
+    def _hit_star(self, pos) -> bool:
+        # Generous target: the drawn star is 12px on a 108px card.
+        return self._ref is not None and \
+            self._star_rect().adjusted(-4, -4, 4, 4).contains(pos)
+
     def mousePressEvent(self, event):
+        # On the PRESS, never the release: the drag and the star are both
+        # left-button-only, so a right press cannot fight either of them.
+        if event.button() == Qt.MouseButton.RightButton:
+            self.context_menu_requested.emit(self._ref or {},
+                                             self._subtitle_text)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_pos = event.position().toPoint()
+            self._press_on_star = self._hit_star(self._press_pos)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._press_pos is None:
+        pos = event.position().toPoint()
+        self._update_cursor(pos)
+        if self._press_pos is None or self._press_on_star or not self._available:
             return
-        moved = (event.position().toPoint() - self._press_pos).manhattanLength()
+        moved = (pos - self._press_pos).manhattanLength()
         if moved < QApplication.startDragDistance():
             return
         self._press_pos = None
@@ -229,11 +273,30 @@ class ClipCard(QFrame):
 
     def mouseReleaseEvent(self, event):
         if (self._press_pos is not None
-                and event.button() == Qt.MouseButton.LeftButton
-                and self._preview):
-            self.clicked.emit(self._preview)
+                and event.button() == Qt.MouseButton.LeftButton):
+            if self._press_on_star and self._hit_star(event.position().toPoint()):
+                self.star_toggled.emit(self._ref)
+            elif self._preview and self._available:
+                self.clicked.emit(self._preview)
         self._press_pos = None
+        self._press_on_star = False
         super().mouseReleaseEvent(event)
+
+    def _update_cursor(self, pos) -> None:
+        """The star is a button sitting inside a draggable card, so the cursor
+        has to say which of the two is under the pointer. Only set on a change:
+        this runs on every hover move."""
+        on_star = self._hit_star(pos)
+        if on_star == self._on_star:
+            return
+        self._on_star = on_star
+        self.setCursor(Qt.CursorShape.PointingHandCursor if on_star
+                       else self._base_cursor)
+
+    def leaveEvent(self, event):
+        self._on_star = False
+        self.setCursor(self._base_cursor)
+        super().leaveEvent(event)
 
     def _start_drag(self):
         encoded = json.dumps(self._payload).encode("utf-8")
@@ -244,7 +307,11 @@ class ClipCard(QFrame):
         drag.setMimeData(mime)
         pixmap = self.grab()
         drag.setPixmap(pixmap)
-        drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        # A song part starts where it is dropped, so it is carried by its left
+        # edge — the card's edge is where the section will begin.
+        song_part = note_layout.is_song_part(self._payload.get("note", -1))
+        drag.setHotSpot(QPoint(0 if song_part else pixmap.width() // 2,
+                               pixmap.height() // 2))
         drag.exec(Qt.DropAction.CopyAction)
 
 
@@ -257,15 +324,26 @@ class ClipLibraryWidget(QWidget):
     # for a scene expanded into its fixture's channel-control notes. The MIDI
     # channel selects the fixture (its patch index), mirroring handle_note_on.
     preview_requested = pyqtSignal(list)
+    # A card's menu or the "+ New" tile wants a patched fixture opened for
+    # editing: (its stable MIDI channel, which tab to land on, and the clip's
+    # own ref so the editor can open ON that scene or chase rather than merely
+    # on its tab). The ref is empty when nothing in particular was asked for.
+    edit_fixture_requested = pyqtSignal(int, str, dict)
 
-    def __init__(self, config: Config, parent=None):
+    def __init__(self, config: Config, show_manager=None, parent=None):
         super().__init__(parent)
         self.setObjectName("ClipLibrary")
         self.config = config
+        # Favourites are show content, so the show owns them; without a show
+        # manager (standalone/tests) the panel simply has no star state.
+        self.show_manager = show_manager
         self.logger = get_logger("ui.clip_library")
         self._groups: List[Dict] = []
         self._pills: List[ClipPill] = []
+        self._starred_ids: set = set()
         self._selected = -1
+        if show_manager is not None:
+            show_manager.favorites_changed.connect(self._on_favorites_changed)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -349,186 +427,6 @@ class ClipLibraryWidget(QWidget):
         return row
 
     # ------------------------------------------------------------------
-    # Group model
-    # ------------------------------------------------------------------
-    def _patched_types(self) -> List[Tuple[str, str]]:
-        """Unique patched (fixture type, mode) pairs, deduped, ordered by DMX
-        address (matching the DMX-sorted timeline).
-
-        Mode is part of the identity: the same type in two modes exposes
-        different channels, so each needs its own group of clips."""
-        seen: List[Tuple[str, str]] = []
-        for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
-            t = getattr(inst, "type", None)
-            if t and (t, getattr(inst, "mode", "")) not in seen:
-                seen.append((t, getattr(inst, "mode", "")))
-        return seen
-
-    def _fixture_index_for_type(self, ftype: str, mode: str = "") -> int:
-        """Stable MIDI channel of the first patched fixture of ``ftype`` in
-        ``mode`` (by DMX address, matching the displayed group). The channel
-        selects which fixture handle_note_on targets; defaults to 0 if the type
-        isn't patched."""
-        for inst in sorted(self.config.fixtures, key=lambda f: f.dmx_start):
-            if (getattr(inst, "type", None) == ftype
-                    and getattr(inst, "mode", "") == mode):
-                return getattr(inst, "channel", 0)
-        return 0
-
-    def _build_groups(self) -> List[Dict]:
-        """Ordered group descriptors ``{label, color, clips}``: per patched
-        fixture a channel-controls group, one group per scene bank and a chases
-        group, all sharing the fixture's colour, plus a global Show group."""
-        groups: List[Dict] = []
-        for i, (ftype, mode) in enumerate(self._patched_types()):
-            fdef = resolve_fixture(ftype, mode)
-            if fdef is None:
-                continue
-            color = _GROUP_COLORS[i % len(_GROUP_COLORS)]
-            channel = self._fixture_index_for_type(ftype, mode)
-
-            clips = self._fixture_clips(fdef, channel)
-            if clips:
-                groups.append({"label": ftype.replace("_", " ").capitalize(),
-                               "color": color, "clips": clips})
-            for bank, bank_clips in self._bank_groups(ftype, mode, fdef, channel):
-                groups.append({"label": bank.replace("_", " ").capitalize(),
-                               "color": color, "clips": bank_clips})
-            chase_clips = self._chase_clips(fdef, channel)
-            if chase_clips:
-                groups.append({"label": "Chases", "color": color,
-                               "clips": chase_clips})
-
-        show_clips = self._show_clips()
-        if show_clips:
-            groups.append({"label": "Show", "color": _SHOW_COLOR,
-                           "clips": show_clips})
-        return groups
-
-    def _fixture_clips(self, fdef: FixtureDef, channel: int) -> List[Dict]:
-        """A fixture's individual verbs: channel controls + per-fixture blackout
-        + colour macros."""
-        notes: List[int] = list(range(1, fdef.channel_count + 1))
-        notes.append(note_layout.BLACKOUT_FIXTURE)
-        notes += list(range(note_layout.COLOR_MACRO_BASE,
-                            note_layout.COLOR_MACRO_BASE
-                            + len(note_layout.COLOR_MACROS)))
-        clips: List[Dict] = []
-        for note in notes:
-            info = note_layout.describe_note(note, fdef)
-            if info is None:
-                continue
-            clips.append(self._note_clip(info, note, DEFAULT_DROP_VELOCITY,
-                                         channel, self._clip_type(note)))
-        return clips
-
-    def _bank_groups(self, ftype: str, mode: str, fdef: FixtureDef, channel: int
-                     ) -> List[Tuple[str, List[Dict]]]:
-        """``(bank_name, [clip, ...])`` per scene bank of the fixture."""
-        by_bank: Dict[str, List[Scene]] = defaultdict(list)
-        for scene in load_scenes(ftype, mode):
-            by_bank[scene.bank].append(scene)
-        out: List[Tuple[str, List[Dict]]] = []
-        for bank in sorted(by_bank.keys()):
-            clips = [self._scene_clip(fdef, scene, channel)
-                     for scene in sorted(by_bank[bank], key=lambda s: s.index)]
-            out.append((bank, clips))
-        return out
-
-    def _chase_clips(self, fdef: FixtureDef, channel: int) -> List[Dict]:
-        """The fixture's chases (drop as note CHASE_LOAD, velocity = index)."""
-        clips: List[Dict] = []
-        for idx in range(len(fdef.chases)):
-            info = note_layout.describe_note(note_layout.CHASE_LOAD, fdef, idx)
-            clips.append(self._note_clip(info, note_layout.CHASE_LOAD, idx,
-                                         channel, "chase"))
-        return clips
-
-    def _show_clips(self) -> List[Dict]:
-        """Show-control verbs that route globally (no fixture): START, the song
-        parts and blackout-all."""
-        notes = ([note_layout.START]
-                 + list(range(note_layout.SONG_PART_BASE,
-                              note_layout.SONG_PART_BASE
-                              + len(note_layout.SONG_PARTS)))
-                 + [note_layout.BLACKOUT_ALL])
-        clips: List[Dict] = []
-        for note in notes:
-            info = note_layout.describe_note(note)
-            if info is None:
-                continue
-            clips.append(self._note_clip(info, note, DEFAULT_DROP_VELOCITY, 0,
-                                         self._clip_type(note)))
-        return clips
-
-    # ------------------------------------------------------------------
-    # Clip descriptors
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _clip_type(note: int) -> str:
-        """Short clip-type subtitle for a single-note clip."""
-        n = int(note)
-        if n in (note_layout.BLACKOUT_FIXTURE, note_layout.BLACKOUT_ALL):
-            return "blackout"
-        last_macro = (note_layout.COLOR_MACRO_BASE
-                      + len(note_layout.COLOR_MACROS) - 1)
-        if note_layout.COLOR_MACRO_BASE <= n <= last_macro:
-            return "color"
-        if n == note_layout.START or note_layout.is_song_part(n):
-            return "cue"
-        if n == note_layout.CHASE_LOAD:
-            return "chase"
-        return "channel"
-
-    @staticmethod
-    def _note_clip(info, note: int, velocity: int, channel: int,
-                   ctype: str) -> Dict:
-        payload = {"note": int(note), "velocity": int(velocity),
-                   "channel": int(channel)}
-        return {"title": info.part, "type": ctype, "accent": info.color,
-                "mime_type": CLIP_MIME_TYPE, "payload": payload,
-                "preview": [(int(channel), int(note), int(velocity))],
-                "sentinel": False}
-
-    def _scene_clip(self, fdef: FixtureDef, scene: Scene, channel: int) -> Dict:
-        r, g, b = note_layout.scene_rgb(fdef, scene.values)
-        # Lead with take-manual, exactly as add_scene folds it into a dropped
-        # scene: without it the auto/song-part program overwrites the channel
-        # values on its next frame and the audition shows nothing.
-        preview: List[Tuple[int, int, int]] = [
-            (int(channel), note_layout.TAKE_MANUAL, TAKE_MANUAL_VELOCITY)]
-        for ch_name, note in note_layout.field_note_map(fdef):
-            if ch_name not in scene.values:
-                continue
-            # Same lossy 0..255 -> 0..127 mapping the controller doubles back.
-            velocity = max(0, min(127, int(scene.values[ch_name]) // 2))
-            preview.append((channel, note, velocity))
-        return {"title": scene.name, "type": "scene",
-                "accent": f"#{r:02x}{g:02x}{b:02x}",
-                "mime_type": SCENE_MIME_TYPE,
-                "payload": self._scene_to_payload(scene),
-                "preview": preview,
-                "sentinel": self._is_palette_sentinel(fdef, scene.values)}
-
-    @staticmethod
-    def _scene_to_payload(scene: Scene) -> Dict:
-        return {
-            "name": scene.name,
-            "channels": dict(scene.values),
-            "fixture_type": scene.fixture_type,
-        }
-
-    @staticmethod
-    def _is_palette_sentinel(fdef: FixtureDef, values: Dict[str, int]) -> bool:
-        """Whether a scene hands its colour to the live palette — the same
-        R/G/B-at-full rule `DMXController.load_scene` applies."""
-        slots = color_slots(fdef)
-        fields = [fdef.channels[slots[colour]].field
-                  for colour in ("Red", "Green", "Blue") if colour in slots]
-        return len(fields) == 3 and all(int(values.get(f, 0)) >= 254
-                                        for f in fields)
-
-    # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
     def _rebuild(self) -> None:
@@ -541,6 +439,34 @@ class ClipLibraryWidget(QWidget):
         self.logger.info(
             f"Clip library populated: {len(self._groups)} group(s)")
 
+    def _build_groups(self) -> List[Dict]:
+        """The patch's groups, led by the show's Favourites when it has any.
+
+        Resolution happens ONCE here: the resolved descriptors are the very
+        objects the other groups hold, so a starred card is marked by identity
+        rather than by re-deriving the match card by card."""
+        groups = clip_model.build_groups(self.config)
+        favorites = (self.show_manager.favorites()
+                     if self.show_manager is not None else [])
+        resolved = clip_model.resolve_in(groups, favorites)
+        self._starred_ids = {id(clip) for clip in resolved if clip is not None}
+        if not favorites:
+            return groups
+        clips = [clip if clip is not None else self._unavailable_clip(ref)
+                 for ref, clip in zip(favorites, resolved)]
+        return [{"label": _FAVORITES_LABEL, "color": _FAVORITES_COLOR,
+                 "clips": clips}] + groups
+
+    @staticmethod
+    def _unavailable_clip(ref: Dict) -> Dict:
+        """Placeholder card for a favourite that no longer resolves. It is kept
+        on screen — never quietly dropped — because repatching the fixture
+        brings the real clip back, and the star is how the operator clears it
+        deliberately."""
+        title, reason = clip_model.describe_ref(ref)
+        return {"title": title, "type": reason, "accent": _UNAVAILABLE_COLOR,
+                "sentinel": False, "ref": ref, "available": False}
+
     def _render_pills(self) -> None:
         self._clear_layout(self.pill_flow)
         self._pills = []
@@ -550,8 +476,11 @@ class ClipLibraryWidget(QWidget):
             pill.clicked.connect(self._select_group)
             self.pill_flow.addWidget(pill)
             self._pills.append(pill)
-        # Inert "+ New" tile, matching the mockup.
-        self.pill_flow.addWidget(ClipPill(-1, "+ New", None, 0, is_new=True))
+        # "+ New" tile: index -1, so its click routes to the fixture editor
+        # rather than to _select_group.
+        new_pill = ClipPill(-1, "+ New", None, 0, is_new=True)
+        new_pill.clicked.connect(lambda _index: self._on_new_clicked())
+        self.pill_flow.addWidget(new_pill)
 
     def _select_group(self, index: int) -> None:
         if not (0 <= index < len(self._groups)):
@@ -586,8 +515,10 @@ class ClipLibraryWidget(QWidget):
             self.group_header.setText("")
             return
         for clip in clips:
-            card = ClipCard(clip)
+            card = ClipCard(clip, starred=self._is_starred(clip))
             card.clicked.connect(self.preview_requested.emit)
+            card.star_toggled.connect(self._on_star_toggled)
+            card.context_menu_requested.connect(self._on_card_menu)
             self.card_flow.addWidget(card)
 
     def _show_placeholder(self) -> None:
@@ -616,6 +547,135 @@ class ClipLibraryWidget(QWidget):
     # ------------------------------------------------------------------
     # Interaction
     # ------------------------------------------------------------------
+    def _is_starred(self, clip: Dict) -> bool:
+        # Identity, not ref equality: _build_groups already resolved the show's
+        # favourites onto these exact descriptors. A card in the Favourites
+        # group is starred by definition, resolved or not.
+        return (id(clip) in self._starred_ids
+                or not clip.get("available", True))
+
+    def _on_star_toggled(self, ref: Dict) -> None:
+        if self.show_manager is None or not ref:
+            return
+        self.show_manager.toggle_favorite(ref)
+
+    # --- opening the fixture editor -----------------------------------
+    def _instance_for_type(self, ftype: str, mode: str = ""):
+        """The patched instance a (type, mode) group speaks for, or None.
+
+        The first by DMX address, which is the one `fixture_index_for_type`
+        picks and so the one the group's own clips already fire at. When the
+        same type is patched twice this is an arbitrary-but-consistent choice,
+        which is why the menu names the fixture it will open.
+        """
+        candidates = [f for f in self.config.fixtures
+                      if f.type == ftype
+                      and (not mode or getattr(f, "mode", "") == mode)]
+        if not candidates:
+            # A group's mode came from the patch, so a miss here means the type
+            # is patched in another mode only — still the right fixture to edit.
+            candidates = [f for f in self.config.fixtures if f.type == ftype]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda f: getattr(f, "dmx_start", 0))
+
+    def _instance_for_ref(self, ref: Dict):
+        """The patched instance a clip's ref points at, or None for one that
+        names no fixture — a global Show verb, or a favourite whose fixture has
+        been unpatched."""
+        if not ref:
+            return None
+        ftype = ref.get("fixture")
+        if not ftype:
+            return None
+        return self._instance_for_type(ftype, ref.get("mode", "") or "")
+
+    @staticmethod
+    def _instance_label(instance) -> str:
+        return instance.name or instance.type
+
+    def _ask_to_edit(self, instance, clip_type: str = "",
+                     ref: Optional[Dict] = None) -> None:
+        """Announce the request. A chase card lands on the Chases tab; anything
+        else on Scenes — and `ref`, when a card supplied one, says which scene
+        or chase on it."""
+        channel = int(getattr(instance, "channel", -1))
+        if channel < 0:
+            return
+        tab = "chases" if clip_type == "chase" else "scenes"
+        self.edit_fixture_requested.emit(channel, tab, dict(ref or {}))
+
+    def _on_card_menu(self, ref: Dict, clip_type: str) -> None:
+        """Right-click on a card. The menu is built here rather than on the
+        card so it can name the instance that will actually open — and so its
+        owner is not one of the widgets a patch edit destroys."""
+        instance = self._instance_for_ref(ref)
+        if instance is None:
+            return  # a Show verb, or a favourite that no longer resolves
+        menu = QMenu(self)
+        edit = menu.addAction(f"Edit {self._instance_label(instance)}…")
+        if menu.exec(QCursor.pos()) is edit:
+            self._ask_to_edit(instance, clip_type, ref)
+
+    def _selected_group_instance(self):
+        """The fixture behind the selected pill, or None when no single one
+        owns the view: search mode (which spans every group), the global Show
+        group, or the synthetic Favourites group (mixed fixtures)."""
+        if self.search_box.text().strip():
+            return None
+        if not (0 <= self._selected < len(self._groups)):
+            return None
+        group = self._groups[self._selected]
+        ftype = group.get("fixture")
+        if not ftype or group["label"] == _FAVORITES_LABEL:
+            return None
+        return self._instance_for_type(ftype, group.get("mode", "") or "")
+
+    def _on_new_clicked(self) -> None:
+        """The "+ New" tile. New scenes and chases are authored in the fixture
+        editor, so this opens it — on the fixture the view is already about
+        when there is one, and otherwise on the one the operator picks."""
+        instance = self._selected_group_instance()
+        if instance is not None:
+            self._ask_to_edit(instance)
+            return
+        self._pick_fixture_to_edit()
+
+    def _pick_fixture_to_edit(self) -> None:
+        """Show / Favourites / search: no one fixture owns the view, so ask."""
+        patched = sorted(self.config.fixtures,
+                         key=lambda f: getattr(f, "dmx_start", 0))
+        if not patched:
+            return  # the placeholder already says why
+        if len(patched) == 1:
+            self._ask_to_edit(patched[0])
+            return
+        menu = QMenu(self)
+        actions = {menu.addAction(
+            f"{self._instance_label(f)}  ·  ch {getattr(f, 'channel', -1)}"): f
+            for f in patched}
+        chosen = menu.exec(QCursor.pos())
+        if chosen in actions:
+            self._ask_to_edit(actions[chosen])
+
+    def _on_favorites_changed(self) -> None:
+        """Rebuild for a star change, keeping the operator where they were —
+        the Favourites pill appears and disappears, so the selection is
+        restored by NAME rather than by index."""
+        label = (self._groups[self._selected]["label"]
+                 if 0 <= self._selected < len(self._groups) else None)
+        query = self.search_box.text()
+        self._groups = self._build_groups()
+        self._render_pills()
+        index = next((i for i, g in enumerate(self._groups)
+                      if g["label"] == label), 0)
+        if self._groups:
+            self._select_group(index)
+            if query:
+                self.search_box.setText(query)
+        else:
+            self._show_placeholder()
+
     def refresh_configuration(self, config: Config) -> None:
         """Refresh the library when configuration changes."""
         self.config = config

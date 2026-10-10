@@ -197,6 +197,51 @@ def test_unprogrammed_marker_also_truncates_manual_clip():
     _assert(_auto_clips(led) == [], "no auto clip for the unprogrammed BREAK")
 
 
+def _assert_label_fits(tl, clip, label, full, zoom, what):
+    """`label` shows less than `full`, and what it shows fits `clip` (5px of
+    padding each side) at `zoom`."""
+    room = (clip.rect.width() - 10) * zoom
+    shown = label.toPlainText()
+    width = tl.content_view.fontMetrics().horizontalAdvance(shown)
+    _assert(shown != full and width <= room,
+            f"the zoomed {what} label fits its clip "
+            f"({shown!r}: {width}px in {room:.0f}px)")
+
+
+def test_zoom_refits_label_to_marker_cut_clip():
+    print("test_zoom_refits_label_to_marker_cut_clip")
+    from timeline.tracks.midi_events import DraggableMidiEvent
+    m, tl, ctrl = _build_timeline()
+    # The marker-cut manual clip again (2s..5s). A zoom re-fits every label,
+    # and it must fit the clip as drawn — not the uncut extent to the song end.
+    m.add_event(1, 2.0, 100, channel=0)
+    m.add_event(61, 5.0, 100)
+    ctrl.set_fixture_auto(0, True)
+    tl.refresh_from_manager()
+    clip = [it for it in tl.midi_events_tracks[0].items
+            if isinstance(it, DraggableMidiEvent) and not it.is_blackout_clip][0]
+    full = clip.text_item.data(0)
+    tl.set_zoom(0.2)
+    _assert_label_fits(tl, clip, clip.text_item, full, 0.2, "manual")
+
+
+def test_zoom_refits_auto_clip_label():
+    print("test_zoom_refits_auto_clip_label")
+    m, tl, ctrl = _build_timeline()
+    # An INTRO section (1s..10s) draws an auto clip whose label fits at 1:1.
+    m.add_event(61, 1.0, 100)
+    m.add_event(63, 10.0, 100)
+    ctrl.set_fixture_auto(0, True)
+    tl.refresh_from_manager()
+    led = tl.midi_events_tracks[0]
+    clip = _auto_clips(led)[0]
+    label = led.items[led.items.index(clip) + 1]  # drawn right after its clip
+    full = note_layout.song_part_clip_info(_ledbar(), "INTRO").part
+    _assert(label.toPlainText() == full, f"the label starts whole ({full!r})")
+    tl.set_zoom(0.1)
+    _assert_label_fits(tl, clip, label, full, 0.1, "auto")
+
+
 def test_only_programmed_parts_draw():
     print("test_only_programmed_parts_draw")
     m, tl, ctrl = _build_timeline()
@@ -232,6 +277,8 @@ def main():
     test_manual_clip_breaks_auto_clip()
     test_song_part_marker_truncates_manual_clip()
     test_unprogrammed_marker_also_truncates_manual_clip()
+    test_zoom_refits_label_to_marker_cut_clip()
+    test_zoom_refits_auto_clip_label()
     test_only_programmed_parts_draw()
     test_auto_off_clears_clips()
     print("\nALL TESTS PASSED")

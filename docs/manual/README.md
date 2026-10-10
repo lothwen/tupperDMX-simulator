@@ -3,7 +3,7 @@
 Source for `docs/Manual_TupperDMX.pdf`.
 
 ```
-01-introduction.md … 13-appendix-buildroot.md   chapters, in filename order
+01-introduction.md … 14-appendix-buildroot.md   chapters, in filename order
 assets/manual.css                             the print stylesheet (A4)
 images/                                       captured screenshots + diagrams
 build_manual.py                               chapters -> one PDF
@@ -71,7 +71,13 @@ It is safe with respect to your data:
 - the show is a `copytree` of `~/Documents/TupperDMX/Billares2026.show` into a
   temp folder, so the real project is never opened;
 - `core.config.userprefs_path` is redirected to a patched copy of the real
-  preferences, with every volume at zero and the MIDI hardware port disabled.
+  preferences, with every volume at zero, the MIDI hardware port disabled and
+  logging at INFO (at DEBUG the stage prints its cost into every stage figure);
+- a show that stars nothing gets one scene per fixture type starred **in the
+  copy**, since the web remote's cue grid is the show's favourites.
+
+The auto-program figures wait for a real analysis of the demo song, so that part
+of the run takes as long as the analysis does.
 
 Change `REAL_SHOW` at the top of the script to point it at a different project.
 

@@ -4,12 +4,13 @@ from typing import Callable, Optional
 from PyQt6.QtWidgets import (QToolBar, QLabel, QWidget, QSizePolicy,
                              QFrame, QHBoxLayout, QPushButton, QLineEdit,
                              QVBoxLayout, QToolButton, QMenu, QComboBox)
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtGui import QAction, QFont, QIcon
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSize
 
 from ui.widgets import icons
 from tupperlogger import get_logger
 from core.config import Config
+from core.paths import asset_path
 from webremote.state import probe_duration
 
 
@@ -83,13 +84,13 @@ class ToolbarManager(QObject):
     # Bundle / setlist signals
     export_bundle_requested = pyqtSignal()
     import_bundle_requested = pyqtSignal()
-    song_title_edited = pyqtSignal(str)
     song_key_edited = pyqtSignal(str)        # current song's musical key (TONO)
     # Playlist navigation signals
     prev_song_requested = pyqtSignal()
     next_song_requested = pyqtSignal()
     new_song_requested = pyqtSignal()     # append an empty song to the setlist
-    remove_song_requested = pyqtSignal()
+    playlist_requested = pyqtSignal()     # open the playlist manager
+    auto_program_requested = pyqtSignal()  # open the auto program
     song_selected = pyqtSignal(int)  # setlist combobox picked a song by index
     # Application menu signals
     settings_requested = pyqtSignal()
@@ -109,10 +110,9 @@ class ToolbarManager(QObject):
         self.toolbar: Optional[QToolBar] = None
         self.container: Optional[QWidget] = None
         self.export_midi_menu_action: Optional[QAction] = None
-        # Narrow-window state: the two cards that fold into the ☰ menu, the
-        # width that decides it, and the menu actions that stand in for them.
+        # Narrow-window state: the SHOW card that folds into the ☰ menu, the
+        # width that decides it, and the menu actions that stand in for it.
         self.show_section: Optional[QFrame] = None
-        self.versions_section: Optional[QFrame] = None
         self._compact = False
         self._full_min_width = 0
         self._compact_actions: list = []
@@ -131,7 +131,7 @@ class ToolbarManager(QObject):
         self.prev_button: Optional[QPushButton] = None
         self.next_button: Optional[QPushButton] = None
         self.new_song_button: Optional[QPushButton] = None
-        self.remove_button: Optional[QPushButton] = None
+        self.playlist_button: Optional[QPushButton] = None
         self.menu_button: Optional[QToolButton] = None
         self.dock_stage_action = None
         # Show section widgets
@@ -147,10 +147,6 @@ class ToolbarManager(QObject):
         self.offset_label: Optional[QLabel] = None
         self.linked_chip: Optional[QLabel] = None
         self.key_edit: Optional[QLineEdit] = None
-        # Versions widgets
-        self.versions_combo: Optional[QComboBox] = None
-        self.restore_button: Optional[QPushButton] = None
-        self.versions_stats_label: Optional[QLabel] = None
 
         self.logger.info("Toolbar manager initialized")
     
@@ -179,10 +175,6 @@ class ToolbarManager(QObject):
         song_files_section = self._create_song_files_section()
         container_layout.addWidget(song_files_section, 3)  # widest — long paths
 
-        # Versions Section (right of files - snapshot/history controls)
-        self.versions_section = self._create_versions_section()
-        container_layout.addWidget(self.versions_section, 0)
-
         # Menu Section (far right - fixed width hamburger button)
         menu_section = self._create_menu_section()
         container_layout.addWidget(menu_section, 0)
@@ -197,16 +189,16 @@ class ToolbarManager(QObject):
         return self.toolbar
 
     # ------------------------------------------------------------------
-    # Narrow windows: SHOW and VERSIONS fold into the ☰ menu
+    # Narrow windows: SHOW folds into the ☰ menu
     # ------------------------------------------------------------------
     def _measure_breakpoint(self) -> None:
-        """Record what the bar needs with everything shown and with SHOW and
-        VERSIONS folded away. Measured rather than hardcoded so the numbers
-        follow the UI density and any later change to the sections.
+        """Record what the bar needs with everything shown and with SHOW
+        folded away. Measured rather than hardcoded so the numbers follow the
+        UI density and any later change to the sections.
 
         The two widths are derived from whichever state the bar is in plus what
-        the folding sections cost, rather than by hiding and showing them to
-        measure each: `minimumSizeHint()` is valid on a hidden widget, while a
+        the folding section costs, rather than by hiding and showing it to
+        measure: `minimumSizeHint()` is valid on a hidden widget, while a
         section shown and re-measured in one call stack still reports the size
         it had before Qt laid it out again.
         """
@@ -217,9 +209,8 @@ class ToolbarManager(QObject):
         layout.activate()
 
         # A hidden widget takes neither width nor a spacing gap, so folding
-        # the two sections saves their minimums and their two gaps.
-        folded = sum(section.minimumSizeHint().width() + layout.spacing()
-                     for section in (self.show_section, self.versions_section))
+        # the section saves its minimum and its gap.
+        folded = self.show_section.minimumSizeHint().width() + layout.spacing()
         current = layout.minimumSize().width()
         if self._compact:
             compact_min, self._full_min_width = current, current + folded
@@ -245,7 +236,7 @@ class ToolbarManager(QObject):
         self._on_bar_resized(self.container.width())
 
     def _on_bar_resized(self, width: int) -> None:
-        """Fold the show/versions cards away when the full bar would not fit.
+        """Fold the SHOW card away when the full bar would not fit.
 
         Hysteresis is implicit: it collapses only when the expanded layout is
         too wide for `width` and expands only when it would fit again, so the
@@ -260,13 +251,12 @@ class ToolbarManager(QObject):
             self.set_compact(True)
 
     def set_compact(self, compact: bool) -> None:
-        """Show or fold the SHOW and VERSIONS cards. Folded, their actions are
-        reachable from the ☰ menu instead — the same signals either way."""
+        """Show or fold the SHOW card. Folded, its actions are reachable from
+        the ☰ menu instead — the same signals either way."""
         if compact == self._compact:
             return
         self._compact = compact
         self.show_section.setVisible(not compact)
-        self.versions_section.setVisible(not compact)
         for action in self._compact_actions:
             action.setVisible(compact)
         self.logger.debug("Toolbar %s", "folded" if compact else "expanded")
@@ -380,73 +370,6 @@ class ToolbarManager(QObject):
         self.logger.debug("Show section created")
         return section
 
-    def _create_versions_section(self) -> QFrame:
-        """Create the VERSIONS section: header, a row with a snapshot picker +
-        Restore, and a footer with the pinned-snapshot action plus
-        autosave/pinned counts."""
-        section = QFrame()
-        section.setFrameStyle(QFrame.Shape.StyledPanel)
-        section.setObjectName("ToolbarSection")
-
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(4)
-
-        header_layout = QHBoxLayout()
-        title_label = QLabel("VERSIONS")
-        title_label.setObjectName("ShowSectionTitle")
-        font = title_label.font()
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
-        title_label.setFont(font)
-        header_layout.addWidget(title_label)
-        header_layout.addStretch(1)
-        layout.addLayout(header_layout)
-
-        picker_layout = QHBoxLayout()
-        picker_layout.setSpacing(6)
-        self.versions_combo = QComboBox()
-        self.versions_combo.setObjectName("VersionsCombo")
-        self.versions_combo.setFixedHeight(30)
-        self.versions_combo.setMinimumWidth(185)
-        self.versions_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.versions_combo.setToolTip("Pick a snapshot to restore")
-        picker_layout.addWidget(self.versions_combo, 1)
-        self.restore_button = QPushButton("Restore")
-        self.restore_button.setFixedHeight(30)
-        self.restore_button.setObjectName("LoadButton")
-        self.restore_button.setToolTip("Restore the show to the selected snapshot (undoable)")
-        self.restore_button.setEnabled(False)
-        self.restore_button.clicked.connect(self._on_restore_clicked)
-        picker_layout.addWidget(self.restore_button)
-        layout.addLayout(picker_layout)
-
-        footer_layout = QHBoxLayout()
-        footer_layout.setSpacing(8)
-        snapshot_button = QPushButton("Snapshot")
-        snapshot_button.setIcon(icons.icon("pin", "#d7d7d7"))
-        snapshot_button.setIconSize(QSize(13, 13))
-        snapshot_button.setFixedHeight(26)
-        snapshot_button.setObjectName("SnapshotButton")
-        snapshot_button.setToolTip("Take a named, never-pruned snapshot")
-        snapshot_button.clicked.connect(self.snapshot_requested.emit)
-        footer_layout.addWidget(snapshot_button)
-        self.versions_stats_label = _StatusChip("")
-        self.versions_stats_label.setObjectName("ShowStatsLabel")
-        footer_layout.addWidget(self.versions_stats_label)
-        footer_layout.addStretch(1)
-        layout.addLayout(footer_layout)
-
-        self.logger.debug("Versions section created")
-        return section
-
-    def _on_restore_clicked(self) -> None:
-        """Emit a restore request for the version currently picked in the combobox."""
-        if self.versions_combo is None:
-            return
-        version_id = self.versions_combo.currentData()
-        if version_id:
-            self.restore_version_requested.emit(version_id)
-
     def set_show_name(self, name: str) -> None:
         """Update the show-name display in the SHOW section (bold name plus a
         dimmed .show suffix)."""
@@ -477,54 +400,30 @@ class ToolbarManager(QObject):
             f"patch {fixtures} fix")
 
     def set_versions(self, infos: list) -> None:
-        """Populate the snapshot picker (newest first, auto-selected) and the
-        autosave/pinned counts from a list of `versions.VersionInfo`."""
-        if self.versions_combo is None:
+        """Populate the ☰ menu's Restore submenu, newest first, from a list of
+        `versions.VersionInfo`. A show with no history yet leaves the submenu
+        there but disabled — there is nothing to roll back to."""
+        if self.versions_menu is None:
             return
-        self.versions_combo.blockSignals(True)
-        try:
-            self.versions_combo.clear()
-            autosaves = pinned = 0
-            for info in infos:
-                if info.pinned:
-                    pinned += 1
-                else:
-                    autosaves += 1
-                self.versions_combo.addItem(self._version_icon(info),
-                                            self._version_label(info),
-                                            info.version_id)
-        finally:
-            self.versions_combo.blockSignals(False)
-        if infos:
-            self.versions_combo.setCurrentIndex(0)
-        if self.restore_button:
-            self.restore_button.setEnabled(bool(infos))
-        if self.versions_menu is not None:
-            # Same list, same restore signal — the ☰ submenu is what a folded
-            # bar offers in place of the picker.
-            self.versions_menu.clear()
-            self.versions_menu.setEnabled(bool(infos))
-            for info in infos:
-                action = self.versions_menu.addAction(
-                    self._version_icon(info), self._version_label(info))
-                action.triggered.connect(
-                    lambda _checked=False, version_id=info.version_id:
-                    self.restore_version_requested.emit(version_id))
-        if self.versions_stats_label:
-            self.versions_stats_label.setText(
-                f"{autosaves} autosave{'s' if autosaves != 1 else ''}"
-                f" · {pinned} pinned")
+        self.versions_menu.clear()
+        self.versions_menu.setEnabled(bool(infos))
+        for info in infos:
+            action = self.versions_menu.addAction(
+                self._version_icon(info), self._version_label(info))
+            action.triggered.connect(
+                lambda _checked=False, version_id=info.version_id:
+                self.restore_version_requested.emit(version_id))
 
     @staticmethod
     def _version_icon(info):
-        """Combobox icon for a snapshot: amber pin when pinned, dim save
-        glyph for autosaves."""
+        """Menu icon for a snapshot: amber pin when pinned, dim save glyph
+        for autosaves."""
         if info.pinned:
             return icons.icon("pin", "#e2a04a")
         return icons.icon("save", "#8a8a8a")
 
     def _version_label(self, info) -> str:
-        """Combobox label for a snapshot: 'name · time' when pinned, else
+        """Menu label for a snapshot: 'name · time' when pinned, else
         'Autosave · time' (the icon carries the pinned/auto distinction)."""
         when = self._format_version_time(info.timestamp)
         if info.pinned:
@@ -594,8 +493,8 @@ class ToolbarManager(QObject):
         self.prev_button.setEnabled(False)
         controls_layout.addWidget(self.prev_button)
 
-        # Unified selector: a counter badge + editable combobox in one rounded
-        # frame (the frame carries the border; the combobox is drawn flat).
+        # Unified selector: a counter badge + combobox in one rounded frame
+        # (the frame carries the border; the combobox is drawn flat).
         selector = QFrame()
         selector.setObjectName("SetlistSelector")
         selector.setFixedHeight(30)
@@ -608,20 +507,15 @@ class ToolbarManager(QObject):
         selector_layout.addWidget(self.setlist_counter_badge)
         self.song_combo = QComboBox()
         self.song_combo.setObjectName("SetlistCombo")
-        self.song_combo.setEditable(True)
-        self.song_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.song_combo.lineEdit().setPlaceholderText("Song title")
-        self.song_combo.setToolTip("Select a song, or edit its title and press Enter to rename")
+        self.song_combo.setPlaceholderText("No songs")
+        self.song_combo.setToolTip("Select a song (rename it in the playlist manager)")
         self.song_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # A title the operator can still read is the point of this control, so
         # give it a floor of its own rather than letting the row squeeze it.
         self.song_combo.setMinimumContentsLength(12)
-        # Selecting from the dropdown switches song; typing + Enter renames the
-        # current one. activated() only fires on user action (not programmatic
-        # repopulation), so no guard is needed on the selection path.
+        # Selecting from the dropdown switches song. activated() only fires on
+        # user action (not programmatic repopulation), so no guard is needed.
         self.song_combo.activated.connect(self._on_combo_activated)
-        self.song_combo.lineEdit().returnPressed.connect(
-            lambda: self.song_title_edited.emit(self.song_combo.currentText()))
         selector_layout.addWidget(self.song_combo, 1)
         controls_layout.addWidget(selector, 1)
 
@@ -647,14 +541,16 @@ class ToolbarManager(QObject):
         self.new_song_button.clicked.connect(self.new_song_requested.emit)
         controls_layout.addWidget(self.new_song_button)
 
-        self.remove_button = QPushButton()
-        self.remove_button.setIcon(icons.icon("trash", "#d98a8a"))
-        self.remove_button.setIconSize(QSize(15, 15))
-        self.remove_button.setFixedSize(28, 30)
-        self.remove_button.setObjectName("RemoveButton")
-        self.remove_button.setToolTip("Remove current song from playlist")
-        self.remove_button.clicked.connect(self.remove_song_requested.emit)
-        controls_layout.addWidget(self.remove_button)
+        # The playlist manager: reorder, remove, import and edit every song
+        # (the rest of this panel only ever touches the current one).
+        self.playlist_button = QPushButton()
+        self.playlist_button.setIcon(icons.icon("playlist", "#e6e6e6"))
+        self.playlist_button.setIconSize(QSize(15, 15))
+        self.playlist_button.setFixedSize(28, 30)
+        self.playlist_button.setObjectName("NavButton")
+        self.playlist_button.setToolTip("Manage playlist…")
+        self.playlist_button.clicked.connect(self.playlist_requested.emit)
+        controls_layout.addWidget(self.playlist_button)
 
         layout.addLayout(controls_layout)
 
@@ -836,24 +732,25 @@ class ToolbarManager(QObject):
 
         return card, path_label, empty_button
 
-    def _on_combo_activated(self, index: int) -> None:
-        """A dropdown pick (never programmatic repopulation) switches song."""
+    def _on_combo_activated(self, row: int) -> None:
+        """A dropdown pick (never programmatic repopulation) switches song —
+        by the song's playlist index, which the row carries: with disabled
+        songs left out, the two differ."""
         if not self._populating_setlist:
-            self.song_selected.emit(index)
+            self.song_selected.emit(self.song_combo.itemData(row))
 
     def _add_compact_actions(self, menu: QMenu) -> None:
-        """The SHOW and VERSIONS cards as menu entries, hidden until the bar
-        actually folds. They emit the very same signals the cards do, so a
-        narrow window loses the buttons and nothing else."""
+        """The SHOW card as menu entries, hidden until the bar actually folds.
+        They emit the very same signals the buttons do, so a narrow window
+        loses the card and nothing else."""
         for icon_name, text, signal in (
                 ("plus", "New show…", self.new_show_requested),
                 ("folder-open", "Open show…", self.open_show_requested),
                 ("save", "Save show", self.save_show_requested),
-                (None, "Save show as…", self.save_show_as_requested),
-                (None, "Import bundle…", self.import_bundle_requested),
+                ("save", "Save show as…", self.save_show_as_requested),
+                ("upload", "Import bundle…", self.import_bundle_requested),
                 ("package", "Export bundle…", self.export_bundle_requested)):
-            action = (menu.addAction(icons.icon(icon_name), text) if icon_name
-                      else menu.addAction(text))
+            action = menu.addAction(icons.icon(icon_name), text)
             action.triggered.connect(signal.emit)
             self._compact_actions.append(action)
 
@@ -866,18 +763,24 @@ class ToolbarManager(QObject):
             self.export_midi_requested.emit)
         self._compact_actions.append(self.export_midi_menu_action)
 
-        snapshot_action = menu.addAction(icons.icon("pin"), "Snapshot")
-        snapshot_action.triggered.connect(self.snapshot_requested.emit)
-        self._compact_actions.append(snapshot_action)
-
-        # Populated alongside the versions combobox by set_versions().
-        self.versions_menu = QMenu("Restore version", menu)
-        self.versions_menu.setEnabled(False)
-        self._compact_actions.append(menu.addMenu(self.versions_menu))
-
         self._compact_actions.append(menu.addSeparator())
         for action in self._compact_actions:
             action.setVisible(False)
+
+    def _add_version_actions(self, menu: QMenu) -> None:
+        """The show's history: take a pinned snapshot, or roll back to one.
+        The ☰ menu is the only home these have — there is no VERSIONS card —
+        so they stay visible whatever width the bar is at."""
+        snapshot_action = menu.addAction(icons.icon("pin"), "Snapshot")
+        snapshot_action.setToolTip("Take a named, never-pruned snapshot")
+        snapshot_action.triggered.connect(self.snapshot_requested.emit)
+
+        # Filled by set_versions(); disabled until the show has a history.
+        self.versions_menu = QMenu("Restore version", menu)
+        self.versions_menu.setIcon(icons.icon("swap"))
+        self.versions_menu.setEnabled(False)
+        menu.addMenu(self.versions_menu)
+        menu.addSeparator()
 
     def _create_menu_section(self) -> QFrame:
         """Create the hamburger application menu section (far-right)."""
@@ -899,16 +802,24 @@ class ToolbarManager(QObject):
         button.setToolTip("Menu")
 
         menu = QMenu(button)
+        menu.setToolTipsVisible(True)
         self._add_compact_actions(menu)
+        auto_action = menu.addAction(icons.icon("bolt"), "Auto program…")
+        auto_action.setToolTip("Generate a song's light show from its audio")
+        auto_action.triggered.connect(self.auto_program_requested.emit)
+        menu.addSeparator()
+        self._add_version_actions(menu)
         # The stage's own dock button leaves with the stage, so this is the way
         # back when its window ends up on a display that is no longer there.
-        self.dock_stage_action = menu.addAction("Dock stage")
+        self.dock_stage_action = menu.addAction(
+            icons.icon("dock"), "Dock stage")
         self.dock_stage_action.setEnabled(False)
         self.dock_stage_action.triggered.connect(self.dock_stage_requested.emit)
         menu.addSeparator()
-        settings_action = menu.addAction("Settings…")
+        settings_action = menu.addAction(icons.icon("settings"), "Settings…")
         settings_action.triggered.connect(self.settings_requested.emit)
-        about_action = menu.addAction("About TupperDMX")
+        about_action = menu.addAction(
+            QIcon(asset_path("icons", "TupperDMX-icon.png")), "About TupperDMX")
         about_action.triggered.connect(self.about_requested.emit)
         button.setMenu(menu)
 
@@ -957,6 +868,19 @@ class ToolbarManager(QObject):
                                self.midi_empty_button, filename)
         self.logger.debug(f"MIDI file display updated: {filename or '(empty)'}")
 
+    def update_offset_display(self, offset: float,
+                             has_song: bool = True) -> None:
+        """Refresh just the SETLIST footer's offset chip.
+
+        Its own setter because the audio offset changes WITHOUT the song
+        changing — a waveform drag retimes the audio under a song that is
+        already loaded, and update_song_info's other arguments (title, status,
+        bpm, key) are not the drag's to supply. Always the backing offset: the
+        guide has its own, and the chip has always meant `song.offset`."""
+        if self.offset_label is not None:
+            self.offset_label.setText(
+                f"offset {offset:+.2f}s" if has_song else "")
+
     def update_song_info(self, title: str, status: str,
                          bpm: Optional[int] = None,
                          offset: float = 0.0,
@@ -967,9 +891,7 @@ class ToolbarManager(QObject):
         combobox."""
         if self.bpm_label is not None:
             self.bpm_label.setText(f"{int(bpm)} BPM" if bpm else "")
-        if self.offset_label is not None:
-            self.offset_label.setText(
-                f"offset {offset:+.2f}s" if title else "")
+        self.update_offset_display(offset, has_song=bool(title))
         if self.key_edit is not None:
             self.key_edit.blockSignals(True)
             self.key_edit.setText(key)
@@ -997,20 +919,25 @@ class ToolbarManager(QObject):
         if self.bpm_label is not None:
             self.bpm_label.setText(f"{int(bpm)} BPM" if bpm else "")
 
-    def set_setlist(self, titles: list, current_index: int) -> None:
+    def set_setlist(self, titles: list, current_index: int,
+                    enabled: Optional[list] = None) -> None:
         """Repopulate the song-selector combobox from the setlist and select
-        the current song, without firing a selection signal."""
+        the current song, without firing a selection signal.
+
+        A disabled song (`enabled[i]` false) is left out — it is out of the
+        running order — unless it is the current one, which the selector
+        still has to show."""
         if self.song_combo is None:
             return
         self._populating_setlist = True
         try:
             self.song_combo.clear()
-            self.song_combo.addItems(
-                [t or f"Song {i + 1}" for i, t in enumerate(titles)])
-            if 0 <= current_index < len(titles):
-                self.song_combo.setCurrentIndex(current_index)
-            else:
-                self.song_combo.setEditText("")
+            for i, title in enumerate(titles):
+                if enabled is not None and not enabled[i] and i != current_index:
+                    continue
+                self.song_combo.addItem(title or f"Song {i + 1}", i)
+                if i == current_index:
+                    self.song_combo.setCurrentIndex(self.song_combo.count() - 1)
         finally:
             self._populating_setlist = False
 

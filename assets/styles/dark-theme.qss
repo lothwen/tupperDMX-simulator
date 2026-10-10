@@ -1,5 +1,13 @@
 /* TupperDMX Simulator Dark Theme */
 
+/* Tab bars — QMacStyle answers SH_TabBar_Alignment with AlignCenter, so every
+   QTabWidget's tabs sit in the middle of the bar on macOS and hug the left
+   everywhere else. The hint is read by QCommonStyle when it places the bar, and
+   this rule is the only thing that overrides it. */
+QTabWidget::tab-bar {
+    alignment: left;
+}
+
 /* Main Splitter */
 QSplitter {
     border: none;
@@ -16,6 +24,21 @@ QSplitter::handle:horizontal {
 
 QSplitter::handle:vertical {
     height: 2px;
+}
+
+/* The fixture editors' list/editor divider. Wider than the 2px above because
+   this one is meant to be found and dragged, not just to separate two docked
+   regions — and transparent, since both panes already carry their own border.
+   Scoped by object name so the window's own splitters keep the hairline. */
+QSplitter#RatioSplitter::handle:horizontal {
+    width: 11px;
+    background-color: transparent;
+}
+
+QSplitter#RatioSplitter::handle:horizontal:hover {
+    background-color: #4aa3df;
+    margin: 0 4px;
+    border-radius: 1px;
 }
 
 /* Timeline Widget */
@@ -86,8 +109,15 @@ QMenu {
 
 QMenu::item {
     background-color: transparent;
-    padding: 8px 16px;
+    /* Item padding moves the LABEL only — the icon sits at the item's left
+       edge — so QMenu::icon repeats the same 10px and the whole row (icon
+       included) breathes away from the menu border. */
+    padding: 8px 16px 8px 16px;
     border-radius: 3px;
+}
+
+QMenu::icon {
+    left: 10px;
 }
 
 QMenu::item:selected {
@@ -115,17 +145,6 @@ QMenu::separator {
 #MetronomeMuteButton:checked, #AudioMuteButton:checked {
     background-color: red;
     color: white;
-}
-
-/* Toolbar tempo glyph (decorative ♩ next to the BPM spinbox) */
-#MetronomeButton {
-    background-color: transparent;
-    color: #cfcfcf;
-    font-size: 22px;
-    min-width: 32px;
-    max-width: 32px;
-    min-height: 32px;
-    max-height: 32px;
 }
 
 /* Combined track-header panel (TRACKS counter + MASTER/METRO volumes) */
@@ -348,25 +367,6 @@ QPushButton#NavButton:disabled {
     border-top-color: #444;
 }
 
-/* Remove Song Button */
-QPushButton#RemoveButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
-    color: #d98a8a;
-    border: 1px solid #202020;
-    border-top: 1px solid #5d5d5d;
-    border-radius: 6px;
-    font-size: 14px;
-}
-
-QPushButton#RemoveButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #585858, stop:1 #4d4d4d);
-    color: #e89a9a;
-}
-
-QPushButton#RemoveButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #404040, stop:1 #3a3a3a);
-}
-
 /* Toolbar Hamburger Menu Button */
 QToolButton#MenuButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4f4f4f, stop:1 #444);
@@ -435,6 +435,9 @@ QLabel#SetlistCounter {
     font-family: ui-monospace,monospace;
 }
 
+/* combobox-popup: 0 — a plain list that drops BELOW the selector. A
+   non-editable combobox otherwise opens the style's menu popup, which lays the
+   current song over the selector, so from a late song the list runs upwards. */
 QComboBox#SetlistCombo {
     background: transparent;
     border: none;
@@ -442,13 +445,7 @@ QComboBox#SetlistCombo {
     font-size: 13px;
     font-weight: bold;
     padding: 2px 4px;
-}
-
-QComboBox#SetlistCombo QLineEdit {
-    background: transparent;
-    border: none;
-    color: #f0f0f0;
-    font-weight: bold;
+    combobox-popup: 0;
 }
 
 QComboBox#SetlistCombo::drop-down {
@@ -539,48 +536,6 @@ QPushButton#FileCardAction[kind="backing"] { color: #6fce7f; border-color: #3c61
 QPushButton#FileCardAction[kind="guide"]   { color: #5da9e8; border-color: #35567a; }
 QPushButton#FileCardAction:hover   { background-color: #333; }
 QPushButton#FileCardAction:pressed { background-color: #262626; }
-
-/* VERSIONS section: snapshot picker, History link and Snapshot action */
-QComboBox#VersionsCombo {
-    background-color: #262626;
-    border: 1px solid #161616;
-    border-radius: 6px;
-    color: #e6e6e6;
-    font-size: 12px;
-    padding: 2px 8px;
-}
-
-QComboBox#VersionsCombo::drop-down {
-    border: none;
-    width: 18px;
-}
-
-QComboBox#VersionsCombo QAbstractItemView {
-    background-color: #262626;
-    border: 1px solid #4a4a4a;
-    color: #e6e6e6;
-    selection-background-color: #2d4a63;
-    outline: none;
-}
-
-QPushButton#SnapshotButton {
-    background-color: #2f2f2f;
-    color: #d7d7d7;
-    border: 1px solid #3a4a5a;
-    border-radius: 3px;
-    padding: 2px 12px;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-QPushButton#SnapshotButton:hover {
-    background-color: #384555;
-    border-color: #4a6076;
-}
-
-QPushButton#SnapshotButton:pressed {
-    background-color: #2a2a2a;
-}
 
 /* Transport Buttons */
 QPushButton#StopButton {
@@ -1043,8 +998,20 @@ QLabel#ClipPillCount {
 
 QFrame#ClipPillNew {
     background-color: transparent;
-    border: 1px dashed #666;
+    border: 1px solid #1f1f1f;
     border-radius: 12px;
+}
+
+/* It opens the fixture editor, so it has to answer the pointer like the pills
+   beside it do. The dash brightens with the fill, or the outline washes out
+   against the lighter ground it is drawn on. */
+QFrame#ClipPillNew:hover {
+    background-color: #3a3a3a;
+    border-color: #8a8a8a;
+}
+
+QFrame#ClipPillNew:hover QLabel#ClipPillLabel {
+    color: #dddddd;
 }
 
 QFrame#ClipPillNew QLabel#ClipPillLabel {
@@ -1088,6 +1055,24 @@ QFrame#ClipCard {
 QFrame#ClipCard:hover {
     background-color: #24323a;
     border-color: #4a7d92;
+}
+
+/* A favourite whose clip no longer resolves: its fixture was unpatched or its
+   scene renamed. It stays on the Favorites page — dimmed, undraggable — until
+   the operator unstars it. */
+QFrame#ClipCard[available="false"] {
+    background-color: #202020;
+    border-style: dashed;
+    border-color: #3a3a3a;
+}
+
+QFrame#ClipCard[available="false"]:hover {
+    background-color: #202020;
+    border-color: #4a4a4a;
+}
+
+QFrame#ClipCard[available="false"] QLabel#ClipCardTitle {
+    color: #7d7d7d;
 }
 
 QLabel#ClipCardTitle {
@@ -1220,6 +1205,14 @@ QLabel#TrackInfo {
     font-size: 10px;
 }
 
+/* This lane's fixture shares DMX slots with another. The row is the address
+   read-out, so it is the row that says so — red, and marked, since colour
+   alone is not a message. */
+QLabel#TrackInfo[state="clash"] {
+    color: #e05252;
+    font-weight: bold;
+}
+
 /* Reorder grip (placeholder) + collapse chevron — frameless; the chevron
    collapses the track and swaps its glyph rather than showing a checked fill. */
 QPushButton#TrackGrip,
@@ -1312,6 +1305,18 @@ QPushButton#StageDockButton {
     min-width: 0;
 }
 
+/* The stage debug readout, bottom-right over the stage image. Shown only at
+   DEBUG log level. No panel behind it: it is text laid straight on the stage,
+   so it reads as an instrument rather than as part of the rig. Monospace so
+   the numbers stay in their columns as they change. */
+QLabel#StageDebugOverlay {
+    background: transparent;
+    color: #9fe0b0;
+    border: none;
+    font-family: "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
 QWidget#StageEditToolbar {
     background-color: rgba(28, 28, 28, 235);
     border: 1px solid rgba(255, 255, 255, 40);
@@ -1324,7 +1329,15 @@ QLabel#EditModeLabel {
     padding: 0 4px;
 }
 
-QWidget#StageEditToolbar QPushButton {
+/* The toolbar's OWN buttons only — `>`, not a descendant match, is load
+   bearing. This toolbar parents the Add-fixture dialog (designer.py's
+   `AddFixtureDialog(self._stage, self)`), and Qt walks the parent chain when it
+   matches a descendant selector, so a dialog IS "inside" the widget that owns
+   it. Written loosely, this rule paints every QPushButton in that dialog —
+   and wins, because one ID plus two types outranks the `QPushButton#Name` the
+   dialog styles its own buttons with. Its buttons all sit directly in this
+   widget's layouts, so the child selector still reaches every one of them. */
+QWidget#StageEditToolbar > QPushButton {
     color: white;
     background-color: #4a4a4a;
     border: 1px solid rgba(255, 255, 255, 40);
@@ -1333,11 +1346,11 @@ QWidget#StageEditToolbar QPushButton {
     font-weight: bold;
 }
 
-QWidget#StageEditToolbar QPushButton:hover {
+QWidget#StageEditToolbar > QPushButton:hover {
     background-color: #5a5a5a;
 }
 
-QWidget#StageEditToolbar QPushButton:disabled {
+QWidget#StageEditToolbar > QPushButton:disabled {
     color: #777;
     background-color: #3a3a3a;
     border-color: rgba(255, 255, 255, 20);
@@ -1461,6 +1474,18 @@ QLabel#InspectorHint {
     font-size: 10px;
 }
 
+/* A standing patch clash. The address field refuses an overlap outright, but a
+   mode change is let through, so the card carries the condition until it is
+   fixed — a block rather than a status word, since nobody dismissed it. */
+QLabel#InspectorWarning {
+    color: #e05252;
+    background-color: rgba(120, 40, 40, 90);
+    border: 1px solid rgba(224, 82, 82, 110);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-size: 10px;
+}
+
 QLabel#InspectorReadonly {
     color: white;
     background-color: #333;
@@ -1504,7 +1529,7 @@ QPushButton#InspectorDelete:pressed {
 /* ============================================================
    Timeline toolbar (strip above the timeline tracks)
    Transport widgets reuse #StopButton/#PlayPauseButton/
-   #TimeDisplay/#MetronomeButton styles defined above.
+   #TimeDisplay styles defined above.
    ============================================================ */
 QWidget#TimelineToolbar {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #303030, stop:1 #2a2a2a);
@@ -1526,8 +1551,7 @@ QFrame#TTViewPopup {
     border-radius: 4px;
 }
 
-QLabel#TTRowsLabel,
-QLabel#TTCountInLabel {
+QLabel#TTRowsLabel {
     color: #aaa;
     padding: 0 2px;
 }
@@ -1579,41 +1603,61 @@ QWidget#TimelineToolbar QPushButton#TTSnap:checked {
     font-weight: bold;
 }
 
-/* Segmented toggles (Bars|Time, Rows S/M/L) */
-QWidget#TimelineToolbar QPushButton#TTSegment {
+/* The segmented switch (ui/widgets/segmented.py): Bars|Time, Rows S/M/L,
+   BACKING|GUIDE, and the fixture dialog's chase DIRECTION and TIMING UNITS.
+   Deliberately NOT scoped to #TimelineToolbar — it is the app's switch, not
+   that toolbar's, and a second copy of these rules under another name is how
+   two controls doing the same job start looking different. */
+QPushButton#TTSegment {
     color: #9a9a9a;
-    background-color: #242424;
+    /* Every one of these is stated on purpose, including the ones that look
+       like defaults. This switch is used inside dialogs, and `QDialog
+       QPushButton` up at the top of this file gives every button in one a
+       raised gradient, a lighter top edge, a 3px radius and its own font size
+       — none of which a segment wants, and all of which reach anything left
+       unsaid here. The radius is the visible one: unset, each segment rounds
+       its INNER corners too and the pill comes apart at the seam. */
+    background: #242424;
     border: 1px solid #161616;
+    border-top: 1px solid #161616;
+    border-radius: 0;
+    font-size: 12px;
+    /* A line of 12px text, so an icon-only segment stands as tall as a worded
+       one. Two switches side by side (chase DIRECTION and TIMING UNITS) are
+       one row, and 6px of difference between them reads as a mistake. */
+    min-height: 17px;
     padding: 4px 8px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment:checked {
+QPushButton#TTSegment:hover {
+    color: #d0d0d0;
+}
+
+QPushButton#TTSegment:checked {
     color: #e6e6e6;
-    background-color: #3a3a3a;
+    background: #3a3a3a;
     font-weight: bold;
 }
 
-/* GUIDE monitor: amber when active (matches the Export-bundle accent) so
-   "not the live signal" is unmistakable */
-QWidget#TimelineToolbar QPushButton#TTSegment[monitor="guide"]:checked {
-    color: #f8e7c8;
-    background-color: #6d5330;
-    border-color: #c1954f;
+QPushButton#TTSegment:disabled {
+    color: #4a4a4a;
 }
 
 /* Round only the outer corners of the segmented control */
-QWidget#TimelineToolbar QPushButton#TTSegment[seg="left"] {
+QPushButton#TTSegment[seg="left"] {
     border-top-left-radius: 5px;
     border-bottom-left-radius: 5px;
     border-right: 0px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment[rows="true"] {
+/* One narrow width for every segment: single letters (Rows S/M/L) and
+   icon-only segments, neither of which has text to size to. */
+QPushButton#TTSegment[compact="true"] {
     min-width: 28px;
     max-width: 28px;
 }
 
-QWidget#TimelineToolbar QPushButton#TTSegment[seg="right"] {
+QPushButton#TTSegment[seg="right"] {
     border-top-right-radius: 5px;
     border-bottom-right-radius: 5px;
     border-left: 0px;
@@ -1698,6 +1742,17 @@ QLabel#SettingsValueLabel {
     font-size: 12px;
 }
 
+/* Names written under a slider's ticks: dim, except the stop the handle is on. */
+QLabel#SliderTickLabel {
+    background: transparent;
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+QLabel#SliderTickLabel[active="true"] {
+    color: #e0e0e0;
+}
+
 QLabel#SettingsToggleLabel {
     background: transparent;
     color: #cfcfcf;
@@ -1778,6 +1833,49 @@ QLabel#SettingsLinkLabel {
     color: #79cdf0;
     font-family: monospace;
     font-size: 12px;
+}
+
+/* ------------------------------------------------------------
+   Settings dialog — Logging page
+   A path field that carries its own icon and size readout, over
+   the live `tail -f` pane (ui/widgets/log_tail.py). Line colours
+   inside the pane are painted per line, in code.
+   ------------------------------------------------------------ */
+
+/* Reads as one line edit; it is a frame so the folder icon and the
+   "38.4 MB · 12 files" readout can sit inside the same box. */
+QFrame#SettingsPathField {
+    background-color: #1a1a1a;
+    border: 1px solid #444;
+    border-radius: 3px;
+}
+
+QFrame#SettingsPathField QLineEdit#SettingsPathEdit {
+    background: transparent;
+    border: none;
+    padding: 4px 0px;
+}
+
+QToolButton#SettingsPathIcon {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QLabel#LogTailStatus {
+    color: #8a8a8a;
+    font-size: 11px;
+}
+
+QPlainTextEdit#LogTailPane {
+    background-color: #161616;
+    color: #d6d6d6;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    min-height: 150px;
 }
 
 /* ============================================================
@@ -2004,6 +2102,29 @@ QLabel#AddFxDetailManufacturer {
 QLabel#AddFxDetailName {
     color: #f0f0f0;
     font-size: 21px;
+}
+
+/* The model, once the title above it is carrying a name of the operator's
+   own. Set beside the manufacturer and styled with it, so the pair reads as
+   one line of provenance rather than as a second title. */
+QLabel#AddFxDetailModel {
+    color: #6f6f6f;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
+/* Rename: a pencil that only shows its edges under the pointer, so it sits
+   beside the title without competing with it. */
+QToolButton#AddFxRename {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 3px;
+}
+
+QToolButton#AddFxRename:hover {
+    background-color: #3a3a3a;
+    border-color: #4f4f4f;
 }
 
 QLabel#AddFxStatLabel {
@@ -2276,6 +2397,32 @@ QPushButton#AddFxSceneSave:disabled {
     color: #5a5a5a;
 }
 
+/* The quiet half of the save pair: the same box as #AddFxSceneSave, so the two
+   line up in the name row, in the palette of #AddFxSceneAction, because it is
+   the secondary of the two — it makes a new scene out of the changes instead
+   of writing them over the one being shown. */
+QPushButton#AddFxSceneSaveAs {
+    background-color: #2c2c2c;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    color: #cfcfcf;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 7px 12px;
+}
+
+QPushButton#AddFxSceneSaveAs:hover {
+    background-color: #353535;
+    color: #ffffff;
+}
+
+QPushButton#AddFxSceneSaveAs:disabled {
+    background-color: #242424;
+    border: 1px solid #333333;
+    color: #5a5a5a;
+}
+
 /* Song-part tags. Outlined, not filled, so they read as tags rather than as
    another row of buttons — they are `_PartChip` labels, and the checked state
    arrives as a property. Nothing here may set a width: they are sized by their
@@ -2397,6 +2544,186 @@ QSlider#AddFxFader:disabled::add-page:vertical {
     background: #2a2a2a;
 }
 
+/* --- chases ---
+   The list panel, the "+ New" button and the Save button are the Scenes tab's
+   (#AddFxScenesPanel, #AddFxNewScene, #AddFxSceneSave), so the two tabs read as
+   one editor. Only what the Scenes tab has no equivalent of is styled here. */
+QFrame#AddFxSceneHeader,
+QFrame#AddFxChaseHeader,
+QFrame#AddFxStepsCard {
+    background-color: #202020;
+    border: 1px solid #303030;
+    border-radius: 3px;
+}
+
+QPushButton#AddFxChaseRun {
+    background-color: #2c5f8a;
+    border: 1px solid #4a90e2;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-width: 56px;
+    padding: 5px 12px;
+}
+
+QPushButton#AddFxChaseRun:hover {
+    background-color: #35719f;
+}
+
+QPushButton#AddFxChaseRun:checked {
+    background-color: #8a3c2c;
+    border: 1px solid #e2704a;
+}
+
+QPushButton#AddFxChaseRun:disabled {
+    background-color: #242424;
+    border: 1px solid #333333;
+    color: #5a5a5a;
+}
+
+QLabel#AddFxChaseStep {
+    color: #f0f0f0;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* The step table. The header caption is #AddFxFieldLabel like every other
+   caption in the dialog; these are the cells under it. */
+QWidget#AddFxStepHeader {
+    border-bottom: 1px solid #303030;
+    padding-bottom: 4px;
+}
+
+QWidget#AddFxStepRow {
+    background: transparent;
+}
+
+QLabel#AddFxStepNumber {
+    color: #6f6f6f;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QComboBox#AddFxStepScene {
+    background-color: #191919;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    color: #d8d8d8;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+
+QComboBox#AddFxStepScene:hover {
+    border: 1px solid #4f4f4f;
+}
+
+QComboBox#AddFxStepScene::drop-down {
+    border: none;
+    width: 16px;
+}
+
+QComboBox#AddFxStepScene QAbstractItemView {
+    background-color: #1c1c1c;
+    border: 1px solid #3a3a3a;
+    color: #d8d8d8;
+    selection-background-color: #2c5f8a;
+}
+
+/* One box holding the number and the unit it is counted in, so the unit stays
+   at the right-hand edge instead of trailing the digits around. */
+QFrame#AddFxStepTime {
+    background-color: #191919;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    min-height: 24px;
+}
+
+QFrame#AddFxStepTime:hover {
+    border: 1px solid #4f4f4f;
+}
+
+QDoubleSpinBox#AddFxStepTimeSpin {
+    background: transparent;
+    border: none;
+    color: #d8d8d8;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QLabel#AddFxStepUnit {
+    color: #6f6f6f;
+    font-family: monospace;
+    font-size: 10px;
+}
+
+QLabel#AddFxStepLevelValue {
+    color: #d8d8d8;
+    font-family: monospace;
+    font-size: 11px;
+}
+
+QSlider#AddFxStepLevel::groove:horizontal {
+    background-color: #262626;
+    border-radius: 2px;
+    height: 4px;
+}
+
+QSlider#AddFxStepLevel::sub-page:horizontal {
+    background-color: #4a90e2;
+    border-radius: 2px;
+}
+
+QSlider#AddFxStepLevel::handle:horizontal {
+    background-color: #cfcfcf;
+    border-radius: 2px;
+    height: 10px;
+    margin: -4px 0;
+    width: 4px;
+}
+
+QToolButton#AddFxStepButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: #7a7a7a;
+    font-size: 10px;
+    padding: 2px;
+}
+
+QToolButton#AddFxStepButton:hover {
+    background-color: #2c2c2c;
+    border: 1px solid #3f3f3f;
+    color: #ffffff;
+}
+
+QToolButton#AddFxAddStep {
+    background: transparent;
+    border: 1px dashed #3a3a3a;
+    border-radius: 3px;
+    color: #8a8a8a;
+    font-size: 11px;
+    padding: 4px 10px;
+}
+
+QToolButton#AddFxAddStep:hover {
+    border: 1px dashed #4a90e2;
+    color: #ffffff;
+}
+
+QToolButton#AddFxAddStep:disabled {
+    border: 1px dashed #2a2a2a;
+    color: #454545;
+}
+
+QScrollArea#AddFxStepScroll,
+QScrollArea#AddFxStepScroll > QWidget > QWidget {
+    background: transparent;
+    border: none;
+}
+
 /* --- footer --- */
 QFrame#AddFxFooter {
     background-color: #1f1f1f;
@@ -2490,6 +2817,37 @@ QDialog#AddFixtureDialog QPushButton#AddFxOk:disabled {
     color: #6a7a82;
 }
 
+/* Edit mode only: the instance's own name, up in the header beside the type,
+   and Delete down in the footer. Both share the dialog's existing family —
+   the name field matches the footer's spin boxes, Delete the inspector's. */
+QDialog#AddFixtureDialog QLineEdit#AddFxNameEdit {
+    background-color: #1a1a1a;
+    border: 1px solid #4f4f4f;
+    border-radius: 3px;
+    color: #ffffff;
+    font-size: 21px;
+    padding: 1px 8px;
+}
+
+QDialog#AddFixtureDialog QLineEdit#AddFxNameEdit:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxDelete {
+    background-color: rgba(120, 40, 40, 200);
+    border: 1px solid #a04040;
+    border-radius: 5px;
+    color: #ff8a8a;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 7px 18px;
+}
+
+QDialog#AddFixtureDialog QPushButton#AddFxDelete:hover {
+    background-color: rgba(150, 50, 50, 220);
+    color: #ffffff;
+}
+
 QDialog#AddFixtureDialog QPushButton#AddFxCancel {
     background-color: #2f2f2f;
     border: 1px solid #3f3f3f;
@@ -2569,12 +2927,230 @@ QLineEdit#SongKeyEdit {
     max-width: 44px;
 }
 
-/* Transport BPM. */
+/* Transport BPM: the time display's readout, a size down. */
 QWidget#TimelineToolbar QSpinBox#TTBpm {
-    min-width: 50px;
-    max-width: 50px;
+    background-color: #1a1a1a;
+    color: #46e05a;
+    border: 2px solid #333;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    font-weight: bold;
+    selection-background-color: #2a5a30;
+    selection-color: #46e05a;
+    min-width: 64px;
+    max-width: 64px;
+    min-height: 26px;
+    max-height: 26px;
+}
+
+/* The ♩▴ button next to it, which opens the click panel: raised like the
+   toolbar's other buttons, pressed in while the panel is open. */
+QWidget#TimelineToolbar QPushButton#TTClickButton {
+    color: #cfcfcf;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
+    border: 1px solid #1d1d1d;
+    border-top: 1px solid #454545;
+    border-radius: 3px;
+    font-size: 11px;
     min-height: 30px;
-    max-height: 30px;
+    padding: 0 8px;
+}
+
+QWidget#TimelineToolbar QPushButton#TTClickButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #464646, stop:1 #3c3c3c);
+}
+
+QWidget#TimelineToolbar QPushButton#TTClickButton:pressed,
+QWidget#TimelineToolbar QPushButton#TTClickButton[open="true"] {
+    background: #2a2a2a;
+    border-top: 1px solid #1d1d1d;
+}
+
+/* Lit while the click free-runs — the one sign of it once the panel closes. */
+QWidget#TimelineToolbar QPushButton#TTClickButton[running="true"] {
+    background: #2f5a2c;
+    border: 1px solid #3e8a3a;
+}
+
+
+/* ============================================================
+   CLICK PANEL (ui/click_popup.py)
+   Opens upward from the timeline toolbar's ♩ button: tempo + TAP,
+   meter, accent, count-in, level, then free-run / set as song tempo.
+   ============================================================ */
+QFrame#ClickPopup {
+    background: #2b2b2b;
+    border: 1px solid #161616;
+    border-radius: 6px;
+    min-width: 250px;
+}
+
+QLabel#ClickPopupTitle {
+    color: #9a9a9a;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QLabel#ClickRowLabel {
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    min-width: 50px;
+}
+
+QLabel#ClickRowLabel[top="true"] {
+    padding-top: 6px;
+}
+
+QFrame#ClickTempoBox {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    min-height: 42px;
+}
+
+QSpinBox#ClickBpm {
+    background: transparent;
+    border: none;
+    color: #5aa6ee;
+    font-size: 26px;
+    font-weight: bold;
+    min-width: 56px;
+    max-width: 56px;
+    padding: 0;
+    selection-background-color: #1f3d5c;
+}
+
+QLabel#ClickBpmUnit {
+    color: #8a8a8a;
+    font-size: 10px;
+    font-weight: bold;
+    padding-bottom: 10px;
+}
+
+QPushButton#ClickStepButton,
+QPushButton#ClickTapButton,
+QPushButton#ClickApplyButton {
+    color: #e0e0e0;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333);
+    border: 1px solid #1d1d1d;
+    border-top: 1px solid #454545;
+    border-radius: 5px;
+}
+
+QPushButton#ClickStepButton:hover,
+QPushButton#ClickTapButton:hover,
+QPushButton#ClickApplyButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #464646, stop:1 #3c3c3c);
+}
+
+QPushButton#ClickStepButton:pressed,
+QPushButton#ClickTapButton:pressed,
+QPushButton#ClickApplyButton:pressed {
+    background: #2a2a2a;
+}
+
+QPushButton#ClickStepButton {
+    font-size: 18px;
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 42px;
+    max-height: 42px;
+}
+
+QPushButton#ClickTapButton {
+    font-size: 12px;
+    font-weight: bold;
+    min-width: 46px;
+    min-height: 42px;
+    max-height: 42px;
+}
+
+QPushButton#ClickMeterChip {
+    color: #bdbdbd;
+    background: #242424;
+    border: 1px solid #161616;
+    border-radius: 4px;
+    font-size: 12px;
+    min-width: 46px;
+    padding: 5px 0;
+}
+
+QPushButton#ClickMeterChip:hover {
+    color: #e6e6e6;
+    background: #303030;
+}
+
+QPushButton#ClickMeterChip:checked {
+    color: #5aa6ee;
+    background: #1c2a38;
+    border: 1px solid #3f78b5;
+    font-weight: bold;
+}
+
+QLabel#ClickAccentHint {
+    color: #b0b0b0;
+}
+
+QSlider#ClickLevelSlider::groove:horizontal {
+    height: 4px;
+    background: #1a1a1a;
+    border-radius: 2px;
+}
+
+QSlider#ClickLevelSlider::sub-page:horizontal {
+    background: #4a90d9;
+    border-radius: 2px;
+}
+
+QSlider#ClickLevelSlider::handle:horizontal {
+    background: #f0f0f0;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QLabel#ClickLevelDb {
+    color: #b0b0b0;
+    font-size: 11px;
+    min-width: 40px;
+}
+
+QPushButton#ClickFreeRunButton,
+QPushButton#ClickApplyButton {
+    font-size: 12px;
+    min-height: 32px;
+    padding: 0 10px;
+}
+
+QPushButton#ClickFreeRunButton {
+    color: #f2fff0;
+    font-weight: bold;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a9a45, stop:1 #3a7f36);
+    border: 1px solid #2a5e27;
+    border-top: 1px solid #5cae56;
+    border-radius: 5px;
+}
+
+QPushButton#ClickFreeRunButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #55a850, stop:1 #438c3e);
+}
+
+QPushButton#ClickFreeRunButton[running="true"] {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #b0463c, stop:1 #963a31);
+    border: 1px solid #6e2a24;
+    border-top: 1px solid #c45a4f;
+}
+
+QPushButton#ClickFreeRunButton:disabled,
+QPushButton#ClickApplyButton:disabled {
+    color: #5a5a5a;
+    background: #2e2e2e;
+    border: 1px solid #242424;
 }
 
 
@@ -2691,4 +3267,961 @@ QDoubleSpinBox#MarkersSegueSpin {
 QSpinBox#MarkersBpmSpin:focus, QDoubleSpinBox#MarkersTimeSpin:focus,
 QDoubleSpinBox#MarkersSegueSpin:focus, QLineEdit#MarkersTextEdit:focus {
     border: 1px solid #79cdf0;
+}
+
+
+/* ============================================================
+   OFFSET RIPPLE DIALOG (ui/offset_dialog.py)
+   A show that cannot follow the offset. `QDialog QPushButton` sets a
+   text colour, which Qt keeps for a disabled button — so disabled
+   alone reads as enabled here. Blocked turns the button and the
+   reason red; the dialog adds the warning glyph to both.
+   ============================================================ */
+QLabel#OffsetQuestion {
+    min-width: 460px;
+}
+
+QLabel#OffsetQuestion[state="blocked"] {
+    color: #e05252;
+}
+
+QPushButton#OffsetMoveShow[state="blocked"] {
+    background: #3a2a2a;
+    color: #9a5a5a;
+    border: 1px solid #6b3434;
+    border-top: 1px solid #6b3434;
+}
+
+
+/* ============================================================
+   PLAYLIST MANAGER (ui/playlist_dialog.py)
+   The whole setlist in one table. Everything is scoped to the
+   dialog: the generic `QDialog QPushButton` gradient would
+   otherwise win over every button here. The palette is the
+   fixture dialog's (AddFixtureDialog): #262626 body, #1f1f1f
+   footer and rail, #3a3a3a hairlines, the #79cdf0 accent.
+   ============================================================ */
+QDialog#PlaylistDialog {
+    background-color: #262626;
+    min-width: 980px;
+    min-height: 420px;
+}
+
+QFrame#PlaylistActions {
+    background-color: #262626;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 6px 8px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPrimary {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPrimary:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistSecondary {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistSecondary:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QFrame#PlaylistActionsSep {
+    color: #3a3a3a;
+    max-width: 1px;
+    margin: 4px 6px;
+}
+
+QToolButton#PlaylistMove {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    min-width: 28px;
+    min-height: 28px;
+}
+
+QToolButton#PlaylistMove:hover {
+    background-color: #3a3a3a;
+}
+
+QToolButton#PlaylistMove:disabled {
+    background-color: #2a2a2a;
+    border-color: #333333;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete {
+    background: transparent;
+    color: #ff8a8a;
+    border: 1px solid #a04040;
+    border-radius: 3px;
+    padding: 6px 14px;
+    font-size: 12px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete:hover {
+    background-color: rgba(120, 40, 40, 200);
+    color: #ffffff;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistDelete:disabled {
+    color: #5f5f5f;
+    border-color: #3f3f3f;
+}
+
+/* The filter, BPM and key fields keep the app-wide QLineEdit / QSpinBox /
+   QComboBox look; only their size is set here. */
+QLineEdit#PlaylistFilter {
+    padding: 5px 6px;
+    min-width: 220px;
+}
+
+QTableWidget#PlaylistTable {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: none;
+    font-size: 13px;
+    selection-background-color: #3a5a67;
+    outline: none;
+}
+
+QTableWidget#PlaylistTable::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 6px;
+}
+
+QTableWidget#PlaylistTable::item:selected {
+    background-color: #3a5a67;
+}
+
+QTableWidget#PlaylistTable QHeaderView::section {
+    background-color: #232323;
+    color: #7a7a7a;
+    border: none;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 8px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+QTableWidget#PlaylistTable QLineEdit {
+    border: 1px solid #79cdf0;
+    padding: 2px 4px;
+}
+
+/* Some of the project's songs checked: the box outlined, not filled. */
+QCheckBox#ImportSelectAll::indicator:indeterminate {
+    background-color: #1a1a1a;
+    border: 2px solid #5e9ec2;
+}
+
+/* A song's backing or guide: the toolbar's SONG FILES card in small —
+   same slot colour, same dot per kind (guide blue, backing green). */
+QFrame#PlaylistChip {
+    background-color: #202020;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    min-height: 24px;
+    max-height: 24px;
+}
+
+QFrame#PlaylistChip[state="missing"] {
+    background-color: rgba(120, 40, 40, 90);
+    border: 1px solid rgba(224, 82, 82, 110);
+}
+
+QFrame#PlaylistChip[state="ok"] QLabel#PlaylistChipDot {
+    border-radius: 3px;
+    min-width: 6px;
+    max-width: 6px;
+    min-height: 6px;
+    max-height: 6px;
+}
+
+QFrame#PlaylistChip[kind="guide"][state="ok"] QLabel#PlaylistChipDot {
+    background-color: #5da9e8;
+}
+
+QFrame#PlaylistChip[kind="audio"][state="ok"] QLabel#PlaylistChipDot {
+    background-color: #6fce7f;
+}
+
+QLabel#PlaylistChipName {
+    color: #dcdcdc;
+    font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QFrame#PlaylistChip[state="missing"] QLabel#PlaylistChipName {
+    color: #e05252;
+}
+
+QToolButton#PlaylistChipClear {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QToolButton#PlaylistChipClear:hover {
+    background-color: #3a3a3a;
+    border-radius: 2px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPick {
+    background: transparent;
+    color: #9a9a9a;
+    border: 1px dashed #555;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 11px;
+}
+
+QDialog#PlaylistDialog QPushButton#PlaylistPick:hover {
+    color: #d0d0d0;
+    border-color: #777;
+}
+
+QSpinBox#PlaylistBpm, QComboBox#PlaylistKey {
+    padding: 2px 4px;
+    font-size: 12px;
+    min-height: 20px;
+}
+
+QSpinBox#PlaylistBpm {
+    min-width: 44px;
+}
+
+QComboBox#PlaylistKey {
+    min-width: 60px;
+}
+
+QFrame#PlaylistFooter {
+    background-color: #1f1f1f;
+    border-top: 1px solid #3a3a3a;
+    padding: 4px 8px;
+}
+
+QLabel#PlaylistFooterText {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+
+/* ============================================================
+   IMPORT FROM OTHER PROJECTS (ui/import_songs_dialog.py)
+   Same palette as the playlist manager; the projects rail is the
+   fixture dialog's library rail.
+   ============================================================ */
+QDialog#ImportSongsDialog {
+    background-color: #262626;
+    min-width: 600px;
+    min-height: 380px;
+}
+
+QFrame#ImportProjectsPanel {
+    background-color: #1f1f1f;
+    border-right: 1px solid #3a3a3a;
+    min-width: 200px;
+    max-width: 220px;
+}
+
+QLabel#ImportHeading {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 12px 14px 6px 14px;
+}
+
+QListWidget#ImportProjects {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#ImportProjects::item {
+    border-left: 2px solid transparent;
+}
+
+QListWidget#ImportProjects::item:hover {
+    background-color: #2e2e2e;
+}
+
+QListWidget#ImportProjects::item:selected {
+    background-color: #2e2e2e;
+    border-left: 2px solid #79cdf0;
+}
+
+QLabel#ImportProjectName {
+    color: #e8e8e8;
+    font-size: 13px;
+}
+
+QLabel#ImportProjectDetail {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QFrame#ImportSongsHeader {
+    border-bottom: 1px solid #3a3a3a;
+    padding: 6px 14px;
+}
+
+QCheckBox#ImportSelectAll {
+    color: #cfcfcf;
+    font-size: 12px;
+}
+
+/* The warning block of the stage inspector (InspectorWarning), in the
+   app's warning amber instead of its error red. */
+QLabel#ImportPatchWarning {
+    background-color: rgba(107, 74, 31, 90);
+    color: #d9a13b;
+    border-bottom: 1px solid rgba(165, 116, 44, 110);
+    padding: 8px 14px;
+    font-size: 11px;
+}
+
+QTreeWidget#ImportSongList {
+    background: transparent;
+    color: #dcdcdc;
+    border: none;
+    outline: none;
+    font-size: 13px;
+}
+
+QTreeWidget#ImportSongList::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background-color: #1a1a1a;
+}
+
+QTreeWidget#ImportSongList::indicator:hover {
+    border-color: #777;
+}
+
+QTreeWidget#ImportSongList::indicator:checked {
+    background-color: #5e9ec2;
+    border-color: #5e9ec2;
+    image: url('assets/icons/checkmark.png');
+}
+
+QTreeWidget#ImportSongList::item {
+    border-bottom: 1px solid #333333;
+    padding: 8px 10px;
+}
+
+QLabel#ImportEmpty {
+    color: #7a7a7a;
+    font-size: 12px;
+}
+
+QFrame#ImportFooter {
+    background-color: #1f1f1f;
+    border-top: 1px solid #3a3a3a;
+    padding: 8px 12px;
+}
+
+QLabel#ImportStatus {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportCancel {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 6px 16px;
+    font-size: 12px;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportCancel:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#ImportSongsDialog QPushButton#ImportConfirm:disabled {
+    background-color: #3a4a52;
+    color: #6a7a82;
+    border-color: #35424a;
+}
+
+
+/* ============================================================
+   AUTO PROGRAM (ui/autoprogram_dialog.py)
+   The playlist manager's family: #262626 body, #1f1f1f footer and
+   rails, #232323 tables, #3a3a3a hairlines, the #79cdf0 accent,
+   #d9a13b warnings, #e05252 / #ff8a8a errors. Buttons are scoped
+   to the dialog so the generic `QDialog QPushButton` gradient
+   loses; the replace confirmation is the dialog's child, so the
+   same rules reach it. Letter spacing is set in Python (QSS has no
+   property for it); the song map, role chips and step / notice
+   icons are painted, with these same colours.
+   ============================================================ */
+QDialog#AutoProgramDialog,
+QDialog#AutoProgramConfirm {
+    background-color: #262626;
+}
+
+QDialog#AutoProgramDialog {
+    min-width: 760px;
+    min-height: 520px;
+}
+
+/* Every label's default; as specific as `QLabel#Name`, so the
+   named rules below (later in the sheet) win. */
+#AutoProgramDialog QLabel {
+    color: #dcdcdc;
+    font-size: 12px;
+}
+
+QLabel#AutoProgramCaption {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+/* Song and palette */
+QDialog#AutoProgramDialog QComboBox {
+    background-color: #2f2f2f;
+    color: #dcdcdc;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 8px;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QComboBox:hover {
+    border-color: #555555;
+}
+
+QDialog#AutoProgramDialog QComboBox:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QComboBox::drop-down {
+    width: 16px;
+    padding-right: 4px;
+}
+
+QDialog#AutoProgramDialog QComboBox::down-arrow {
+    width: 10px;
+    height: 10px;
+}
+
+/* A custom palette's colours: the fill is each swatch's own */
+QPushButton#AutoProgramSwatch {
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+}
+
+QPushButton#AutoProgramSwatch:hover {
+    border-color: #79cdf0;
+}
+
+/* Audio to analyse: two segments sharing one seam */
+QPushButton#AutoProgramTrack {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    padding: 0px;
+}
+
+QPushButton#AutoProgramTrack[seg="left"] {
+    border-top-left-radius: 3px;
+    border-bottom-left-radius: 3px;
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+}
+
+QPushButton#AutoProgramTrack[seg="right"] {
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+    border-top-left-radius: 0px;
+    border-bottom-left-radius: 0px;
+}
+
+QPushButton#AutoProgramTrack:hover {
+    background-color: #353535;
+}
+
+QPushButton#AutoProgramTrack:checked {
+    background-color: #3a5a67;
+    border-color: #5fb4d8;
+}
+
+QPushButton#AutoProgramTrack:disabled {
+    background-color: #2a2a2a;
+    border-color: #333333;
+}
+
+QLabel#AutoProgramTrackName {
+    color: #cfcfcf;
+    font-weight: 600;
+}
+
+QLabel#AutoProgramTrackFile {
+    color: #9a9a9a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramTrackName[state="on"] {
+    color: #ffffff;
+}
+
+QLabel#AutoProgramTrackFile[state="on"] {
+    color: #c4dde8;
+}
+
+QLabel#AutoProgramTrackName[state="disabled"] {
+    color: #5a5a5a;
+}
+
+QLabel#AutoProgramTrackFile[state="disabled"] {
+    color: #4f4f4f;
+}
+
+/* The Advanced toggle and its panel */
+QToolButton#AutoProgramAdvanced {
+    background-color: #2f2f2f;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+}
+
+QToolButton#AutoProgramAdvanced:hover {
+    background-color: #353535;
+}
+
+QToolButton#AutoProgramAdvanced:checked {
+    background-color: #3a5a67;
+    border-color: #5fb4d8;
+}
+
+QLabel#AutoProgramAdvancedText {
+    color: #cfcfcf;
+}
+
+QLabel#AutoProgramAdvancedText[state="open"] {
+    color: #ffffff;
+}
+
+QLabel#AutoProgramAdvancedCount {
+    color: #79cdf0;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramAdvancedArrow {
+    color: #9a9a9a;
+    font-size: 9px;
+}
+
+QFrame#AutoProgramAdvancedPanel {
+    background-color: #232323;
+    border: 1px solid #3a3a3a;
+}
+
+QLabel#AutoProgramGroupNote,
+QLabel#AutoProgramPaceReadout {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+/* The Feel slider's names, as Settings' (the dialog's label default above
+   would otherwise light them all). */
+#AutoProgramDialog QLabel#SliderTickLabel {
+    color: #6f6f6f;
+    font-size: 11px;
+}
+
+#AutoProgramDialog QLabel#SliderTickLabel[active="true"] {
+    color: #e0e0e0;
+}
+
+QLabel#AutoProgramFieldLabel {
+    color: #9a9a9a;
+}
+
+QLabel#AutoProgramFieldLabel[changed="true"] {
+    color: #dcdcdc;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField {
+    background-color: #1f1f1f;
+    color: #dcdcdc;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 2px 0px 6px;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField[changed="true"] {
+    border-color: #5fb4d8;
+    color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button {
+    subcontrol-origin: border;
+    width: 14px;
+    background-color: transparent;
+    border: none;
+    border-left: 1px solid #3f3f3f;
+    padding: 0px;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button {
+    subcontrol-position: top right;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button {
+    subcontrol-position: bottom right;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-button:hover,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-button:hover {
+    background-color: #2f2f2f;
+}
+
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::up-arrow,
+QDialog#AutoProgramDialog QAbstractSpinBox#AutoProgramField::down-arrow {
+    width: 8px;
+    height: 8px;
+}
+
+QFrame#AutoProgramDivider {
+    background-color: #3a3a3a;
+    border: none;
+}
+
+/* The summary strip */
+QFrame#AutoProgramSummary {
+    border: none;
+    border-top: 1px solid #3a3a3a;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+QLabel#AutoProgramSummaryKey {
+    color: #8a8a8a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummaryValue {
+    color: #dcdcdc;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummarySub {
+    color: #7a7a7a;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramSummaryValue[state="warn"],
+QDialog#AutoProgramDialog QLabel#AutoProgramSummarySub[state="warn"] {
+    color: #d9a13b;
+}
+
+/* Notices: warnings and errors, never selectable */
+QListWidget#AutoProgramNotices {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: 1px solid #3a3a3a;
+    font-size: 12px;
+    outline: none;
+}
+
+QListWidget#AutoProgramNotices::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 8px;
+}
+
+/* The song map, and the progress shown in its place */
+QFrame#AutoProgramMapFrame {
+    border: 1px solid #3a3a3a;
+    background-color: #1a1a1a;
+}
+
+QFrame#AutoProgramProgressPanel {
+    border: 1px solid #3a3a3a;
+    background-color: #1a1a1a;
+}
+
+QLabel#AutoProgramStep {
+    color: #7a7a7a;
+}
+
+QLabel#AutoProgramStep[state="now"] {
+    color: #dcdcdc;
+}
+
+QLabel#AutoProgramStep[state="done"] {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramStepTime {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramProgressText {
+    color: #9a9a9a;
+}
+
+QProgressBar#AutoProgramProgress {
+    background-color: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 0px;
+    padding: 1px;
+}
+
+QProgressBar#AutoProgramProgress::chunk {
+    background-color: #79cdf0;
+}
+
+/* Nothing to show: no audio, a failed or cancelled analysis */
+QFrame#AutoProgramErrorPanel {
+    background-color: #232323;
+    border: 1px solid #3a3a3a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorMark {
+    background-color: #e05252;
+    color: #1f1f1f;
+    border-radius: 18px;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorTitle {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QLabel#AutoProgramErrorBody {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramErrorDetail {
+    color: #9a9a9a;
+    background-color: #1f1f1f;
+    border: 1px solid #333333;
+    padding: 6px 10px;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+/* Sections and fixtures */
+QLabel#AutoProgramTableCaption {
+    color: #9a9a9a;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramTableCount {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramTableEmpty {
+    color: #7a7a7a;
+}
+
+QTableWidget#AutoProgramSections,
+QTableWidget#AutoProgramFixtures {
+    background-color: #232323;
+    color: #dcdcdc;
+    border: 1px solid #3a3a3a;
+    font-size: 12px;
+    outline: none;
+}
+
+/* With the style's own 3px text margin, text starts 8px into its column
+   (the mock's row padding) and keeps 5px clear of the next. */
+QTableWidget#AutoProgramSections::item,
+QTableWidget#AutoProgramFixtures::item {
+    border-bottom: 1px solid #333333;
+    padding: 0px 2px 0px 5px;
+}
+
+QTableWidget#AutoProgramSections QHeaderView::section,
+QTableWidget#AutoProgramFixtures QHeaderView::section {
+    background-color: #1f1f1f;
+    color: #7a7a7a;
+    border: none;
+    border-bottom: 1px solid #3a3a3a;
+    padding: 0px 5px 0px 8px;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+QTableWidget#AutoProgramSections QScrollBar:vertical,
+QTableWidget#AutoProgramFixtures QScrollBar:vertical,
+QListWidget#AutoProgramNotices QScrollBar:vertical {
+    background-color: #1f1f1f;
+    width: 8px;
+}
+
+QTableWidget#AutoProgramSections QScrollBar::handle:vertical,
+QTableWidget#AutoProgramFixtures QScrollBar::handle:vertical,
+QListWidget#AutoProgramNotices QScrollBar::handle:vertical {
+    background-color: #4a4a4a;
+    border-radius: 3px;
+    margin: 2px 1px;
+    min-height: 20px;
+}
+
+/* The footer */
+QFrame#AutoProgramFooter,
+QFrame#AutoProgramConfirmFooter {
+    background-color: #1f1f1f;
+    border: none;
+    border-top: 1px solid #3a3a3a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramStats {
+    color: #7a7a7a;
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+}
+
+QLabel#AutoProgramNote[state="busy"] {
+    color: #9a9a9a;
+}
+
+QLabel#AutoProgramNote[state="error"] {
+    color: #ff8a8a;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary {
+    background-color: #79cdf0;
+    color: #082230;
+    border: 1px solid #5fb4d8;
+    border-radius: 3px;
+    padding: 0px 18px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary:hover {
+    background-color: #8fd6f3;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramPrimary:disabled {
+    background-color: #2f4552;
+    color: #6f8b99;
+    border-color: #3a5a67;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 14px;
+    font-size: 12px;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramSecondary:disabled {
+    background-color: #2a2a2a;
+    color: #5a5a5a;
+    border-color: #333333;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramReset {
+    background-color: #2f2f2f;
+    color: #cfcfcf;
+    border: 1px solid #3f3f3f;
+    border-radius: 3px;
+    padding: 0px 10px;
+    font-size: 11px;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramReset:hover {
+    background-color: #3a3a3a;
+    color: #ffffff;
+}
+
+/* The replace confirmation */
+QDialog#AutoProgramConfirm QPushButton#AutoProgramSecondary:focus {
+    border-color: #79cdf0;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramDestructive {
+    background-color: #262626;
+    color: #ff8a8a;
+    border: 1px solid #a04040;
+    border-radius: 3px;
+    padding: 0px 14px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QPushButton#AutoProgramDestructive:hover {
+    background-color: rgba(120, 40, 40, 200);
+    color: #ffffff;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmHeading {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmCaption {
+    color: #7a7a7a;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmCaption[state="replaced"] {
+    color: #ff8a8a;
+}
+
+QLabel#AutoProgramConfirmItem[state="kept"] {
+    color: #9a9a9a;
+}
+
+QDialog#AutoProgramDialog QLabel#AutoProgramConfirmInfo {
+    color: #9a9a9a;
+    background-color: #232323;
+    border: 1px solid #333333;
+    padding: 8px 10px;
 }

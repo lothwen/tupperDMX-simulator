@@ -1,6 +1,6 @@
 # ABOUTME: Configuration management for TupperDMX. Splits storage across two files:
 # ABOUTME: shipped config.json (read-only fixture patch) and userprefs.json (writable user prefs).
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from typing import Dict, List, Optional, Any
 import json
 import os
@@ -11,6 +11,7 @@ from core.fixture_library import (
     fixture_modes, load_fixture_defs, resolve_fixture,
 )
 from core.paths import bundle_dir, userprefs_dir
+from core.tempo_map import DEFAULT_METER, valid_meter
 from tupperlogger import get_logger
 
 logger = get_logger("config")
@@ -32,7 +33,7 @@ def userprefs_path() -> Path:
 
 @dataclass
 class StageFogConfig:
-    """Volumetric fog on the virtual stage. GPU path only, off by default.
+    """Volumetric fog on the virtual stage. GPU path only, on by default.
 
     How *much* fog there is is deliberately NOT here: that is
     `WindowConfig.stage_haze`, which already exists and already has a slider.
@@ -41,22 +42,22 @@ class StageFogConfig:
     """
 
     # Needs `stage_gpu` as well — a ray march has nowhere to run on the raster
-    # path. Off by default for the same reason `stage_gpu` is.
-    enabled: bool = False
+    # path. The shipped defaults are Settings' Mid quality preset.
+    enabled: bool = True
 
     # -- the look ------------------------------------------------------
     # How far up from the floor the fog reaches, in scene units, and how sharply
     # it thins on the way. Haze settles: there is more of it round the ankles
     # than in the truss, and a slab of even density reads as a bug.
     height: float = 520.0
-    height_falloff: float = 1.6
+    height_falloff: float = 2.4
     # What colour the air scatters. Not white: real haze is very slightly cool.
     color: str = "#dfe4ee"
     # How much of the light that passes through the fog comes back to the eye.
-    scattering: float = 1.0
+    scattering: float = 1.75
     # Henyey-Greenstein g. Positive is forward-scattering, which is why a beam
     # aimed at you is blinding and the same beam crossing the stage is a shaft.
-    anisotropy: float = 0.55
+    anisotropy: float = 0.1
     # How ragged the air is, 0..3. 0 is a perfectly smooth medium, which
     # integrates to a translucent sheet laid over the picture — the "white
     # filter" look. Real haze has structure at every scale and drifts, and this
@@ -64,14 +65,14 @@ class StageFogConfig:
     # field. 1 is "a pocket of air can be completely empty"; past that the
     # billows separate into distinct banks with clear air between them, which is
     # a real stage under a smoke machine rather than one under a hazer.
-    texture: float = 1.1
+    texture: float = 1.0
     # How big those features are, in scene units. Around a third of the stage's
     # height is what reads as billows rather than as grain.
     texture_scale: float = 260.0
     # A stage-wide key light for the medium itself, so smoke is visible before
     # any fixture is. `light_dir_deg` is measured the way every other axis on
     # this stage is: 90 is straight down the picture.
-    light_intensity: float = 0.35
+    light_intensity: float = 0.8
     light_dir_deg: float = 255.0
 
     # -- what it costs -------------------------------------------------
@@ -84,9 +85,9 @@ class StageFogConfig:
     # temporal pass then averages away. 0 disables it and the bands come back.
     jitter: float = 0.8
     # Fraction of the viewport the fog is marched at, upsampled on resolve.
-    # Half is the shipped default: fog is low-frequency, so the resolution it
-    # is computed at is much cheaper to give up than the step count.
-    resolution: float = 0.5
+    # Quarter is the shipped default: fog is low-frequency, so the resolution
+    # it is computed at is much cheaper to give up than the step count.
+    resolution: float = 0.25
 
 
 # How tightly the interface packs: the factor the theme's type and spacing are
@@ -111,20 +112,28 @@ class WindowConfig:
     waveform_track_height: int = 100
     midi_events_track_height: int = 50
     timeline_section_height: int = 230
+    # Width of the timeline's track-header strip, in pixels. 0 means "never
+    # sized by hand", exactly as `sidebar_width` above: the opening width is
+    # then derived from `ui_scale`, since the lane names are painted into the
+    # strip and grow with the interface.
+    timeline_header_width: int = 0
     # Rows "S" mode: every fixture lane collapsed to one row. Persisted so the
     # section height (fitted to collapsed lanes) stays consistent on reload.
     tracks_collapsed: bool = False
     # How hazy the virtual stage's air is before any hazer runs, 0..1. Beams are
     # only visible because there is something for them to scatter off, so this
     # is what a rig with no hazer patched still gets to see.
-    stage_haze: float = 0.15
+    stage_haze: float = 0.30
     # Draw the stage's light on the GPU: one HDR buffer everything adds into,
     # tonemapped once with ACES, instead of 8-bit brushes that alpha-stack.
-    # Off by default — it needs a working OpenGL context, and the raster path
-    # is the one that survives a venue machine with no usable driver.
-    stage_gpu: bool = False
+    # On by default (Settings' Mid quality preset). It needs a working OpenGL
+    # context; a venue machine with no usable driver fails soft to raster.
+    stage_gpu: bool = True
+    # EXPERIMENTAL: show the 3D bar prototype (stage/stage3d/) in the 2D stage's
+    # place. A machine setting like stage_gpu — it needs OpenGL 4.1.
+    stage_3d_experimental: bool = False
     # Exposure applied before the tonemap, 0.1..4.0. Only the GPU path reads it.
-    stage_exposure: float = 1.0
+    stage_exposure: float = 0.5
     # Volumetric fog: what `stage_haze` looks like once it is marched through
     # rather than multiplied into a beam's alpha. Needs `stage_gpu`.
     fog: StageFogConfig = field(default_factory=StageFogConfig)
@@ -162,8 +171,8 @@ class IOConfig:
 
 
 @dataclass
-class VoiceCueConfig:
-    """One spoken guide cue (Fase 4): TTS text fired at a timeline position,
+class VoiceTTSConfig:
+    """One spoken guide line (Fase 4): TTS text fired at a timeline position,
     routed to the voice bus (the musician's click side). Rides the show
     manifest — guide audio is not sequence data, so it stays out of the .mid."""
     time: float = 0.0
@@ -201,15 +210,19 @@ class SongConfig:
     title: str = ""
     key: str = ""                                       # musical key, e.g. "Am"
     precount: bool = True                               # count-in click; off = segue from previous song
-    voice_cues: List[VoiceCueConfig] = field(default_factory=list)
+    meter: str = DEFAULT_METER                          # one of core.tempo_map.METERS
+    voice_tts: List[VoiceTTSConfig] = field(default_factory=list)
     # Control markers (tempo change, stop click) — the transport's half of the
-    # marker track that voice_cues is the spoken half of.
+    # marker track that voice_tts is the spoken half of.
     control_markers: List[ControlMarkerConfig] = field(default_factory=list)
     # Segue: at segue_time this song hands the show to the next one in the
     # setlist and starts it with no count-in. Kept as two fields rather than an
     # Optional so unticking the box does not throw away the time already dialled.
     segue: bool = False
     segue_time: float = 0.0
+    # Off = the song stays in the setlist (and can still be opened to edit)
+    # but next/prev, the segue and the web remote's setlist skip it.
+    enabled: bool = True
     cache: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -218,6 +231,17 @@ class PlaylistConfig:
     """Configuration for the playlist."""
     songs: List["SongConfig"] = field(default_factory=list)
     current_song_index: int = 0
+
+    def neighbour(self, step: int) -> Optional[int]:
+        """Index of the nearest ENABLED song after (step > 0) or before
+        (step < 0) the current one, or None. The one rule next/prev, the
+        segue and the toolbar's nav buttons share."""
+        i = self.current_song_index + (1 if step > 0 else -1)
+        while 0 <= i < len(self.songs):
+            if self.songs[i].enabled:
+                return i
+            i += 1 if step > 0 else -1
+        return None
 
 
 @dataclass
@@ -235,6 +259,42 @@ def fixture_channel_count(type_name: str, mode: str = "") -> int:
     empty mode means the type's default."""
     fdef = resolve_fixture(type_name, mode)
     return fdef.channel_count if fdef else 0
+
+
+def dmx_clashes(fixtures, fixture) -> List[str]:
+    """Names of the patched fixtures whose DMX slots `fixture` also holds.
+
+    Empty when its span is legal. Symmetric by construction — if A is reported
+    against B then B is reported against A — which is what lets a surface flag
+    BOTH sides of a clash rather than only the fixture that moved. A type that
+    resolves no channels occupies nothing, so an unresolvable patch entry is
+    never reported as clashing (and is never clashed with).
+
+    Qt-free and here rather than beside the browser footer's `used_dmx_spans`
+    because `timeline/` may not import `ui/`, and the track headers need the
+    same answer the stage inspector does.
+    """
+    def span(f):
+        # A patch entry may carry no mode at all — "" already means "the type's
+        # first declared mode", so an absent one reads the same way.
+        count = fixture_channel_count(f.type, getattr(f, "mode", ""))
+        return (f.dmx_start, f.dmx_start + count - 1) if count else None
+
+    mine = span(fixture)
+    if mine is None:
+        return []
+    first, last = mine
+    names = []
+    for other in fixtures:
+        if other is fixture:
+            continue
+        theirs = span(other)
+        if theirs is None:
+            continue
+        o_first, o_last = theirs
+        if first <= o_last and last >= o_first:
+            names.append(other.name or other.type)
+    return names
 
 
 def known_fixture_types() -> set:
@@ -260,6 +320,10 @@ class FixtureInstance:
     # because a beam that points down is what every stage drew before a fixture
     # could say which way up it was.
     hanging: bool = True
+    # Row this fixture occupies in the timeline's track strip, as dragged by the
+    # header grip. -1 = never reordered, which sorts to the end and leaves the
+    # lane in DMX order — what every patch written before this showed.
+    order: int = -1
     bars: List[FixturePosition] = field(default_factory=list)  # ledbar: visual bars
 
 
@@ -267,7 +331,7 @@ class FixtureInstance:
 class VolumeConfig:
     metronome: float = 0.5
     audio: float = 0.5
-    voice: float = 0.8                                  # TTS guide bus (cues + spoken count-in)
+    voice: float = 0.8                                  # TTS guide bus (voice TTS + count-in)
 
 
 # Valid AudioConfig.routing values (mirrors audio/mixer.py ROUTING_MODES;
@@ -282,8 +346,9 @@ class AudioConfig:
     per-song count-in on/off stays in the show (SongConfig.precount)."""
     output_device: str = ""              # QAudioDevice id; "" = system default
     routing: str = "stereo"              # see AUDIO_ROUTING_MODES
-    count_in_bars: int = 2               # length of the precount (bars of 4)
+    count_in_bars: int = 2               # length of the precount (bars of the song's meter)
     count_in_voice: bool = True          # speak beat numbers on the last bar
+    click_accent: bool = True            # beat 1 of the click takes the accent sound
     tts_voice: str = "es_ES-davefx-medium"
 
 
@@ -292,33 +357,13 @@ class LoggingConfig:
     level: str = "INFO"
     console_output: bool = True
     file_output: bool = True
-    log_dir: str = "logs"
+    #: Folder for the rotating log files. Blank means "wherever the app has
+    #: always put them" — tupperlogger.resolve_log_dir turns it into ./logs —
+    #: so a prefs file written before the folder was settable, or one whose
+    #: field the operator cleared, keeps logging exactly where it did.
+    log_dir: str = ""
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     backup_count: int = 5
-
-
-@dataclass
-class WebCueConfig:
-    """One web-remote lighting cue: a labelled button that fires MIDI messages
-    through the configured MIDI outputs (same path as clip-library preview)."""
-    label: str
-    color: str = "#888888"                # hex swatch shown on the web button
-    messages: List[List[int]] = field(default_factory=list)  # [channel, note, velocity]
-
-
-def default_webremote_cues() -> List["WebCueConfig"]:
-    """Shipped cue set, built from existing controller verbs (color macros
-    72-75, ledbar bank-select 36+n / scene-load 24+n, blackout-all 51) against
-    the default patch channels (0 = ledbar, 1/2 = blinders)."""
-    all_fx = [0, 1, 2]
-    return [
-        WebCueConfig("Warm", "#ffb86b", [[c, 73, 127] for c in all_fx]),       # ORANGE macro
-        WebCueConfig("Cool Blue", "#7cc4ff", [[c, 74, 127] for c in all_fx]),  # CYAN macro
-        WebCueConfig("Strobe", "#e6e6e6", [[0, 40, 0], [0, 24, 100]]),         # STROBES bank + scene 0
-        WebCueConfig("Full flash", "#ffffff", [[c, 72, 127] for c in all_fx]), # WHITE macro
-        WebCueConfig("Magenta", "#ff5bd1", [[c, 75, 127] for c in all_fx]),    # PINK macro
-        WebCueConfig("Blackout", "#666666", [[0, 51, 0]]),                     # global toggle
-    ]
 
 
 @dataclass
@@ -327,7 +372,6 @@ class WebRemoteConfig:
     served on the LAN without auth, so enabling is an explicit choice."""
     enabled: bool = False
     port: int = 8765
-    cues: List[WebCueConfig] = field(default_factory=default_webremote_cues)
 
 
 @dataclass
@@ -350,6 +394,14 @@ class Config:
     _last_written: Optional[Dict[str, Any]] = field(
         default=None, init=False, repr=False, compare=False)
 
+    #: I/O routing fields the command line pinned for THIS RUN — `--dmx-usb`
+    #: naming the dongle that happens to be plugged into this box. A fact about
+    #: the run, not a preference, so it is kept apart from `io`: applied on top
+    #: at every apply (effective_io), which is what makes it survive a live
+    #: prefs reload, and never written back by save().
+    _io_overrides: Dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False, compare=False)
+
     #: Sections reload_prefs() adopts from disk while the app runs. Everything
     #: else in the file is deliberately excluded: `playlist`/`fixtures` are the
     #: legacy keys the show migration reads once, and after
@@ -358,6 +410,22 @@ class Config:
     #: would mean swapping the show out from under a running session.
     RELOADABLE_SECTIONS = ("window", "artnet", "volume", "logging", "io",
                            "audio", "webremote")
+
+    def override_io(self, **values: Any) -> None:
+        """Pin I/O routing fields from the command line, for this run only."""
+        self._io_overrides.update(values)
+
+    def effective_io(self) -> IOConfig:
+        """The routing to actually apply: `io` with this run's command-line
+        overrides on top.
+
+        `io` itself stays the preferences' view — what the Settings dialog
+        edits and what save() writes — so a `--dmx-usb` pick drives the
+        hardware without ever rewriting userprefs.json.
+        """
+        if not self._io_overrides:
+            return self.io
+        return replace(self.io, **self._io_overrides)
 
     def next_free_channel(self) -> int:
         """Lowest non-negative MIDI channel not used by any patched fixture.
@@ -496,12 +564,16 @@ class Config:
                 waveform_track_height=cls._validate_int(window_data.get("waveform_track_height", 100), 30, 1000),
                 midi_events_track_height=cls._validate_int(window_data.get("midi_events_track_height", 50), 30, 1000),
                 timeline_section_height=cls._validate_int(window_data.get("timeline_section_height", 230), 120, 2000),
+                # Upper bound matches Timeline.MAX_HEADER_WIDTH (the timeline
+                # clamps to its own bounds anyway; core stays Qt-free).
+                timeline_header_width=cls._validate_int(window_data.get("timeline_header_width", 0), 0, 600),
                 tracks_collapsed=bool(window_data.get("tracks_collapsed", False)),
                 stage_haze=cls._validate_float(
-                    window_data.get("stage_haze", 0.15), 0.0, 1.0),
-                stage_gpu=bool(window_data.get("stage_gpu", False)),
+                    window_data.get("stage_haze", 0.30), 0.0, 1.0),
+                stage_gpu=bool(window_data.get("stage_gpu", True)),
+                stage_3d_experimental=bool(window_data.get("stage_3d_experimental", False)),
                 stage_exposure=cls._validate_float(
-                    window_data.get("stage_exposure", 1.0), 0.1, 4.0),
+                    window_data.get("stage_exposure", 0.5), 0.1, 4.0),
                 fog=cls._parse_fog(window_data.get("fog")),
                 ui_scale=cls._validate_float(
                     window_data.get("ui_scale", 1.0),
@@ -528,7 +600,10 @@ class Config:
                     title=str(song_data.get("title", "")),
                     key=str(song_data.get("key", "")),
                     precount=bool(song_data.get("precount", True)),
-                    voice_cues=cls._parse_voice_cues(song_data.get("voice_cues")),
+                    meter=valid_meter(song_data.get("meter")),
+                    voice_tts=cls._parse_voice_tts(
+                        song_data.get("voice_tts",
+                                      song_data.get("voice_cues"))),
                     control_markers=cls._parse_control_markers(
                         song_data.get("control_markers")),
                     segue=bool(song_data.get("segue", False)),
@@ -563,6 +638,8 @@ class Config:
                     audio_data.get("count_in_bars", defaults.count_in_bars), 1, 8),
                 count_in_voice=bool(
                     audio_data.get("count_in_voice", defaults.count_in_voice)),
+                click_accent=bool(
+                    audio_data.get("click_accent", defaults.click_accent)),
                 tts_voice=str(audio_data.get("tts_voice", defaults.tts_voice)
                               or defaults.tts_voice),
             )
@@ -573,7 +650,7 @@ class Config:
                 level=cls._validate_log_level(logging_data.get("level", "INFO")),
                 console_output=bool(logging_data.get("console_output", True)),
                 file_output=bool(logging_data.get("file_output", True)),
-                log_dir=str(logging_data.get("log_dir", "logs")),
+                log_dir=str(logging_data.get("log_dir", "")),
                 max_file_size=cls._validate_int(logging_data.get("max_file_size", 10 * 1024 * 1024), 1024, 100 * 1024 * 1024),
                 backup_count=cls._validate_int(logging_data.get("backup_count", 5), 1, 20)
             )
@@ -609,11 +686,12 @@ class Config:
 
         if "webremote" in data:
             web_data = data["webremote"]
+            # A legacy `cues` key is read by nobody and not written back: the
+            # remote's buttons are the open show's starred clips (see
+            # core/clips.py), which is show content, not a machine setting.
             config.webremote = WebRemoteConfig(
                 enabled=bool(web_data.get("enabled", False)),
                 port=cls._validate_int(web_data.get("port", 8765), 1024, 65535),
-                cues=(cls._parse_web_cues(web_data["cues"])
-                      if "cues" in web_data else default_webremote_cues()),
             )
 
     @staticmethod
@@ -644,61 +722,24 @@ class Config:
         return io
 
     @staticmethod
-    def _parse_web_cues(cues_data: Any) -> List[WebCueConfig]:
-        """Parse the webremote cue list. Entries without a label and malformed
-        messages are dropped; channel/note/velocity are clamped to MIDI ranges."""
-        cues: List[WebCueConfig] = []
-
-        if not isinstance(cues_data, list):
-            return cues
-
-        for entry in cues_data:
-            if not isinstance(entry, dict):
-                continue
-            label = entry.get("label")
-            if not isinstance(label, str) or not label:
-                continue
-
-            messages: List[List[int]] = []
-            raw_messages = entry.get("messages", [])
-            if isinstance(raw_messages, list):
-                for msg in raw_messages:
-                    if not isinstance(msg, (list, tuple)) or len(msg) != 3:
-                        continue
-                    messages.append([
-                        Config._validate_int(msg[0], 0, 15),
-                        Config._validate_int(msg[1], 0, 127),
-                        Config._validate_int(msg[2], 0, 127),
-                    ])
-
-            color = entry.get("color")
-            cues.append(WebCueConfig(
-                label=label,
-                color=color if isinstance(color, str) and color else "#888888",
-                messages=messages,
-            ))
-
-        return cues
-
-    @staticmethod
-    def _parse_voice_cues(cues_data: Any) -> List[VoiceCueConfig]:
-        """Parse a song's voice-cue list. Entries without text are dropped;
+    def _parse_voice_tts(data: Any) -> List[VoiceTTSConfig]:
+        """Parse a song's voice-TTS list. Entries without text are dropped;
         times clamp to the valid timeline range."""
-        cues: List[VoiceCueConfig] = []
-        if not isinstance(cues_data, list):
-            return cues
-        for entry in cues_data:
+        lines: List[VoiceTTSConfig] = []
+        if not isinstance(data, list):
+            return lines
+        for entry in data:
             if not isinstance(entry, dict):
                 continue
             text = entry.get("text")
             if not isinstance(text, str) or not text.strip():
                 continue
-            cues.append(VoiceCueConfig(
+            lines.append(VoiceTTSConfig(
                 time=Config._validate_float(entry.get("time", 0.0), 0.0, 36000.0),
                 text=text.strip(),
             ))
-        cues.sort(key=lambda c: c.time)
-        return cues
+        lines.sort(key=lambda line: line.time)
+        return lines
 
     @staticmethod
     def _parse_control_markers(data: Any) -> List[ControlMarkerConfig]:
@@ -841,6 +882,9 @@ class Config:
                 # A patch saved before fixtures could be rigged either way is
                 # read as flown, which is where its beams already pointed.
                 hanging=bool(entry.get("hanging", True)),
+                # Upper bound is generous: a row index only has to outlast the
+                # patch it orders (at most 16 MIDI channels' worth of lanes).
+                order=Config._validate_int(entry.get("order", -1), -1, 63),
                 bars=bars,
             ))
 
@@ -1001,6 +1045,20 @@ class Config:
                 self.playlist.current_song_index -= 1
             return True
         return False
+
+    def move_song(self, src: int, dst: int) -> bool:
+        """Move the song at src so it lands at index dst. The current index
+        follows the current song OBJECT: the show autosave flushes pending
+        MIDI edits into whatever song is current, so it must stay the same one."""
+        songs = self.playlist.songs
+        if not (0 <= src < len(songs) and 0 <= dst < len(songs)) or src == dst:
+            return False
+        current = self.get_current_song()
+        songs.insert(dst, songs.pop(src))
+        if current is not None:
+            self.playlist.current_song_index = next(
+                i for i, s in enumerate(songs) if s is current)
+        return True
 
     def update_current_song(self, midi: Optional[str] = None, offset: Optional[float] = None,
                             guide: Optional[str] = None,
